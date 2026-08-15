@@ -441,9 +441,12 @@ sets a model provider and key in the app.
 - **Advice quality without audio.** The narrowed mixing scope is honest, but
   whether settings-only critique is useful enough to justify the app remains the
   MVP's central bet. It is the reason to ship small.
-- **Ambient value is thin by construction.** With a 10-minute cooldown and four
-  conservative rules, a first session may contain very few nudges. The app is
-  chat-first; the nudge machinery is a bet that needs real-use validation.
+- **Ambient value is thin by construction — accepted.** With a 10-minute
+  cooldown and four conservative rules, early sessions may contain very few
+  nudges. This is a deliberate choice, not a gap to close before shipping: a
+  wrong or obvious nudge costs more trust than a missing one. The MVP is
+  chat-first, and the rules stay conservative until real use shows which
+  thresholds earn their interruption. Do not add rules to raise the nudge rate.
 - **Fork maintenance.** Vendoring buys capability and costs upstream drift.
   Pinned by commit, with its own tests.
 - **Third-party plugin parameters.** VST and AU parameters may return opaque
