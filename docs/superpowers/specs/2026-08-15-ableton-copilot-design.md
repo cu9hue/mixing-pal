@@ -1,7 +1,7 @@
 # Ableton Copilot — Design
 
 Date: 2026-08-15
-Status: approved for planning (revised after external review)
+Status: approved for planning (revised after two adversarial review rounds)
 
 ## Goal
 
@@ -15,215 +15,352 @@ Three kinds of guidance:
 1. **Musical and arrangement feedback** — harmony, structure, repetition, where
    the arrangement is thin.
 2. **Mixing critique from settings** — device chains, filter overlap between
-   tracks, compressor and EQ settings, chain order, send structure, gain
-   structure. It judges **settings, not sound**. It cannot hear masking,
-   loudness, tone, or timbre, and the system prompt forbids claiming otherwise.
+   tracks, compressor and EQ settings, sidechain routing, chain order, send
+   structure, gain structure. It judges **settings, not sound**. It cannot hear
+   masking, loudness, tone, or timbre, and the system prompt forbids claiming
+   otherwise.
 3. **Workflow and Live technique** — faster ways to do what the producer is
    doing.
 
 ## Non-goals for the MVP
 
-- **No write access.** The copilot advises; the producer acts. AbletonOSC
-  exposes `set/` endpoints, so writes can be added later behind a confirmation
-  step.
+- **No write access.** The copilot advises; the producer acts. Writes can be
+  added later behind a confirmation step.
 - **No audio analysis.** No spectrum, no loudness, no per-track audio content.
-  Nothing about how the set actually *sounds*.
+  Nothing about how the set actually *sounds*. Master metering gives level only.
 - **No screen capture.** Third-party plugin UIs stay invisible.
 - **No deep music theory engine.** No functional harmony, no voice leading.
-- **No dB values.** See "Volume is not dB" below.
+- **No streaming responses.** Deferred by decision; see "Response latency".
 
-Audio and screen senses are deliberate follow-ups. Ship state-only first and
-find out whether the advice is good before paying for more senses.
-
-## Why AbletonOSC
-
-The producer runs **Live 12.2.5 Suite** on macOS.
+## The dependency: a vendored fork of AbletonOSC
 
 Ableton's official [Extensions SDK](https://www.ableton.com/en/live/extensions)
-is rejected for the MVP. It requires the Live 12.4.5 beta, and an extension
-"runs once, performs its task, then stops" — it cannot hold a persistent
-process, so it cannot support nudges. Revisit when Extensions ship stable and
-gain a background mode.
+is rejected for the MVP. It requires Live 12.4.5 beta (the producer runs
+12.2.5), and an extension "runs once, performs its task, then stops" — it cannot
+hold a persistent process, so it cannot support nudges. Revisit when Extensions
+ship stable and gain a background mode.
 
-[AbletonOSC](https://github.com/ideoforms/AbletonOSC) is a Python Remote Script
-that exposes the Live Object Model over OSC. It supports Live 11+, is actively
-maintained, and covers what remains in scope.
+[AbletonOSC](https://github.com/ideoforms/AbletonOSC) is the foundation, but
+**the project vendors a pinned fork and ships it with the installer.** It is not
+an upstream download the producer fetches themselves. Four findings force this,
+each verified against upstream source at `master`:
 
-A custom Remote Script (our own Python inside Live, computing the digest in
-process) is the upgrade path if OSC round-trip volume becomes the bottleneck.
-It is not the starting point: debugging inside Live's Python sandbox is slow.
-
-### Endpoints the design depends on
-
-| Need | Endpoint | Access |
+| Gap | Evidence | Fork change |
 | --- | --- | --- |
-| Bulk snapshot of tracks and clips | `/live/song/get/track_data` | query, chunked |
-| Tempo, time signature, transport | `/live/song/get/{tempo,signature_numerator,signature_denominator,is_playing,current_song_time}` | listen |
-| Key and scale | `/live/song/get/{root_note,scale_name}` | listen |
-| Loop brace | `/live/song/get/{loop,loop_start,loop_length}` | listen |
-| Track state | `/live/track/get/{name,volume,panning,mute,solo,is_foldable,is_grouped}` | listen, per index |
-| Arrangement structure | `/live/track/get/arrangement_clips/{name,length,start_time}` | query |
-| Session clips | `/live/track/get/clips/{name,length}` | query |
-| MIDI notes | `/live/clip/get/notes` | **query only — poll and diff** |
-| Device chain | `/live/device/get/{name,class_name,num_parameters}` | query |
-| Device settings, human readable | `/live/device/get/parameter/value_string` | query |
-| Device parameter changes | `/live/device/start_listen/parameter/value <track> <device> <param>` | listen, per parameter |
-| Levels | `/live/track/get/output_meter_level` | poll, restricted set |
-| Selected track / scene | `/live/view/{get,start_listen}/selected_{track,scene}` | listen |
-| Selected clip / device | `/live/view/get/selected_{clip,device}` | **query only — poll** |
+| Master and return tracks unreachable | `track.py:21` resolves `self.song.tracks[i]`; the LOM's `song.tracks` excludes master and returns. The string `master` does not occur anywhere in the source. | Add a handler over `song.master_track` and `song.return_tracks`, same pattern as tracks |
+| `track_data` cannot fetch faders | `song.py:141` does `getattr(track, prop)`; `volume` and `panning` live on `track.mixer_device`, not on `Track` | Map `track.volume` / `track.panning` through `mixer_device` |
+| No dB anywhere | AbletonOSC never exposes `mixer_device`. In the LOM, `track.mixer_device.volume` *is* a `DeviceParameter` and yields a formatted dB string | Expose the volume parameter's formatted value |
+| Dense clips fail hard | See "Datagram budget" below | Chunk large replies server-side |
 
-AbletonOSC listens on UDP port 11000 and replies on 11001.
+Vendoring also collapses the old "custom Remote Script" upgrade path into a
+gradient: the fork *is* the first step. If OSC round-trip volume ever becomes
+the bottleneck, digest computation moves into the fork incrementally rather than
+as a rewrite.
 
-## OSC protocol realities
+The fork is pinned by commit, tracked in-repo, and carries its own tests.
 
-These four constraints shape the whole design. Each was verified against the
-AbletonOSC endpoint documentation.
+## Protocol realities
 
-### Listener replies alias query replies
+Five constraints shape the design. Each was verified against upstream source,
+not documentation.
 
-A subscription update and a query response arrive at the **same address**. A
-listener on track 3's volume replies to `/live/track/get/volume 3 <value>` —
-byte-identical in shape to the reply for an explicit query of track 3's volume.
-There is no request ID.
+### Listeners emit registration-time indices
 
-The resolution: **treat every inbound packet as a state observation first.**
-Every message updates the mirror unconditionally. A separate request table
-resolves pending promises:
+`handler.py:61-83` builds a closure over the `params` supplied at registration
+and sends `(*params, *value)`. Delete a track and the listener attached to the
+object formerly at index 3 keeps firing labelled `3`, while that object now sits
+at index 2. The index in a packet does not reliably name the object it named at
+subscribe time.
 
-- One in-flight request per `(address, index-args)` key. A duplicate request
-  attaches to the existing promise instead of sending a second packet.
+### Targeted `stop_listen` leaks the listener
+
+Worse: `_stop_listen` resolves its target from the *current* index, then calls
+`remove_..._listener` on that object — removing a callback that was registered
+on a *different* object. The call raises, `handler.py` swallows it as "likely
+benign", and `del self.listener_functions[key]` runs anyway.
+
+**The registry entry disappears while the real LOM listener stays attached for
+the rest of the session.** It keeps emitting at the old index, byte-identical to
+legitimate traffic at that index. No client-side epoch or generation filter can
+separate the two. The only clean reset is `/live/api/reload`, which upstream
+documents as development-only.
+
+### Therefore: subscribe to singletons, poll everything indexed
+
+This is the central architectural consequence. The leak is unfixable from the
+client, so the design never creates it.
+
+**Subscribed** — objects with no index, which therefore never churn and never
+leak. Registered once on connect, torn down only on disconnect:
+
+- `/live/song/start_listen/` — `tempo`, `is_playing`, `root_note`, `scale_name`,
+  `loop`, `loop_start`, `loop_length`, `signature_numerator`,
+  `signature_denominator`
+- `/live/song/start_listen/beat` — the transport clock. **Not**
+  `current_song_time`, whose LOM listener fires many times per second; upstream
+  built the `beat` event specifically to avoid it (`song.py:271-284`).
+- `/live/view/start_listen/selected_track`, `selected_scene`
+
+**Polled** — everything keyed by an index:
+
+| What | Rate | Cost |
+| --- | --- | --- |
+| Track names, mute, solo, device class lists | 2 s | one `track_data` call |
+| Track faders and pans | 2 s | one `track_data` call (fork) |
+| Selected clip, selected device | 1 s | two messages |
+| Focused MIDI clip notes | 1.5 s | paged, focused clip only |
+| Master meter | 2 s | one message (fork) |
+| Per-track meters, focused/armed/soloed only | 2 s | bounded small set |
+
+Polling costs latency on state a producer changes a few times a minute. In
+exchange it deletes the topology watcher, the subscription rebuild machinery,
+the rebuild storms, and the phantom-listener class of bug entirely. All of that
+existed only to service subscriptions the design no longer needs.
+
+### Inbound packets are observations first
+
+A subscription update and a query reply arrive at the **same address** with no
+request ID. So every inbound packet updates the mirror unconditionally, and a
+separate request table resolves promises:
+
+- Single-flight per `(address, key-args)`. A duplicate request attaches to the
+  existing promise rather than sending a second packet.
 - A pending entry resolves on the first matching inbound message, then clears.
-- An inbound message with no pending entry is a listener update. Mirror only.
+- An unmatched inbound message is a subscription update. Mirror only.
+- Every request carries a timeout.
 
-This degrades safely. If a listener update resolves a query early, the value is
-still truthful — same property, same object, current value. Only the causation
-is ambiguous, and nothing depends on causation. When the real reply arrives it
-finds no pending entry and is absorbed as an observation.
+**Key arity varies per endpoint** and must be declared, not inferred:
+`/live/track/get/volume` echoes 1 index, `/live/track/get/send` 2,
+`/live/clip/get/notes` 2, `/live/device/get/parameter/value_string` 3, and
+`track_data` / `track_names` echo **none at all** — a bare flat tuple with no
+range or property list. `requests.rs` owns an explicit arity map with a test
+enumerating every endpoint the design uses. One wrong entry silently
+cross-resolves queries for different objects.
 
-Every request still carries a timeout for the case where AbletonOSC never
-answers at all.
+**Keyless queries are serialized.** At most one `track_data` or `track_names`
+outstanding at a time, because nothing in the reply identifies which request it
+answers. After a timeout, the snapshot restarts at a new generation rather than
+reissuing, so a late zombie reply cannot be mistaken for a fresh one. Parsing a
+`track_data` reply also requires `num_scenes` and per-track `num_devices` up
+front, since the clip and device segments are positional.
 
-### Track indices are not stable identities
+**A generation counter** guards in-flight work. Any change in track count or
+ordering increments it; requests issued under an older generation are cancelled
+rather than resolved.
 
-Every track, clip, and device subscription is keyed by track index. Live
-reindexes on track add, delete, and reorder, silently pointing every
-subscription at the wrong track.
+### Datagram budget
 
-The resolution: a **topology watcher**. Poll `/live/song/get/num_tracks` and
-`/live/song/get/track_names` every 2 seconds — one cheap bulk call. Any change
-in count or ordering is a topology event: tear down all index-keyed
-subscriptions, resnapshot, and rebuild. Two same-named tracks swapping position
-escapes detection; that is an accepted MVP limitation.
+`clip_get_notes` (`clip.py:132-143`) flattens every note into one flat tuple,
+and `osc_server.py:83` sends it as a single `sendto`. macOS caps UDP datagrams
+at `net.inet.udp.maxdgram` — **9216 bytes**, confirmed on the target machine.
+Past roughly 450 notes, `sendto` raises and the client receives *nothing*. This
+is hard failure, not truncation, and it would hit exactly the dense clips most
+worth discussing.
 
-### Note edits are not observable
+Every bulk query is therefore budgeted in **bytes, not object counts**:
 
-Clips expose exactly one listener, `playing_position`. There is no note-change
-event.
+- Notes are paged with the 4-argument ranged form of `/live/clip/get/notes`
+  (`pitch_start, pitch_span, time_start, time_span`, confirmed present) by time
+  window, reassembled client-side.
+- `track_data` chunks are sized against the byte budget, using `num_scenes` and
+  `num_devices` to predict reply size — never a fixed track count.
+- `get_device_params` on a Rack can expose hundreds of parameters and is paged
+  the same way.
 
-The resolution: poll `/live/clip/get/notes` for the **focused MIDI clip only**,
-every 1.5 seconds, and diff against the previous result. Report it as what it
-is — "the focused clip's notes changed" — never as "the producer edited notes."
-Nothing else in the set gets note polling.
-
-Selected clip and selected device have no listeners either, so both are polled
-at 1 Hz. Two messages per second.
-
-### Volume is not dB
-
-`/live/track/get/volume` returns Live's normalized fader position, a float from
-0.0 to 1.0, where roughly 0.85 is unity gain. It is not decibels, and Live's
-fader curve is nonlinear. The mixer volume is not a device parameter, so
-`value_string` cannot supply a formatted value either.
-
-The MVP displays normalized values and labels them as such. Deriving true dB
-needs a calibrated fader curve — a follow-up, not a guess. No rule may threshold
-on a dB value.
+`missing_reason` distinguishes **"reply too large to send"** from **"Live did
+not answer"**. Repeated instant timeouts on one clip surface as "clip too dense
+to read", not as a connection problem.
 
 ## Architecture
 
 ```
 Ableton Live 12.2.5 Suite
-  └─ AbletonOSC  (Remote Script, selected as a Control Surface)
+  └─ AbletonOSC fork  (vendored, pinned, shipped with the installer)
         │  UDP 11000 out / 11001 in
         ▼
   Tauri v2 desktop app  (always on top, small, frameless)
     ┌─ Rust — the protocol layer ────────────────────────────┐
     │  socket.rs    UDP, OSC codec                           │
-    │  requests.rs  single-flight table, timeouts            │
-    │  subs.rs      subscription registry, survives reloads  │
-    │  topology.rs  index churn detection, teardown/rebuild  │
-    │  pollers.rs   focused clip notes, selection, meters    │
+    │  requests.rs  single-flight table, arity map, timeouts │
+    │  subs.rs      singleton subscriptions only             │
+    │  pollers.rs   indexed state, selection, notes, meters  │
+    │  budget.rs    byte-budgeted chunking and paging        │
     │  deltas.rs    coalesce observations → state deltas     │
     │  model.rs     HTTPS to provider; holds the API key     │
     └────────────────────────────────────────────────────────┘
                     │  coalesced deltas, not raw packets
     ┌─ TypeScript (webview) — the domain layer ──────────────┐
-    │  live/     set model, applies deltas, change log       │
-    │  digest/   state → structured brief; music analysis    │
+    │  live/     set model, applies deltas, observation log  │
+    │  digest/   structured brief; music + mixer analysis    │
     │  rules/    pure nudge predicates                       │
     │  model/    provider interface + adapter                │
     │  agent/    conversation and tool loop                  │
-    │  ui/       chat pane, nudge feed                       │
+    │  ui/       chat pane, nudge feed, session context      │
     └────────────────────────────────────────────────────────┘
 ```
 
-The split follows a single rule: **Rust owns anything whose correctness depends
-on not being interrupted or reloaded.** Sockets, in-flight requests,
-subscriptions, and topology all qualify. A webview reload must not orphan a
-subscription inside Live.
+The split follows one rule: **Rust owns anything whose correctness depends on
+not being interrupted or reloaded** — sockets, in-flight requests,
+subscriptions. A webview reload must not orphan a subscription inside Live.
 
-Everything above that line is domain logic we expect to iterate on hard —
+Everything above that line is domain logic we expect to iterate on hard:
 musical analysis, digest wording, rule thresholds, prompts. It stays in
-TypeScript, where that iteration is cheap. A reload costs a resnapshot and
-nothing more, because the subscriptions live in Rust.
+TypeScript, where iteration is cheap. A reload costs a resnapshot and nothing
+more.
 
-Rust never sends raw packets to the webview. It coalesces observations into
-deltas on a tick, so a meter stream or a burst of listener updates does not
-become thousands of IPC messages.
+Rust never forwards raw packets. It coalesces observations into deltas every
+250 ms, so a meter stream never becomes thousands of IPC messages.
 
-## Components
+## The digest
 
-### Rust
+Two parts. A **structured JSON payload** carries the facts. A **short text
+summary** orients the model.
 
-**`socket.rs`** — Binds UDP, sends to 127.0.0.1:11000, listens on 11001, encodes
-and decodes with the `rosc` crate. No protocol knowledge beyond OSC.
+```
+SET  128 BPM · 4/4 · C minor · 96 bars · Arrangement view
+GOAL  "rolling minimal techno, ref: Zip - Mono, want the breakdown to land"
+FOCUS  tr3 "Bass" › clip "Bass A" (bars 17-25) › EQ Eight · playing, bar 21
+OBSERVED, LAST 60s  Bass A note content changed ×6 · EQ Eight "Freq 1" moved
 
-**`requests.rs`** — The single-flight request table described above. Exposes
-`osc_query(address, args) -> Result<Vec<OscValue>>` with a timeout.
+TRACKS
+ 1 Kick   aud -3.0 dB  [Drum Rack › Saturator]               4 clips
+ 2 Bass   mid -6.5 dB  [Operator › EQ Eight › Compressor]     3 clips
+ M Master     -0.5 dB  [Limiter]
 
-**`subs.rs`** — Owns every `start_listen` registration and can enumerate,
-tear down, and rebuild them. Re-registers on reconnect.
+MIXER
+ Kick   EQ8: HP 30Hz · bell +3dB @ 60Hz
+ Bass   EQ8: HP 80Hz · bell -2dB @ 250Hz | Comp: -18dB 4:1, sidechain ← Kick
+ Master Limiter: ceiling -0.3dB
 
-**`topology.rs`** — The 2-second track-count and name poll, and the teardown
-and rebuild it triggers.
+ARRANGEMENT   1----8---16---24---32---40---48
+ Kick         ....████████████████........
+ Bass         ........████████████........
+ sections: intro 1-16 · A 17-32 · nothing past 48
 
-**`pollers.rs`** — Three timers: focused-clip notes at 1.5s, selected clip and
-device at 1s, meters at 2s for a restricted track set (see below).
+MIDI  Bass A (8 bars, 32 notes): C1-G2, root C, mostly 1/8, degrees 1 b3 5 b7
+```
 
-**`deltas.rs`** — Buffers observations and emits a coalesced delta to the
-webview every 250 ms.
+The observation line states what was observed, never what the producer intended.
 
-**`model.rs`** — `model_complete(request)`. Forwards to the configured provider
-over HTTPS. The API key is read from the settings store and never crosses into
-the webview. The system prompt and the allowed tool schema are backend-owned so
-the webview cannot widen them.
+### Session context
 
-### TypeScript
+`GOAL` is a persistent free-text field the producer edits in the UI — genre,
+reference track, today's objective — injected into the system prompt.
 
-**`live/`** — The set model: song, tracks, clips, devices, selection. Applies
-deltas. Holds a ring buffer of recent observations, each stamped with what was
-actually observed rather than an inferred cause.
+Without it the model has state but no intent, and "the arrangement is thin" has
+opposite answers for minimal techno and pop, so every response hedges into
+uselessness. This is the cheapest thing in the spec and probably the highest
+leverage. Chat history persists for the session alongside it.
 
-**`digest/music.ts`** — Light analysis of a note list. Pitch range, note count,
-rhythmic grid, scale degrees relative to the set's key, velocity spread.
-Deterministic and pure. No chord naming, no functional harmony.
+### Mixer summary
 
-**`digest/build.ts`** — Renders the model's view of the set. See below.
+Precomputed into the structured payload, refreshed on device-chain change rather
+than per question: per track — fader, pan, sends — plus **extracted headline
+parameters for known stock device classes**:
 
-**`rules/`** — One pure predicate per rule, taking a snapshot and the
-observation log, returning a nudge or nothing.
+| Device | Extracted |
+| --- | --- |
+| EQ Eight | per band: on, type, frequency, gain |
+| Compressor | threshold, ratio, attack, release, **sidechain source** |
+| Limiter | ceiling |
+| Utility | gain, width |
+| Auto Filter | type, frequency, resonance |
 
-**`model/provider.ts`** — The interface:
+This exists because pillar 2 is inherently cross-track. Answering "do my kick
+and bass fight?" needs EQ and compressor settings across many tracks at once,
+and the only other path is `get_device_params` one device per call — roughly 90
+serialized round trips on a 30-track set. No model will issue those, so it would
+answer from device names alone and produce filler the producer has read a
+hundred times. Sidechain source is the single highest-value fact for an
+electronic producer and is otherwise invisible.
+
+The extractor covers stock devices only. Third-party plugins fall back to name
+and parameter count, and the digest says so.
+
+### Sections
+
+A heuristic, not a claim about intent. A boundary is marked where the set of
+tracks holding a clip changes, quantised to the nearest 8 bars. Sections are
+labelled by position (`intro`, then `A`, `B`, …), never by genre function.
+
+### Budget
+
+The digest is capped at **~4k tokens**. Included in full by default: the focused
+clip's raw notes, and the selected device's parameters. Both are unbounded in
+principle — Operator has ~130 parameters, an Instrument Rack can exceed a
+thousand — so both are capped with an explicit truncation marker. Large sets cap
+track count the same way: focused track and neighbours in full, the rest
+summarized.
+
+### Tools
+
+Tools are **live queries against Live**, not mirror reads. The mirror
+deliberately does not hold notes or device parameters for the whole set.
+
+| Tool | Returns |
+| --- | --- |
+| `get_clip_notes(track, clip)` | Raw note list, paged |
+| `get_device_params(track, device)` | Parameter names and formatted values, paged |
+| `get_track_detail(track)` | Full state for one track |
+| `get_arrangement()` | Every arrangement clip with start and length |
+
+Every result carries `queried_at`, `fresh`, and `missing_reason`, so the model
+can tell "this is zero" from "Live did not answer" from "too large to send".
+
+## Nudges
+
+Deterministic predicates over the state stream. No model call until one trips;
+then the rule and the digest go to the model, which writes one sentence.
+
+| Rule | Trigger |
+| --- | --- |
+| `off_scale_notes` | Focused clip's notes fall outside the set's `root_note` / `scale_name`, above a share threshold |
+| `master_level_high` | Master meter sustained near 1.0 across a window |
+| `unnamed_tracks` | Six or more default-named tracks in a set past a size threshold |
+| `loop_fatigue` | Same loop brace over 8 minutes with no arrangement growth — **opt-in, off by default** |
+
+`off_scale_notes` is the always-on rule that carries a first session. It is
+deterministic, musically specific, and runs on data the focused-clip poller
+already collects. It fires only when Live's scale is actually set.
+
+`master_level_high` is named for what it measures. `output_meter_level` is a
+0–1 level sampled at 2 s, not a peak meter, so the rule may not claim clipping,
+and meters are never presented as level information anywhere else.
+
+Cut, with reasons: `gain_staging` (a fader above unity is not wrong),
+`flat_velocity` (deliberate in most electronic music), `arrangement_stall`
+(punishes sound-design sessions), `untouched_device` (needs a per-device default
+table and still means little).
+
+Global cooldown of 10 minutes. Per-rule disable, not only a global mute. Every
+nudge is dismissible.
+
+## Untrusted input and privacy
+
+Track, clip, and device names flow straight into the prompt. A downloaded
+template or a collaborator's stem pack can carry a name written to steer the
+model. Read-only, the blast radius is bad advice — but the digest format
+designed now becomes the injection surface when writes arrive. All set-derived
+strings are fenced with delimiters and declared to the model as data, never
+instructions.
+
+Separately, and stated plainly because the producer should decide knowingly:
+**the set's names, structure, and raw MIDI stream continuously to a cloud model
+provider.** A local-model adapter is out of scope for the MVP but the provider
+interface does not preclude one.
+
+## Response latency
+
+Streaming is deferred by decision. A question triggers 2–4 model round trips
+plus serialized OSC queries, so first text may take 15–30 seconds.
+
+Mitigation that does not touch the interface: the UI shows live tool-call
+progress ("reading EQ Eight on Bass…") so the wait is legible rather than a dead
+window. If that proves insufficient in real use, adding streaming changes the
+`ModelProvider` contract, its contract tests, and the agent loop — a known,
+accepted retrofit cost.
+
+## Model layer
 
 ```ts
 interface ModelProvider {
@@ -236,166 +373,80 @@ interface ModelProvider {
 ```
 
 The MVP implements **one** adapter properly, behind provider contract tests that
-exercise multi-turn tool calling. A second adapter follows once the contract
-tests exist to hold it honest. "OpenAI-compatible by base URL" is not true in
-practice for tool calls, so it is not treated as free.
+exercise multi-turn tool calling. A second follows once those tests exist to
+hold it honest. "OpenAI-compatible by base URL" is not true in practice for tool
+calls, so it is not treated as free.
 
-**`agent/loop.ts`** — Builds the digest, calls the provider, executes tool
-calls, loops until the model returns text.
-
-## The digest
-
-Two parts. A **structured JSON payload** carries the facts, so nothing is lost to
-prose formatting. A **short text summary** orients the model:
-
-```
-SET  128 BPM · 4/4 · C minor · 96 bars · Arrangement view
-FOCUS  tr3 "Bass" › clip "Bass A" (bars 17-25) › EQ Eight · playing, bar 21
-OBSERVED, LAST 60s  Bass A note content changed ×6 · EQ Eight "Frequency 1" moved
-
-TRACKS
- 1 Kick   aud fader 0.85  [Drum Rack › Saturator]               4 clips
- 2 Bass   mid fader 0.72  [Operator › EQ Eight(HP 80Hz) › Comp]  3 clips
- M Master     fader 0.90  [Limiter]
-
-ARRANGEMENT   1----8---16---24---32---40---48
- Kick         ....████████████████........
- Bass         ........████████████........
- sections: intro 1-16 · A 17-32 · nothing past 48
-
-MIDI  Bass A (8 bars, 32 notes): C1-G2, root C, mostly 1/8, degrees 1 b3 5 b7
-```
-
-Faders are normalized, labelled `fader`, never `dB`. The observation line states
-what was observed, not what the producer intended.
-
-Included by default, because they are what the producer is working on: the
-focused clip's **raw notes**, and the selected device's **full parameter list
-with `value_string`**. Everything else is summarized, with drill-down tools for
-the rest.
-
-Sections are a heuristic, not a claim about intent. A boundary is marked where
-the set of tracks holding a clip changes, quantised to the nearest 8 bars.
-Sections are labelled by position (`intro`, then `A`, `B`, …), never by genre
-function.
-
-Large sets are capped: the focused track and its neighbours in full, the rest
-summarized, and the digest says it truncated.
-
-### Tools
-
-Tools are **live queries against Live**, not mirror reads. The mirror
-deliberately does not hold notes or device parameters for the whole set, so a
-mirror read would return stale or absent data.
-
-| Tool | Returns |
-| --- | --- |
-| `get_clip_notes(track, clip)` | Raw note list |
-| `get_device_params(track, device)` | Every parameter name and `value_string` |
-| `get_track_detail(track)` | Full state for one track |
-| `get_arrangement()` | Every arrangement clip with start and length |
-
-Every tool result carries `queried_at`, `fresh`, and `missing_reason`, so the
-model can tell the difference between "this is zero" and "Live did not answer."
-
-## Nudges
-
-Deterministic predicates run over the state stream. No model call happens until
-one trips. When one does, the rule and the digest go to the model, which writes
-a single sentence.
-
-| Rule | Trigger |
-| --- | --- |
-| `master_level_high` | Master output meter sustained near 1.0 over a window |
-| `unnamed_tracks` | Six or more default-named tracks in a set that has grown past a threshold |
-| `loop_fatigue` | Same loop brace playing over 8 minutes with no arrangement growth — **opt-in, off by default** |
-
-Cut after review, with reasons:
-
-- `gain_staging` — thresholded on a dB value that does not exist, and a fader
-  above unity is not wrong anyway.
-- `flat_velocity` — identical velocities are deliberate in most electronic
-  music.
-- `arrangement_stall` — punishes sound-design and session-view sessions.
-- `untouched_device` — needs a per-device default table to mean anything, and
-  still is not musically meaningful.
-
-Global cooldown of 10 minutes. Per-rule disable, not only a global mute. Every
-nudge is dismissible.
-
-`master_level_high` is named for what it measures. `output_meter_level` is a
-0–1 level, not a peak meter, so the rule may not claim clipping.
-
-## Meter polling
-
-Meters are the highest-rate data in the system and the easiest way to bog down
-Live's Python thread. The MVP polls `output_meter_level` at 2-second intervals
-for **master, plus any focused, armed, or soloed track** — never the whole set,
-and never as a subscription.
-
-Before this is considered settled, benchmark at 20, 50, and 100 tracks.
+The system prompt and the allowed tool schema are backend-owned, so the webview
+cannot widen them. The API key lives in Rust and never enters the web context.
 
 ## Error handling
 
-- **Live closed, or AbletonOSC not selected as a Control Surface.** A "not
-  connected" banner, reconnect with backoff, subscriptions rebuilt on reconnect.
-  Never a hang.
-- **Dropped UDP replies.** Per-request timeouts mark the affected slice stale.
-  The digest renders what it has and names what is missing.
-- **Oversized replies.** `track_data` is chunked by track range, 8 tracks per
-  call, to stay well inside practical UDP datagram limits.
+- **Live closed, or the script not selected as a Control Surface.** A "not
+  connected" banner, reconnect with backoff, singleton subscriptions
+  re-registered on reconnect. Never a hang.
+- **Dropped replies.** Per-request timeouts mark the affected slice stale. The
+  digest renders what it has and names what is missing.
+- **Oversized replies.** Byte-budgeted paging, with `missing_reason` separating
+  "too large" from "no answer".
 - **Provider errors.** Surfaced as text in the chat. The app keeps running.
 
 ## Testing
 
-**Automated.** Record real OSC traffic from an actual Live set into fixtures,
-then replay against the real code. Tests call real code; no business logic is
-reimplemented in a test.
+**Automated.** Record real OSC traffic into fixtures and replay against real
+code. Tests call real code; no business logic is reimplemented in a test.
 
-- `requests.rs` — replay interleaved listener updates and query replies on the
-  same address, assert correct resolution and no cross-talk.
-- `topology.rs` — synthetic add, delete, and reorder events; assert every stale
-  subscription is torn down.
-- `digest/music.ts` — pure functions over note lists.
-- `digest/build.ts` — snapshot tests over fixture states.
+- `requests.rs` — interleave subscription updates and query replies on the same
+  address; assert correct resolution and no cross-talk. Assert the arity map
+  covers every endpoint used. Assert a late zombie `track_data` reply cannot
+  resolve a reissued request.
+- `budget.rs` — note paging across the 9216-byte boundary; assert reassembly is
+  lossless and that an oversize reply reports "too large", not "timed out".
+- `pollers.rs` — assert the note-diff baseline resets when the focused clip's
+  `(track, scene)` identity changes, so a selection change never reports a
+  phantom edit.
+- `digest/music.ts`, `digest/mixer.ts` — pure functions over note lists and
+  device parameter sets.
+- `digest/build.ts` — snapshot tests, including the 4k-token cap and truncation
+  markers.
 - `rules/` — pure predicates over crafted snapshots, both directions.
 - `model/` — provider contract tests covering multi-turn tool calling.
 - `agent/loop.ts` — a stub provider returning scripted tool calls; assert the
   loop executes them and terminates.
 
 **Manual, against real Live.** Fixture replay cannot catch listener lifecycle
-bugs, index churn, UDP loss, or Live UI-thread stalls. A checklist run before
-each release:
+bugs, UDP loss, or Live UI-thread stalls. Run before each release:
 
 1. Connect, resnapshot, confirm the digest matches the set.
-2. Add, delete, and reorder tracks; confirm no subscription points at the wrong
-   track.
-3. Change the selected track, clip, and device; confirm focus tracks it.
+2. Add, delete, and reorder tracks; confirm no state lands under the wrong
+   track and no subscription is created against an index.
+3. Change the selected track, clip, and device; confirm focus tracks it and no
+   phantom note edit is reported.
 4. Edit notes in the focused MIDI clip; confirm the diff appears.
-5. Load a 50-plus track set; measure digest build time and Live's responsiveness.
-6. Restart AbletonOSC mid-session; confirm reconnect and subscription rebuild.
-7. Reload the webview; confirm no orphaned subscriptions survive in Live.
+5. Open a clip with 500+ notes; confirm paging works rather than timing out.
+6. Load a 50-plus track set; measure digest build time and Live's
+   responsiveness. Benchmark at 20, 50, 100 tracks.
+7. Restart the script mid-session; confirm reconnect.
+8. Reload the webview; confirm no orphaned subscriptions survive in Live.
 
 ## Setup the producer performs once
 
-1. Download AbletonOSC, rename the folder to `AbletonOSC`, and copy it to
-   `~/Music/Ableton/User Library/Remote Scripts/`.
-2. Restart Live.
-3. Preferences → Link/Tempo/MIDI → Control Surface → AbletonOSC.
-4. Launch the copilot and set a model provider and key.
+The installer places the vendored fork in
+`~/Music/Ableton/User Library/Remote Scripts/`. The producer restarts Live,
+selects the script under Preferences → Link/Tempo/MIDI → Control Surface, then
+sets a model provider and key in the app.
 
 ## Risks
 
-- **Nudge quality.** A wrong or obvious nudge is worse than silence. Three rules
-  ship, all conservative, all individually disableable.
+- **Advice quality without audio.** The narrowed mixing scope is honest, but
+  whether settings-only critique is useful enough to justify the app remains the
+  MVP's central bet. It is the reason to ship small.
+- **Ambient value is thin by construction.** With a 10-minute cooldown and four
+  conservative rules, a first session may contain very few nudges. The app is
+  chat-first; the nudge machinery is a bet that needs real-use validation.
+- **Fork maintenance.** Vendoring buys capability and costs upstream drift.
+  Pinned by commit, with its own tests.
 - **Third-party plugin parameters.** VST and AU parameters may return opaque
-  names and normalised values. `value_string` helps but is not guaranteed. Stock
-  Live devices are the reliable case.
-- **Advice quality without audio.** The narrowed mixing scope is honest, but it
-  remains to be seen whether settings-only critique is useful enough to justify
-  the app. This is the MVP's central bet, and the reason to ship it small.
-- **OSC round-trip volume.** Mitigated by chunked bulk queries, restricted meter
-  polling, and lazy tool-driven detail. If it still bites, move to a custom
-  Remote Script.
-- **AbletonOSC is beta.** Well used and actively maintained, but a third-party
-  dependency inside Live.
+  names and normalised values. The mixer extractor covers stock devices only.
+- **Polling latency.** 1–2 s staleness on indexed state. Accepted deliberately
+  in exchange for deleting the phantom-listener bug class.
