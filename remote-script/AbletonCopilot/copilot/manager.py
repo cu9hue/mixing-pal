@@ -1,5 +1,7 @@
 from ..manager import Manager
 from .master import MasterHandler, ReturnHandler
+from .mixer import MixerHandler
+from .device_range import DeviceRangeHandler
 
 
 class CopilotManager(Manager):
@@ -12,4 +14,6 @@ class CopilotManager(Manager):
             self.handlers += [
                 MasterHandler(self),
                 ReturnHandler(self),
+                MixerHandler(self),
+                DeviceRangeHandler(self),
             ]
