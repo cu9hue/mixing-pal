@@ -50,7 +50,7 @@ each verified against upstream source at `master`:
 | Master and return tracks unreachable | `track.py:21` resolves `self.song.tracks[i]`; the LOM's `song.tracks` excludes master and returns. The string `master` does not occur anywhere in the source. | Add a handler over `song.master_track` and `song.return_tracks`, same pattern as tracks |
 | `track_data` cannot fetch faders | `song.py:141` does `getattr(track, prop)`; `volume` and `panning` live on `track.mixer_device`, not on `Track` | Map `track.volume` / `track.panning` through `mixer_device` |
 | No dB anywhere | AbletonOSC never exposes `mixer_device`. In the LOM, `track.mixer_device.volume` *is* a `DeviceParameter` and yields a formatted dB string | Expose the volume parameter's formatted value |
-| Dense clips fail hard | See "Datagram budget" below | Chunk large replies server-side |
+| Dense clips fail hard | See "Datagram budget" below | Notes already have a ranged query form; add the matching ranged form for device parameter queries, which have none |
 
 Vendoring also collapses the old "custom Remote Script" upgrade path into a
 gradient: the fork *is* the first step. If OSC round-trip volume ever becomes
