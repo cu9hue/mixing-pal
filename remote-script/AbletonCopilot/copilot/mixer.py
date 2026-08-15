@@ -16,10 +16,11 @@ class MixerHandler(AbletonOSCHandler):
         def track_volume_db(params: Tuple[Any]):
             index = int(params[0])
             param = self.song.tracks[index].mixer_device.volume
-            return (index, str(param))
+            return (index, param.str_for_value(param.value))
 
         def master_volume_db(params: Tuple[Any] = ()):
-            return (str(self.song.master_track.mixer_device.volume),)
+            param = self.song.master_track.mixer_device.volume
+            return (param.str_for_value(param.value),)
 
         def mixer_data(params: Tuple[Any]):
             index_min, index_max = int(params[0]), int(params[1])
