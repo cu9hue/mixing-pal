@@ -47,6 +47,13 @@ pub fn param_windows(num_params: usize) -> Vec<(usize, usize)> {
     even_split(num_params, budget_values())
 }
 
+/// Known ceiling: `track_data` takes only a track range, and clip values are
+/// emitted per scene for every track in that range, so a chunk cannot be
+/// split any finer than one track. When a *single* track's own per-scene
+/// cost already exceeds the budget (very high scene counts), this still
+/// returns single-track chunks that overflow `MAX_DATAGRAM` — there is no
+/// way to shrink further within this query shape. The consumer will observe
+/// that case as a reply that never arrives, not as an error from here.
 pub fn track_chunks(
     num_tracks: usize,
     num_scenes: usize,
@@ -105,21 +112,51 @@ mod tests {
     }
 
     #[test]
+    fn param_windows_pages_exactly_at_the_real_budget_boundary() {
+        // Pins the actual edge, derived from budget_values() itself, so a
+        // future change to HEADER_SLACK or BYTES_PER_VALUE that moves the
+        // real threshold gets caught here instead of passing silently.
+        let max = budget_values();
+        assert_eq!(param_windows(max).len(), 1);
+        assert_eq!(param_windows(max + 1).len(), 2);
+    }
+
+    #[test]
     fn track_chunks_shrink_as_scene_count_grows() {
         // Clip segments are per scene, so a set with many scenes must take
         // fewer tracks per chunk. Chunking by a fixed track count is the bug
         // this replaces.
         let few = track_chunks(50, 8, 4);
         let many = track_chunks(50, 200, 4);
-        assert!(
-            many.len() > few.len(),
-            "200 scenes should need more chunks than 8"
-        );
+        // Hand-computed against budget_values() == 1792:
+        // few:  values_per_track = 4 + 8   = 12,  tracks_per_chunk = 1792/12  = 149 -> 1 chunk of 50.
+        // many: values_per_track = 4 + 200 = 204, tracks_per_chunk = 1792/204 = 8   -> ceil(50/8) = 7 chunks.
+        // Exact counts, not just the inequality, so a regression that
+        // preserves direction but breaks the packing arithmetic still fails.
+        assert_eq!(few.len(), 1);
+        assert_eq!(many.len(), 7);
         // Both must still cover every track exactly once.
         for chunks in [&few, &many] {
             assert_eq!(chunks[0].0, 0);
             assert_eq!(chunks.last().unwrap().1, 50);
         }
+    }
+
+    #[test]
+    fn track_chunks_cannot_split_below_one_track_and_may_still_overflow() {
+        // At very high scene counts, a single track's own per-scene cost
+        // already exceeds the datagram budget (2000 scenes, 4 props/track:
+        // values_per_track = 2004, 2004*5 + HEADER_SLACK = 10276 > 9216).
+        // track_chunks has no way to split below one track, so it emits
+        // single-track chunks that still overflow. This pins that known
+        // ceiling as a documented fact, not a silent gap.
+        let chunks = track_chunks(50, 2000, 4);
+        assert_eq!(chunks.len(), 50);
+        for (min, max) in &chunks {
+            assert_eq!(max - min, 1, "expected single-track chunks at this scene count");
+        }
+        assert_eq!(chunks[0].0, 0);
+        assert_eq!(chunks.last().unwrap().1, 50);
     }
 
     // --- Boundary behaviour: zero inputs must not divide by zero, loop
