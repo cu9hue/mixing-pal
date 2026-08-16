@@ -34,7 +34,6 @@ struct Pending {
 pub struct RequestTable {
     pending: HashMap<PendingKey, Pending>,
     next_id: RequestId,
-    generation: u64,
     /// Addresses with an `Unkeyed` request currently in flight. Keyed per
     /// address, not a single global flag: `track_data`, `track_names`, and
     /// `mixer_data` reply at different addresses and so are trivially
@@ -65,22 +64,8 @@ impl RequestTable {
         Self {
             pending: HashMap::new(),
             next_id: 1,
-            generation: 0,
             unkeyed_outstanding: HashSet::new(),
         }
-    }
-
-    /// A monotonic marker for the current topology epoch, bumped by
-    /// `bump_generation`. It does NOT and cannot filter inbound packets:
-    /// nothing stamps the generation onto the wire, so a reply already in
-    /// flight when the epoch turns arrives byte-identical to a legitimate
-    /// one and this table cannot reject it. See
-    /// `a_zombie_reply_is_indistinguishable_and_resolves_the_current_request`
-    /// for what that means for a caller. This accessor exists only so the
-    /// counter is inspectable from outside the table, not internally mutated
-    /// and never read.
-    pub fn generation(&self) -> u64 {
-        self.generation
     }
 
     pub fn register(&mut self, now: Instant, addr: &str, args: &[OscType]) -> Registration {
@@ -140,16 +125,6 @@ impl RequestTable {
             self.unkeyed_outstanding.remove(&msg.addr);
         }
         Resolution { observation: true, completed }
-    }
-
-    /// Any topology change invalidates in-flight work keyed by index.
-    pub fn bump_generation(&mut self) -> Vec<RequestId> {
-        self.generation += 1;
-        self.unkeyed_outstanding.clear();
-        let mut cancelled: Vec<RequestId> =
-            self.pending.drain().map(|(_, p)| p.id).collect();
-        cancelled.sort_unstable();
-        cancelled
     }
 
     pub fn expire(&mut self, now: Instant, timeout: Duration) -> Vec<RequestId> {
@@ -292,35 +267,35 @@ mod tests {
 
     #[test]
     fn a_zombie_reply_is_indistinguishable_and_resolves_the_current_request() {
-        // Timeline: request track 3's volume, a track is deleted, the world is
-        // regenerated, a new request for track 3 goes out. The late reply from
-        // the dead (cancelled) request then arrives.
+        // Timeline: request track 3's volume, the request times out and its
+        // slot is freed by `expire`, a new request for track 3 goes out. The
+        // late reply from the dead (expired) request then arrives.
         //
-        // This layer CANNOT reject it: UDP carries no request ID, nothing
-        // stamps the generation onto the wire, and the zombie packet is
-        // byte-identical in every field the table keys on to a legitimate
-        // reply for the current request. `bump_generation` cancels the table
-        // ENTRY, not the packet already in flight -- it has no way to recall
-        // what Live already sent. So the zombie resolves the CURRENT
-        // request. This is an inherent protocol limit, not a bug here.
+        // This layer CANNOT reject it: UDP carries no request ID, and the
+        // zombie packet is byte-identical in every field the table keys on
+        // to a legitimate reply for the current request. `expire` cancels
+        // the table ENTRY, not the packet already in flight -- it has no way
+        // to recall what Live already sent. So the zombie resolves the
+        // CURRENT request. This is an inherent protocol limit, not a bug
+        // here.
         //
         // Containment lives elsewhere, not in this table: no caller reads
         // `completed` as if it were a value; the genuine reply that follows
         // is still an observation and overwrites whatever stale value the
         // zombie wrote into the mirror; and polling re-corrects within one
-        // cycle regardless. See `RequestTable::generation` for how the
-        // generation counter relates to this (it does not filter packets).
+        // cycle regardless.
         let mut t = RequestTable::new();
-        let now = Instant::now();
-        let old = match t.register(now, "/live/track/get/volume", &[OscType::Int(3)]) {
+        let start = Instant::now();
+        let old = match t.register(start, "/live/track/get/volume", &[OscType::Int(3)]) {
             Registration::New(id) => id,
             other => panic!("expected New, got {other:?}"),
         };
 
-        let cancelled = t.bump_generation();
+        let later = start + Duration::from_secs(3);
+        let cancelled = t.expire(later, Duration::from_secs(2));
         assert_eq!(cancelled, vec![old]);
 
-        let new = match t.register(now, "/live/track/get/volume", &[OscType::Int(3)]) {
+        let new = match t.register(later, "/live/track/get/volume", &[OscType::Int(3)]) {
             Registration::New(id) => id,
             other => panic!("expected New, got {other:?}"),
         };
@@ -351,14 +326,6 @@ mod tests {
     }
 
     #[test]
-    fn generation_increases_after_bump_generation() {
-        let mut t = RequestTable::new();
-        let before = t.generation();
-        t.bump_generation();
-        assert!(t.generation() > before);
-    }
-
-    #[test]
     fn unkeyed_flag_clears_on_resolve() {
         let mut t = RequestTable::new();
         let now = Instant::now();
@@ -380,22 +347,21 @@ mod tests {
     }
 
     #[test]
-    fn unkeyed_flag_clears_on_bump_generation() {
-        let mut t = RequestTable::new();
-        let now = Instant::now();
-        t.register(now, "/live/track/get/mixer_data", &[]);
-        t.bump_generation();
-        let again = t.register(now, "/live/track/get/mixer_data", &[]);
-        assert!(matches!(again, Registration::New(_)));
-    }
-
-    #[test]
     fn an_unmatched_unkeyed_reply_does_not_clear_the_flag() {
         // mixer_data is outstanding. A resolve for track_data -- a different
         // Unkeyed address with nothing pending for it -- is unmatched
-        // (completed: None) and must not clear mixer_data's flag. Without
-        // the `completed.is_some()` guard on the resolve path, an unmatched
-        // reply could unlock a slot nothing actually freed.
+        // (completed: None) and must not clear mixer_data's flag.
+        //
+        // Under the current per-address keying this doesn't actually
+        // exercise `resolve`'s `completed.is_some()` guard: an Unkeyed
+        // address always has an empty key (`key_of` returns `vec![]` for
+        // arity `Unkeyed`), so `PendingKey`s never collide across different
+        // Unkeyed addresses in the first place -- the `addr` field alone
+        // already keeps `mixer_data` and `track_data` apart. What this test
+        // actually proves is that `resolve`'s address-scoped lookup does not
+        // cross-clear another Unkeyed address's outstanding flag. The guard
+        // would only be load-bearing if some future change made two
+        // different addresses share a `PendingKey`, which nothing here does.
         let mut t = RequestTable::new();
         let now = Instant::now();
         t.register(now, "/live/track/get/mixer_data", &[]);

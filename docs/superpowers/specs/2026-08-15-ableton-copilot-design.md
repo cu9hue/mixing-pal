@@ -175,6 +175,20 @@ count or ordering increments it, and requests issued under an older generation
 have their table entries cancelled. The counter is a marker, not a filter: it
 cannot and does not reject inbound packets.
 
+This plan never registers an index-keyed request in production — polling only
+ever uses `KeyArity::None` and `KeyArity::Unkeyed` addresses — so there is
+nothing for a generation bump to cancel yet, and the real topology
+invalidation that exists today (`lib.rs`'s `queue_built_for`, which restarts
+a `track_data` sweep when `(num_tracks, num_scenes)` changes) doesn't go
+through `RequestTable` at all. An earlier build of this plan added the
+counter as unreachable production code with only its own tests exercising
+it; the 2026-08-16 whole-branch review removed it rather than leave an
+unmet promise in the table's API. It lands for real with whichever later
+plan first registers an index-keyed request, at which point a mid-flight
+bump also needs to account for `lib.rs`'s in-flight ranges (`TrackCounts`),
+not just `RequestTable`'s own `pending`/`unkeyed_outstanding` state — see
+that review for the hazard of wiring it naively.
+
 ### Datagram budget
 
 `clip_get_notes` (`clip.py:132-143`) flattens every note into one flat tuple,
