@@ -342,10 +342,22 @@ the model rather than hidden from it.
 
 | Tool | Source | Returns |
 | --- | --- | --- |
-| `get_track_detail(track)` | **Mirror** | Name, fader, pan, mute, solo, device names for one track |
+| `get_track_detail(track)` | **Mirror** | Name, fader (normalised and dB), pan, mute, solo for one track |
 | `get_clip_notes(track, clip)` | **Live query** | Raw note list, paged |
 | `get_device_params(track, device)` | Live query | Parameter names and formatted values, paged |
 | `get_arrangement()` | Live query | Every arrangement clip with start and length |
+
+`get_track_detail` carries no device names. Nothing polls them, so the mirror
+cannot hold them, and fetching them would need `num_devices` plus one
+`/live/device/get/name` per device — a live query, which would break the tool's
+one defining property (it costs no OSC traffic). Device names arrive with
+`get_device_params`, which already needs that traffic.
+
+The dB string is what makes the fader legible to a model: `0.85` is a
+normalised control position and means nothing musically, while `-3.0 dB` does.
+The fork already exposes `/live/track/get/volume_db` per track; the bulk
+`mixer_data` reply is extended to carry it alongside volume and panning, so one
+poll covers all three and the app never issues a per-track dB query.
 
 **The first cut ships the top two only** — `get_track_detail` and
 `get_clip_notes`. They are deliberately asymmetric: one proves the mirror-read
@@ -486,6 +498,31 @@ honours it.
 
 The system prompt and the allowed tool schema are backend-owned, so the webview
 cannot widen them. The API key lives in Rust and never enters the web context.
+
+### Where the split actually falls
+
+Those two sentences decide it. If TypeScript built the HTTP request it would
+need the key, and it could widen the system prompt and the tool list by
+construction. So **Rust owns the whole model call**: base URL, model, key,
+system prompt, tool schema, the HTTPS POST, and parsing `tool_calls` back out.
+The `complete()` command takes `messages` and nothing else.
+
+TypeScript keeps what the architecture diagram puts there and what iteration
+actually costs money to change:
+
+- the **agent loop** — issue a completion, run the tool calls it returns, append
+  the results, repeat, stop;
+- the **context block** — the lean digest, assembled from the `SetState` the
+  webview already holds and sent as an ordinary user turn.
+
+`ModelProvider` stays a TypeScript interface with one implementation that calls
+the Rust command, so the loop can be tested against a scripted stub and a second
+provider can arrive later without touching the loop.
+
+The consequence for untrusted input: set-derived strings reach the model down
+two paths — the TypeScript context block, and Rust tool results — so **both**
+fence them. One shared vector file pins the two implementations to identical
+output, the same tripwire pattern `shared/handled-addresses.json` already uses.
 
 ## Error handling
 
