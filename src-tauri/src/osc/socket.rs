@@ -7,6 +7,18 @@ use tokio::net::UdpSocket;
 pub const LIVE_RECV_PORT: u16 = 11000;
 pub const CLIENT_PORT: u16 = 11001;
 
+/// Structural half of the read-only guarantee: every datagram this app ever
+/// sends must be a query (`/get/...`) or a subscribe (`/start_listen/...`).
+/// Nothing may ever reach `/live/*/set/*`, `/live/*/add/*`, or
+/// `/live/*/remove/*` -- this app runs against a producer's real project,
+/// and `send`/`send_to` are the only two places any byte leaves this
+/// process, so this one check on every datagram is the entire enforcement
+/// surface for that promise. `send_to` panics if this returns false; see its
+/// doc comment.
+pub(crate) fn is_read_only_address(addr: &str) -> bool {
+    addr.contains("/get/") || addr.contains("/start_listen/")
+}
+
 pub struct OscSocket {
     socket: UdpSocket,
     remote_port: u16,
@@ -38,6 +50,13 @@ impl OscSocket {
         addr: &str,
         args: Vec<OscType>,
     ) -> std::io::Result<()> {
+        assert!(
+            is_read_only_address(addr),
+            "refusing to send {addr}: this app is read-only and must never send a \
+             /set/, /add/, or /remove/ address -- only /get/ and /start_listen/ are \
+             allowed. This assertion is the whole enforcement surface for that \
+             guarantee (F4, 2026-08-16 whole-branch review); do not bypass it."
+        );
         let packet = OscPacket::Message(OscMessage {
             addr: addr.to_string(),
             args,
@@ -91,5 +110,32 @@ mod tests {
         let msg = b.recv().await.unwrap();
         assert_eq!(msg.addr, "/live/song/get/tempo");
         assert_eq!(msg.args, vec![OscType::Float(128.0)]);
+    }
+
+    #[test]
+    fn is_read_only_address_accepts_get_and_start_listen() {
+        assert!(is_read_only_address("/live/song/get/tempo"));
+        assert!(is_read_only_address("/live/song/start_listen/tempo"));
+        assert!(is_read_only_address("/live/track/get/mixer_data"));
+    }
+
+    #[test]
+    fn is_read_only_address_rejects_a_mutating_address() {
+        assert!(!is_read_only_address("/live/track/set/mute"));
+        assert!(!is_read_only_address("/live/song/add/track"));
+        assert!(!is_read_only_address("/live/track/remove/clip"));
+        assert!(!is_read_only_address("/live/song/stop_listen/tempo"));
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "refusing to send")]
+    async fn send_to_panics_on_a_set_address_rather_than_send_it() {
+        // The whole point of F4: a wrong-line-of-code /set/ call must be
+        // caught here, structurally, not by inspection.
+        let a = OscSocket::bind_to(0, 0).await.unwrap();
+        let b = OscSocket::bind_to(0, 0).await.unwrap();
+        let _ = a
+            .send_to(b.local_port(), "/live/track/set/mute", vec![OscType::Int(1)])
+            .await;
     }
 }

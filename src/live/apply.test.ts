@@ -63,4 +63,43 @@ describe("applyDelta", () => {
     expect(s.tracks[0].mute).toBeNull();
     expect(s.tracks[0].solo).toBeNull();
   });
+
+  describe("num_tracks", () => {
+    // Regression for F2 (2026-08-16 whole-branch review): Rust's
+    // Coalescer::evict_tracks_at_or_beyond already cleans its own maps when
+    // a track is deleted in Live, but emitted no delta -- applyDelta only
+    // ever inserted into state.tracks, so a deleted track's row stayed in
+    // the window forever, showing whatever it last read.
+    function withTracks(indices: number[]): ReturnType<typeof emptySet> {
+      let s = emptySet();
+      for (const i of indices) {
+        s = applyDelta(s, { addr: "/live/track/get/name", args: [i, `Track ${i}`] });
+      }
+      return s;
+    }
+
+    it("removes tracks at or beyond a shrunk count", () => {
+      let s = withTracks([0, 1, 2, 3, 4, 5]);
+      s = applyDelta(s, { addr: "/live/song/get/num_tracks", args: [5] });
+      expect(Object.keys(s.tracks).map(Number).sort((a, b) => a - b)).toEqual([
+        0, 1, 2, 3, 4,
+      ]);
+    });
+
+    it("does not remove any track when the count grows", () => {
+      let s = withTracks([0, 1, 2]);
+      s = applyDelta(s, { addr: "/live/song/get/num_tracks", args: [10] });
+      expect(Object.keys(s.tracks).map(Number).sort((a, b) => a - b)).toEqual([
+        0, 1, 2,
+      ]);
+    });
+
+    it("ignores a null count rather than wiping the table", () => {
+      let s = withTracks([0, 1, 2]);
+      s = applyDelta(s, { addr: "/live/song/get/num_tracks", args: [null] });
+      expect(Object.keys(s.tracks).map(Number).sort((a, b) => a - b)).toEqual([
+        0, 1, 2,
+      ]);
+    });
+  });
 });

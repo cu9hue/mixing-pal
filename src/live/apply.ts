@@ -32,7 +32,31 @@ export const TRACK_FIELDS: Record<string, keyof TrackState> = {
   "/live/track/get/output_meter_level": "meter",
 };
 
+// Handled directly in applyDelta rather than through SONG_FIELDS: unlike a
+// plain song field, num_tracks doesn't copy into a single SetState field --
+// it prunes state.tracks of any index the new count no longer covers. Fix
+// for F2 (2026-08-16 whole-branch review): Coalescer::evict_tracks_at_or_
+// beyond already cleans Rust's own maps on a shrink, but emitted no delta,
+// so a deleted track kept a phantom row (stale name/mute/solo/fader) in the
+// window forever. Still listed in shared/handled-addresses.json's
+// songFields so the lib.rs consistency tripwire (I4) treats it as handled;
+// see addresses.test.ts's handledOutsideFieldMaps for why the exact-match
+// check there excludes it from the SONG_FIELDS comparison.
+export const NUM_TRACKS_ADDR = "/live/song/get/num_tracks";
+
 export function applyDelta(state: SetState, delta: Delta): SetState {
+  if (delta.addr === NUM_TRACKS_ADDR) {
+    const n = delta.args[0];
+    // A null count means "unknown", not "zero tracks" -- coercing it would
+    // wipe every row in the table for no reason.
+    if (typeof n !== "number") return state;
+    const tracks: Record<number, TrackState> = {};
+    for (const [key, track] of Object.entries(state.tracks)) {
+      if (Number(key) < n) tracks[Number(key)] = track;
+    }
+    return { ...state, tracks };
+  }
+
   const songField = SONG_FIELDS[delta.addr];
   if (songField) {
     return { ...state, [songField]: delta.args[0] } as SetState;

@@ -5,7 +5,8 @@
     "/live/song/get/is_playing",
     "/live/song/get/scale_name",
     "/live/song/get/root_note",
-    "/live/view/get/selected_track"
+    "/live/view/get/selected_track",
+    "/live/song/get/num_tracks"
   ],
   "trackFields": [
     "/live/track/get/name",

@@ -66,6 +66,26 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
     "/live/master/get/output_meter_level",
 ];
 
+/// Every literal address the poll loop sends on the wire, outside of
+/// `SINGLETON_SUBSCRIPTIONS` (checked separately, since it already has its
+/// own name). Exists solely so
+/// `every_poll_loop_send_and_subscription_is_read_only` (below) has a
+/// concrete list to check against `osc::socket::is_read_only_address` --
+/// F4 in the 2026-08-16 whole-branch review: the read-only guarantee is
+/// structural (every `send_to` call asserts it), but this test is what
+/// proves every address this codebase actually sends today passes that
+/// assertion, rather than trusting it by inspection.
+#[cfg(test)]
+const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
+    "/live/song/get/num_tracks",
+    "/live/song/get/num_scenes",
+    "/live/song/get/track_data",
+    "/live/track/get/mixer_data",
+    "/live/view/get/selected_clip",
+    "/live/view/get/selected_device",
+    "/live/master/get/output_meter_level",
+];
+
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
 /// whether or not any traffic has arrived in between. Not silence-gated:
 /// loading a different project in Live swaps the `Song` object every polled
@@ -150,10 +170,52 @@ fn snapshot(state: tauri::State<Arc<Mutex<Coalescer>>>) -> Vec<Delta> {
     }
 }
 
+/// Reported via the `connection_status` command so `Connection.tsx` can
+/// tell a port conflict (the socket never bound, so the receive and poll
+/// loops never started) apart from "bound but Live hasn't sent anything
+/// yet" -- the latter is already covered by the existing `lastSeen`
+/// staleness check, which is driven by actual deltas.
+///
+/// Fix for F3 (2026-08-16 whole-branch review): before this existed, a bind
+/// failure only printed to stderr and left the window showing the
+/// "not connected to Live" banner -- a confidently wrong diagnosis when the
+/// real cause is a leftover probe script or a second copy of the app
+/// already holding the port.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ConnectionStatus {
+    /// The socket bound; the receive and poll loops are running normally.
+    /// Whether Live itself is talking to it is a separate question, answered
+    /// by the frontend's own `lastSeen` staleness check.
+    Bound,
+    /// `OscSocket::bind()` failed before the receive/poll loops could even
+    /// start. `port` and `error` let the frontend name the exact port and
+    /// show the OS's own reason (almost always "address in use").
+    BindFailed { port: u16, error: String },
+}
+
+impl ConnectionStatus {
+    fn bind_failed(port: u16, err: &std::io::Error) -> Self {
+        ConnectionStatus::BindFailed { port, error: err.to_string() }
+    }
+}
+
+#[tauri::command]
+fn connection_status(state: tauri::State<Arc<Mutex<ConnectionStatus>>>) -> ConnectionStatus {
+    match state.lock() {
+        Ok(s) => s.clone(),
+        // Poisoned only if some other code panicked while holding this
+        // lock, which nothing here ever does while holding it; Bound is the
+        // harmless default either way -- the frontend's lastSeen staleness
+        // check still catches real silence.
+        Err(_) => ConnectionStatus::Bound,
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![snapshot])
+        .invoke_handler(tauri::generate_handler![snapshot, connection_status])
         .setup(|app| {
             // Set up regardless of whether the OSC socket binds -- a dead
             // socket shouldn't hide the whole window.
@@ -172,6 +234,11 @@ pub fn run() {
             // resolve() call in the receive loop below.
             let table = Arc::new(Mutex::new(RequestTable::new()));
 
+            // Managed before the bind attempt below so `connection_status`
+            // is answerable regardless of how that attempt turns out.
+            let connection_status = Arc::new(Mutex::new(ConnectionStatus::Bound));
+            app.manage(connection_status.clone());
+
             // Bound synchronously, via the background tokio runtime Tauri
             // already manages, so the same Arc<OscSocket> can be handed to
             // both the receive loop and the poll loop from the start. This
@@ -182,6 +249,9 @@ pub fn run() {
                 Ok(s) => Arc::new(s),
                 Err(e) => {
                     eprintln!("failed to bind OSC socket: {e}");
+                    if let Ok(mut s) = connection_status.lock() {
+                        *s = ConnectionStatus::bind_failed(osc::socket::CLIENT_PORT, &e);
+                    }
                     return Ok(());
                 }
             };
@@ -531,13 +601,23 @@ async fn poll_kind(
             // populate them within a poll or two of connecting.
             if let (Some(num_tracks), Some(num_scenes)) = (num_tracks, num_scenes) {
                 let current = (num_tracks, num_scenes);
-                if *queue_built_for != Some(current) {
+                if *queue_built_for != Some(current) || track_data_queue.is_empty() {
                     // Either the first time both counts are known, or the
                     // counts changed since the queue was built (a track
-                    // was added/removed mid-sweep). Either way, whatever is
-                    // still queued was built against stale counts and
-                    // would request wrong ranges, so restart the sweep
-                    // instead of draining the stale one out first.
+                    // was added/removed mid-sweep), or a prior sweep fully
+                    // drained -- track names/mute/solo refresh every 2s per
+                    // the spec's poll table, so an unchanged-but-empty
+                    // queue must still be rebuilt every tick, not just the
+                    // first time counts become known. Regression for F1
+                    // (2026-08-16 whole-branch review): the old condition
+                    // only checked for a counts change, so once the single
+                    // sweep for a session drained, nothing was ever queued
+                    // again and track_data was sent exactly once total.
+                    //
+                    // Either way, whatever is still queued was built
+                    // against stale counts and would request wrong ranges,
+                    // so restart the sweep instead of draining the stale
+                    // one out first.
                     track_data_queue.clear();
                     track_data_queue.extend(track_chunks(
                         num_tracks,
@@ -765,7 +845,9 @@ mod tests {
             "/live/view/get/selected_scene",
             // Cached internally for track_chunks' byte-budget math; observed
             // raw like any other reply, but not (yet) surfaced in SetState.
-            "/live/song/get/num_tracks",
+            // num_tracks is NOT here (F2, 2026-08-16 whole-branch review):
+            // apply.ts now handles it directly, pruning state.tracks of any
+            // stale index a shrink leaves behind -- see NUM_TRACKS_ADDR.
             "/live/song/get/num_scenes",
         ];
 
@@ -799,6 +881,50 @@ mod tests {
                  extend allowed_unemitted with a reason"
             );
         }
+    }
+
+    #[test]
+    fn every_poll_loop_send_and_subscription_is_read_only() {
+        // F4 (2026-08-16 whole-branch review): every address this codebase
+        // actually sends must pass send_to's structural read-only check.
+        // SINGLETON_SUBSCRIPTIONS and POLL_LOOP_SENT_ADDRESSES together are
+        // every literal address any send()/send_to() call site in this
+        // codebase uses today.
+        for addr in SINGLETON_SUBSCRIPTIONS.iter().chain(POLL_LOOP_SENT_ADDRESSES.iter()) {
+            assert!(
+                osc::socket::is_read_only_address(addr),
+                "{addr} would be refused by send_to's read-only guard"
+            );
+        }
+    }
+
+    #[test]
+    fn bind_failed_status_names_the_port_and_carries_the_os_error() {
+        let err = std::io::Error::new(std::io::ErrorKind::AddrInUse, "address already in use");
+        let status = ConnectionStatus::bind_failed(11001, &err);
+        match status {
+            ConnectionStatus::BindFailed { port, error } => {
+                assert_eq!(port, 11001);
+                assert!(error.contains("already in use"), "expected the OS error text, got {error:?}");
+            }
+            other => panic!("expected BindFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_held_client_port_makes_the_real_bind_fail_the_way_setup_reacts_to() {
+        // Reproduces the actual failure `setup()` detects: something else
+        // (a leftover probe script, a second copy of the app) already holds
+        // the port OscSocket::bind() wants. This is what F3 turns into a
+        // ConnectionStatus::BindFailed instead of the old silent stderr
+        // print and a misleading "Live isn't running" banner.
+        let holder = OscSocket::bind_to(0, 0).await.unwrap();
+        let held_port = holder.local_port();
+        let result = OscSocket::bind_to(held_port, 0).await;
+        assert!(
+            result.is_err(),
+            "binding an already-held port must fail, not silently succeed"
+        );
     }
 
     async fn recv_message(listener: &OscSocket) -> OscMessage {
@@ -898,6 +1024,230 @@ mod tests {
         assert_eq!(msg2.args[1], OscType::Int(2));
         assert_eq!(queue.len(), 1);
         assert_eq!(counts.lock().unwrap().inflight_track_data, Some((1, 2)));
+    }
+
+    // --- poll_kind's TrackState arm -----------------------------------
+    //
+    // Regression coverage for F1 (2026-08-16 whole-branch review): before
+    // this fix, `poll_kind` had no test at all, and the bug it shipped with
+    // -- track_data sent exactly once per session -- lived entirely in the
+    // refill condition below `drain_track_data_queue`, which the existing
+    // `track_data_queue_retries_deferred_chunks_across_ticks` test never
+    // exercises (it hands `drain_track_data_queue` a pre-populated queue
+    // directly, bypassing `poll_kind` entirely).
+
+    #[tokio::test]
+    async fn poll_kind_trackstate_refills_the_queue_after_it_drains_on_a_later_tick() {
+        // The old refill condition (`*queue_built_for != Some(current)`)
+        // only rebuilt the queue when (num_tracks, num_scenes) changed. For
+        // a small set, the queue built on the first tick is a single chunk
+        // that drains immediately in the same tick -- so every later tick
+        // found the counts unchanged and the queue empty, and skipped the
+        // refill forever. Track names/mute/solo refresh every 2s per the
+        // spec's poll table; this proves they actually do.
+        let listener = OscSocket::bind_to(0, 0).await.unwrap();
+        let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts {
+            num_tracks: Some(3),
+            num_scenes: Some(1),
+            ..Default::default()
+        });
+        let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut queue_built_for: Option<(usize, usize)> = None;
+        let mut faders_pending = false;
+        let start = Instant::now();
+
+        // First tick: counts are already known, so the queue builds and its
+        // one chunk (a 3-track/1-scene set fits in a single chunk) drains
+        // immediately, in the same call.
+        poll_kind(
+            PollKind::TrackState,
+            start,
+            &table,
+            &poll_socket,
+            &counts,
+            &mut queue,
+            &mut queue_built_for,
+            &mut faders_pending,
+        )
+        .await;
+
+        let mut first_tick_addrs = HashSet::new();
+        for _ in 0..3 {
+            let msg = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
+                .await
+                .expect("expected num_tracks, num_scenes, and track_data on the first tick");
+            first_tick_addrs.insert(msg.addr);
+        }
+        assert!(first_tick_addrs.contains("/live/song/get/track_data"));
+        assert_eq!(queue_built_for, Some((3, 1)));
+        assert!(queue.is_empty(), "the single chunk must have drained immediately");
+
+        // Free track_data's single-flight slot, as the receive loop would
+        // once the reply actually arrives.
+        {
+            let mut t = table.lock().unwrap();
+            t.resolve(&OscMessage { addr: "/live/song/get/track_data".to_string(), args: vec![] });
+        }
+
+        // Second tick, same counts -- nothing changed in Live. track_data
+        // must still be resent.
+        let later = start + Duration::from_secs(2);
+        poll_kind(
+            PollKind::TrackState,
+            later,
+            &table,
+            &poll_socket,
+            &counts,
+            &mut queue,
+            &mut queue_built_for,
+            &mut faders_pending,
+        )
+        .await;
+
+        // num_tracks/num_scenes are still pending from the first tick (never
+        // resolved), so register_and_send must not resend them -- only
+        // track_data should go out this time.
+        let msg = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
+            .await
+            .expect(
+                "track_data must be resent once the queue has drained, \
+                 even though counts didn't change",
+            );
+        assert_eq!(msg.addr, "/live/song/get/track_data");
+        let nothing_more =
+            tokio::time::timeout(Duration::from_millis(50), recv_message(&listener)).await;
+        assert!(nothing_more.is_err(), "num_tracks/num_scenes must not be resent while still pending");
+    }
+
+    #[tokio::test]
+    async fn poll_kind_trackstate_discards_a_partial_sweep_when_counts_change() {
+        // A track add/remove mid-sweep must restart the sweep against the
+        // new counts rather than finish draining ranges that no longer
+        // describe the real set.
+        let listener = OscSocket::bind_to(0, 0).await.unwrap();
+        let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+        let table = Mutex::new(RequestTable::new());
+        // 1200 tracks / 1 scene, 3 track.* properties: tracks_per_chunk is
+        // fixed at budget_values()/3 == 597 for a clip_props=0 request, so
+        // this yields three chunks: (0,597), (597,1194), (1194,1200).
+        let counts = Mutex::new(TrackCounts {
+            num_tracks: Some(1200),
+            num_scenes: Some(1),
+            ..Default::default()
+        });
+        let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut queue_built_for: Option<(usize, usize)> = None;
+        let mut faders_pending = false;
+        let start = Instant::now();
+
+        poll_kind(
+            PollKind::TrackState,
+            start,
+            &table,
+            &poll_socket,
+            &counts,
+            &mut queue,
+            &mut queue_built_for,
+            &mut faders_pending,
+        )
+        .await;
+        // Drain the num_tracks/num_scenes/track_data datagrams this tick
+        // sent; the queue now holds the two chunks track_data's
+        // single-flight slot deferred.
+        for _ in 0..3 {
+            tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
+                .await
+                .expect("expected num_tracks, num_scenes, and the first track_data chunk");
+        }
+        assert_eq!(queue_built_for, Some((1200, 1)));
+        assert_eq!(
+            queue,
+            VecDeque::from([(597, 1194), (1194, 1200)]),
+            "chunks 2 and 3 must still be queued, not dropped"
+        );
+
+        // A track was deleted mid-sweep: num_tracks drops to 800. Free the
+        // single-flight slot first, as the receive loop would once the
+        // first chunk's reply arrives.
+        {
+            let mut t = table.lock().unwrap();
+            t.resolve(&OscMessage { addr: "/live/song/get/track_data".to_string(), args: vec![] });
+        }
+        counts.lock().unwrap().num_tracks = Some(800);
+
+        let later = start + Duration::from_secs(2);
+        poll_kind(
+            PollKind::TrackState,
+            later,
+            &table,
+            &poll_socket,
+            &counts,
+            &mut queue,
+            &mut queue_built_for,
+            &mut faders_pending,
+        )
+        .await;
+
+        assert_eq!(queue_built_for, Some((800, 1)));
+        // even_split(800, 597) == [(0,597), (597,800)]; the first chunk
+        // sends immediately and is popped, leaving only the second queued.
+        // Neither of the old (597,1194)/(1194,1200) ranges -- built against
+        // the stale 1200-track count -- may survive the rebuild.
+        assert_eq!(
+            queue,
+            VecDeque::from([(597, 800)]),
+            "the stale sweep must be discarded and rebuilt against the new count, \
+             not finished or merged with the old one"
+        );
+        assert_eq!(counts.lock().unwrap().inflight_track_data, Some((0, 597)));
+    }
+
+    #[tokio::test]
+    async fn poll_kind_trackstate_sends_no_track_data_while_counts_are_unknown() {
+        // The very first tick(s) after connect can fire before either
+        // num_tracks or num_scenes has a reply yet. track_chunks needs both
+        // real counts, so nothing chunked may go out until then.
+        let listener = OscSocket::bind_to(0, 0).await.unwrap();
+        let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
+        let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut queue_built_for: Option<(usize, usize)> = None;
+        let mut faders_pending = false;
+        let start = Instant::now();
+
+        poll_kind(
+            PollKind::TrackState,
+            start,
+            &table,
+            &poll_socket,
+            &counts,
+            &mut queue,
+            &mut queue_built_for,
+            &mut faders_pending,
+        )
+        .await;
+
+        let mut seen = HashSet::new();
+        for _ in 0..2 {
+            let msg = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
+                .await
+                .expect("expected num_tracks and num_scenes requests");
+            seen.insert(msg.addr);
+        }
+        let expected: HashSet<String> = ["/live/song/get/num_tracks", "/live/song/get/num_scenes"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(seen, expected);
+
+        let nothing_more =
+            tokio::time::timeout(Duration::from_millis(50), recv_message(&listener)).await;
+        assert!(nothing_more.is_err(), "track_data must not be sent while counts are unknown");
+        assert!(queue.is_empty());
+        assert_eq!(queue_built_for, None);
     }
 
     #[tokio::test]
