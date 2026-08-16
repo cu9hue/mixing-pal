@@ -57,6 +57,18 @@ export function SetView() {
         {state.isPlaying ? "playing" : "stopped"}
       </div>
       <table>
+        <thead>
+          <tr>
+            <th style={{ textAlign: "left", paddingRight: 12 }}>#</th>
+            <th style={{ textAlign: "left", paddingRight: 12 }}>name</th>
+            {/* Normalized 0..1 fader value, not dB -- see model.ts/apply.ts:
+                nothing fetches volume_db today, and a real dB readout would
+                need mixer_data extended to carry it (Plan 2 work). */}
+            <th style={{ textAlign: "left", paddingRight: 12 }}>fader</th>
+            <th style={{ textAlign: "left", paddingRight: 12 }}>mute</th>
+            <th style={{ textAlign: "left" }}>solo</th>
+          </tr>
+        </thead>
         <tbody>
           {indices.map((i) => (
             <tr
@@ -67,7 +79,7 @@ export function SetView() {
             >
               <td style={{ paddingRight: 12 }}>{i}</td>
               <td style={{ paddingRight: 12 }}>{state.tracks[i].name ?? "—"}</td>
-              <td style={{ paddingRight: 12 }}>{state.tracks[i].volumeDb ?? "—"}</td>
+              <td style={{ paddingRight: 12 }}>{state.tracks[i].volume ?? "—"}</td>
               <td style={{ paddingRight: 12 }}>{state.tracks[i].mute ? "M" : ""}</td>
               <td>{state.tracks[i].solo ? "S" : ""}</td>
             </tr>
