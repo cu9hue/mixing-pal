@@ -164,3 +164,26 @@ the previous project's values with the app appearing healthy.
 
 Still outstanding: Master / Return track selection, a port-11001 conflict
 showing a legible error, and a 50+ track benchmark.
+
+### Additional results — 2026-08-16, 35-track set
+
+- [x] **Master and Return track selection.** No `ValueError`, correct row
+      highlighting. Zero tracebacks across 400 log lines of real use, so the
+      `copilot/view.py` override is confirmed under load, not just in principle.
+- [x] **Latency at 35 tracks: very fast**, reported by the producer.
+
+The whole track table arrives in a *single* datagram every 2 s: with only
+`track.*` properties requested, `track_chunks` fits 597 tracks per chunk, so 35
+tracks is one chunk. Outbound traffic at rest is a handful of small datagrams
+per second (two bulk queries and two counts every 2 s, selection twice a second,
+master meter every 2 s, and twelve subscription resends every 10 s).
+
+This is also where the `clip_props` fix pays. The previous formula added a
+`num_scenes` term regardless of what was requested; on a session-view-heavy set
+with ~100 scenes that gives 17 tracks per chunk, so 35 tracks would have needed
+3 chunks and a full sweep would have taken several seconds instead of one tick.
+Multiple chunks in flight is also the only condition under which a late reply
+can be decoded against the wrong index range.
+
+Remaining: a port-11001 conflict showing a legible error (start a second copy of
+the app to trigger it).
