@@ -2,6 +2,7 @@ from ..manager import Manager
 from .master import MasterHandler, ReturnHandler
 from .mixer import MixerHandler
 from .device_range import DeviceRangeHandler
+from .view import ViewOverrideHandler
 
 
 class CopilotManager(Manager):
@@ -16,4 +17,7 @@ class CopilotManager(Manager):
                 ReturnHandler(self),
                 MixerHandler(self),
                 DeviceRangeHandler(self),
+                # Registered after upstream's ViewHandler, so this handler's
+                # None-safe get_selected_device wins the address.
+                ViewOverrideHandler(self),
             ]

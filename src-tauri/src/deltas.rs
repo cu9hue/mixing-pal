@@ -43,11 +43,24 @@ pub struct Coalescer {
     /// per-address rather than being dropped or panicking.
     latest: HashMap<String, Delta>,
     order: Vec<String>,
+    /// The last known value per key, same keying as `latest` but never
+    /// cleared by `drain()`. A subscription's initial value (tempo,
+    /// root_note, scale_name, ...) arrives once, at subscribe time, and
+    /// never repeats on its own -- a frontend that attaches its listener
+    /// after that burst was already drained and emitted would otherwise
+    /// never see it. `snapshot()` lets a late subscriber catch up.
+    retained: HashMap<String, Delta>,
+    retained_order: Vec<String>,
 }
 
 impl Coalescer {
     pub fn new() -> Self {
-        Self { latest: HashMap::new(), order: Vec::new() }
+        Self {
+            latest: HashMap::new(),
+            order: Vec::new(),
+            retained: HashMap::new(),
+            retained_order: Vec::new(),
+        }
     }
 
     pub fn observe(&mut self, msg: &OscMessage) {
@@ -62,17 +75,22 @@ impl Coalescer {
             .map(|a| format!("{a:?}"))
             .collect();
         let key = format!("{}|{}", msg.addr, key_part.join(","));
+        let delta = Delta {
+            addr: msg.addr.clone(),
+            args: msg.args.iter().map(to_json).collect(),
+        };
 
         if !self.latest.contains_key(&key) {
             self.order.push(key.clone());
         }
-        self.latest.insert(
-            key,
-            Delta {
-                addr: msg.addr.clone(),
-                args: msg.args.iter().map(to_json).collect(),
-            },
-        );
+        self.latest.insert(key.clone(), delta.clone());
+
+        // Same key, a separate map: bounded the same way `latest` is (one
+        // entry per address+key), just never emptied by `drain()`.
+        if !self.retained.contains_key(&key) {
+            self.retained_order.push(key.clone());
+        }
+        self.retained.insert(key, delta);
     }
 
     /// Empties the buffer, returning deltas in first-seen order.
@@ -85,6 +103,19 @@ impl Coalescer {
         self.latest.clear();
         self.order.clear();
         out
+    }
+
+    /// Every retained value, in first-seen order, unaffected by `drain()`.
+    /// A late subscriber (the `snapshot` Tauri command) calls this to catch
+    /// up on values that already arrived -- including a set's initial
+    /// defaults, which are pushed once when `SINGLETON_SUBSCRIPTIONS` is
+    /// sent and would otherwise be lost the moment they're drained by the
+    /// emit loop before any webview listener exists.
+    pub fn snapshot(&self) -> Vec<Delta> {
+        self.retained_order
+            .iter()
+            .filter_map(|k| self.retained.get(k).cloned())
+            .collect()
     }
 }
 
@@ -139,5 +170,42 @@ mod tests {
         c.observe(&msg("/live/song/get/tempo", vec![OscType::Float(128.0)]));
         assert_eq!(c.drain().len(), 1);
         assert!(c.drain().is_empty());
+    }
+
+    #[test]
+    fn snapshot_survives_drain_and_keeps_the_latest_value_per_key() {
+        // A late subscriber (the `snapshot` command) must still see a
+        // value that already went out and was drained by the emit loop --
+        // most importantly a set's initial defaults (tempo, root_note,
+        // scale_name, ...), which are pushed once at subscribe time and
+        // never repeat on their own.
+        let mut c = Coalescer::new();
+        c.observe(&msg("/live/song/get/tempo", vec![OscType::Float(120.0)]));
+        c.observe(&msg("/live/song/get/tempo", vec![OscType::Float(128.0)]));
+
+        // The coalescer's own buffer drains and empties as usual.
+        assert_eq!(c.drain().len(), 1);
+        assert!(c.drain().is_empty());
+
+        // The retained snapshot survived both drains and kept the latest
+        // value, not the first.
+        let snap = c.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].args[0], serde_json::json!(128.0));
+    }
+
+    #[test]
+    fn snapshot_does_not_collapse_across_different_objects() {
+        let mut c = Coalescer::new();
+        c.observe(&msg(
+            "/live/track/get/name",
+            vec![OscType::Int(0), OscType::String("Kick".into())],
+        ));
+        c.observe(&msg(
+            "/live/track/get/name",
+            vec![OscType::Int(1), OscType::String("Bass".into())],
+        ));
+        c.drain();
+        assert_eq!(c.snapshot().len(), 2);
     }
 }
