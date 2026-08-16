@@ -2309,3 +2309,90 @@ Deliberately **not** in this plan, and carried to Plans 2 and 3: the digest and 
 **Known gap to close in Plan 2.** Task 12 calls `track_chunks(64, 8, 4)` with hardcoded track and scene counts. Real values need `/live/song/get/num_tracks` and `/live/song/get/num_scenes` fetched before the first chunked call, which is also what parsing a `track_data` reply requires. Plan 2's first task does the snapshot sequencing properly; until then the poll loop over-requests on small sets and under-covers sets above 64 tracks.
 
 **Types.** `Delta` is defined once in `src/live/model.ts` and matches the Rust `Delta` in `src-tauri/src/deltas.rs` field for field. `PollKind` is used identically in Tasks 8 and 12. `NoteTracker.update` has one signature, used only in its own tests here.
+
+---
+
+### Task 13: Decode the bulk replies so tracks actually appear
+
+Added after Tasks 1-12 shipped. The poll loop sends `track_data` and `mixer_data`;
+`applyDelta` only ever handled individual `/live/track/get/*` addresses; and no task
+was assigned the parser between them. The result is that `state.tracks` stays `{}`
+and the window renders zero track rows. This task closes that gap.
+
+**The decode happens in Rust, not TypeScript.** Both replies are keyless — they echo
+no range — so attributing one requires knowing which request is outstanding, and that
+knowledge lives beside the request table. Rust decodes each bulk reply and re-emits it
+as ordinary per-track deltas at the addresses `applyDelta` already understands, so the
+tested TypeScript path is reused rather than duplicated.
+
+**Reply shapes, verified against the vendored script:**
+- `track_data` requests only `track.*` properties (`TRACK_DATA_PROPERTIES`), and
+  `song.py` appends exactly one value per `track.` property per track. So the reply is
+  `3 * (max - min)` values: `name, mute, solo` per track, in index order. Scene count
+  does not affect it — that only applies to `clip.*` properties, which we never request.
+- `mixer_data` (`copilot/mixer.py`) appends `volume, panning` per track: `2 * (max - min)`
+  values, in index order.
+
+**Files:**
+- Modify: `src-tauri/src/lib.rs` (record in-flight ranges; decode on receipt)
+- Create: `src-tauri/src/bulk.rs` (pure decoding, unit-tested)
+- Modify: `src/live/model.ts` (`TrackState` gains `mute`, `solo`, `panning`)
+- Modify: `src/live/apply.ts` (handle the re-emitted addresses)
+- Modify: `src/ui/SetView.tsx` (render the new columns)
+
+**Interfaces:**
+- Consumes: `Delta` (Task 9), `RequestTable` (Task 6), `TrackState`/`applyDelta` (Task 10).
+- Produces: `pub fn decode_track_data(range: (u32, u32), args: &[OscType]) -> Vec<Delta>`
+  and `pub fn decode_mixer_data(range: (u32, u32), args: &[OscType]) -> Vec<Delta>`,
+  each returning per-track deltas at `/live/track/get/{name,mute,solo}` and
+  `/live/track/get/{volume,panning}` with `[index, value]` args.
+
+- [ ] **Step 1: Write the failing decode tests**
+
+Cover, at minimum: a two-track `track_data` reply decoding to six deltas with correct
+indices offset by `range.0`; a `mixer_data` reply decoding to volume and panning per
+track; a reply whose length is NOT a whole multiple of the stride returning no deltas
+rather than panicking or emitting garbage (a truncated or mismatched reply must fail
+closed); and an empty reply returning an empty vec.
+
+- [ ] **Step 2: Run them, confirm they fail**
+
+Run: `cd src-tauri && cargo test bulk`
+
+- [ ] **Step 3: Implement `bulk.rs`**
+
+Pure functions, no I/O. Reject any reply whose length is not `stride * (max - min)`
+and return an empty vec — a wrong-length reply means the range attribution is wrong,
+and emitting partial data under wrong indices is the exact class of plausible-wrong-data
+this codebase exists to avoid. Log the mismatch.
+
+- [ ] **Step 4: Record in-flight ranges and decode on receipt**
+
+Extend the existing shared counts state with `inflight_track_data: Option<(u32, u32)>`
+and `inflight_mixer_data: Option<(u32, u32)>`. Set when the poll loop sends a chunk;
+read and clear in the receive loop when the matching reply arrives; feed the decoded
+deltas through the same `Coalescer` and retained-snapshot map as any other observation,
+so they reach the UI and survive a reload identically.
+
+Single-flight serializes keyless requests per address, so at most one range is
+outstanding per address at a time. Clear the in-flight range on `expire` too, or a lost
+reply strands it.
+
+- [ ] **Step 5: Extend the TypeScript model**
+
+`TrackState` gains `mute: boolean | null`, `solo: boolean | null`, `panning: number | null`.
+`applyDelta` handles the three new addresses. Add tests. Keep the existing null-tolerance —
+a `null` arg must stay `null`, not become `false` or `0`.
+
+- [ ] **Step 6: Render the columns**
+
+`SetView` shows index, name, volume, and mute/solo state. Keep it plain.
+
+- [ ] **Step 7: Verify and commit**
+
+`cargo test`, `npm test`, `npm run build`, `cargo clippy`. Then relaunch against real
+Live and confirm track rows populate — that step is PENDING-USER.
+
+```bash
+git add -A && git commit -m "feat: decode bulk track and mixer replies into per-track deltas"
+```
