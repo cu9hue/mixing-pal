@@ -4,11 +4,12 @@ Vendored: 2026-08-16
 
 The `abletonosc/` and `pythonosc/` directories are unmodified upstream code.
 `manager.py` is also unmodified upstream code, vendored alongside
-`abletonosc/` because `__init__.py` does `from .manager import Manager`;
-without `manager.py` the Remote Script cannot construct its Manager instance
-inside Live. (The brief's copy list omitted `manager.py`; this is the one
-deviation from it, made because Tasks 2 and later require a working Remote
-Script, not just an importable `abletonosc.handler` module.)
+`abletonosc/` because `copilot/manager.py`'s `CopilotManager` does
+`from ..manager import Manager` and subclasses it; without `manager.py` the
+Remote Script cannot construct its Manager instance inside Live. (The
+brief's copy list omitted `manager.py`; this is the one deviation from it,
+made because Tasks 2 and later require a working Remote Script, not just an
+importable `abletonosc.handler` module.)
 
 The upstream `client/` directory (a standalone CLI/test client) is not
 vendored: nothing in `abletonosc/`, `manager.py`, or `__init__.py` imports
@@ -21,7 +22,8 @@ handler in `copilot/` and register it from `copilot/manager.py` instead.
 to upstream (see above), so it cannot be edited to add master/return-track
 handlers. Instead, `copilot/manager.py` defines `CopilotManager(Manager)`,
 which overrides `init_api()` to call `super().init_api()` and then append
-`MasterHandler`/`ReturnHandler` to `self.handlers` (see Task 2). `__init__.py`
+`MasterHandler`, `ReturnHandler`, `MixerHandler`, `DeviceRangeHandler`, and
+`ViewOverrideHandler` to `self.handlers` (see Task 2 and later). `__init__.py`
 was changed only to import `CopilotManager` from `.copilot.manager` and
 return it from `create_instance()` instead of the upstream `Manager`. The
 `try/except ImportError` wrapper that lets pytest import this package is

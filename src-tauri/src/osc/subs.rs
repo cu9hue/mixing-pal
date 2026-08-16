@@ -21,17 +21,6 @@ pub const SINGLETON_SUBSCRIPTIONS: &[&str] = &[
     "/live/view/start_listen/selected_scene",
 ];
 
-/// Answers "is this on the vetted subscribe list" — not "is this
-/// structurally index-free". A prefix check on `/live/song/` or
-/// `/live/view/` would also admit `/live/song/start_listen/current_song_time`,
-/// which is index-free but explicitly excluded because its LOM listener
-/// floods (see `never_subscribes_to_current_song_time`). Membership in
-/// `SINGLETON_SUBSCRIPTIONS` is the actual guarantee this function's name
-/// promises.
-pub fn is_subscribable(addr: &str) -> bool {
-    SINGLETON_SUBSCRIPTIONS.contains(&addr)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,18 +36,6 @@ mod tests {
                 "{addr} is indexed and must never be subscribed"
             );
         }
-    }
-
-    #[test]
-    fn rejects_indexed_subscriptions() {
-        assert!(!is_subscribable("/live/track/start_listen/volume"));
-        assert!(!is_subscribable("/live/clip/start_listen/playing_position"));
-        assert!(!is_subscribable("/live/device/start_listen/parameter/value"));
-        assert!(is_subscribable("/live/song/start_listen/tempo"));
-        assert!(is_subscribable("/live/view/start_listen/selected_track"));
-        // The whole point: index-free but explicitly excluded because its
-        // LOM listener floods. A prefix check would wrongly admit this.
-        assert!(!is_subscribable("/live/song/start_listen/current_song_time"));
     }
 
     #[test]
