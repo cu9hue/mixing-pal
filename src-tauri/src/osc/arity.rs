@@ -44,8 +44,11 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/song/get/beat" => KeyArity::None,
 
         "/live/track/get/name"
+        | "/live/track/get/mute"
+        | "/live/track/get/solo"
         | "/live/track/get/volume"
         | "/live/track/get/volume_db"
+        | "/live/track/get/panning"
         | "/live/track/get/output_meter_level"
         | "/live/track/get/clips/name"
         | "/live/track/get/arrangement_clips/name"
@@ -96,8 +99,11 @@ mod tests {
             ("/live/master/get/output_meter_level", KeyArity::None),
             ("/live/master/get/volume_db", KeyArity::None),
             ("/live/track/get/name", KeyArity::Args(1)),
+            ("/live/track/get/mute", KeyArity::Args(1)),
+            ("/live/track/get/solo", KeyArity::Args(1)),
             ("/live/track/get/volume", KeyArity::Args(1)),
             ("/live/track/get/volume_db", KeyArity::Args(1)),
+            ("/live/track/get/panning", KeyArity::Args(1)),
             ("/live/track/get/output_meter_level", KeyArity::Args(1)),
             ("/live/track/get/clips/name", KeyArity::Args(1)),
             ("/live/track/get/arrangement_clips/name", KeyArity::Args(1)),

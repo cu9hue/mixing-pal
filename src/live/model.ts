@@ -1,7 +1,10 @@
 export interface TrackState {
   name: string | null;
+  mute: boolean | null;
+  solo: boolean | null;
   volume: number | null;
   volumeDb: string | null;
+  panning: number | null;
   meter: number | null;
 }
 
@@ -20,5 +23,13 @@ export interface Delta {
 }
 
 export function emptyTrack(): TrackState {
-  return { name: null, volume: null, volumeDb: null, meter: null };
+  return {
+    name: null,
+    mute: null,
+    solo: null,
+    volume: null,
+    volumeDb: null,
+    panning: null,
+    meter: null,
+  };
 }

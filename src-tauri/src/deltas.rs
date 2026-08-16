@@ -9,7 +9,7 @@ pub struct Delta {
     pub args: Vec<serde_json::Value>,
 }
 
-fn to_json(arg: &OscType) -> serde_json::Value {
+pub(crate) fn to_json(arg: &OscType) -> serde_json::Value {
     match arg {
         OscType::Int(i) => serde_json::json!(i),
         OscType::Long(i) => serde_json::json!(i),
@@ -79,7 +79,29 @@ impl Coalescer {
             addr: msg.addr.clone(),
             args: msg.args.iter().map(to_json).collect(),
         };
+        self.ingest(key, delta);
+    }
 
+    /// Same coalescing as `observe`, for a `Delta` that was decoded from a
+    /// bulk reply (see `bulk::decode_track_data`/`decode_mixer_data`)
+    /// rather than read straight off the wire as an `OscMessage`. The key is
+    /// computed from the delta's own (already JSON-converted) args instead
+    /// of raw `OscType`s, since a decoded delta has no `OscMessage` to draw
+    /// one from -- but every other behaviour (last-value-wins within a
+    /// window, survival in `retained` across `drain()`) is identical, which
+    /// is the point: the frontend and a reload's `snapshot()` cannot tell a
+    /// bulk-decoded track delta apart from one that arrived any other way.
+    pub fn observe_delta(&mut self, delta: Delta) {
+        let n = match key_arity(&delta.addr) {
+            KeyArity::Args(n) => n,
+            _ => 0,
+        };
+        let key_part: Vec<String> = delta.args.iter().take(n).map(|a| a.to_string()).collect();
+        let key = format!("{}|{}", delta.addr, key_part.join(","));
+        self.ingest(key, delta);
+    }
+
+    fn ingest(&mut self, key: String, delta: Delta) {
         if !self.latest.contains_key(&key) {
             self.order.push(key.clone());
         }
@@ -91,6 +113,46 @@ impl Coalescer {
             self.retained_order.push(key.clone());
         }
         self.retained.insert(key, delta);
+    }
+
+    /// Removes `retained` (and, incidentally, any not-yet-drained `latest`)
+    /// entries for track indices `>= num_tracks`, at any of `addrs`.
+    ///
+    /// Exists because `retained` never evicts on its own (see the module
+    /// doc comment): before bulk decoding, that was harmless, since only
+    /// song/view singletons and unkeyed bulk addresses ever landed in it,
+    /// and the frontend ignored the unkeyed ones. Now that bulk replies are
+    /// decoded into per-track deltas at real, keyed addresses (`/live/track/
+    /// get/name` and friends), `retained` holds one entry per track index
+    /// that ever existed in the session. Deleting a track in Live never
+    /// tells this coalescer to forget it -- there is no "track removed"
+    /// message, only a smaller `num_tracks` on the next poll -- so without
+    /// this, a webview reload's `snapshot()` would resurrect rows for
+    /// tracks no longer in the set.
+    ///
+    /// Called from `lib.rs` whenever `num_tracks` is observed to shrink,
+    /// with the exact addresses `bulk::decode_track_data`/
+    /// `decode_mixer_data` re-emit under (`TRACK_DATA_ADDRS` +
+    /// `MIXER_ADDRS`), so this can never fall out of sync with what the
+    /// decode step actually produces.
+    pub fn evict_tracks_at_or_beyond(&mut self, addrs: &[&str], num_tracks: u32) {
+        let is_stale = |key: &str| -> bool {
+            for addr in addrs {
+                if let Some(rest) = key.strip_prefix(addr) {
+                    if let Some(index) = rest.strip_prefix('|') {
+                        if let Ok(index) = index.parse::<u32>() {
+                            return index >= num_tracks;
+                        }
+                    }
+                }
+            }
+            false
+        };
+
+        self.retained_order.retain(|k| !is_stale(k));
+        self.retained.retain(|k, _| !is_stale(k));
+        self.order.retain(|k| !is_stale(k));
+        self.latest.retain(|k, _| !is_stale(k));
     }
 
     /// Empties the buffer, returning deltas in first-seen order.
@@ -207,5 +269,81 @@ mod tests {
         ));
         c.drain();
         assert_eq!(c.snapshot().len(), 2);
+    }
+
+    fn delta(addr: &str, index: u32, value: serde_json::Value) -> Delta {
+        Delta { addr: addr.to_string(), args: vec![serde_json::json!(index), value] }
+    }
+
+    #[test]
+    fn observe_delta_coalesces_and_retains_the_same_way_observe_does() {
+        // A bulk-decoded delta (no OscMessage backing it) must behave
+        // identically to one observed off the wire: last value wins within
+        // a window, different track indices never collapse, and the value
+        // survives drain() via retained.
+        let mut c = Coalescer::new();
+        c.observe_delta(delta("/live/track/get/name", 0, serde_json::json!("Kick")));
+        c.observe_delta(delta("/live/track/get/name", 0, serde_json::json!("Snare")));
+        c.observe_delta(delta("/live/track/get/name", 1, serde_json::json!("Bass")));
+
+        let out = c.drain();
+        assert_eq!(out.len(), 2, "two distinct track indices, last value wins per index");
+        assert!(c.drain().is_empty());
+
+        let snap = c.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert!(snap.iter().any(|d| d.args == vec![serde_json::json!(0), serde_json::json!("Snare")]));
+        assert!(snap.iter().any(|d| d.args == vec![serde_json::json!(1), serde_json::json!("Bass")]));
+    }
+
+    #[test]
+    fn shrinking_num_tracks_evicts_stale_track_entries_from_the_snapshot() {
+        // Regression for the reviewer-caught bug: retained never evicted on
+        // its own, so once bulk decoding started landing per-track values
+        // there, a track deleted in Live would keep resurrecting as a
+        // phantom row in a webview reload's snapshot(). A shrink must
+        // actually remove those stale entries, not just stop refreshing
+        // them.
+        let mut c = Coalescer::new();
+        for i in 0..3u32 {
+            c.observe_delta(delta("/live/track/get/name", i, serde_json::json!(format!("Track {i}"))));
+            c.observe_delta(delta("/live/track/get/volume", i, serde_json::json!(0.8)));
+        }
+        c.drain();
+        assert_eq!(c.snapshot().len(), 6, "3 tracks * 2 addresses");
+
+        // Track 2 is deleted; num_tracks shrinks from 3 to 2.
+        c.evict_tracks_at_or_beyond(
+            &["/live/track/get/name", "/live/track/get/volume"],
+            2,
+        );
+
+        let snap = c.snapshot();
+        assert_eq!(snap.len(), 4, "only tracks 0 and 1 survive the shrink");
+        for d in &snap {
+            let index = &d.args[0];
+            assert!(
+                *index == serde_json::json!(0) || *index == serde_json::json!(1),
+                "expected only surviving indices 0 or 1, got {index:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn eviction_does_not_touch_other_addresses_or_smaller_indices() {
+        let mut c = Coalescer::new();
+        c.observe_delta(delta("/live/track/get/name", 0, serde_json::json!("Kick")));
+        c.observe_delta(delta("/live/track/get/name", 5, serde_json::json!("Ghost")));
+        // A non-track address sharing no prefix must be untouched.
+        c.observe(&msg("/live/song/get/tempo", vec![OscType::Float(128.0)]));
+        c.drain();
+
+        c.evict_tracks_at_or_beyond(&["/live/track/get/name"], 5);
+
+        let snap = c.snapshot();
+        assert_eq!(snap.len(), 2, "track 0 and tempo survive; track 5 is evicted");
+        assert!(snap.iter().any(|d| d.addr == "/live/track/get/name" && d.args[0] == serde_json::json!(0)));
+        assert!(snap.iter().any(|d| d.addr == "/live/song/get/tempo"));
+        assert!(!snap.iter().any(|d| d.args.first() == Some(&serde_json::json!(5))));
     }
 }

@@ -1,6 +1,8 @@
+mod bulk;
 mod deltas;
 mod osc;
 
+use bulk::{decode_mixer_data, decode_track_data, MIXER_ADDRS, TRACK_DATA_ADDRS};
 use deltas::{Coalescer, Delta};
 use osc::budget::track_chunks;
 use osc::pollers::{PollKind, PollSchedule};
@@ -31,15 +33,60 @@ const TRACK_DATA_PROPERTIES: [&str; 3] = ["track.name", "track.mute", "track.sol
 /// mechanism.
 const SUBSCRIPTION_RESEND_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Same window `RequestTable::expire` uses to free a single-flight slot.
+/// Reused here so `inflight_track_data`/`inflight_mixer_data` (below) can
+/// never outlive the request they describe -- see
+/// `clear_stale_inflight`'s doc comment for why a stranded range would
+/// otherwise misattribute a later, differently-ranged reply.
+const UNKEYED_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Cached as replies to `/live/song/get/{num_tracks,num_scenes}` arrive
 /// through the normal receive-loop observation path. `track_chunks` needs
 /// the real counts, and parsing a `track_data` reply requires them anyway
 /// since its clip segments are positional -- so chunked polling is skipped
 /// until both are known rather than guessed.
+///
+/// `inflight_track_data`/`inflight_mixer_data` record the `(min, max)`
+/// track range the poll loop just sent a request for, at the moment it
+/// sends it. Both replies are `KeyArity::Unkeyed` -- they echo no range --
+/// so this is the only place that knowledge exists once the request is on
+/// the wire; the receive loop reads and clears the matching field when the
+/// reply arrives, and `clear_stale_inflight` clears it if the reply never
+/// does. The paired `_sent_at` fields exist only to drive that timeout and
+/// are not part of the brief's stated field set.
 #[derive(Default)]
 struct TrackCounts {
     num_tracks: Option<usize>,
     num_scenes: Option<usize>,
+    inflight_track_data: Option<(u32, u32)>,
+    inflight_mixer_data: Option<(u32, u32)>,
+    track_data_sent_at: Option<Instant>,
+    mixer_data_sent_at: Option<Instant>,
+}
+
+/// Clears a stranded `inflight_track_data`/`inflight_mixer_data` range once
+/// its request is older than `UNKEYED_REQUEST_TIMEOUT` -- the same window
+/// `RequestTable::expire` uses to free the matching single-flight slot.
+/// Without this, a reply that's lost in transit would leave the old range
+/// sitting in `TrackCounts` forever (or until happenstance overwrites it
+/// with the next successful send), so a later stray or zombie packet at the
+/// same address could be decoded under a range nothing actually confirmed.
+/// Called once per poll tick, alongside `RequestTable::expire`.
+fn clear_stale_inflight(counts: &Mutex<TrackCounts>, now: Instant) {
+    if let Ok(mut c) = counts.lock() {
+        if c.track_data_sent_at
+            .is_some_and(|t| now.duration_since(t) > UNKEYED_REQUEST_TIMEOUT)
+        {
+            c.inflight_track_data = None;
+            c.track_data_sent_at = None;
+        }
+        if c.mixer_data_sent_at
+            .is_some_and(|t| now.duration_since(t) > UNKEYED_REQUEST_TIMEOUT)
+        {
+            c.inflight_mixer_data = None;
+            c.mixer_data_sent_at = None;
+        }
+    }
 }
 
 /// Returns every retained value (see `Coalescer::snapshot`) so a webview
@@ -131,13 +178,100 @@ pub fn run() {
                             // waits on its own reply.
                             match (msg.addr.as_str(), msg.args.first()) {
                                 ("/live/song/get/num_tracks", Some(OscType::Int(n))) => {
-                                    if let Ok(mut c) = recv_counts.lock() {
-                                        c.num_tracks = Some((*n).max(0) as usize);
+                                    let new_count = (*n).max(0) as usize;
+                                    let shrank = match recv_counts.lock() {
+                                        Ok(mut c) => {
+                                            let shrank = c
+                                                .num_tracks
+                                                .is_some_and(|old| new_count < old);
+                                            c.num_tracks = Some(new_count);
+                                            shrank
+                                        }
+                                        Err(_) => false,
+                                    };
+                                    // A shrink means at least one track was
+                                    // deleted in Live. There is no "track
+                                    // removed" message -- only a smaller
+                                    // count on the next poll -- so this is
+                                    // the only signal that stale retained
+                                    // entries (see
+                                    // `Coalescer::evict_tracks_at_or_beyond`)
+                                    // need sweeping before a reload's
+                                    // `snapshot()` can resurrect them as
+                                    // phantom rows.
+                                    if shrank {
+                                        if let Ok(mut c) = recv_coalescer.lock() {
+                                            let addrs: Vec<&str> = TRACK_DATA_ADDRS
+                                                .iter()
+                                                .chain(MIXER_ADDRS.iter())
+                                                .copied()
+                                                .collect();
+                                            c.evict_tracks_at_or_beyond(
+                                                &addrs,
+                                                new_count as u32,
+                                            );
+                                        }
                                     }
                                 }
                                 ("/live/song/get/num_scenes", Some(OscType::Int(n))) => {
                                     if let Ok(mut c) = recv_counts.lock() {
                                         c.num_scenes = Some((*n).max(0) as usize);
+                                    }
+                                }
+                                _ => {}
+                            }
+
+                            // track_data and mixer_data are both
+                            // `KeyArity::Unkeyed` -- the reply echoes no
+                            // range -- so attributing this one to a track
+                            // range means reading (and clearing) whatever
+                            // range the poll loop most recently recorded
+                            // for this address in `TrackCounts`. A `None`
+                            // here means no range is known for this reply
+                            // (never sent one, or `clear_stale_inflight`
+                            // already reclaimed it): decoding would have to
+                            // guess the range, which is exactly the
+                            // plausible-wrong-data this design avoids, so
+                            // it's dropped instead.
+                            match msg.addr.as_str() {
+                                "/live/song/get/track_data" => {
+                                    let range = match recv_counts.lock() {
+                                        Ok(mut c) => c.inflight_track_data.take(),
+                                        Err(_) => None,
+                                    };
+                                    match range {
+                                        Some(range) => {
+                                            let deltas = decode_track_data(range, &msg.args);
+                                            if let Ok(mut c) = recv_coalescer.lock() {
+                                                for delta in deltas {
+                                                    c.observe_delta(delta);
+                                                }
+                                            }
+                                        }
+                                        None => eprintln!(
+                                            "track_data reply arrived with no in-flight \
+                                             range recorded; dropping"
+                                        ),
+                                    }
+                                }
+                                "/live/track/get/mixer_data" => {
+                                    let range = match recv_counts.lock() {
+                                        Ok(mut c) => c.inflight_mixer_data.take(),
+                                        Err(_) => None,
+                                    };
+                                    match range {
+                                        Some(range) => {
+                                            let deltas = decode_mixer_data(range, &msg.args);
+                                            if let Ok(mut c) = recv_coalescer.lock() {
+                                                for delta in deltas {
+                                                    c.observe_delta(delta);
+                                                }
+                                            }
+                                        }
+                                        None => eprintln!(
+                                            "mixer_data reply arrived with no in-flight \
+                                             range recorded; dropping"
+                                        ),
                                     }
                                 }
                                 _ => {}
@@ -215,7 +349,7 @@ pub fn run() {
                     // retryable on this very tick rather than the next one.
                     match poll_table.lock() {
                         Ok(mut t) => {
-                            t.expire(now, Duration::from_secs(2));
+                            t.expire(now, UNKEYED_REQUEST_TIMEOUT);
                         }
                         Err(_) => {
                             eprintln!(
@@ -223,6 +357,10 @@ pub fn run() {
                             );
                         }
                     }
+                    // Same reasoning, for the in-flight ranges `TrackCounts`
+                    // tracks alongside the request table's own slots -- see
+                    // `clear_stale_inflight`'s doc comment.
+                    clear_stale_inflight(&poll_counts, now);
 
                     // Unconditional, not silence-gated -- see
                     // SUBSCRIPTION_RESEND_INTERVAL's doc comment for why a
@@ -238,10 +376,17 @@ pub fn run() {
                     // Dropping this, the way `if let Registration::New(_)
                     // = ...` alone would, silently loses track_data chunks
                     // 2..n and any deferred mixer_data poll forever.
-                    drain_track_data_queue(&poll_table, &poll_socket, &mut track_data_queue, now)
-                        .await;
+                    drain_track_data_queue(
+                        &poll_table,
+                        &poll_socket,
+                        &poll_counts,
+                        &mut track_data_queue,
+                        now,
+                    )
+                    .await;
                     if faders_pending {
-                        try_faders(&poll_table, &poll_socket, now, &mut faders_pending).await;
+                        try_faders(&poll_table, &poll_socket, &poll_counts, now, &mut faders_pending)
+                            .await;
                     }
 
                     for kind in schedule.due(now) {
@@ -329,12 +474,12 @@ async fn poll_kind(
                     ));
                     *queue_built_for = Some(current);
                 }
-                drain_track_data_queue(table, poll_socket, track_data_queue, now).await;
+                drain_track_data_queue(table, poll_socket, counts, track_data_queue, now).await;
             }
         }
         PollKind::Faders => {
             *faders_pending = true;
-            try_faders(table, poll_socket, now, faders_pending).await;
+            try_faders(table, poll_socket, counts, now, faders_pending).await;
         }
         PollKind::Selection => {
             for addr in [
@@ -394,6 +539,7 @@ async fn register_and_send(
 async fn drain_track_data_queue(
     table: &Mutex<RequestTable>,
     poll_socket: &OscSocket,
+    counts: &Mutex<TrackCounts>,
     queue: &mut VecDeque<(usize, usize)>,
     now: Instant,
 ) {
@@ -417,6 +563,14 @@ async fn drain_track_data_queue(
             Registration::New(_) => {
                 let _ = poll_socket.send("/live/song/get/track_data", args).await;
                 queue.pop_front();
+                // Record exactly the range just sent, so the receive loop
+                // can decode this reply's keyless values back into the
+                // right track indices when it arrives (see
+                // `TrackCounts::inflight_track_data`'s doc comment).
+                if let Ok(mut c) = counts.lock() {
+                    c.inflight_track_data = Some((min as u32, max as u32));
+                    c.track_data_sent_at = Some(now);
+                }
             }
             // track_data is KeyArity::Unkeyed, so Joined is structurally
             // unreachable here (the per-address outstanding flag would
@@ -432,6 +586,7 @@ async fn drain_track_data_queue(
 async fn try_faders(
     table: &Mutex<RequestTable>,
     poll_socket: &OscSocket,
+    counts: &Mutex<TrackCounts>,
     now: Instant,
     pending: &mut bool,
 ) {
@@ -448,6 +603,19 @@ async fn try_faders(
         Registration::New(_) => {
             let _ = poll_socket.send(addr, args).await;
             *pending = false;
+            // The wire args above ask for "every track" (`0, -1`); Live
+            // resolves that server-side, so the concrete upper bound this
+            // client can decode against is whatever `num_tracks` it last
+            // cached. If that's still unknown (e.g. the very first tick,
+            // before any `num_tracks` reply has arrived), no range is
+            // recorded and the receive loop drops this reply rather than
+            // guess -- self-correcting on the next poll, by which point
+            // `num_tracks` is almost always known.
+            if let Ok(mut c) = counts.lock() {
+                let range = c.num_tracks.map(|n| (0u32, n as u32));
+                c.inflight_mixer_data = range;
+                c.mixer_data_sent_at = range.map(|_| now);
+            }
         }
         // mixer_data is also KeyArity::Unkeyed, so Joined is equally
         // unreachable here -- same reasoning as drain_track_data_queue:
@@ -487,14 +655,24 @@ mod tests {
         // traffic arrived in between. That's the property that heals a
         // Live project switch, where polled addresses keep replying but
         // the song/view listeners are dead.
+        //
+        // UDP guarantees nothing about arrival order between independent
+        // sends, even over loopback, so this checks the SET of addresses
+        // received rather than asserting they arrive in send order.
         let later = start + SUBSCRIPTION_RESEND_INTERVAL;
         maybe_resubscribe(&poll_socket, later, &mut last_resubscribe).await;
-        for expected in SINGLETON_SUBSCRIPTIONS {
+        let mut received = std::collections::HashSet::new();
+        for _ in SINGLETON_SUBSCRIPTIONS {
             let msg = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
                 .await
                 .expect("expected every SINGLETON_SUBSCRIPTIONS address to be resent");
-            assert_eq!(&msg.addr, expected);
+            received.insert(msg.addr);
         }
+        let expected: std::collections::HashSet<String> = SINGLETON_SUBSCRIPTIONS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(received, expected);
         assert_eq!(last_resubscribe, later);
     }
 
@@ -503,13 +681,14 @@ mod tests {
         let listener = OscSocket::bind_to(0, 0).await.unwrap();
         let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
         let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
         let mut queue: VecDeque<(usize, usize)> = VecDeque::from([(0, 1), (1, 2), (2, 3)]);
         let start = Instant::now();
 
         // First pass: track_data is single-flight per address, so only
         // chunk 1 goes out. Chunks 2 and 3 must stay queued, not be
         // dropped, per the brief's carried-forward Deferred-retry fix.
-        drain_track_data_queue(&table, &poll_socket, &mut queue, start).await;
+        drain_track_data_queue(&table, &poll_socket, &counts, &mut queue, start).await;
 
         let msg = recv_message(&listener).await;
         assert_eq!(msg.addr, "/live/song/get/track_data");
@@ -517,9 +696,14 @@ mod tests {
         assert_eq!(msg.args[1], OscType::Int(1));
         assert_eq!(queue.len(), 2);
         assert_eq!(queue.front(), Some(&(1, 2)));
+        assert_eq!(
+            counts.lock().unwrap().inflight_track_data,
+            Some((0, 1)),
+            "the exact chunk just sent must be recorded so the receive loop can decode its reply"
+        );
 
         // A second pass before the slot frees must not send anything new.
-        drain_track_data_queue(&table, &poll_socket, &mut queue, start).await;
+        drain_track_data_queue(&table, &poll_socket, &counts, &mut queue, start).await;
         assert_eq!(queue.len(), 2);
         let nothing_sent =
             tokio::time::timeout(Duration::from_millis(50), recv_message(&listener)).await;
@@ -534,13 +718,14 @@ mod tests {
             let mut t = table.lock().unwrap();
             t.expire(later, Duration::from_secs(2));
         }
-        drain_track_data_queue(&table, &poll_socket, &mut queue, later).await;
+        drain_track_data_queue(&table, &poll_socket, &counts, &mut queue, later).await;
         let msg2 = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
             .await
             .expect("expected chunk 2 to be sent once the slot expired");
         assert_eq!(msg2.args[0], OscType::Int(1));
         assert_eq!(msg2.args[1], OscType::Int(2));
         assert_eq!(queue.len(), 1);
+        assert_eq!(counts.lock().unwrap().inflight_track_data, Some((1, 2)));
     }
 
     #[tokio::test]
@@ -548,6 +733,7 @@ mod tests {
         let listener = OscSocket::bind_to(0, 0).await.unwrap();
         let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
         let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts { num_tracks: Some(4), ..Default::default() });
         let start = Instant::now();
 
         // Occupy mixer_data's single-flight slot directly, as if a
@@ -559,7 +745,7 @@ mod tests {
         }
 
         let mut pending = true;
-        try_faders(&table, &poll_socket, start, &mut pending).await;
+        try_faders(&table, &poll_socket, &counts, start, &mut pending).await;
         assert!(
             pending,
             "mixer_data is already in flight; the retry must stay pending, not be dropped"
@@ -577,11 +763,62 @@ mod tests {
             let mut t = table.lock().unwrap();
             t.expire(later, Duration::from_secs(2));
         }
-        try_faders(&table, &poll_socket, later, &mut pending).await;
+        try_faders(&table, &poll_socket, &counts, later, &mut pending).await;
         assert!(!pending);
         let msg = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
             .await
             .expect("expected mixer_data to be sent once the slot expired");
         assert_eq!(msg.addr, "/live/track/get/mixer_data");
+        // num_tracks was known (4) at send time, so the resolved range
+        // (0, num_tracks) is what gets recorded for the receive loop to
+        // decode this reply against.
+        assert_eq!(counts.lock().unwrap().inflight_mixer_data, Some((0, 4)));
+    }
+
+    #[tokio::test]
+    async fn a_mixer_data_send_with_num_tracks_unknown_records_no_range() {
+        // The very first tick can fire before any num_tracks reply has
+        // arrived. Recording a guessed range would let the receive loop
+        // decode a reply under a range nothing confirmed; recording none
+        // means it gets dropped and logged instead, self-correcting on the
+        // next poll once num_tracks is known.
+        let listener = OscSocket::bind_to(0, 0).await.unwrap();
+        let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
+        let start = Instant::now();
+
+        let mut pending = true;
+        try_faders(&table, &poll_socket, &counts, start, &mut pending).await;
+        assert!(!pending);
+        recv_message(&listener).await;
+        assert_eq!(counts.lock().unwrap().inflight_mixer_data, None);
+    }
+
+    #[test]
+    fn clear_stale_inflight_reclaims_a_range_whose_reply_never_arrived() {
+        let counts = Mutex::new(TrackCounts {
+            inflight_track_data: Some((0, 8)),
+            track_data_sent_at: Some(Instant::now()),
+            inflight_mixer_data: Some((0, 8)),
+            mixer_data_sent_at: Some(Instant::now()),
+            ..Default::default()
+        });
+        let start = Instant::now();
+
+        // Still within the timeout: nothing is cleared.
+        clear_stale_inflight(&counts, start);
+        {
+            let c = counts.lock().unwrap();
+            assert_eq!(c.inflight_track_data, Some((0, 8)));
+            assert_eq!(c.inflight_mixer_data, Some((0, 8)));
+        }
+
+        // Past the timeout: both stranded ranges are reclaimed.
+        let later = start + UNKEYED_REQUEST_TIMEOUT + Duration::from_millis(1);
+        clear_stale_inflight(&counts, later);
+        let c = counts.lock().unwrap();
+        assert_eq!(c.inflight_track_data, None);
+        assert_eq!(c.inflight_mixer_data, None);
     }
 }

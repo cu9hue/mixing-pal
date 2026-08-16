@@ -21,8 +21,11 @@ const SONG_FIELDS: Record<string, keyof SetState> = {
 
 const TRACK_FIELDS: Record<string, keyof TrackState> = {
   "/live/track/get/name": "name",
+  "/live/track/get/mute": "mute",
+  "/live/track/get/solo": "solo",
   "/live/track/get/volume": "volume",
   "/live/track/get/volume_db": "volumeDb",
+  "/live/track/get/panning": "panning",
   "/live/track/get/output_meter_level": "meter",
 };
 

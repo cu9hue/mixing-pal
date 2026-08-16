@@ -24,14 +24,21 @@ export function SetView() {
       setLastSeen(Date.now());
     });
 
-    invoke<Delta[]>("snapshot").then((snapshot) => {
-      if (snapshot.length === 0) return;
-      setState((prev) => snapshot.reduce(applyDelta, prev));
-      // A non-empty snapshot means the app is (or recently was) connected;
-      // clear the "not connected" banner immediately instead of waiting
-      // for the next change to produce a delta.
-      setLastSeen(Date.now());
-    });
+    invoke<Delta[]>("snapshot")
+      .then((snapshot) => {
+        if (snapshot.length === 0) return;
+        setState((prev) => snapshot.reduce(applyDelta, prev));
+        // A non-empty snapshot means the app is (or recently was) connected;
+        // clear the "not connected" banner immediately instead of waiting
+        // for the next change to produce a delta.
+        setLastSeen(Date.now());
+      })
+      .catch((err) => {
+        // A rejected invoke would otherwise become an unhandled promise
+        // rejection; the live deltas listener above still works on its
+        // own, so this is a missed catch-up, not a fatal error.
+        console.error("failed to fetch initial snapshot", err);
+      });
 
     return () => {
       stop.then((unlisten) => unlisten());
@@ -60,7 +67,9 @@ export function SetView() {
             >
               <td style={{ paddingRight: 12 }}>{i}</td>
               <td style={{ paddingRight: 12 }}>{state.tracks[i].name ?? "—"}</td>
-              <td>{state.tracks[i].volumeDb ?? "—"}</td>
+              <td style={{ paddingRight: 12 }}>{state.tracks[i].volumeDb ?? "—"}</td>
+              <td style={{ paddingRight: 12 }}>{state.tracks[i].mute ? "M" : ""}</td>
+              <td>{state.tracks[i].solo ? "S" : ""}</td>
             </tr>
           ))}
         </tbody>

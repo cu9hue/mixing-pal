@@ -43,4 +43,24 @@ describe("applyDelta", () => {
     });
     expect(s.tracks[0].meter).toBeNull();
   });
+
+  it("routes mute, solo, and panning to the right track", () => {
+    let s = emptySet();
+    s = applyDelta(s, { addr: "/live/track/get/mute", args: [0, true] });
+    s = applyDelta(s, { addr: "/live/track/get/solo", args: [0, false] });
+    s = applyDelta(s, { addr: "/live/track/get/panning", args: [0, -0.3] });
+    expect(s.tracks[0].mute).toBe(true);
+    expect(s.tracks[0].solo).toBe(false);
+    expect(s.tracks[0].panning).toBe(-0.3);
+  });
+
+  it("stores a null mute/solo as null, not false, and does not crash", () => {
+    // Same null-tolerance rule as meter: a null arg means "unknown", and
+    // coercing it to false would claim the track is definitely not muted.
+    let s = emptySet();
+    s = applyDelta(s, { addr: "/live/track/get/mute", args: [0, null] });
+    s = applyDelta(s, { addr: "/live/track/get/solo", args: [0, null] });
+    expect(s.tracks[0].mute).toBeNull();
+    expect(s.tracks[0].solo).toBeNull();
+  });
 });
