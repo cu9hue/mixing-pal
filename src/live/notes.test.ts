@@ -14,6 +14,19 @@ describe("diffNotes", () => {
     const d = diffNotes([note(60, 0)], [note(60, 0), note(64, 1)]);
     expect(d).toEqual({ added: 1, removed: 0 });
   });
+
+  it("counts a deleted duplicate note as removed, not invisible", () => {
+    // Live allows two stacked notes with identical pitch/start/duration/
+    // velocity, distinguished only by note_id, which this scheme doesn't
+    // track. A Set-based diff collapses the duplicate and misses the delete.
+    const d = diffNotes([note(60, 0), note(60, 0)], [note(60, 0)]);
+    expect(d).toEqual({ added: 0, removed: 1 });
+  });
+
+  it("counts a layered duplicate note as added, not invisible", () => {
+    const d = diffNotes([note(60, 0)], [note(60, 0), note(60, 0)]);
+    expect(d).toEqual({ added: 1, removed: 0 });
+  });
 });
 
 describe("NoteTracker", () => {
@@ -46,5 +59,13 @@ describe("NoteTracker", () => {
     t.update("2:0", [note(60, 0)]);
     t.update("3:1", [note(48, 0)]);
     expect(t.update("3:1", [note(48, 0), note(55, 1)]).changed).toBe(true);
+  });
+
+  it("reports a change when a duplicate note is deleted within one clip", () => {
+    const t = new NoteTracker();
+    t.update("2:0", [note(60, 0), note(60, 0)]);
+    const r = t.update("2:0", [note(60, 0)]);
+    expect(r.changed).toBe(true);
+    expect(r.removed).toBe(1);
   });
 });

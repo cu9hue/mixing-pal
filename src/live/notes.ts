@@ -8,19 +8,32 @@ export interface Note {
 
 const keyOf = (n: Note) => `${n.pitch}:${n.start}:${n.duration}:${n.velocity}`;
 
+function countByKey(notes: Note[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const n of notes) {
+    const k = keyOf(n);
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return counts;
+}
+
 export function diffNotes(
   prev: Note[],
   next: Note[],
 ): { added: number; removed: number } {
-  const before = new Set(prev.map(keyOf));
-  const after = new Set(next.map(keyOf));
+  // A plain Set collapses duplicates, so two identical stacked notes losing
+  // one is indistinguishable from no change at all. Live permits duplicate
+  // pitch/start/duration/velocity notes (distinguished only by note_id,
+  // which this scheme doesn't track), so counts per key, not just presence.
+  const before = countByKey(prev);
+  const after = countByKey(next);
   let added = 0;
   let removed = 0;
-  after.forEach((k) => {
-    if (!before.has(k)) added += 1;
-  });
-  before.forEach((k) => {
-    if (!after.has(k)) removed += 1;
+  const keys = new Set([...before.keys(), ...after.keys()]);
+  keys.forEach((k) => {
+    const diff = (after.get(k) ?? 0) - (before.get(k) ?? 0);
+    if (diff > 0) added += diff;
+    else if (diff < 0) removed += -diff;
   });
   return { added, removed };
 }
