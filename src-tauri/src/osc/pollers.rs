@@ -109,4 +109,27 @@ mod tests {
         assert!(due.contains(&PollKind::Faders));
         assert!(due.contains(&PollKind::Meters));
     }
+
+    #[test]
+    fn due_orders_multiple_results_deterministically() {
+        // Pins the exact multi-element sequence due() returns when everything
+        // is overdue at once, so the ordering is enforced rather than assumed.
+        let start = Instant::now();
+        let mut s = PollSchedule::new(start);
+        for kind in PollKind::all() {
+            s.mark(kind, start);
+        }
+        let at_2s = start + Duration::from_millis(2_050);
+        let due = s.due(at_2s);
+        assert_eq!(
+            due,
+            vec![
+                PollKind::TrackState,
+                PollKind::Faders,
+                PollKind::Selection,
+                PollKind::FocusedNotes,
+                PollKind::Meters,
+            ]
+        );
+    }
 }
