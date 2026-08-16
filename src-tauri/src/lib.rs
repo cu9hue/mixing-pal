@@ -20,6 +20,52 @@ use tauri::{Emitter, Manager};
 /// match exactly what actually goes on the wire.
 const TRACK_DATA_PROPERTIES: [&str; 3] = ["track.name", "track.mute", "track.solo"];
 
+/// Every address that can end up in a `Delta` the frontend actually
+/// receives: subscription replies (`SINGLETON_SUBSCRIPTIONS`'s `get`
+/// addresses), the two keyless counters this loop caches for `track_chunks`
+/// (observed raw, same as any other reply), and `track_data`/`mixer_data`'s
+/// decoded per-track addresses (`TRACK_DATA_ADDRS`/`MIXER_ADDRS` -- the raw
+/// bulk addresses themselves never reach the frontend; see the receive
+/// loop's `is_bulk_reply` skip). `PollKind::Selection`'s and
+/// `PollKind::Meters`' own addresses are observed raw and included too.
+///
+/// Exported so `every_emitted_address_is_handled_or_explicitly_allowed`
+/// (below) can assert this list and `apply.ts`'s address mappings
+/// (`shared/handled-addresses.json`) never drift apart silently -- I4 in the
+/// 2026-08-16 whole-branch review: this is the tripwire whose absence is
+/// exactly why C1 (a rendered field nothing ever fetched) shipped.
+pub const EMITTED_ADDRESSES: &[&str] = &[
+    // SINGLETON_SUBSCRIPTIONS reply (get) addresses.
+    "/live/song/get/tempo",
+    "/live/song/get/is_playing",
+    "/live/song/get/root_note",
+    "/live/song/get/scale_name",
+    "/live/song/get/loop",
+    "/live/song/get/loop_start",
+    "/live/song/get/loop_length",
+    "/live/song/get/signature_numerator",
+    "/live/song/get/signature_denominator",
+    "/live/song/get/beat",
+    "/live/view/get/selected_track",
+    "/live/view/get/selected_scene",
+    // PollKind::TrackState's own keyless counters, observed raw (see
+    // TrackCounts).
+    "/live/song/get/num_tracks",
+    "/live/song/get/num_scenes",
+    // track_data/mixer_data are Unkeyed bulk replies, skipped by observe()
+    // and decoded into these instead (bulk::TRACK_DATA_ADDRS/MIXER_ADDRS).
+    "/live/track/get/name",
+    "/live/track/get/mute",
+    "/live/track/get/solo",
+    "/live/track/get/volume",
+    "/live/track/get/panning",
+    // PollKind::Selection, observed raw.
+    "/live/view/get/selected_clip",
+    "/live/view/get/selected_device",
+    // PollKind::Meters, observed raw.
+    "/live/master/get/output_meter_level",
+];
+
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
 /// whether or not any traffic has arrived in between. Not silence-gated:
 /// loading a different project in Live swaps the `Song` object every polled
@@ -156,8 +202,24 @@ pub fn run() {
                 loop {
                     match recv_socket.recv().await {
                         Ok(msg) => {
-                            if let Ok(mut c) = recv_coalescer.lock() {
-                                c.observe(&msg);
+                            // track_data and mixer_data are raw bulk arrays
+                            // (up to ~1800 values) that get decoded into
+                            // real per-track deltas below and observed THERE
+                            // (via observe_delta) instead. Observing the raw
+                            // reply here too would coalesce and retain the
+                            // whole bulk array under its own request address
+                            // forever -- re-sent in full on every webview
+                            // reload via snapshot(), and never evicted,
+                            // since evict_tracks_at_or_beyond only matches
+                            // the decoded per-track addresses, not these.
+                            let is_bulk_reply = matches!(
+                                msg.addr.as_str(),
+                                "/live/song/get/track_data" | "/live/track/get/mixer_data"
+                            );
+                            if !is_bulk_reply {
+                                if let Ok(mut c) = recv_coalescer.lock() {
+                                    c.observe(&msg);
+                                }
                             }
                             // Every inbound packet is an observation first
                             // and a promise resolution second (see
@@ -277,7 +339,17 @@ pub fn run() {
                                 _ => {}
                             }
                         }
-                        Err(e) => eprintln!("osc recv error: {e}"),
+                        Err(e) => {
+                            eprintln!("osc recv error: {e}");
+                            // "Live isn't running" (connection refused on
+                            // every recv) is the normal startup state, not a
+                            // rare fault, and this loop has no other
+                            // throttle -- without a backoff, a persistent
+                            // immediate error spins the receive task at
+                            // 100% CPU in an app that's always-on-top and
+                            // typically left running for a whole session.
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
                     }
                 }
             });
@@ -471,6 +543,10 @@ async fn poll_kind(
                         num_tracks,
                         num_scenes,
                         TRACK_DATA_PROPERTIES.len(),
+                        // TRACK_DATA_PROPERTIES is all track.*, no clip.*
+                        // properties -- see track_chunks' doc comment for
+                        // why that term must stay 0 here.
+                        0,
                     ));
                     *queue_built_for = Some(current);
                 }
@@ -628,6 +704,102 @@ async fn try_faders(
 mod tests {
     use super::*;
     use rosc::OscMessage;
+    use std::collections::HashSet;
+
+    #[derive(serde::Deserialize)]
+    struct HandledAddresses {
+        #[serde(rename = "songFields")]
+        song_fields: Vec<String>,
+        #[serde(rename = "trackFields")]
+        track_fields: Vec<String>,
+    }
+
+    fn load_handled_addresses() -> HandledAddresses {
+        // Same manifest src/live/addresses.test.ts checks against apply.ts's
+        // actual SONG_FIELDS/TRACK_FIELDS -- see that file's comment. A pure
+        // Rust test can't see apply.ts, so both sides cross-check against
+        // this one shared file instead of against each other directly.
+        serde_json::from_str(include_str!("../../shared/handled-addresses.json"))
+            .expect("shared/handled-addresses.json must be valid JSON matching HandledAddresses")
+    }
+
+    #[test]
+    fn emitted_addresses_includes_every_bulk_decoded_address() {
+        // Sanity check on EMITTED_ADDRESSES itself: it must actually contain
+        // what TRACK_DATA_ADDRS/MIXER_ADDRS produce, so it can't drift from
+        // what decode_track_data/decode_mixer_data really emit.
+        for addr in TRACK_DATA_ADDRS.iter().chain(MIXER_ADDRS.iter()) {
+            assert!(
+                EMITTED_ADDRESSES.contains(addr),
+                "{addr} is decoded from a bulk reply but missing from EMITTED_ADDRESSES"
+            );
+        }
+    }
+
+    #[test]
+    fn every_emitted_address_is_handled_by_the_frontend_or_explicitly_allowed() {
+        let manifest = load_handled_addresses();
+        let handled: HashSet<&str> = manifest
+            .song_fields
+            .iter()
+            .chain(manifest.track_fields.iter())
+            .map(String::as_str)
+            .collect();
+
+        // Known, deliberate gaps -- backend emits these, apply.ts doesn't
+        // model them (yet). Each entry needs a reason, not just a listing,
+        // per I4 in the 2026-08-16 whole-branch review.
+        let allowed_unhandled: &[&str] = &[
+            // Polled every 1s/2s but SetState has no field for either yet.
+            "/live/view/get/selected_clip",
+            "/live/view/get/selected_device",
+            "/live/master/get/output_meter_level",
+            // Subscribed via SINGLETON_SUBSCRIPTIONS but not modelled in
+            // SetState -- seven properties, deliberately unmodelled.
+            "/live/song/get/loop",
+            "/live/song/get/loop_start",
+            "/live/song/get/loop_length",
+            "/live/song/get/signature_numerator",
+            "/live/song/get/signature_denominator",
+            "/live/song/get/beat",
+            "/live/view/get/selected_scene",
+            // Cached internally for track_chunks' byte-budget math; observed
+            // raw like any other reply, but not (yet) surfaced in SetState.
+            "/live/song/get/num_tracks",
+            "/live/song/get/num_scenes",
+        ];
+
+        for addr in EMITTED_ADDRESSES {
+            assert!(
+                handled.contains(addr) || allowed_unhandled.contains(addr),
+                "{addr} is emitted to the frontend but apply.ts has no mapping \
+                 for it and it is not in allowed_unhandled -- add a mapping in \
+                 apply.ts (and shared/handled-addresses.json) or extend \
+                 allowed_unhandled with a reason"
+            );
+        }
+    }
+
+    #[test]
+    fn every_frontend_handled_address_is_emitted_or_explicitly_allowed() {
+        let manifest = load_handled_addresses();
+
+        // apply.ts models these ahead of backend support -- see C1 in the
+        // 2026-08-16 whole-branch review: a real dB readout and per-track
+        // meters both need mixer_data extended to carry them, which is
+        // Plan 2 work, not this wave.
+        let allowed_unemitted: &[&str] =
+            &["/live/track/get/volume_db", "/live/track/get/output_meter_level"];
+
+        for addr in manifest.song_fields.iter().chain(manifest.track_fields.iter()) {
+            assert!(
+                EMITTED_ADDRESSES.contains(&addr.as_str()) || allowed_unemitted.contains(&addr.as_str()),
+                "{addr} is mapped in apply.ts but nothing in the backend ever \
+                 emits it, and it is not in allowed_unemitted -- wire it up or \
+                 extend allowed_unemitted with a reason"
+            );
+        }
+    }
 
     async fn recv_message(listener: &OscSocket) -> OscMessage {
         listener.recv().await.expect("expected a datagram")

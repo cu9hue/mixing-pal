@@ -54,14 +54,30 @@ pub fn param_windows(num_params: usize) -> Vec<(usize, usize)> {
 /// returns single-track chunks that overflow `MAX_DATAGRAM` — there is no
 /// way to shrink further within this query shape. The consumer will observe
 /// that case as a reply that never arrives, not as an error from here.
+///
+/// `clip_props` is the count of *clip-valued* properties being requested
+/// (`clip.*`, not `track.*`) — `abletonosc/song.py`'s `song_get_track_data`
+/// only appends one value per scene per track for those; a `track.*`
+/// property (e.g. `track.name`) appends exactly one value per track,
+/// full stop, with no scene loop at all. Multiplying every property by
+/// `num_scenes` regardless of which kind it is over-estimates a
+/// `track.*`-only request (like the production `TRACK_DATA_PROPERTIES`)
+/// by roughly `num_scenes`x, forcing far more chunks than the reply
+/// actually needs — and more chunks is the only way the in-flight range
+/// this module feeds (see `lib.rs`'s `TrackCounts`) can ever hold more
+/// than one distinct range at a time, which is what makes the zombie-reply
+/// misattribution race in the whole-branch review possible. Pass 0 when
+/// none of the requested properties are `clip.*`.
 pub fn track_chunks(
     num_tracks: usize,
     num_scenes: usize,
     props_per_track: usize,
+    clip_props: usize,
 ) -> Vec<(usize, usize)> {
-    // Per track: its own properties, plus one clip value per scene per
-    // clip-valued property. Scene count dominates on real sets.
-    let values_per_track = props_per_track + num_scenes.max(1);
+    // Per track: its own (track.*) properties, plus one clip value per
+    // scene per clip-valued (clip.*) property. Scene count only enters in
+    // via clip_props -- see the doc comment above.
+    let values_per_track = props_per_track + clip_props * num_scenes.max(1);
     let tracks_per_chunk = (budget_values() / values_per_track.max(1)).max(1);
     even_split(num_tracks, tracks_per_chunk)
         .into_iter()
@@ -124,13 +140,14 @@ mod tests {
     #[test]
     fn track_chunks_shrink_as_scene_count_grows() {
         // Clip segments are per scene, so a set with many scenes must take
-        // fewer tracks per chunk. Chunking by a fixed track count is the bug
-        // this replaces.
-        let few = track_chunks(50, 8, 4);
-        let many = track_chunks(50, 200, 4);
+        // fewer tracks per chunk -- when the request actually includes a
+        // clip.* property (clip_props = 1 here). Chunking by a fixed track
+        // count is the bug this replaces.
+        let few = track_chunks(50, 8, 4, 1);
+        let many = track_chunks(50, 200, 4, 1);
         // Hand-computed against budget_values() == 1792:
-        // few:  values_per_track = 4 + 8   = 12,  tracks_per_chunk = 1792/12  = 149 -> 1 chunk of 50.
-        // many: values_per_track = 4 + 200 = 204, tracks_per_chunk = 1792/204 = 8   -> ceil(50/8) = 7 chunks.
+        // few:  values_per_track = 4 + 1*8   = 12,  tracks_per_chunk = 1792/12  = 149 -> 1 chunk of 50.
+        // many: values_per_track = 4 + 1*200 = 204, tracks_per_chunk = 1792/204 = 8   -> ceil(50/8) = 7 chunks.
         // Exact counts, not just the inequality, so a regression that
         // preserves direction but breaks the packing arithmetic still fails.
         assert_eq!(few.len(), 1);
@@ -145,18 +162,34 @@ mod tests {
     #[test]
     fn track_chunks_cannot_split_below_one_track_and_may_still_overflow() {
         // At very high scene counts, a single track's own per-scene cost
-        // already exceeds the datagram budget (2000 scenes, 4 props/track:
-        // values_per_track = 2004, 2004*5 + HEADER_SLACK = 10276 > 9216).
-        // track_chunks has no way to split below one track, so it emits
-        // single-track chunks that still overflow. This pins that known
-        // ceiling as a documented fact, not a silent gap.
-        let chunks = track_chunks(50, 2000, 4);
+        // already exceeds the datagram budget (2000 scenes, 4 props/track,
+        // 1 of them clip-valued: values_per_track = 2004, 2004*5 +
+        // HEADER_SLACK = 10276 > 9216). track_chunks has no way to split
+        // below one track, so it emits single-track chunks that still
+        // overflow. This pins that known ceiling as a documented fact, not
+        // a silent gap. clip_props = 1 keeps the scene term meaningful --
+        // this ceiling is specific to clip.*-bearing requests, not the
+        // production track.*-only case (see the doc comment above).
+        let chunks = track_chunks(50, 2000, 4, 1);
         assert_eq!(chunks.len(), 50);
         for (min, max) in &chunks {
             assert_eq!(max - min, 1, "expected single-track chunks at this scene count");
         }
         assert_eq!(chunks[0].0, 0);
         assert_eq!(chunks.last().unwrap().1, 50);
+    }
+
+    #[test]
+    fn track_chunks_with_no_clip_props_ignores_scene_count() {
+        // Regression for I3 (2026-08-16 whole-branch review): lib.rs's
+        // production call requests only track.* properties
+        // (TRACK_DATA_PROPERTIES), so clip_props = 0. A 50-track/200-scene
+        // set must still fit in one chunk -- the old code multiplied every
+        // property by num_scenes regardless of kind and demanded 7 chunks
+        // for what is, on the wire, exactly 3 values per track.
+        let chunks = track_chunks(50, 200, 3, 0);
+        assert_eq!(chunks.len(), 1, "track.*-only requests must not scale with scene count");
+        assert_eq!(chunks[0], (0, 50));
     }
 
     // --- Boundary behaviour: zero inputs must not divide by zero, loop
@@ -209,12 +242,12 @@ mod tests {
 
     #[test]
     fn track_chunks_of_zero_tracks_is_empty() {
-        assert_eq!(track_chunks(0, 8, 4), Vec::<(usize, usize)>::new());
+        assert_eq!(track_chunks(0, 8, 4, 1), Vec::<(usize, usize)>::new());
     }
 
     #[test]
     fn track_chunks_tile_with_no_gap_or_overlap() {
-        let chunks = track_chunks(50, 200, 4);
+        let chunks = track_chunks(50, 200, 4, 1);
         assert!(chunks.len() > 1);
         let mut expected_min = 0;
         for (min, max) in &chunks {
