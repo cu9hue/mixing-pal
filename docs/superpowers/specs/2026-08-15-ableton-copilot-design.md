@@ -336,18 +336,73 @@ summarized.
 
 ### Tools
 
-Tools are **live queries against Live**, not mirror reads. The mirror
-deliberately does not hold notes or device parameters for the whole set.
+Some tools are live queries against Live; some are mirror reads. Which is which
+follows from what the mirror actually holds, and the distinction is visible to
+the model rather than hidden from it.
 
-| Tool | Returns |
-| --- | --- |
-| `get_clip_notes(track, clip)` | Raw note list, paged |
-| `get_device_params(track, device)` | Parameter names and formatted values, paged |
-| `get_track_detail(track)` | Full state for one track |
-| `get_arrangement()` | Every arrangement clip with start and length |
+| Tool | Source | Returns |
+| --- | --- | --- |
+| `get_track_detail(track)` | **Mirror** | Name, fader, pan, mute, solo, device names for one track |
+| `get_clip_notes(track, clip)` | **Live query** | Raw note list, paged |
+| `get_device_params(track, device)` | Live query | Parameter names and formatted values, paged |
+| `get_arrangement()` | Live query | Every arrangement clip with start and length |
 
-Every result carries `queried_at`, `fresh`, and `missing_reason`, so the model
-can tell "this is zero" from "Live did not answer" from "too large to send".
+**The first cut ships the top two only** — `get_track_detail` and
+`get_clip_notes`. They are deliberately asymmetric: one proves the mirror-read
+path and costs nothing, the other proves the awaitable request path end to end.
+`get_device_params` and `get_arrangement` follow once that loop is trustworthy;
+each needs its own decode path, and device parameters need paging.
+
+`get_track_detail` costs no OSC traffic. Polling already refreshes track state
+every 2 seconds, so the mirror is the authoritative local copy and a round trip
+would only re-fetch what is already there. Notes, device parameters, and
+arrangement clips are never polled, so those must go to Live.
+
+Every result carries `queried_at`, `fresh_as_of`, `fresh`, and `missing_reason`,
+so the model can tell "this is zero" from "Live did not answer" from "too large
+to send" — and, for mirror reads, how old the value is. A mirror read is up to
+one poll interval stale, and longer if a reply was lost. The model is told the
+age rather than left to imply live truth.
+
+### The awaitable request path
+
+Live queries need machinery Plan 1 never used. Today every request is
+fire-and-forget: the poll loop sends, the receive loop mirrors, and the
+`RequestId` that `resolve()` returns is discarded. A tool call needs the
+opposite — send this query, and give me *this* answer.
+
+`RequestTable` was built for exactly this. Add a map of `RequestId` to a oneshot
+sender; when the receive loop's `resolve()` reports a completion, hand the reply
+arguments to the waiting caller. Single-flight, the arity map, and the timeout
+all already work — this collects the answer instead of dropping it. A tool call
+becomes: register, send, await with timeout, and on timeout return
+`missing_reason` rather than a value.
+
+### Model capability gating
+
+The design requires working tool calls. A lean digest plus drill-down is only
+efficient if the drill-down happens; a model that cannot call tools does not
+degrade, it fabricates — it answers confidently from the digest alone, about
+data it never fetched.
+
+Tool-calling support is not reliably advertised. Some models list tool support
+and then return prose containing JSON that *describes* a call instead of
+emitting a `tool_calls` field. That failure is silent at the protocol level.
+
+So the app probes rather than trusts. On saving model settings, it sends one
+request carrying a single trivial tool and checks for a real `tool_calls`
+response. The result is stored with a timestamp. **A model that fails the probe
+is refused**, with a message naming the model and showing what it returned
+instead. The producer finds out at setup, not three answers into a session.
+
+### Standing disclaimer
+
+The chat pane carries a permanent, non-dismissible line: **"AI can make
+mistakes. Treat responses as suggestions."** Plan 1 could only display wrong
+data; from here the app can state wrong things fluently, in prose, about the
+producer's music. The probe and the untrusted-input fencing are defences, and
+neither is airtight. The disclaimer is not legal boilerplate — it sets the
+relationship the rest of the design assumes.
 
 ## Nudges
 
@@ -416,8 +471,18 @@ interface ModelProvider {
 
 The MVP implements **one** adapter properly, behind provider contract tests that
 exercise multi-turn tool calling. A second follows once those tests exist to
-hold it honest. "OpenAI-compatible by base URL" is not true in practice for tool
-calls, so it is not treated as free.
+hold it honest.
+
+That adapter is **`openai-compatible`, pointed at OpenRouter**. OpenRouter
+standardises the tool-calling interface across providers and exposes a filter
+for models that support it, so one adapter reaches a wide model set — and the
+same adapter reaches LM Studio, Ollama, and OpenAI by base URL alone. Provider,
+base URL, model, and key are settings, never code.
+
+"OpenAI-compatible by base URL" is nonetheless not free for tool calls, which is
+why "Model capability gating" above probes rather than trusts. The adapter
+handles the transport; the probe establishes whether a given model actually
+honours it.
 
 The system prompt and the allowed tool schema are backend-owned, so the webview
 cannot widen them. The API key lives in Rust and never enters the web context.
@@ -440,8 +505,11 @@ code. Tests call real code; no business logic is reimplemented in a test.
 
 - `requests.rs` — interleave subscription updates and query replies on the same
   address; assert correct resolution and no cross-talk. Assert the arity map
-  covers every endpoint used. Assert a late zombie `track_data` reply cannot
-  resolve a reissued request.
+  covers every endpoint used. Assert that a late zombie reply **does** resolve
+  the current request and is not silently dropped — it is byte-identical to a
+  legitimate one, so this layer cannot reject it (see "A late reply cannot be
+  rejected" above). An earlier draft of this section asked for the opposite and
+  contradicted the body; the test pins the real, documented limit.
 - `budget.rs` — note paging across the 9216-byte boundary; assert reassembly is
   lossless and that an oversize reply reports "too large", not "timed out".
 - `pollers.rs` — assert the note-diff baseline resets when the focused clip's
