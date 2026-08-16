@@ -32,7 +32,16 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/master/get/output_meter_level"
         | "/live/master/get/volume_db"
         // Bare count, no index.
-        | "/live/return/get/num_returns" => KeyArity::None,
+        | "/live/return/get/num_returns"
+        // Task 8's SINGLETON_SUBSCRIPTIONS arrive as start_listen pushes at
+        // these same addresses; still keyless, one value, no index.
+        | "/live/song/get/root_note"
+        | "/live/song/get/loop"
+        | "/live/song/get/loop_start"
+        | "/live/song/get/loop_length"
+        | "/live/song/get/signature_numerator"
+        | "/live/song/get/signature_denominator"
+        | "/live/song/get/beat" => KeyArity::None,
 
         "/live/track/get/name"
         | "/live/track/get/volume"
@@ -97,6 +106,13 @@ mod tests {
             ("/live/return/get/panning", KeyArity::Args(1)),
             ("/live/return/get/name", KeyArity::Args(1)),
             ("/live/return/get/num_returns", KeyArity::None),
+            ("/live/song/get/root_note", KeyArity::None),
+            ("/live/song/get/loop", KeyArity::None),
+            ("/live/song/get/loop_start", KeyArity::None),
+            ("/live/song/get/loop_length", KeyArity::None),
+            ("/live/song/get/signature_numerator", KeyArity::None),
+            ("/live/song/get/signature_denominator", KeyArity::None),
+            ("/live/song/get/beat", KeyArity::None),
             ("/live/clip/get/notes", KeyArity::Args(2)),
             ("/live/clip/get/length", KeyArity::Args(2)),
             ("/live/device/get/name", KeyArity::Args(2)),
