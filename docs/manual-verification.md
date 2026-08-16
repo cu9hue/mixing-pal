@@ -10,28 +10,47 @@ Preferences > Link/Tempo/MIDI, which is GUI-only and cannot be driven by an
 agent. Nothing in this list has been executed against real Live; this file
 records what to run and what "pass" means, not a completed run.
 
-Four items below are currently **BLOCKED**, not just untested: the
-frontend (`src/live/apply.ts`) has no address mapping for `track_data` or
-`mixer_data`, so `state.tracks` stays `{}` and the track table always
-renders zero rows no matter what the poll loop sends; and `PollKind::FocusedNotes`
-is left unwired with `note_windows` still dead code, so nothing about clip
-notes is fetched, paged, or diffed yet. Those are scope gaps carried
-forward to a later plan (see the plan's self-review), not defects in this
-build — do not fail them, mark them blocked and move on.
+Two items below are still **BLOCKED**, not just untested:
+`PollKind::FocusedNotes` is left unwired with `note_windows` still dead
+code, so nothing about clip notes is fetched, paged, or diffed yet. That is
+a scope gap carried forward to a later plan (see the plan's self-review),
+not a defect in this build — do not fail them, mark them blocked and move
+on.
+
+Everything else is now runnable. Task 13 added the `track_data`/
+`mixer_data` address mapping in `src/live/apply.ts` that the previous
+revision of this file was waiting on, so the track table, the
+wrong-track-attribution check, and the 20/50/100-track benchmark are no
+longer blocked.
 
 Date: ___________  Live version: ___________  Tester: ___________
 
-- [ ] Connect, resnapshot, confirm the displayed set matches Live.
-      Song-level fields only (tempo, playing state, scale, root note,
-      selected track) — the track table is separately BLOCKED, see below.
-      "Resnapshot" now means: reload the webview and confirm the song
-      fields populate immediately from the `snapshot` command, without
-      waiting for the next change to trigger a delta.
+- [ ] Connect, resnapshot, confirm the displayed set matches Live,
+      including the track table (name, fader, mute, solo columns).
+      "Resnapshot" means: reload the webview and confirm every field —
+      song-level and per-track — populates immediately from the `snapshot`
+      command, without waiting for the next change to trigger a delta.
 - [ ] Add, delete, and reorder tracks. Confirm no `start_listen` was ever
       sent to an indexed address (check Live's log at
       `~/Music/Ableton/User Library/Remote Scripts/AbletonCopilot/logs`).
-      The "confirm no state lands under the wrong track" half of this item
-      is BLOCKED (see above — no track fields render at all yet).
+      Also confirm no state lands under the wrong track: rename a few
+      tracks to something distinctive (e.g. their own index), reorder them,
+      and check each row still shows the name/fader/mute/solo for the track
+      actually at that position — not a stale value left over from before
+      the reorder.
+- [ ] Select the Master track, then a Return track, in Live. Confirm Live's
+      log shows no `ValueError: ... is not in list` traceback from
+      `/live/view/get/selected_track`, `/live/view/get/selected_clip`, or
+      `/live/view/get/selected_device` (see `copilot/view.py`'s
+      `ViewOverrideHandler` — `song.tracks` excludes both, so upstream's
+      `list(...).index(...)` raises on exactly this click). Confirm no row
+      in the track table is bolded while Master or a Return is selected —
+      `selectedTrack` should read -1, which matches no row index, rather
+      than freezing bolded on whatever track was last validly selected.
+- [ ] Confirm the fader column populates with a normalized value in
+      roughly the 0..1 range (unity gain reads ~0.85), not em-dashes, once
+      `PollKind::Faders` completes its first poll. This is not a dB
+      reading — see `src/ui/SetView.tsx`'s column comment for why.
 - [ ] Change the selected track, clip, and device. Confirm the selected
       *track* follows (the only one of the three the frontend currently
       models — `selectedClip`/`selectedDevice` aren't in `SetState` yet).
@@ -44,10 +63,18 @@ Date: ___________  Live version: ___________  Tester: ___________
       `note_windows` for paging). Open a clip with 500+ notes. Confirm
       paging works rather than timing out, and that a dense clip never
       reports "no answer".
-- [ ] BLOCKED (until a later plan parses `track_data` / `mixer_data`
-      replies into `SetState`). Load a 50+ track set. Measure display
-      update latency and Live's responsiveness. Benchmark at 20, 50, and
-      100 tracks.
+- [ ] Load a 50+ track set. Measure display update latency and Live's
+      responsiveness. Benchmark at 20, 50, and 100 tracks: confirm the
+      track table fills in within a few `TrackState` poll cycles (roughly
+      `chunks * round-trip-time`, not `chunks * 2s` — see the note below),
+      and that Live's UI stays responsive while the sweep runs.
+- [ ] Start the app while port 11001 (`CLIENT_PORT`, see
+      `src-tauri/src/osc/socket.rs`) is already bound by another process
+      (e.g. `nc -ul 11001` in another terminal). Confirm the failure is
+      legible: the app should print `failed to bind OSC socket: ...` to its
+      console and still open its window (a dead socket must not hide the
+      whole app — see `lib.rs`'s `setup` closure), rather than hanging or
+      crashing silently.
 - [ ] Restart Live mid-session. Confirm the app reconnects: song-level
       fields (tempo, is_playing, scale_name, root_note, selected_track,
       selected_scene) should resume updating within
@@ -79,21 +106,27 @@ Date: ___________  Live version: ___________  Tester: ___________
   `/live/song/get/num_scenes` on every `TrackState` tick and skips the
   chunked `track_data` poll until both are known. Expect a short delay (a
   poll cycle or two) after connecting before the counts populate — this is
-  expected, not a hang, and the frontend can't show it yet regardless (see
-  the BLOCKED item above).
+  expected, not a hang.
 - `track_data` is single-flight per address: only one chunk can be
   outstanding at a time. With `resolve()` wired, a chunk's slot frees as
   soon as Live answers it, and the queue is drained every 250ms tick (not
   gated behind `TrackState`'s own 2s due cycle), so a multi-chunk sweep
   should complete in roughly `chunks * round-trip-time`, not `chunks * 2s`.
+  `TRACK_DATA_PROPERTIES` is `track.*`-only (name, mute, solo), so on a
+  realistic set this is one chunk regardless of scene count — see
+  `track_chunks`' `clip_props` parameter.
 - At extreme scene counts (roughly 1800+), a single track's own row can
   exceed the OSC datagram cap and Live's `sendto` raises, so that request
   never gets a reply at all. `expire()` is what prevents this from
   occupying its slot forever; confirm the app does not hang waiting for it
-  and instead moves on to the next chunk after the 2s expiry.
-- `/live/view/get/selected_device` was fixed at the remote-script level
-  (`remote-script/AbletonCopilot/copilot/view.py`) to return `(track, -1)`
-  instead of raising when no device is selected on the selected track —
-  confirm Live's log shows no `ValueError: None is not in list` tracebacks
-  from this address during normal use (deselecting a device is a normal
-  state, not an edge case).
+  and instead moves on to the next chunk after the 2s expiry. This does not
+  apply to the production `track_data` poll (see above); it can still
+  happen on `mixer_data`'s implicit "every track" request at high track
+  counts.
+- `/live/view/get/selected_track`, `/live/view/get/selected_clip`, and
+  `/live/view/get/selected_device` were all fixed at the remote-script
+  level (`remote-script/AbletonCopilot/copilot/view.py`) to return -1 for
+  the track index instead of raising when the selected track is Master or
+  a Return track — confirm Live's log shows no `ValueError: ... is not in
+  list` tracebacks from any of these three addresses during normal use
+  (selecting Master to check the limiter is routine, not an edge case).
