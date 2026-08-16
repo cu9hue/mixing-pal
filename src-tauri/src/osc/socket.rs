@@ -48,8 +48,16 @@ impl OscSocket {
         Ok(())
     }
 
+    /// Exactly one task may await `recv` at a time. Tokio's `UdpSocket` keeps
+    /// only the most recent `Waker` for the recv direction, so a second
+    /// concurrent caller silently steals the wakeup slot and can starve the
+    /// first, indefinitely, without ever corrupting a datagram. By contrast,
+    /// `send`/`send_to` are safe to call concurrently from multiple
+    /// `Arc<OscSocket>` holders — the write direction has its own waker slot.
     pub async fn recv(&self) -> std::io::Result<OscMessage> {
         // 9216 is the macOS maxdgram ceiling; anything Live can send fits.
+        // Allocated fresh per call, deliberately kept simple; if the receive
+        // path ever shows up in profiling, look here first.
         let mut buf = vec![0u8; 9216];
         let (len, _) = self.socket.recv_from(&mut buf).await?;
         let (_, packet) = decoder::decode_udp(&buf[..len])
