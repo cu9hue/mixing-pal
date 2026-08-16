@@ -11,7 +11,10 @@ export function emptySet(): SetState {
   };
 }
 
-const SONG_FIELDS: Record<string, keyof SetState> = {
+// Exported so a test can assert this mapping's address set never drifts
+// from shared/handled-addresses.json without failing the build -- see I4 in
+// the 2026-08-16 whole-branch review.
+export const SONG_FIELDS: Record<string, keyof SetState> = {
   "/live/song/get/tempo": "tempo",
   "/live/song/get/is_playing": "isPlaying",
   "/live/song/get/scale_name": "scaleName",
@@ -19,7 +22,7 @@ const SONG_FIELDS: Record<string, keyof SetState> = {
   "/live/view/get/selected_track": "selectedTrack",
 };
 
-const TRACK_FIELDS: Record<string, keyof TrackState> = {
+export const TRACK_FIELDS: Record<string, keyof TrackState> = {
   "/live/track/get/name": "name",
   "/live/track/get/mute": "mute",
   "/live/track/get/solo": "solo",
