@@ -170,10 +170,11 @@ is ours and can be changed; `track_data` belongs to the unmodified upstream tree
 Deferred to a later plan rather than reshaping an endpoint contract three
 completed tasks after the fact.
 
-**A generation counter** marks the current topology epoch. Any change in track
-count or ordering increments it, and requests issued under an older generation
-have their table entries cancelled. The counter is a marker, not a filter: it
-cannot and does not reject inbound packets.
+**A generation counter** is the intended mechanism for marking the current
+topology epoch: any change in track count or ordering would increment it, and
+requests issued under an older generation would have their table entries
+cancelled. It would be a marker, not a filter — it could not and would not
+reject inbound packets. **It is not built.** Why, and when it lands:
 
 This plan never registers an index-keyed request in production — polling only
 ever uses `KeyArity::None` and `KeyArity::Unkeyed` addresses — so there is
