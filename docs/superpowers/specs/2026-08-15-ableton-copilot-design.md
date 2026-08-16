@@ -137,16 +137,43 @@ range or property list. `requests.rs` owns an explicit arity map with a test
 enumerating every endpoint the design uses. One wrong entry silently
 cross-resolves queries for different objects.
 
-**Keyless queries are serialized.** At most one `track_data` or `track_names`
-outstanding at a time, because nothing in the reply identifies which request it
-answers. After a timeout, the snapshot restarts at a new generation rather than
-reissuing, so a late zombie reply cannot be mistaken for a fresh one. Parsing a
-`track_data` reply also requires `num_scenes` and per-track `num_devices` up
-front, since the clip and device segments are positional.
+**Keyless queries are serialized per address.** At most one `track_data`
+outstanding at a time, and likewise one `mixer_data`, because nothing in either
+reply identifies which request it answers. Serialization is per address, not
+global: replies at different addresses are trivially distinguishable, and a
+single global lock would make the two starve each other on the shared 2-second
+tick. Parsing a `track_data` reply also requires `num_scenes` and per-track
+`num_devices` up front, since the clip and device segments are positional.
 
-**A generation counter** guards in-flight work. Any change in track count or
-ordering increments it; requests issued under an older generation are cancelled
-rather than resolved.
+**A late reply cannot be rejected, and the design does not pretend otherwise.**
+A zombie — a reply to a request already cancelled by a topology change — is
+byte-identical to a legitimate reply in every field the table keys on. UDP
+carries no request ID, and nothing stamps a generation onto the wire. The same
+sentence that applies to leaked listeners applies here: no client-side epoch or
+generation filter can separate the two.
+
+Containment is therefore structural rather than filtered. Cancelling a request
+cancels the table *entry*, never the packet already in flight. When a zombie
+lands it resolves whatever entry currently matches, and its payload enters the
+mirror as an observation. That is survivable because nothing reads a resolved
+value — resolution exists only to release single-flight — because the genuine
+reply arriving afterwards is still an observation and overwrites the stale
+value, and because the next poll corrects the mirror within one cycle. The
+residual cost is bounded: a zombie consumes the pending entry, so if the genuine
+reply is then lost, no timeout fires and the correction waits one poll interval.
+
+The keyless case is the weakest, since a keyless reply has no key at all and
+matches any pending entry at its address — and its stale payload is a whole bulk
+table rather than one float. Closing that properly needs the reply to echo its
+own `(index_min, index_max)`, turning the endpoint into a keyed one. `mixer_data`
+is ours and can be changed; `track_data` belongs to the unmodified upstream tree.
+Deferred to a later plan rather than reshaping an endpoint contract three
+completed tasks after the fact.
+
+**A generation counter** marks the current topology epoch. Any change in track
+count or ordering increments it, and requests issued under an older generation
+have their table entries cancelled. The counter is a marker, not a filter: it
+cannot and does not reject inbound packets.
 
 ### Datagram budget
 

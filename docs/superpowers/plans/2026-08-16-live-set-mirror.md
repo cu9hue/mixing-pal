@@ -876,11 +876,17 @@ mod tests {
     }
 
     #[test]
-    fn a_zombie_reply_cannot_resolve_a_request_from_a_later_generation() {
+    fn a_zombie_reply_is_indistinguishable_and_resolves_the_current_request() {
         // Timeline: request track 3's volume, a track is deleted, the world is
         // regenerated, a new request for track 3 goes out. The late reply from
-        // the dead request carries the OLD track's value and must be discarded
-        // as a resolution, though it still counts as an observation.
+        // the dead request carries the OLD track's value — and is byte-identical
+        // to a legitimate reply in every field the table keys on. UDP carries no
+        // request ID and nothing stamps the generation onto the wire, so this
+        // layer CANNOT reject it. bump_generation cancels the table ENTRY, never
+        // the packet already in flight. Containment lives elsewhere: nothing
+        // reads a resolved value, the genuine reply that follows is still an
+        // observation and overwrites the stale one, and polling re-corrects
+        // within one cycle.
         let mut t = RequestTable::new();
         let old = match t.register("/live/track/get/volume", &[OscType::Int(3)]) {
             Registration::New(id) => id,
