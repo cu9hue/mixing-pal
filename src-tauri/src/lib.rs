@@ -87,16 +87,40 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
-/// whether or not any traffic has arrived in between. Not silence-gated:
-/// loading a different project in Live swaps the `Song` object every polled
-/// getter (`track_data`, `mixer_data`, `num_tracks`, meters) resolves
-/// through, so those keep working and traffic keeps flowing, but the old
-/// song/view listeners stay registered on the *previous* `Song` object and
-/// go stale silently -- absence of traffic is therefore not a reliable
-/// signal that the subscriptions died. A fixed interval heals that case,
-/// plus "Live restarted", "Live hadn't started yet when we first
-/// subscribed", and "a subscribe datagram got dropped", all with one
-/// mechanism.
+/// whether or not any traffic has arrived in between.
+///
+/// Not silence-gated, and this is the mechanism that recovers a project
+/// switch. Confirmed against Live 12.2.5 on 2026-08-16 by reading the
+/// script's own log across a real project load:
+///
+/// ```text
+/// 18:49:56  Adding listener ... tempo     <- resend N
+/// 18:50:07  Started AbletonOSC            <- Live re-instantiates the script
+/// 18:50:16  Adding listener ... tempo     <- resend N+2 rebinds
+/// 18:50:16  Property tempo changed: (123.0,)
+/// ```
+///
+/// Loading a project makes Live re-instantiate the Control Surface. That
+/// re-runs `init_api()`, which registers the OSC *handlers* -- but listeners
+/// are only ever created when a client sends `start_listen`, so the restart
+/// destroys every subscription and Live never recreates them. Meanwhile every
+/// polled getter (`track_data`, `mixer_data`, `num_tracks`, meters) keeps
+/// working against the new song, so traffic keeps flowing and `lastSeen` stays
+/// fresh. Absence of traffic is therefore not a signal that subscriptions
+/// died: a silence-gated resend would never fire, and tempo/key/scale would
+/// sit frozen on the previous project's values indefinitely while the app
+/// looked healthy.
+///
+/// One interval is also the worst-case recovery latency for that case
+/// (~9s was observed above), which is why this is seconds rather than minutes.
+/// The same mechanism covers "Live restarted", "Live hadn't started yet when
+/// we first subscribed", and "a subscribe datagram got dropped".
+///
+/// Resending is safe and self-healing rather than merely harmless: a repeat
+/// `_start_listen` for an existing key calls `_stop_listen` first, and for
+/// these index-free song/view targets that removal resolves to the same
+/// object it was registered on. It must never be extended to an indexed
+/// address -- see `SINGLETON_SUBSCRIPTIONS`.
 const SUBSCRIPTION_RESEND_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Same window `RequestTable::expire` uses to free a single-flight slot.

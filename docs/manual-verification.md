@@ -130,3 +130,37 @@ Date: ___________  Live version: ___________  Tester: ___________
   a Return track — confirm Live's log shows no `ValueError: ... is not in
   list` tracebacks from any of these three addresses during normal use
   (selecting Master to check the limiter is routine, not an edge case).
+
+## Verified against real Live — 2026-08-16
+
+Ableton Live 12.2.5 Suite, real layered house track plus a fresh project.
+
+- [x] Track rows populate; names, mute and solo update live.
+- [x] Fader column populates.
+- [x] Tempo, key and scale arrive on connect, not only after a change.
+- [x] Mute / solo reflected in the window.
+- [x] Responsiveness acceptable on a real layered house track.
+- [x] **Project switch recovers.** Tempo lags by up to one
+      `SUBSCRIPTION_RESEND_INTERVAL` (~9s observed) and then loads.
+
+**Mechanism, confirmed from the script log rather than inferred.** Loading a
+project makes Live re-instantiate the Control Surface (a second
+`Started AbletonOSC` line appears). That re-runs `init_api()`, which registers
+OSC *handlers* — but listeners exist only where a client has sent
+`start_listen`, so the restart destroys every subscription and Live never
+recreates them. Polled getters keep working against the new song throughout, so
+traffic never stops. The unconditional resend is what rebinds:
+
+```
+18:49:56  Adding listener ... tempo     resend N
+18:50:07  Started AbletonOSC            Live re-instantiates the script
+18:50:16  Adding listener ... tempo     resend N+2 rebinds
+18:50:16  Property tempo changed: (123.0,)
+```
+
+A silence-gated resend would never have fired here, because polling keeps
+`lastSeen` fresh the entire time. Tempo, key and scale would have sat frozen on
+the previous project's values with the app appearing healthy.
+
+Still outstanding: Master / Return track selection, a port-11001 conflict
+showing a legible error, and a 50+ track benchmark.
