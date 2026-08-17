@@ -1,0 +1,213 @@
+import { describe, expect, it } from "vitest";
+import { parseMarkdown, type BlockNode, type InlineNode } from "./markdown";
+
+function paragraph(md: string): InlineNode[] {
+  const blocks = parseMarkdown(md);
+  expect(blocks).toHaveLength(1);
+  const block = blocks[0];
+  expect(block.type).toBe("paragraph");
+  return (block as Extract<BlockNode, { type: "paragraph" }>).children;
+}
+
+describe("parseMarkdown inline spans", () => {
+  it("parses bold", () => {
+    expect(paragraph("**loud**")).toEqual([
+      { type: "bold", children: [{ type: "text", text: "loud" }] },
+    ]);
+  });
+
+  it("parses italic with either marker", () => {
+    expect(paragraph("*soft*")).toEqual([
+      { type: "italic", children: [{ type: "text", text: "soft" }] },
+    ]);
+    expect(paragraph("_soft_")).toEqual([
+      { type: "italic", children: [{ type: "text", text: "soft" }] },
+    ]);
+  });
+
+  it("parses inline code", () => {
+    expect(paragraph("`gain -6dB`")).toEqual([{ type: "code", text: "gain -6dB" }]);
+  });
+
+  it("mixes plain text with spans", () => {
+    expect(paragraph("pull **Kick** down a touch")).toEqual([
+      { type: "text", text: "pull " },
+      { type: "bold", children: [{ type: "text", text: "Kick" }] },
+      { type: "text", text: " down a touch" },
+    ]);
+  });
+});
+
+describe("parseMarkdown fence chips", () => {
+  it("turns a fenced set-derived name into a fence node without the guillemets", () => {
+    expect(paragraph("cut «Extra Hats» by 3dB")).toEqual([
+      { type: "text", text: "cut " },
+      { type: "fence", name: "Extra Hats" },
+      { type: "text", text: " by 3dB" },
+    ]);
+  });
+});
+
+describe("parseMarkdown lists", () => {
+  it("groups consecutive `- ` lines into one unordered list", () => {
+    const blocks = parseMarkdown("- kick\n- snare");
+    expect(blocks).toEqual([
+      {
+        type: "list",
+        ordered: false,
+        items: [
+          [{ type: "text", text: "kick" }],
+          [{ type: "text", text: "snare" }],
+        ],
+      },
+    ]);
+  });
+
+  it("groups consecutive `* ` lines the same way", () => {
+    const blocks = parseMarkdown("* kick\n* snare");
+    expect(blocks).toEqual([
+      {
+        type: "list",
+        ordered: false,
+        items: [
+          [{ type: "text", text: "kick" }],
+          [{ type: "text", text: "snare" }],
+        ],
+      },
+    ]);
+  });
+
+  it("groups consecutive numbered lines into one ordered list", () => {
+    const blocks = parseMarkdown("1. tighten the low end\n2. widen the pad");
+    expect(blocks).toEqual([
+      {
+        type: "list",
+        ordered: true,
+        items: [
+          [{ type: "text", text: "tighten the low end" }],
+          [{ type: "text", text: "widen the pad" }],
+        ],
+      },
+    ]);
+  });
+});
+
+describe("parseMarkdown headings", () => {
+  it("parses #, ##, ### as heading blocks carrying their level, not a font size", () => {
+    // The renderer is responsible for keeping these visually small (an
+    // emphasised line, not large type) in a pane this size -- the AST just
+    // needs to say which level it was.
+    expect(parseMarkdown("# Mix notes")).toEqual([
+      { type: "heading", level: 1, children: [{ type: "text", text: "Mix notes" }] },
+    ]);
+    expect(parseMarkdown("## Mix notes")).toEqual([
+      { type: "heading", level: 2, children: [{ type: "text", text: "Mix notes" }] },
+    ]);
+    expect(parseMarkdown("### Mix notes")).toEqual([
+      { type: "heading", level: 3, children: [{ type: "text", text: "Mix notes" }] },
+    ]);
+  });
+});
+
+describe("parseMarkdown fenced code blocks", () => {
+  it("renders a closed ``` fence as one code_block, unparsed", () => {
+    expect(parseMarkdown("```\nlet x = **not bold**\n```")).toEqual([
+      { type: "code_block", text: "let x = **not bold**" },
+    ]);
+  });
+});
+
+describe("parseMarkdown paragraphs", () => {
+  it("splits on blank lines", () => {
+    const blocks = parseMarkdown("first idea\n\nsecond idea");
+    expect(blocks).toEqual([
+      { type: "paragraph", children: [{ type: "text", text: "first idea" }] },
+      { type: "paragraph", children: [{ type: "text", text: "second idea" }] },
+    ]);
+  });
+
+  it("keeps consecutive non-blank lines in one paragraph", () => {
+    const blocks = parseMarkdown("line one\nline two");
+    expect(blocks).toEqual([
+      { type: "paragraph", children: [{ type: "text", text: "line one\nline two" }] },
+    ]);
+  });
+});
+
+describe("parseMarkdown malformed input degrades to plain text, never throws", () => {
+  it("treats an unclosed ** as literal asterisks", () => {
+    expect(() => parseMarkdown("**never closes")).not.toThrow();
+    expect(paragraph("**never closes")).toEqual([{ type: "text", text: "**never closes" }]);
+  });
+
+  it("treats a stray backtick as a literal character", () => {
+    expect(() => parseMarkdown("`never closes")).not.toThrow();
+    expect(paragraph("`never closes")).toEqual([{ type: "text", text: "`never closes" }]);
+  });
+
+  it("treats an unclosed italic marker as literal", () => {
+    expect(() => parseMarkdown("*never closes")).not.toThrow();
+    expect(paragraph("*never closes")).toEqual([{ type: "text", text: "*never closes" }]);
+  });
+
+  it("does not throw on a list marker with nothing after it", () => {
+    expect(() => parseMarkdown("- ")).not.toThrow();
+    expect(parseMarkdown("- ")).toEqual([{ type: "list", ordered: false, items: [[]] }]);
+  });
+
+  it("does not throw on a fence marker that never closes", () => {
+    expect(() => parseMarkdown("«never closes")).not.toThrow();
+    expect(paragraph("«never closes")).toEqual([{ type: "text", text: "«never closes" }]);
+  });
+
+  it("does not throw on an unclosed code fence", () => {
+    expect(() => parseMarkdown("```\nno closing fence")).not.toThrow();
+    expect(parseMarkdown("```\nno closing fence")).toEqual([
+      { type: "paragraph", children: [{ type: "text", text: "```\nno closing fence" }] },
+    ]);
+  });
+
+  it("returns no blocks for an empty string", () => {
+    expect(() => parseMarkdown("")).not.toThrow();
+    expect(parseMarkdown("")).toEqual([]);
+  });
+});
+
+describe("parseMarkdown and raw HTML", () => {
+  it("never turns a producer-controlled track name's HTML into structure -- only ever a text leaf", () => {
+    // A downloaded template's track name reaches the model's reply as
+    // ordinary text (the backend fences it, but the model may quote it back
+    // unfenced in prose). This parser must not special-case angle brackets
+    // at all: the entire string comes back as one text node, exactly as
+    // written, never as an element the renderer could mistake for markup.
+    const hostile = 'look at <img src=x onerror=alert(1)> and <script>alert(1)</script>';
+    const blocks = parseMarkdown(hostile);
+    expect(blocks).toEqual([{ type: "paragraph", children: [{ type: "text", text: hostile }] }]);
+
+    // No node anywhere in the tree is anything but text/bold/italic/code/fence/
+    // paragraph/heading/list/code_block -- there is no "html" or "raw" node
+    // type this parser could produce, so there is no path from this string
+    // to markup.
+    const allowedTypes = new Set([
+      "text",
+      "bold",
+      "italic",
+      "code",
+      "fence",
+      "paragraph",
+      "heading",
+      "list",
+      "code_block",
+    ]);
+    function walk(node: BlockNode | InlineNode) {
+      expect(allowedTypes.has(node.type)).toBe(true);
+      if (node.type === "paragraph" || node.type === "heading") walk_all(node.children);
+      if (node.type === "bold" || node.type === "italic") walk_all(node.children);
+      if (node.type === "list") node.items.forEach(walk_all);
+    }
+    function walk_all(nodes: InlineNode[]) {
+      nodes.forEach(walk);
+    }
+    blocks.forEach(walk);
+  });
+});

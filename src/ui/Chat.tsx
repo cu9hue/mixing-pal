@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { SetState } from "../live/model";
 import { ChatMessage, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
 import { buildContext } from "../digest/build";
+import { BlockNode, InlineNode, parseMarkdown } from "./markdown";
 
 /**
  * Permanent and non-dismissible. Plan 1 could only display wrong data; from
@@ -28,6 +29,91 @@ function loadStoredGoal(): string {
   } catch {
     return "";
   }
+}
+
+// The chip that stands in for a «fenced» set-derived name (track names, in
+// practice). Faint and muted on purpose -- it should read as "this text
+// came from your project", not compete with the model's own words.
+const FENCE_CHIP_STYLE = {
+  background: "rgba(255,255,255,0.1)",
+  color: "#aaa",
+  padding: "0 4px",
+  borderRadius: 3,
+} as const;
+
+const CODE_STYLE = { font: "12px ui-monospace, monospace", background: "rgba(255,255,255,0.08)", padding: "0 3px" };
+
+function renderInline(nodes: InlineNode[]): ReactNode {
+  return nodes.map((n, i) => {
+    switch (n.type) {
+      case "text":
+        return n.text;
+      case "bold":
+        return <strong key={i}>{renderInline(n.children)}</strong>;
+      case "italic":
+        return <em key={i}>{renderInline(n.children)}</em>;
+      case "code":
+        return (
+          <code key={i} style={CODE_STYLE}>
+            {n.text}
+          </code>
+        );
+      case "fence":
+        return (
+          <span key={i} style={FENCE_CHIP_STYLE}>
+            {n.name}
+          </span>
+        );
+    }
+  });
+}
+
+// Rendered small on purpose: this is a narrow, always-on-top pane, not a
+// document -- a heading here is an emphasised line, never large type.
+function renderBlocks(blocks: BlockNode[]): ReactNode {
+  return blocks.map((b, i) => {
+    switch (b.type) {
+      case "paragraph":
+        return (
+          <div key={i} style={{ whiteSpace: "pre-wrap" }}>
+            {renderInline(b.children)}
+          </div>
+        );
+      case "heading":
+        return (
+          <div key={i} style={{ fontWeight: "bold", opacity: 0.85 }}>
+            {renderInline(b.children)}
+          </div>
+        );
+      case "list":
+        return b.ordered ? (
+          <ol key={i} style={{ margin: "2px 0", paddingLeft: 20 }}>
+            {b.items.map((item, j) => (
+              <li key={j}>{renderInline(item)}</li>
+            ))}
+          </ol>
+        ) : (
+          <ul key={i} style={{ margin: "2px 0", paddingLeft: 20 }}>
+            {b.items.map((item, j) => (
+              <li key={j}>{renderInline(item)}</li>
+            ))}
+          </ul>
+        );
+      case "code_block":
+        return (
+          <pre key={i} style={{ ...CODE_STYLE, padding: 6, overflowX: "auto" }}>
+            {b.text}
+          </pre>
+        );
+    }
+  });
+}
+
+// Markdown is applied to the model's replies only -- the producer's own
+// words render as plain text, same as before.
+function MessageBody({ role, content }: { role: ChatMessage["role"]; content: string | null | undefined }) {
+  if (role !== "assistant") return <>{content}</>;
+  return <>{renderBlocks(parseMarkdown(content ?? ""))}</>;
 }
 
 export function Chat({ state }: { state: SetState }) {
@@ -89,7 +175,8 @@ export function Chat({ state }: { state: SetState }) {
       <div style={{ maxHeight: 240, overflowY: "auto" }}>
         {history.map((m, i) => (
           <div key={i} style={{ marginBottom: 6, whiteSpace: "pre-wrap" }}>
-            <b>{m.role === "user" ? "you" : "copilot"}</b> {m.content}
+            <b>{m.role === "user" ? "you" : "copilot"}</b>{" "}
+            <MessageBody role={m.role} content={m.content} />
           </div>
         ))}
         {progress && <div style={{ opacity: 0.6 }}>reading {progress}…</div>}
