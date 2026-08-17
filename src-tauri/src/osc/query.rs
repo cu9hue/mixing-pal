@@ -82,13 +82,26 @@ impl LiveQuery {
                 }
             }
 
+            let owns_request = matches!(registration, Registration::New(_));
             let rx = rx.expect("New and Joined always produce a receiver");
             let remaining = deadline.saturating_duration_since(Instant::now());
             return match tokio::time::timeout(remaining, rx).await {
                 Ok(Ok(reply)) => Ok(reply),
                 // The channel closed: `expire` reclaimed the slot and
                 // dropped the waiter. Same outcome as running out of time.
-                Ok(Err(_)) | Err(_) => Err(QueryError::NoReply),
+                Ok(Err(_)) | Err(_) => {
+                    // Only the New registrant may free the slot -- a Joined
+                    // caller giving up must not cancel the request it never
+                    // owned out from under whoever is still waiting on it.
+                    if owns_request {
+                        let mut t = self
+                            .table
+                            .lock()
+                            .map_err(|_| QueryError::Transport("request table lock poisoned".into()))?;
+                        t.cancel(addr, &args);
+                    }
+                    Err(QueryError::NoReply)
+                }
             };
         }
     }
@@ -223,6 +236,75 @@ mod tests {
 
         let reply = joined.await.unwrap().unwrap();
         assert_eq!(reply[2], OscType::Float(8.0));
+    }
+
+    #[tokio::test]
+    async fn a_second_query_for_the_same_key_after_the_first_times_out_still_sends_a_datagram() {
+        // Regression test: before the fix, a timed-out New registrant left
+        // its entry in the table. A retry for the same (track, clip) key
+        // then `Joined` the dead entry and its datagram was never sent. The
+        // fake Live here never answers either query, so the second query's
+        // datagram is the only proof the retry actually went out.
+        let (live, q, _table, _port) = fixture().await;
+        let addr = "/live/clip/get/notes";
+        let args = vec![OscType::Int(1), OscType::Int(0)];
+
+        let first = q
+            .query(addr, args.clone(), Duration::from_millis(100))
+            .await
+            .unwrap_err();
+        assert_eq!(first, QueryError::NoReply);
+
+        // Drain the first datagram off the wire.
+        let first_on_wire = tokio::time::timeout(Duration::from_millis(200), live.recv())
+            .await
+            .expect("the first query must have sent a datagram")
+            .unwrap();
+        assert_eq!(first_on_wire.addr, addr);
+
+        let second = q
+            .query(addr, args.clone(), Duration::from_millis(100))
+            .await
+            .unwrap_err();
+        assert_eq!(second, QueryError::NoReply);
+
+        let second_on_wire = tokio::time::timeout(Duration::from_millis(200), live.recv()).await;
+        let second_on_wire = second_on_wire
+            .expect("the retry must also send its own datagram, not silently Join a dead entry")
+            .unwrap();
+        assert_eq!(second_on_wire.addr, addr);
+        assert_eq!(second_on_wire.args, args);
+    }
+
+    #[tokio::test]
+    async fn a_joined_callers_timeout_does_not_cancel_the_owners_request() {
+        // The owner registered New and is still waiting. A second caller
+        // Joins that request, then times out on its own shorter deadline.
+        // The owner's entry must survive: a later registration for the same
+        // key must still Join it, not New it.
+        let (_live, q, table, _port) = fixture().await;
+        let addr = "/live/clip/get/notes";
+        let args = vec![OscType::Int(1), OscType::Int(0)];
+
+        let owner_id = {
+            let mut t = table.lock().unwrap();
+            match t.register(Instant::now(), addr, &args) {
+                Registration::New(id) => id,
+                other => panic!("expected New, got {other:?}"),
+            }
+        };
+
+        let joined_err = q
+            .query(addr, args.clone(), Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert_eq!(joined_err, QueryError::NoReply);
+
+        let still_pending = {
+            let mut t = table.lock().unwrap();
+            t.register(Instant::now(), addr, &args)
+        };
+        assert_eq!(still_pending, Registration::Joined(owner_id));
     }
 
     #[tokio::test]

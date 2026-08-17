@@ -162,6 +162,37 @@ impl RequestTable {
         Resolution { observation: true, completed }
     }
 
+    /// Frees a request's single-flight slot immediately, instead of leaving
+    /// it for `expire`'s window to elapse.
+    ///
+    /// A caller that gave up on its own request must release the slot, or the
+    /// next request for the SAME key -- which for an `Args(n)` address means
+    /// the same first n arguments, even with different trailing arguments --
+    /// would `Joined` a dead entry and never be sent at all.
+    ///
+    /// Only the caller that received `Registration::New` may cancel. A
+    /// `Joined` caller is riding someone else's in-flight request and must
+    /// never cancel it out from under them.
+    pub fn cancel(&mut self, addr: &str, args: &[OscType]) {
+        let arity = key_arity(addr);
+        let n = match arity {
+            KeyArity::Args(n) => n,
+            _ => 0,
+        };
+        let key = PendingKey {
+            addr: addr.to_string(),
+            key: key_of(args, n),
+        };
+        if let Some(pending) = self.pending.remove(&key) {
+            // Dropping the senders closes any receiver still waiting, which
+            // is the same signal `expire` gives.
+            self.waiters.remove(&pending.id);
+            if arity == KeyArity::Unkeyed {
+                self.unkeyed_outstanding.remove(addr);
+            }
+        }
+    }
+
     pub fn expire(&mut self, now: Instant, timeout: Duration) -> Vec<RequestId> {
         let stale: Vec<PendingKey> = self
             .pending
@@ -503,6 +534,76 @@ mod tests {
         assert_eq!(t.expire(later, Duration::from_secs(2)), vec![id]);
 
         assert_eq!(rx.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Closed));
+    }
+
+    #[test]
+    fn cancelling_a_keyed_request_frees_the_slot_for_a_fresh_registration() {
+        let mut t = RequestTable::new();
+        let now = Instant::now();
+        let args = [OscType::Int(1), OscType::Int(0)];
+        match t.register(now, "/live/clip/get/notes", &args) {
+            Registration::New(_) => {}
+            other => panic!("expected New, got {other:?}"),
+        }
+
+        t.cancel("/live/clip/get/notes", &args);
+
+        let after = t.register(now, "/live/clip/get/notes", &args);
+        assert!(
+            matches!(after, Registration::New(_)),
+            "expected New after cancel, got {after:?}"
+        );
+    }
+
+    #[test]
+    fn cancelling_drops_the_waiter_so_the_receiver_sees_a_closed_channel() {
+        let mut t = RequestTable::new();
+        let now = Instant::now();
+        let args = [OscType::Int(1), OscType::Int(0)];
+        let id = match t.register(now, "/live/clip/get/notes", &args) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+        let mut rx = t.watch(id);
+
+        t.cancel("/live/clip/get/notes", &args);
+
+        assert_eq!(rx.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Closed));
+    }
+
+    #[test]
+    fn cancelling_an_unkeyed_request_clears_its_outstanding_flag() {
+        let mut t = RequestTable::new();
+        let now = Instant::now();
+        match t.register(now, "/live/track/get/mixer_data", &[]) {
+            Registration::New(_) => {}
+            other => panic!("expected New, got {other:?}"),
+        }
+
+        t.cancel("/live/track/get/mixer_data", &[]);
+
+        let after = t.register(now, "/live/track/get/mixer_data", &[]);
+        assert!(
+            matches!(after, Registration::New(_)),
+            "expected New after cancel, got {after:?}"
+        );
+    }
+
+    #[test]
+    fn cancelling_a_key_that_is_not_pending_is_a_harmless_no_op() {
+        let mut t = RequestTable::new();
+        let now = Instant::now();
+        let id = match t.register(now, "/live/track/get/name", &[OscType::Int(1)]) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+
+        // Nothing is pending for track 2; cancelling it must not touch
+        // track 1's entry.
+        t.cancel("/live/track/get/name", &[OscType::Int(2)]);
+
+        let still_joined = t.register(now, "/live/track/get/name", &[OscType::Int(1)]);
+        assert_eq!(still_joined, Registration::Joined(id));
     }
 
     #[test]
