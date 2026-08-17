@@ -8,6 +8,7 @@ use deltas::{Coalescer, Delta};
 use osc::budget::{mixer_chunks, track_chunks};
 use osc::pollers::{PollKind, PollSchedule};
 use osc::requests::{Registration, RequestTable};
+use osc::query::LiveQuery;
 use osc::socket::OscSocket;
 use osc::subs::SINGLETON_SUBSCRIPTIONS;
 use rosc::OscType;
@@ -15,6 +16,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
+use tools::{ToolContext, ToolResult};
 
 /// Property names requested per `track_data` chunk. Kept next to the chunk
 /// builder because `track_chunks`' byte-budget math needs the count to
@@ -392,10 +394,24 @@ fn connection_status(state: tauri::State<Arc<Mutex<ConnectionStatus>>>) -> Conne
     }
 }
 
+/// The webview names a tool and passes arguments; it never supplies a tool
+/// definition. See `tools::tool_schema`.
+#[tauri::command]
+async fn execute_tool(
+    name: String,
+    args: serde_json::Value,
+    ctx: tauri::State<'_, ToolContext>,
+) -> Result<ToolResult, String> {
+    // Clone out of managed state so nothing borrowed from `State` is held
+    // across the await.
+    let ctx = ctx.inner().clone();
+    Ok(tools::execute(&ctx, &name, &args).await)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![snapshot, connection_status])
+        .invoke_handler(tauri::generate_handler![snapshot, connection_status, execute_tool])
         .setup(|app| {
             // Set up regardless of whether the OSC socket binds -- a dead
             // socket shouldn't hide the whole window.
@@ -419,6 +435,16 @@ pub fn run() {
             let connection_status = Arc::new(Mutex::new(ConnectionStatus::Bound));
             app.manage(connection_status.clone());
 
+            // Managed before the bind attempt for the same reason
+            // connection_status is: a failed bind must leave the tool
+            // command answerable, reporting "not_connected" rather than
+            // failing with "state not managed".
+            let live_query: Arc<Mutex<Option<Arc<LiveQuery>>>> = Arc::new(Mutex::new(None));
+            app.manage(ToolContext {
+                coalescer: coalescer.clone(),
+                query: live_query.clone(),
+            });
+
             // Bound synchronously, via the background tokio runtime Tauri
             // already manages, so the same Arc<OscSocket> can be handed to
             // both the receive loop and the poll loop from the start. This
@@ -435,6 +461,10 @@ pub fn run() {
                     return Ok(());
                 }
             };
+
+            if let Ok(mut q) = live_query.lock() {
+                *q = Some(Arc::new(LiveQuery::new(socket.clone(), table.clone())));
+            }
 
             // Sole reader: this loop is the only caller of `recv()` on
             // this socket for the lifetime of the app. Do not add a second
