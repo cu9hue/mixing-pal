@@ -160,11 +160,13 @@ pub async fn post_chat(
         .map_err(|e| format!("could not parse the reply: {e}: {}", redact(&text, s)))
 }
 
-pub async fn complete(
-    client: &reqwest::Client,
-    s: &Settings,
-    messages: Vec<ChatMessage>,
-) -> Result<Completion, String> {
+/// Assembles the exact request body `complete` sends: validates the
+/// caller's roles, then injects the backend-owned system prompt and tool
+/// schema. Split out from `complete` so a caller that needs the body it's
+/// about to send -- the conversation trace, in `lib.rs`'s `model_complete`
+/// command -- can capture the real thing rather than a second, possibly-
+/// drifting reassembly of it.
+pub fn build_body(s: &Settings, messages: &[ChatMessage]) -> Result<serde_json::Value, String> {
     // The system prompt is the backend's. A caller-supplied message playing
     // that role is refused rather than dropped, so the caller cannot believe
     // it took effect. An allowlist, not a denylist naming only "system": a
@@ -186,15 +188,33 @@ pub async fn complete(
         tool_calls: None,
         tool_call_id: None,
     }];
-    wire.extend(messages);
+    wire.extend(messages.iter().cloned());
 
-    let body = serde_json::json!({
+    Ok(serde_json::json!({
         "model": s.model,
         "messages": wire,
         "tools": tool_schema(),
         "tool_choice": "auto",
-    });
+    }))
+}
 
+pub async fn complete(
+    client: &reqwest::Client,
+    s: &Settings,
+    messages: Vec<ChatMessage>,
+) -> Result<Completion, String> {
+    let body = build_body(s, &messages)?;
+    complete_with_body(client, s, body).await
+}
+
+/// Sends an already-assembled body (from `build_body`) and parses the
+/// response. Kept separate from `complete` for the same reason `build_body`
+/// is: so a caller can hold on to the exact body it sent.
+pub async fn complete_with_body(
+    client: &reqwest::Client,
+    s: &Settings,
+    body: serde_json::Value,
+) -> Result<Completion, String> {
     let parsed: ChatResponse = serde_json::from_value(post_chat(client, s, body).await?)
         .map_err(|e| format!("unexpected response shape: {e}"))?;
     let message = parsed

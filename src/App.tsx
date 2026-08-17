@@ -6,6 +6,7 @@ import { emptySet, applyDelta } from "./live/apply";
 import { SetView } from "./ui/SetView";
 import { Chat } from "./ui/Chat";
 import { Settings } from "./ui/Settings";
+import { Trace } from "./ui/Trace";
 
 export default function App() {
   const [state, setState] = useState(emptySet());
@@ -58,6 +59,7 @@ export default function App() {
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
       <SetView state={state} lastSeen={lastSeen} />
       <Chat state={state} />
+      <Trace />
     </div>
   );
 }

@@ -32,7 +32,9 @@ pub struct ToolResult {
     pub missing_reason: Option<String>,
 }
 
-fn now_millis() -> u64 {
+/// Epoch millis. `pub(crate)` so `trace.rs` (via `lib.rs`) uses this exact
+/// derivation for a step's `at` field instead of a second implementation.
+pub(crate) fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

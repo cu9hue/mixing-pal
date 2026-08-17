@@ -4,6 +4,7 @@ mod model;
 mod osc;
 mod settings;
 mod tools;
+mod trace;
 
 use bulk::{decode_mixer_data, decode_track_data, MIXER_ADDRS, TRACK_DATA_ADDRS};
 use deltas::{Coalescer, Delta};
@@ -22,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 use tools::{ToolContext, ToolResult};
+use trace::{Trace, TraceStep};
 
 /// Property names requested per `track_data` chunk. Kept next to the chunk
 /// builder because `track_chunks`' byte-budget math needs the count to
@@ -427,16 +429,40 @@ fn connection_status(state: tauri::State<Arc<Mutex<ConnectionStatus>>>) -> Conne
 
 /// The webview names a tool and passes arguments; it never supplies a tool
 /// definition. See `tools::tool_schema`.
+///
+/// Records one `Tool` trace step -- name, args, and the full `ToolResult` --
+/// after the call completes, so `missing_reason`/`fresh`/`fresh_as_of` are
+/// visible in the trace pane exactly as the model saw them.
 #[tauri::command]
 async fn execute_tool(
     name: String,
     args: serde_json::Value,
     ctx: tauri::State<'_, ToolContext>,
+    model_state: tauri::State<'_, Arc<ModelState>>,
+    trace_state: tauri::State<'_, Arc<Mutex<Trace>>>,
 ) -> Result<ToolResult, String> {
     // Clone out of managed state so nothing borrowed from `State` is held
     // across the await.
     let ctx = ctx.inner().clone();
-    Ok(tools::execute(&ctx, &name, &args).await)
+    let start = Instant::now();
+    let result = tools::execute(&ctx, &name, &args).await;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    // Locks taken only after the await above, one at a time, each released
+    // before the next -- never held across an .await, never two at once.
+    let redact_value = match model_state.settings.lock() {
+        Ok(s) => s.base_url.clone(),
+        // A poisoned settings lock is not this call's problem to fail over;
+        // worst case the trace step goes unredacted for a base_url that
+        // could not be read anyway.
+        Err(_) => String::new(),
+    };
+    let result_json = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
+    if let Ok(mut t) = trace_state.lock() {
+        t.push(TraceStep::tool(tools::now_millis(), name, args, result_json, duration_ms, &redact_value));
+    }
+
+    Ok(result)
 }
 
 /// Everything the model commands need. The key is inside `Settings` and
@@ -508,10 +534,17 @@ async fn save_settings_impl(
     Ok(view)
 }
 
+/// Records one `Model` trace step -- the exact body sent, the outcome
+/// (success or error, unambiguous by tag), and the elapsed time.
+///
+/// The body is assembled via `model::build_body` rather than duplicated
+/// here, so the trace can never show something other than what was really
+/// sent -- see `model::build_body`'s doc comment.
 #[tauri::command]
 async fn model_complete(
     messages: Vec<ChatMessage>,
     state: tauri::State<'_, Arc<ModelState>>,
+    trace_state: tauri::State<'_, Arc<Mutex<Trace>>>,
 ) -> Result<Completion, String> {
     let state = state.inner().clone();
     let settings = {
@@ -524,7 +557,43 @@ async fn model_complete(
     if settings.model.is_empty() || settings.api_key.is_empty() {
         return Err("No model is configured yet. Open Settings and choose a provider, model, and key.".to_string());
     }
-    model::complete(&state.client, &settings, messages).await
+
+    let body = model::build_body(&settings, &messages)?;
+    let start = Instant::now();
+    let result = model::complete_with_body(&state.client, &settings, body.clone()).await;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    // Outcome is unambiguous by construction: a Completion under "ok" or an
+    // error string under "error", never both.
+    let outcome = match &result {
+        Ok(completion) => serde_json::json!({ "ok": completion }),
+        Err(err) => serde_json::json!({ "error": err }),
+    };
+    // Lock taken only after the await above, and released before this
+    // function returns -- never held across an .await, never alongside the
+    // settings lock above (already dropped by the time this runs).
+    if let Ok(mut t) = trace_state.lock() {
+        t.push(TraceStep::model(tools::now_millis(), body, outcome, duration_ms, &settings.base_url));
+    }
+
+    result
+}
+
+/// Every recorded step, oldest first -- see `trace.rs`'s module doc for why
+/// this exists.
+#[tauri::command]
+fn trace(state: tauri::State<Arc<Mutex<Trace>>>) -> Vec<TraceStep> {
+    match state.lock() {
+        Ok(t) => t.steps(),
+        Err(_) => Vec::new(),
+    }
+}
+
+#[tauri::command]
+fn clear_trace(state: tauri::State<Arc<Mutex<Trace>>>) {
+    if let Ok(mut t) = state.lock() {
+        t.clear();
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -536,7 +605,9 @@ pub fn run() {
             execute_tool,
             get_settings,
             save_settings,
-            model_complete
+            model_complete,
+            trace,
+            clear_trace
         ])
         .setup(|app| {
             // Set up regardless of whether the OSC socket binds -- a dead
@@ -570,6 +641,12 @@ pub fn run() {
                 coalescer: coalescer.clone(),
                 query: live_query.clone(),
             });
+
+            // Managed before the bind attempt for the same reason: a failed
+            // socket must not take tracing down with it, and the trace pane
+            // should be able to show that model calls still work even when
+            // Live isn't reachable.
+            app.manage(Arc::new(Mutex::new(Trace::new())));
 
             // The config dir is where the API key lives. Managed before the
             // bind attempt for the same reason everything else here is: a
