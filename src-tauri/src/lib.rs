@@ -7,6 +7,7 @@ mod tools;
 
 use bulk::{decode_mixer_data, decode_track_data, MIXER_ADDRS, TRACK_DATA_ADDRS};
 use deltas::{Coalescer, Delta};
+use model::{ChatMessage, Completion};
 use osc::budget::{mixer_chunks, track_chunks};
 use osc::pollers::{PollKind, PollSchedule};
 use osc::requests::{Registration, RequestTable};
@@ -14,7 +15,9 @@ use osc::query::LiveQuery;
 use osc::socket::OscSocket;
 use osc::subs::SINGLETON_SUBSCRIPTIONS;
 use rosc::OscType;
+use settings::{Settings, SettingsView};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
@@ -410,10 +413,90 @@ async fn execute_tool(
     Ok(tools::execute(&ctx, &name, &args).await)
 }
 
+/// Everything the model commands need. The key is inside `Settings` and
+/// never leaves this struct.
+struct ModelState {
+    settings: Mutex<Settings>,
+    config_dir: PathBuf,
+    client: reqwest::Client,
+}
+
+#[tauri::command]
+fn get_settings(state: tauri::State<'_, Arc<ModelState>>) -> SettingsView {
+    match state.settings.lock() {
+        Ok(s) => SettingsView::from(&*s),
+        Err(_) => SettingsView::from(&Settings::default()),
+    }
+}
+
+/// Probes before persisting. A model that fails is refused with a message
+/// naming it and showing what it returned instead -- see `model::probe`.
+///
+/// `api_key` empty means "keep the stored key", so the settings pane can
+/// show a placeholder rather than the real key and still let the producer
+/// change only the model.
+#[tauri::command]
+async fn save_settings(
+    base_url: String,
+    model_name: String,
+    api_key: String,
+    state: tauri::State<'_, Arc<ModelState>>,
+) -> Result<SettingsView, String> {
+    let state = state.inner().clone();
+    let candidate = {
+        let stored = state
+            .settings
+            .lock()
+            .map_err(|_| "settings lock poisoned".to_string())?;
+        Settings {
+            base_url: base_url.trim().to_string(),
+            model: model_name.trim().to_string(),
+            api_key: if api_key.is_empty() { stored.api_key.clone() } else { api_key },
+        }
+    };
+
+    model::probe(&state.client, &candidate)
+        .await
+        .map_err(|f| f.to_string())?;
+
+    settings::save(&state.config_dir, &candidate).map_err(|e| format!("could not save settings: {e}"))?;
+    let view = SettingsView::from(&candidate);
+    if let Ok(mut s) = state.settings.lock() {
+        *s = candidate;
+    }
+    Ok(view)
+}
+
+#[tauri::command]
+async fn model_complete(
+    messages: Vec<ChatMessage>,
+    state: tauri::State<'_, Arc<ModelState>>,
+) -> Result<Completion, String> {
+    let state = state.inner().clone();
+    let settings = {
+        let s = state
+            .settings
+            .lock()
+            .map_err(|_| "settings lock poisoned".to_string())?;
+        s.clone()
+    };
+    if settings.model.is_empty() || settings.api_key.is_empty() {
+        return Err("No model is configured yet. Open Settings and choose a provider, model, and key.".to_string());
+    }
+    model::complete(&state.client, &settings, messages).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![snapshot, connection_status, execute_tool])
+        .invoke_handler(tauri::generate_handler![
+            snapshot,
+            connection_status,
+            execute_tool,
+            get_settings,
+            save_settings,
+            model_complete
+        ])
         .setup(|app| {
             // Set up regardless of whether the OSC socket binds -- a dead
             // socket shouldn't hide the whole window.
@@ -446,6 +529,16 @@ pub fn run() {
                 coalescer: coalescer.clone(),
                 query: live_query.clone(),
             });
+
+            // The config dir is where the API key lives. Managed before the
+            // bind attempt for the same reason everything else here is: a
+            // failed socket must not take the chat pane down with it.
+            let config_dir = app.path().app_config_dir().unwrap_or_else(|_| PathBuf::from("."));
+            app.manage(Arc::new(ModelState {
+                settings: Mutex::new(settings::load(&config_dir)),
+                config_dir,
+                client: reqwest::Client::new(),
+            }));
 
             // Bound synchronously, via the background tokio runtime Tauri
             // already manages, so the same Arc<OscSocket> can be handed to

@@ -173,6 +173,94 @@ pub async fn complete(
     })
 }
 
+/// A trivial tool the probe asks the model to call. Deliberately not one of
+/// the app's real tools: a provider that rejects a real tool's schema would
+/// otherwise fail the probe for a reason that has nothing to do with tool
+/// calling.
+pub const PROBE_TOOL: &str = "ping";
+
+/// How much of a failed model's answer to quote back. Enough to recognise
+/// the "JSON in prose" failure on sight, short enough to fit a dialog.
+pub const PROBE_QUOTE_LEN: usize = 300;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeFailure {
+    pub model: String,
+    pub returned: String,
+}
+
+impl std::fmt::Display for ProbeFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} did not make a tool call. It answered with: {}\n\nThis app needs \
+             working tool calls -- it gives the model a deliberately small \
+             summary and expects it to fetch the rest. A model that cannot \
+             call tools answers confidently about data it never read. Choose \
+             a model that supports tool calling.",
+            self.model, self.returned
+        )
+    }
+}
+
+/// Sends one request carrying a single trivial tool and checks for a real
+/// `tool_calls` response.
+///
+/// Tool-calling support is not reliably advertised: some models list it and
+/// then return prose containing JSON that DESCRIBES a call. That failure is
+/// silent at the protocol level, and this design cannot degrade around it,
+/// so the producer finds out at setup rather than three answers into a
+/// session.
+pub async fn probe(client: &reqwest::Client, s: &Settings) -> Result<(), ProbeFailure> {
+    let body = serde_json::json!({
+        "model": s.model,
+        "messages": [{
+            "role": "user",
+            "content": "Call the ping tool with value 1. Reply only with the tool call."
+        }],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": PROBE_TOOL,
+                "description": "Acknowledges a value.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "value": { "type": "integer" } },
+                    "required": ["value"]
+                }
+            }
+        }],
+        "tool_choice": "auto",
+    });
+
+    let quote = |text: String| ProbeFailure {
+        model: s.model.clone(),
+        returned: text.chars().take(PROBE_QUOTE_LEN).collect(),
+    };
+
+    let raw = post_chat(client, s, body).await.map_err(&quote)?;
+    let parsed: ChatResponse = serde_json::from_value(raw)
+        .map_err(|e| quote(format!("an unreadable response ({e})")))?;
+    let Some(message) = parsed.choices.into_iter().next().map(|c| c.message) else {
+        return Err(quote("no choices at all".to_string()));
+    };
+
+    let called_ping = message
+        .tool_calls
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c.function.name == PROBE_TOOL);
+    if called_ping {
+        return Ok(());
+    }
+    Err(quote(
+        message
+            .content
+            .filter(|c| !c.trim().is_empty())
+            .unwrap_or_else(|| "an empty message with no tool call".to_string()),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,5 +416,81 @@ mod tests {
         assert!(complete(&reqwest::Client::new(), &settings_for(&server), vec![user("hi")])
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_model_that_emits_a_real_tool_call_passes_the_probe() {
+        let server = MockServer::start().await;
+        capture(
+            &server,
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{ "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": { "name": PROBE_TOOL, "arguments": "{\"value\":1}" }
+                    }]
+                }}]
+            })),
+        )
+        .await;
+
+        assert!(probe(&reqwest::Client::new(), &settings_for(&server)).await.is_ok());
+
+        // The probe must carry its own trivial tool, not the app's real schema:
+        // a provider that rejects one of the real tools' schemas would otherwise
+        // fail the probe for the wrong reason.
+        let body = sent_body(&server).await;
+        assert_eq!(body["tools"][0]["function"]["name"], PROBE_TOOL);
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_model_that_returns_prose_describing_a_call_is_refused_and_quoted() {
+        // The exact failure this exists for: tool support is advertised, and the
+        // model returns text CONTAINING JSON that describes a call instead of
+        // emitting a tool_calls field. Silent at the protocol level.
+        let server = MockServer::start().await;
+        capture(
+            &server,
+            text_response("Sure! I would call: {\"name\": \"ping\", \"value\": 1}"),
+        )
+        .await;
+
+        let failure = probe(&reqwest::Client::new(), &settings_for(&server))
+            .await
+            .unwrap_err();
+        assert_eq!(failure.model, "test/model");
+        assert!(failure.returned.contains("I would call"));
+        let shown = failure.to_string();
+        assert!(shown.contains("test/model"), "the message must name the model: {shown}");
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_calls_some_other_tool_is_also_a_failure() {
+        let server = MockServer::start().await;
+        capture(
+            &server,
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{ "message": { "role": "assistant", "tool_calls": [{
+                    "id": "call_1", "type": "function",
+                    "function": { "name": "something_else", "arguments": "{}" }
+                }]}}]
+            })),
+        )
+        .await;
+
+        assert!(probe(&reqwest::Client::new(), &settings_for(&server)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_long_prose_answer_is_truncated_in_the_refusal_message() {
+        let server = MockServer::start().await;
+        capture(&server, text_response(&"x".repeat(2000))).await;
+        let failure = probe(&reqwest::Client::new(), &settings_for(&server))
+            .await
+            .unwrap_err();
+        assert!(failure.returned.chars().count() <= PROBE_QUOTE_LEN + 1);
     }
 }
