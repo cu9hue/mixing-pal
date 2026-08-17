@@ -179,6 +179,160 @@ fn clear_stale_inflight(counts: &Mutex<TrackCounts>, now: Instant) {
     }
 }
 
+/// Everything the receive loop does with one inbound datagram: observe it,
+/// resolve any request it completes, cache the two keyless counters the
+/// chunker needs, and decode the two bulk replies against the range the poll
+/// loop recorded when it sent them.
+///
+/// A free function rather than the body of `setup()`'s spawn closure, which
+/// is where this logic used to live and where no test could reach it. The
+/// 2026-08-16 whole-branch review found a Critical bug in exactly this seam
+/// (a rendered field nothing fetched) that thirteen task reviews missed,
+/// because the only way to exercise the loop was to run the app.
+fn handle_inbound(
+    msg: &rosc::OscMessage,
+    coalescer: &Mutex<Coalescer>,
+    table: &Mutex<RequestTable>,
+    counts: &Mutex<TrackCounts>,
+) {
+    // track_data and mixer_data are raw bulk arrays
+    // (up to ~1800 values) that get decoded into
+    // real per-track deltas below and observed THERE
+    // (via observe_delta) instead. Observing the raw
+    // reply here too would coalesce and retain the
+    // whole bulk array under its own request address
+    // forever -- re-sent in full on every webview
+    // reload via snapshot(), and never evicted,
+    // since evict_tracks_at_or_beyond only matches
+    // the decoded per-track addresses, not these.
+    let is_bulk_reply = matches!(
+        msg.addr.as_str(),
+        "/live/song/get/track_data" | "/live/track/get/mixer_data"
+    );
+    if !is_bulk_reply {
+        if let Ok(mut c) = coalescer.lock() {
+            c.observe(msg);
+        }
+    }
+    // Every inbound packet is an observation first
+    // and a promise resolution second (see
+    // `RequestTable::resolve`'s doc comment).
+    // Resolving here -- rather than leaving a
+    // single-flight slot to clear only via
+    // `expire`'s 2s timeout -- is what makes the
+    // rates in `PollKind::interval` the rates that
+    // actually go out on the wire.
+    if let Ok(mut t) = table.lock() {
+        t.resolve(msg);
+    }
+    // The poll loop needs the real track and scene
+    // counts to chunk `track_data` correctly. Cache
+    // them here, through the same observation path
+    // everything else already flows through,
+    // instead of adding a second call site that
+    // waits on its own reply.
+    match (msg.addr.as_str(), msg.args.first()) {
+        ("/live/song/get/num_tracks", Some(OscType::Int(n))) => {
+            let new_count = (*n).max(0) as usize;
+            let shrank = match counts.lock() {
+                Ok(mut c) => {
+                    let shrank = c
+                        .num_tracks
+                        .is_some_and(|old| new_count < old);
+                    c.num_tracks = Some(new_count);
+                    shrank
+                }
+                Err(_) => false,
+            };
+            // A shrink means at least one track was
+            // deleted in Live. There is no "track
+            // removed" message -- only a smaller
+            // count on the next poll -- so this is
+            // the only signal that stale retained
+            // entries (see
+            // `Coalescer::evict_tracks_at_or_beyond`)
+            // need sweeping before a reload's
+            // `snapshot()` can resurrect them as
+            // phantom rows.
+            if shrank {
+                if let Ok(mut c) = coalescer.lock() {
+                    let addrs: Vec<&str> = TRACK_DATA_ADDRS
+                        .iter()
+                        .chain(MIXER_ADDRS.iter())
+                        .copied()
+                        .collect();
+                    c.evict_tracks_at_or_beyond(
+                        &addrs,
+                        new_count as u32,
+                    );
+                }
+            }
+        }
+        ("/live/song/get/num_scenes", Some(OscType::Int(n))) => {
+            if let Ok(mut c) = counts.lock() {
+                c.num_scenes = Some((*n).max(0) as usize);
+            }
+        }
+        _ => {}
+    }
+
+    // track_data and mixer_data are both
+    // `KeyArity::Unkeyed` -- the reply echoes no
+    // range -- so attributing this one to a track
+    // range means reading (and clearing) whatever
+    // range the poll loop most recently recorded
+    // for this address in `TrackCounts`. A `None`
+    // here means no range is known for this reply
+    // (never sent one, or `clear_stale_inflight`
+    // already reclaimed it): decoding would have to
+    // guess the range, which is exactly the
+    // plausible-wrong-data this design avoids, so
+    // it's dropped instead.
+    match msg.addr.as_str() {
+        "/live/song/get/track_data" => {
+            let range = match counts.lock() {
+                Ok(mut c) => c.inflight_track_data.take(),
+                Err(_) => None,
+            };
+            match range {
+                Some(range) => {
+                    let deltas = decode_track_data(range, &msg.args);
+                    if let Ok(mut c) = coalescer.lock() {
+                        for delta in deltas {
+                            c.observe_delta(delta);
+                        }
+                    }
+                }
+                None => eprintln!(
+                    "track_data reply arrived with no in-flight \
+                     range recorded; dropping"
+                ),
+            }
+        }
+        "/live/track/get/mixer_data" => {
+            let range = match counts.lock() {
+                Ok(mut c) => c.inflight_mixer_data.take(),
+                Err(_) => None,
+            };
+            match range {
+                Some(range) => {
+                    let deltas = decode_mixer_data(range, &msg.args);
+                    if let Ok(mut c) = coalescer.lock() {
+                        for delta in deltas {
+                            c.observe_delta(delta);
+                        }
+                    }
+                }
+                None => eprintln!(
+                    "mixer_data reply arrived with no in-flight \
+                     range recorded; dropping"
+                ),
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Returns every retained value (see `Coalescer::snapshot`) so a webview
 /// that just mounted -- or just reloaded -- can catch up on state that
 /// already arrived and was drained by the emit loop before its listener
@@ -295,144 +449,7 @@ pub fn run() {
                 }
                 loop {
                     match recv_socket.recv().await {
-                        Ok(msg) => {
-                            // track_data and mixer_data are raw bulk arrays
-                            // (up to ~1800 values) that get decoded into
-                            // real per-track deltas below and observed THERE
-                            // (via observe_delta) instead. Observing the raw
-                            // reply here too would coalesce and retain the
-                            // whole bulk array under its own request address
-                            // forever -- re-sent in full on every webview
-                            // reload via snapshot(), and never evicted,
-                            // since evict_tracks_at_or_beyond only matches
-                            // the decoded per-track addresses, not these.
-                            let is_bulk_reply = matches!(
-                                msg.addr.as_str(),
-                                "/live/song/get/track_data" | "/live/track/get/mixer_data"
-                            );
-                            if !is_bulk_reply {
-                                if let Ok(mut c) = recv_coalescer.lock() {
-                                    c.observe(&msg);
-                                }
-                            }
-                            // Every inbound packet is an observation first
-                            // and a promise resolution second (see
-                            // `RequestTable::resolve`'s doc comment).
-                            // Resolving here -- rather than leaving a
-                            // single-flight slot to clear only via
-                            // `expire`'s 2s timeout -- is what makes the
-                            // rates in `PollKind::interval` the rates that
-                            // actually go out on the wire.
-                            if let Ok(mut t) = recv_table.lock() {
-                                t.resolve(&msg);
-                            }
-                            // The poll loop needs the real track and scene
-                            // counts to chunk `track_data` correctly. Cache
-                            // them here, through the same observation path
-                            // everything else already flows through,
-                            // instead of adding a second call site that
-                            // waits on its own reply.
-                            match (msg.addr.as_str(), msg.args.first()) {
-                                ("/live/song/get/num_tracks", Some(OscType::Int(n))) => {
-                                    let new_count = (*n).max(0) as usize;
-                                    let shrank = match recv_counts.lock() {
-                                        Ok(mut c) => {
-                                            let shrank = c
-                                                .num_tracks
-                                                .is_some_and(|old| new_count < old);
-                                            c.num_tracks = Some(new_count);
-                                            shrank
-                                        }
-                                        Err(_) => false,
-                                    };
-                                    // A shrink means at least one track was
-                                    // deleted in Live. There is no "track
-                                    // removed" message -- only a smaller
-                                    // count on the next poll -- so this is
-                                    // the only signal that stale retained
-                                    // entries (see
-                                    // `Coalescer::evict_tracks_at_or_beyond`)
-                                    // need sweeping before a reload's
-                                    // `snapshot()` can resurrect them as
-                                    // phantom rows.
-                                    if shrank {
-                                        if let Ok(mut c) = recv_coalescer.lock() {
-                                            let addrs: Vec<&str> = TRACK_DATA_ADDRS
-                                                .iter()
-                                                .chain(MIXER_ADDRS.iter())
-                                                .copied()
-                                                .collect();
-                                            c.evict_tracks_at_or_beyond(
-                                                &addrs,
-                                                new_count as u32,
-                                            );
-                                        }
-                                    }
-                                }
-                                ("/live/song/get/num_scenes", Some(OscType::Int(n))) => {
-                                    if let Ok(mut c) = recv_counts.lock() {
-                                        c.num_scenes = Some((*n).max(0) as usize);
-                                    }
-                                }
-                                _ => {}
-                            }
-
-                            // track_data and mixer_data are both
-                            // `KeyArity::Unkeyed` -- the reply echoes no
-                            // range -- so attributing this one to a track
-                            // range means reading (and clearing) whatever
-                            // range the poll loop most recently recorded
-                            // for this address in `TrackCounts`. A `None`
-                            // here means no range is known for this reply
-                            // (never sent one, or `clear_stale_inflight`
-                            // already reclaimed it): decoding would have to
-                            // guess the range, which is exactly the
-                            // plausible-wrong-data this design avoids, so
-                            // it's dropped instead.
-                            match msg.addr.as_str() {
-                                "/live/song/get/track_data" => {
-                                    let range = match recv_counts.lock() {
-                                        Ok(mut c) => c.inflight_track_data.take(),
-                                        Err(_) => None,
-                                    };
-                                    match range {
-                                        Some(range) => {
-                                            let deltas = decode_track_data(range, &msg.args);
-                                            if let Ok(mut c) = recv_coalescer.lock() {
-                                                for delta in deltas {
-                                                    c.observe_delta(delta);
-                                                }
-                                            }
-                                        }
-                                        None => eprintln!(
-                                            "track_data reply arrived with no in-flight \
-                                             range recorded; dropping"
-                                        ),
-                                    }
-                                }
-                                "/live/track/get/mixer_data" => {
-                                    let range = match recv_counts.lock() {
-                                        Ok(mut c) => c.inflight_mixer_data.take(),
-                                        Err(_) => None,
-                                    };
-                                    match range {
-                                        Some(range) => {
-                                            let deltas = decode_mixer_data(range, &msg.args);
-                                            if let Ok(mut c) = recv_coalescer.lock() {
-                                                for delta in deltas {
-                                                    c.observe_delta(delta);
-                                                }
-                                            }
-                                        }
-                                        None => eprintln!(
-                                            "mixer_data reply arrived with no in-flight \
-                                             range recorded; dropping"
-                                        ),
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
+                        Ok(msg) => handle_inbound(&msg, &recv_coalescer, &recv_table, &recv_counts),
                         Err(e) => {
                             eprintln!("osc recv error: {e}");
                             // "Live isn't running" (connection refused on
@@ -1366,5 +1383,122 @@ mod tests {
         let c = counts.lock().unwrap();
         assert_eq!(c.inflight_track_data, None);
         assert_eq!(c.inflight_mixer_data, None);
+    }
+
+    // --- handle_inbound ------------------------------------------------
+    //
+    // The receive loop's body used to live inside setup()'s spawn closure,
+    // where no test could reach it. These three cover invariants that were
+    // only ever asserted by reading the code.
+
+    fn inbound_fixture() -> (Mutex<Coalescer>, Mutex<RequestTable>, Mutex<TrackCounts>) {
+        (
+            Mutex::new(Coalescer::new()),
+            Mutex::new(RequestTable::new()),
+            Mutex::new(TrackCounts::default()),
+        )
+    }
+
+    #[test]
+    fn a_bulk_reply_is_never_retained_under_its_own_raw_address() {
+        // The raw track_data array is up to ~1800 values. Retaining it would
+        // replay the whole array on every webview reload via snapshot(), and
+        // evict_tracks_at_or_beyond only matches the decoded per-track
+        // addresses, so it would never be cleaned up either.
+        let (coalescer, table, counts) = inbound_fixture();
+        counts.lock().unwrap().inflight_track_data = Some((0, 1));
+
+        handle_inbound(
+            &OscMessage {
+                addr: "/live/song/get/track_data".to_string(),
+                args: vec![
+                    OscType::String("Kick".into()),
+                    OscType::Bool(false),
+                    OscType::Bool(true),
+                ],
+            },
+            &coalescer,
+            &table,
+            &counts,
+        );
+
+        let snapshot = coalescer.lock().unwrap().snapshot();
+        assert!(
+            snapshot.iter().all(|d| d.addr != "/live/song/get/track_data"),
+            "the raw bulk array must never be retained"
+        );
+        assert!(
+            snapshot.iter().any(|d| d.addr == "/live/track/get/name"),
+            "the decoded per-track deltas must be retained instead"
+        );
+    }
+
+    #[test]
+    fn a_bulk_reply_with_no_recorded_range_is_dropped_rather_than_decoded() {
+        // track_data echoes no range, so the only knowledge of which tracks a
+        // reply describes is the range the poll loop recorded when it sent the
+        // request. With none recorded, decoding would have to guess.
+        let (coalescer, table, counts) = inbound_fixture();
+
+        handle_inbound(
+            &OscMessage {
+                addr: "/live/song/get/track_data".to_string(),
+                args: vec![
+                    OscType::String("Kick".into()),
+                    OscType::Bool(false),
+                    OscType::Bool(true),
+                ],
+            },
+            &coalescer,
+            &table,
+            &counts,
+        );
+
+        assert!(coalescer.lock().unwrap().snapshot().is_empty());
+    }
+
+    #[test]
+    fn a_num_tracks_shrink_evicts_retained_rows_for_tracks_that_no_longer_exist() {
+        let (coalescer, table, counts) = inbound_fixture();
+        counts.lock().unwrap().inflight_track_data = Some((0, 2));
+
+        handle_inbound(
+            &OscMessage {
+                addr: "/live/song/get/track_data".to_string(),
+                args: vec![
+                    OscType::String("Kick".into()),
+                    OscType::Bool(false),
+                    OscType::Bool(false),
+                    OscType::String("Bass".into()),
+                    OscType::Bool(false),
+                    OscType::Bool(false),
+                ],
+            },
+            &coalescer,
+            &table,
+            &counts,
+        );
+
+        for n in [2, 1] {
+            handle_inbound(
+                &OscMessage {
+                    addr: "/live/song/get/num_tracks".to_string(),
+                    args: vec![OscType::Int(n)],
+                },
+                &coalescer,
+                &table,
+                &counts,
+            );
+        }
+
+        let names: Vec<_> = coalescer
+            .lock()
+            .unwrap()
+            .snapshot()
+            .into_iter()
+            .filter(|d| d.addr == "/live/track/get/name")
+            .collect();
+        assert_eq!(names.len(), 1, "track 1's retained row must go when the set shrinks to 1");
+        assert_eq!(names[0].args[0], serde_json::json!(0));
     }
 }
