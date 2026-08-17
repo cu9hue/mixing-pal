@@ -1,6 +1,7 @@
 mod bulk;
 mod deltas;
 mod osc;
+mod tools;
 
 use bulk::{decode_mixer_data, decode_track_data, MIXER_ADDRS, TRACK_DATA_ADDRS};
 use deltas::{Coalescer, Delta};
