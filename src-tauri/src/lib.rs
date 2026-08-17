@@ -1,5 +1,6 @@
 mod bulk;
 mod deltas;
+mod model;
 mod osc;
 mod settings;
 mod tools;
