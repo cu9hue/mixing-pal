@@ -12,8 +12,13 @@ import { buildContext } from "../digest/build";
  */
 const DISCLAIMER = "AI can make mistakes. Treat responses as suggestions.";
 
+// The spec calls the goal field "a persistent free-text field" and
+// "probably the highest leverage" thing in the design -- it must survive a
+// webview reload, not just a re-render.
+const GOAL_STORAGE_KEY = "copilot.goal";
+
 export function Chat({ state }: { state: SetState }) {
-  const [goal, setGoal] = useState("");
+  const [goal, setGoal] = useState(() => localStorage.getItem(GOAL_STORAGE_KEY) ?? "");
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [progress, setProgress] = useState<string | null>(null);
@@ -56,7 +61,10 @@ export function Chat({ state }: { state: SetState }) {
         placeholder="What are you working on? (genre, reference, today's goal)"
         value={goal}
         maxLength={500}
-        onChange={(e) => setGoal(e.target.value)}
+        onChange={(e) => {
+          setGoal(e.target.value);
+          localStorage.setItem(GOAL_STORAGE_KEY, e.target.value);
+        }}
       />
       <div style={{ maxHeight: 240, overflowY: "auto" }}>
         {history.map((m, i) => (

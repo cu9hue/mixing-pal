@@ -117,8 +117,18 @@ pub fn tool_schema() -> serde_json::Value {
 /// Reads a required integer argument. Absent or wrongly typed is reported,
 /// never defaulted: answering about track 0 when the model asked about a
 /// track it could not name is worse than answering nothing.
+///
+/// Accepts an f64 too, as long as it's integral: real providers commonly
+/// emit floats for integer-typed fields (e.g. `{"track": 1.0}`). A
+/// genuinely fractional value (`1.5`) is still refused, not truncated --
+/// truncating would answer about a track the model never actually named.
 fn int_arg(args: &serde_json::Value, name: &str) -> Option<i64> {
-    args.get(name)?.as_i64()
+    let value = args.get(name)?;
+    if let Some(i) = value.as_i64() {
+        return Some(i);
+    }
+    let f = value.as_f64()?;
+    (f.is_finite() && f.fract() == 0.0).then_some(f as i64)
 }
 
 /// One track's mirrored name, used as its identity across a paged query.
@@ -304,6 +314,15 @@ mod tests {
         let result = execute(&ctx, "delete_everything", &serde_json::json!({})).await;
         assert_eq!(result.missing_reason.as_deref(), Some("unknown_tool"));
         assert_eq!(result.value, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn int_arg_accepts_an_integral_float_but_rejects_a_fractional_one() {
+        // Real providers commonly emit floats for integer fields.
+        assert_eq!(int_arg(&serde_json::json!({ "track": 1.0 }), "track"), Some(1));
+        assert_eq!(int_arg(&serde_json::json!({ "track": -2.0 }), "track"), Some(-2));
+        assert_eq!(int_arg(&serde_json::json!({ "track": 1.5 }), "track"), None);
+        assert_eq!(int_arg(&serde_json::json!({ "track": 3 }), "track"), Some(3));
     }
 
     #[test]

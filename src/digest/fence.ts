@@ -7,8 +7,11 @@ export function fence(raw: string): string {
   const cleaned = Array.from(raw)
     .filter((c) => c !== "«" && c !== "»")
     // \p{Cc} is the Unicode Cc category, which is exactly what Rust's
-    // char::is_control() tests.
-    .map((c) => (/\p{Cc}/u.test(c) ? " " : c))
+    // char::is_control() tests. \p{Zl}/\p{Zp} (U+2028/U+2029) are added
+    // alongside it: they render as real line breaks in many contexts but
+    // aren't Cc, so a crafted name carrying one could still forge a new
+    // message turn without this.
+    .map((c) => (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(c) ? " " : c))
     .slice(0, MAX_FENCED_LEN)
     .join("");
   return `«${cleaned}»`;

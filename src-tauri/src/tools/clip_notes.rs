@@ -118,7 +118,11 @@ pub async fn get_clip_notes(
             timeout,
         )
         .await?;
-    let length = length_reply.get(2).and_then(as_f64).unwrap_or(0.0) as f32;
+    // A reply that arrived but whose length value can't be read is not "the
+    // clip is empty" -- unwrap_or(0.0) would turn an unreadable reply into a
+    // fabricated zero-span window, which returns {notes: [], missing_reason:
+    // null}, i.e. an invented "this clip is empty" the reply never said.
+    let length = length_reply.get(2).and_then(as_f64).ok_or(QueryError::NoReply)? as f32;
 
     // With no note-count estimate to work from, start with one window over
     // the whole clip; note_windows returns exactly that for est_notes = 0.
@@ -144,7 +148,21 @@ pub async fn get_clip_notes(
         ];
         match q.query("/live/clip/get/notes", args, timeout).await {
             Ok(reply) => match decode_notes(&reply) {
-                Some(mut window) => notes.append(&mut window),
+                // `/live/clip/get/notes` is KeyArity::Args(2): the reply
+                // echoes only (track, clip), not the window. A late reply
+                // for a since-cancelled window can therefore resolve a
+                // DIFFERENT, currently in-flight window's waiter -- see this
+                // function's doc comment. Live's ranged query form is
+                // start-time keyed, so a correct reply only ever contains
+                // notes inside [start, start + span); dropping anything
+                // outside that range is a no-op on a correct reply and
+                // discards a mis-attributed one instead of merging it in.
+                Some(mut window) => {
+                    let window_start = start as f64;
+                    let window_end = window_start + span as f64;
+                    window.retain(|n| n.start >= window_start && n.start < window_end);
+                    notes.append(&mut window)
+                }
                 None => missing_reason = Some("malformed_reply".to_string()),
             },
             // Halve and retry: the reply may simply have been too large for
@@ -227,6 +245,15 @@ mod tests {
         notes: Vec<(f32, i32)>,
         silent: Vec<(f32, f32)>,
         silent_all: bool,
+        /// When set, replies to EVERY `/live/clip/get/notes` request with
+        /// this exact set of notes, ignoring the requested window entirely
+        /// -- a stand-in for a late reply that resolves the wrong window's
+        /// waiter (see `get_clip_notes`'s doc comment and IMPORTANT 1 in the
+        /// 2026-08-16 whole-branch review).
+        full_reply: Option<Vec<(f32, i32)>>,
+        /// When set, replies to `/live/clip/get/length` with a value that
+        /// cannot be read as a number, instead of `fake.length`.
+        malformed_length: bool,
     }
 
     /// Spawns the fake, plus the receive loop the query path needs, and
@@ -266,11 +293,16 @@ mod tests {
                 };
                 match req.addr.as_str() {
                     "/live/clip/get/length" => {
+                        let length_arg = if fake.malformed_length {
+                            OscType::String("not a number".to_string())
+                        } else {
+                            OscType::Float(fake.length)
+                        };
                         let _ = live
                             .send_to(
                                 app_port,
                                 "/live/clip/get/length",
-                                vec![req.args[0].clone(), req.args[1].clone(), OscType::Float(fake.length)],
+                                vec![req.args[0].clone(), req.args[1].clone(), length_arg],
                             )
                             .await;
                     }
@@ -284,9 +316,18 @@ mod tests {
                             continue; // the reply Live could not send
                         }
                         let mut reply = vec![req.args[0].clone(), req.args[1].clone()];
-                        for (at, pitch) in &fake.notes {
-                            if *at >= start && *at < start + span {
+                        if let Some(all) = &fake.full_reply {
+                            // Ignores the requested window on purpose --
+                            // simulates a reply whose notes don't match the
+                            // window it's keyed to resolve.
+                            for (at, pitch) in all {
                                 reply.extend(note_values(*pitch, *at));
+                            }
+                        } else {
+                            for (at, pitch) in &fake.notes {
+                                if *at >= start && *at < start + span {
+                                    reply.extend(note_values(*pitch, *at));
+                                }
                             }
                         }
                         let _ = live.send_to(app_port, "/live/clip/get/notes", reply).await;
@@ -308,6 +349,8 @@ mod tests {
             notes: vec![(0.0, 60), (4.0, 63), (8.0, 67)],
             silent: vec![],
             silent_all: false,
+            full_reply: None,
+            malformed_length: false,
         })
         .await;
 
@@ -330,6 +373,8 @@ mod tests {
             notes: vec![(0.0, 60), (4.0, 63), (8.0, 67), (12.0, 70)],
             silent: vec![(0.0, 16.0)],
             silent_all: false,
+            full_reply: None,
+            malformed_length: false,
         })
         .await;
 
@@ -352,6 +397,8 @@ mod tests {
             notes: vec![(0.0, 60)],
             silent: vec![],
             silent_all: true,
+            full_reply: None,
+            malformed_length: false,
         })
         .await;
 
@@ -376,5 +423,75 @@ mod tests {
         let table = Arc::new(Mutex::new(RequestTable::new()));
         let q = LiveQuery::new(app, table);
         assert_eq!(get_clip_notes(&q, 9, 9, FAST).await, Err(QueryError::NoReply));
+    }
+
+    #[tokio::test]
+    async fn notes_outside_the_requested_window_are_dropped_not_merged() {
+        // IMPORTANT 1 (2026-08-16 whole-branch review): /live/clip/get/notes
+        // is KeyArity::Args(2) -- the reply echoes only (track, clip), not
+        // the window. A late reply meant for a cancelled window can resolve
+        // a different, currently in-flight window's waiter. full_reply
+        // stands in for that: every request gets back the SAME note set,
+        // including one note (start = 12.0) outside the single window this
+        // 8-beat clip actually asks for ([0, 8)).
+        let (q, _seen) = spawn(FakeLive {
+            length: 8.0,
+            notes: vec![],
+            silent: vec![],
+            silent_all: false,
+            full_reply: Some(vec![(0.0, 60), (4.0, 63), (12.0, 70)]),
+            malformed_length: false,
+        })
+        .await;
+
+        let result = get_clip_notes(&q, 2, 1, FAST).await.unwrap();
+        assert_eq!(
+            result.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(),
+            vec![60, 63],
+            "the note at start=12.0, outside [0, 8), must be dropped rather than merged in"
+        );
+        assert_eq!(result.missing_reason, None);
+    }
+
+    #[tokio::test]
+    async fn a_correct_reply_within_its_window_loses_no_notes() {
+        // The normal path, unaffected by the window filter above: every note
+        // the fake returns already falls inside the single window this clip
+        // is fetched in, so none of them should be dropped.
+        let (q, _seen) = spawn(FakeLive {
+            length: 8.0,
+            notes: vec![(0.0, 60), (4.0, 63), (7.9, 70)],
+            silent: vec![],
+            silent_all: false,
+            full_reply: None,
+            malformed_length: false,
+        })
+        .await;
+
+        let result = get_clip_notes(&q, 2, 1, FAST).await.unwrap();
+        assert_eq!(
+            result.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(),
+            vec![60, 63, 70]
+        );
+        assert_eq!(result.missing_reason, None);
+    }
+
+    #[tokio::test]
+    async fn a_malformed_length_reply_is_reported_rather_than_treated_as_an_empty_clip() {
+        // MINOR 10 (2026-08-16 whole-branch review): unwrap_or(0.0) on an
+        // unreadable length reply used to fabricate a zero-span window,
+        // returning {notes: [], missing_reason: null} -- "this clip is
+        // empty", invented from a reply that could not be read.
+        let (q, _seen) = spawn(FakeLive {
+            length: 16.0,
+            notes: vec![(0.0, 60)],
+            silent: vec![],
+            silent_all: false,
+            full_reply: None,
+            malformed_length: true,
+        })
+        .await;
+
+        assert_eq!(get_clip_notes(&q, 2, 1, FAST).await, Err(QueryError::NoReply));
     }
 }

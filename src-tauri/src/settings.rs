@@ -72,6 +72,11 @@ pub fn save(dir: &Path, s: &Settings) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        // create_dir_all leaves the directory at the platform default (a
+        // typical XDG config dir is 755), which would make the directory
+        // holding the key file world-traversable even though the file
+        // itself is 0600.
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
@@ -149,5 +154,11 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600, "the file holds an API key");
+        let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(
+            dir_mode & 0o777,
+            0o700,
+            "the directory holding the key file must not be world-traversable"
+        );
     }
 }

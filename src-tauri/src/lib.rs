@@ -34,8 +34,14 @@ const TRACK_DATA_PROPERTIES: [&str; 3] = ["track.name", "track.mute", "track.sol
 /// (observed raw, same as any other reply), and `track_data`/`mixer_data`'s
 /// decoded per-track addresses (`TRACK_DATA_ADDRS`/`MIXER_ADDRS` -- the raw
 /// bulk addresses themselves never reach the frontend; see the receive
-/// loop's `is_bulk_reply` skip). `PollKind::Selection`'s and
+/// loop's `is_resolve_only` skip). `PollKind::Selection`'s and
 /// `PollKind::Meters`' own addresses are observed raw and included too.
+///
+/// `/live/clip/get/notes` and `/live/clip/get/length` are deliberately
+/// absent: they are also skipped by `is_resolve_only` (IMPORTANT 3,
+/// 2026-08-16 whole-branch review) -- their replies resolve a LiveQuery
+/// caller directly and never enter the coalescer, so they can never end up
+/// in a `Delta` at all.
 ///
 /// Exported so `every_emitted_address_is_handled_or_explicitly_allowed`
 /// (below) can assert this list and `apply.ts`'s address mappings
@@ -84,6 +90,11 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
 /// structural (every `send_to` call asserts it), but this test is what
 /// proves every address this codebase actually sends today passes that
 /// assertion, rather than trusting it by inspection.
+///
+/// Also covers the two addresses `LiveQuery` sends on behalf of
+/// `get_clip_notes` -- not sent by the poll loop itself, but still a
+/// `send`/`send_to` call site this codebase uses today, so still in scope
+/// for the same tripwire (MINOR 11, 2026-08-16 whole-branch review).
 #[cfg(test)]
 const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/song/get/num_tracks",
@@ -93,6 +104,8 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/view/get/selected_clip",
     "/live/view/get/selected_device",
     "/live/master/get/output_meter_level",
+    "/live/clip/get/notes",
+    "/live/clip/get/length",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -204,21 +217,34 @@ fn handle_inbound(
     table: &Mutex<RequestTable>,
     counts: &Mutex<TrackCounts>,
 ) {
-    // track_data and mixer_data are raw bulk arrays
-    // (up to ~1800 values) that get decoded into
-    // real per-track deltas below and observed THERE
-    // (via observe_delta) instead. Observing the raw
-    // reply here too would coalesce and retain the
-    // whole bulk array under its own request address
-    // forever -- re-sent in full on every webview
-    // reload via snapshot(), and never evicted,
-    // since evict_tracks_at_or_beyond only matches
-    // the decoded per-track addresses, not these.
-    let is_bulk_reply = matches!(
+    // Addresses whose reply resolves its own request and is consumed
+    // directly by whatever's awaiting it, but must never enter the
+    // coalescer:
+    //
+    // - track_data and mixer_data are raw bulk arrays (up to ~1800 values)
+    //   that get decoded into real per-track deltas below and observed
+    //   THERE (via observe_delta) instead. Observing the raw reply here too
+    //   would coalesce and retain the whole bulk array under its own
+    //   request address forever -- re-sent in full on every webview reload
+    //   via snapshot(), and never evicted, since evict_tracks_at_or_beyond
+    //   only matches the decoded per-track addresses, not these.
+    // - clip/get/notes and clip/get/length are LiveQuery-only round trips
+    //   (get_clip_notes): the tool call awaiting the reply reads it
+    //   straight off the request table's resolve, same as every other
+    //   LiveQuery caller. A 450-note reply is ~2,250 JSON values; observing
+    //   it here would retain it forever keyed on (track, clip), stream it
+    //   to the frontend in a live://deltas batch, and replay it on every
+    //   reload -- and unlike track_data/mixer_data it never evicts, since
+    //   evict_tracks_at_or_beyond is only called with the track/mixer
+    //   address lists. IMPORTANT 3, 2026-08-16 whole-branch review.
+    let is_resolve_only = matches!(
         msg.addr.as_str(),
-        "/live/song/get/track_data" | "/live/track/get/mixer_data"
+        "/live/song/get/track_data"
+            | "/live/track/get/mixer_data"
+            | "/live/clip/get/notes"
+            | "/live/clip/get/length"
     );
-    if !is_bulk_reply {
+    if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
             c.observe(msg);
         }
@@ -1109,6 +1135,34 @@ mod tests {
                 "{addr} would be refused by send_to's read-only guard"
             );
         }
+    }
+
+    #[test]
+    fn a_clip_notes_reply_never_enters_the_coalescer() {
+        // IMPORTANT 3 (2026-08-16 whole-branch review): a clip-notes reply
+        // resolves a LiveQuery caller directly and must never be observed
+        // into the coalescer -- retained forever, streamed to the frontend,
+        // and replayed on every reload, none of which apply.ts even reads.
+        let coalescer = Mutex::new(Coalescer::new());
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
+        let msg = OscMessage {
+            addr: "/live/clip/get/notes".to_string(),
+            args: vec![
+                OscType::Int(0),
+                OscType::Int(0),
+                OscType::Int(60),
+                OscType::Float(0.0),
+                OscType::Float(0.5),
+                OscType::Float(100.0),
+                OscType::Bool(false),
+            ],
+        };
+        handle_inbound(&msg, &coalescer, &table, &counts);
+        assert!(
+            coalescer.lock().unwrap().snapshot().is_empty(),
+            "a clip-notes reply must not be retained in the coalescer"
+        );
     }
 
     #[test]

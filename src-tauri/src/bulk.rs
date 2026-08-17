@@ -40,8 +40,8 @@ pub fn decode_track_data(range: (u32, u32), args: &[OscType]) -> Vec<Delta> {
     decode_bulk(range, args, &TRACK_DATA_ADDRS, "track_data")
 }
 
-/// Decodes a `mixer_data` reply -- `volume, panning` per track, in index
-/// order, no echoed range -- the same way `decode_track_data` does.
+/// Decodes a `mixer_data` reply -- `volume, panning, volume_db` per track,
+/// in index order, no echoed range -- the same way `decode_track_data` does.
 pub fn decode_mixer_data(range: (u32, u32), args: &[OscType]) -> Vec<Delta> {
     decode_bulk(range, args, &MIXER_ADDRS, "mixer_data")
 }
