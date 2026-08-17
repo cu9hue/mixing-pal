@@ -2,6 +2,7 @@ use super::arity::{key_arity, KeyArity};
 use rosc::{OscMessage, OscType};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
+use tokio::sync::oneshot;
 
 pub type RequestId = u64;
 
@@ -40,6 +41,14 @@ pub struct RequestTable {
     /// distinguishable from one another, even though each individually must
     /// be serialized against itself.
     unkeyed_outstanding: HashSet<String>,
+    /// Callers awaiting a specific request's reply arguments.
+    ///
+    /// A `Vec` because `Registration::Joined` hands two callers the same
+    /// `RequestId` and only one datagram will ever come back for them.
+    /// Empty for every request the poll loop issues -- polling is
+    /// fire-and-forget and reads its values out of the mirror, not out of
+    /// a reply.
+    waiters: HashMap<RequestId, Vec<oneshot::Sender<Vec<OscType>>>>,
 }
 
 /// Only integer and string keys are supported: render them stably so an
@@ -65,6 +74,7 @@ impl RequestTable {
             pending: HashMap::new(),
             next_id: 1,
             unkeyed_outstanding: HashSet::new(),
+            waiters: HashMap::new(),
         }
     }
 
@@ -107,6 +117,21 @@ impl RequestTable {
         Registration::New(id)
     }
 
+    /// Returns a receiver that fires with the reply arguments when `id`
+    /// resolves, or closes if `expire` reclaims the request first.
+    ///
+    /// MUST be called under the same lock guard as the `register` that
+    /// produced `id`. Releasing the lock in between opens a window in which
+    /// the reply arrives, `resolve` finds no waiter to hand it to, and the
+    /// caller then waits out its whole timeout for a packet already
+    /// consumed. `LiveQuery::query` is the only production caller and does
+    /// both under one guard for exactly this reason.
+    pub fn watch(&mut self, id: RequestId) -> oneshot::Receiver<Vec<OscType>> {
+        let (tx, rx) = oneshot::channel();
+        self.waiters.entry(id).or_default().push(tx);
+        rx
+    }
+
     pub fn resolve(&mut self, msg: &OscMessage) -> Resolution {
         let arity = key_arity(&msg.addr);
         let n = match arity {
@@ -123,6 +148,16 @@ impl RequestTable {
         // actually freed.
         if completed.is_some() && arity == KeyArity::Unkeyed {
             self.unkeyed_outstanding.remove(&msg.addr);
+        }
+        // Hand the reply to anyone awaiting this request. Observation and
+        // resolution are unchanged: this only collects an answer that was
+        // previously dropped on the floor.
+        if let Some(id) = completed {
+            for tx in self.waiters.remove(&id).unwrap_or_default() {
+                // A receiver dropped before its reply arrived (the caller
+                // timed out first) is normal, not an error.
+                let _ = tx.send(msg.args.clone());
+            }
         }
         Resolution { observation: true, completed }
     }
@@ -144,6 +179,12 @@ impl RequestTable {
             }
         }
         ids.sort_unstable();
+        // Dropping the senders closes each receiver, so a caller blocked on
+        // a request this table has given up on fails fast rather than
+        // waiting out its own timeout as well.
+        for id in &ids {
+            self.waiters.remove(id);
+        }
         ids
     }
 }
@@ -397,5 +438,89 @@ mod tests {
         // silently under-specifying which clip the caller meant.
         let mut t = RequestTable::new();
         t.register(Instant::now(), "/live/clip/get/notes", &[OscType::Int(2)]);
+    }
+
+    #[test]
+    fn a_watched_request_receives_the_replys_arguments() {
+        let mut t = RequestTable::new();
+        let now = Instant::now();
+        let id = match t.register(now, "/live/clip/get/length", &[OscType::Int(1), OscType::Int(0)]) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+        let mut rx = t.watch(id);
+
+        t.resolve(&msg(
+            "/live/clip/get/length",
+            vec![OscType::Int(1), OscType::Int(0), OscType::Float(8.0)],
+        ));
+
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            vec![OscType::Int(1), OscType::Int(0), OscType::Float(8.0)]
+        );
+    }
+
+    #[test]
+    fn joined_callers_each_receive_the_same_reply() {
+        // Single-flight means the second caller never sends a datagram. It must
+        // still get an answer, or a duplicate tool call would hang forever.
+        let mut t = RequestTable::new();
+        let now = Instant::now();
+        let first = match t.register(now, "/live/clip/get/length", &[OscType::Int(1), OscType::Int(0)]) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+        let mut rx_a = t.watch(first);
+        let second = match t.register(now, "/live/clip/get/length", &[OscType::Int(1), OscType::Int(0)]) {
+            Registration::Joined(id) => id,
+            other => panic!("expected Joined, got {other:?}"),
+        };
+        let mut rx_b = t.watch(second);
+
+        t.resolve(&msg(
+            "/live/clip/get/length",
+            vec![OscType::Int(1), OscType::Int(0), OscType::Float(8.0)],
+        ));
+
+        assert!(rx_a.try_recv().is_ok());
+        assert!(rx_b.try_recv().is_ok());
+    }
+
+    #[test]
+    fn an_expired_request_drops_its_waiter_so_the_caller_sees_a_closed_channel() {
+        // expire() is what frees the single-flight slot. Leaving a waiter behind
+        // would strand the caller on a request the table no longer believes in.
+        let mut t = RequestTable::new();
+        let start = Instant::now();
+        let id = match t.register(start, "/live/clip/get/notes", &[OscType::Int(1), OscType::Int(0)]) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+        let mut rx = t.watch(id);
+
+        let later = start + Duration::from_secs(3);
+        assert_eq!(t.expire(later, Duration::from_secs(2)), vec![id]);
+
+        assert_eq!(rx.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Closed));
+    }
+
+    #[test]
+    fn a_watcher_is_not_woken_by_a_different_keys_reply() {
+        let mut t = RequestTable::new();
+        let now = Instant::now();
+        let id = match t.register(now, "/live/clip/get/notes", &[OscType::Int(1), OscType::Int(0)]) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+        let mut rx = t.watch(id);
+
+        // Same address, different clip.
+        t.resolve(&msg(
+            "/live/clip/get/notes",
+            vec![OscType::Int(1), OscType::Int(1), OscType::Int(60)],
+        ));
+
+        assert_eq!(rx.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty));
     }
 }
