@@ -2,11 +2,20 @@ use crate::osc::arity::{key_arity, KeyArity};
 use rosc::{OscMessage, OscType};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Delta {
     pub addr: String,
     pub args: Vec<serde_json::Value>,
+}
+
+/// One retained value plus when it was observed. `get_track_detail` is a
+/// mirror read, so it reports the age rather than implying live truth.
+#[derive(Debug, Clone)]
+pub struct Retained {
+    pub args: Vec<serde_json::Value>,
+    pub observed_at: Instant,
 }
 
 pub(crate) fn to_json(arg: &OscType) -> serde_json::Value {
@@ -51,6 +60,10 @@ pub struct Coalescer {
     /// never see it. `snapshot()` lets a late subscriber catch up.
     retained: HashMap<String, Delta>,
     retained_order: Vec<String>,
+    /// When each `retained` entry was last observed. `Instant` rather than a
+    /// wall clock because it cannot go backwards mid-session, and an age
+    /// that goes negative would be reported to the model as freshness.
+    retained_at: HashMap<String, Instant>,
 }
 
 impl Coalescer {
@@ -60,6 +73,7 @@ impl Coalescer {
             order: Vec::new(),
             retained: HashMap::new(),
             retained_order: Vec::new(),
+            retained_at: HashMap::new(),
         }
     }
 
@@ -68,11 +82,14 @@ impl Coalescer {
             KeyArity::Args(n) => n,
             _ => 0,
         };
+        // Same rendering as observe_delta's, so one object has one key
+        // whichever path it arrived by -- and so evict_tracks_at_or_beyond's
+        // parse::<u32>() works on both.
         let key_part: Vec<String> = msg
             .args
             .iter()
             .take(n)
-            .map(|a| format!("{a:?}"))
+            .map(|a| to_json(a).to_string())
             .collect();
         let key = format!("{}|{}", msg.addr, key_part.join(","));
         let delta = Delta {
@@ -112,6 +129,7 @@ impl Coalescer {
         if !self.retained.contains_key(&key) {
             self.retained_order.push(key.clone());
         }
+        self.retained_at.insert(key.clone(), Instant::now());
         self.retained.insert(key, delta);
     }
 
@@ -151,6 +169,7 @@ impl Coalescer {
 
         self.retained_order.retain(|k| !is_stale(k));
         self.retained.retain(|k, _| !is_stale(k));
+        self.retained_at.retain(|k, _| !is_stale(k));
         self.order.retain(|k| !is_stale(k));
         self.latest.retain(|k, _| !is_stale(k));
     }
@@ -178,6 +197,23 @@ impl Coalescer {
             .iter()
             .filter_map(|k| self.retained.get(k).cloned())
             .collect()
+    }
+
+    /// The retained value for `addr` keyed by `key_args`, built the same way
+    /// `observe`/`observe_delta` build theirs -- so a caller asks with the
+    /// values it would have seen on the wire. Pass an empty slice for a
+    /// `KeyArity::None` address.
+    ///
+    /// Reads `retained`, not `latest`, so a mirror read is unaffected by
+    /// whether the emit loop happens to have drained recently.
+    pub fn lookup(&self, addr: &str, key_args: &[serde_json::Value]) -> Option<Retained> {
+        let key_part: Vec<String> = key_args.iter().map(|a| a.to_string()).collect();
+        let key = format!("{}|{}", addr, key_part.join(","));
+        let delta = self.retained.get(&key)?;
+        Some(Retained {
+            args: delta.args.clone(),
+            observed_at: *self.retained_at.get(&key)?,
+        })
     }
 }
 
@@ -327,6 +363,73 @@ mod tests {
                 "expected only surviving indices 0 or 1, got {index:?}"
             );
         }
+    }
+
+    #[test]
+    fn both_observation_paths_build_the_same_key_for_the_same_object() {
+        // observe() used to key on format!("{OscType:?}") ("Int(3)") while
+        // observe_delta() keyed on the JSON value ("3"). Nothing collided,
+        // because every track address arrives by exactly one path -- but
+        // evict_tracks_at_or_beyond's parse::<u32>() only ever worked on the
+        // second form, and lookup() cannot be written against two conventions.
+        let mut a = Coalescer::new();
+        a.observe(&msg(
+            "/live/track/get/volume",
+            vec![OscType::Int(3), OscType::Float(0.8)],
+        ));
+
+        let mut b = Coalescer::new();
+        b.observe_delta(Delta {
+            addr: "/live/track/get/volume".to_string(),
+            args: vec![serde_json::json!(3), serde_json::json!(0.8)],
+        });
+
+        // Same object, so a second observation by either path must overwrite,
+        // not accumulate.
+        a.observe_delta(Delta {
+            addr: "/live/track/get/volume".to_string(),
+            args: vec![serde_json::json!(3), serde_json::json!(0.4)],
+        });
+        assert_eq!(a.snapshot().len(), 1);
+        assert_eq!(a.snapshot()[0].args[1], serde_json::json!(0.4));
+        assert_eq!(b.snapshot().len(), 1);
+    }
+
+    #[test]
+    fn eviction_reaches_rows_that_arrived_through_observe() {
+        let mut c = Coalescer::new();
+        c.observe(&msg(
+            "/live/track/get/volume",
+            vec![OscType::Int(5), OscType::Float(0.8)],
+        ));
+        c.evict_tracks_at_or_beyond(&["/live/track/get/volume"], 3);
+        assert!(c.snapshot().is_empty());
+    }
+
+    #[test]
+    fn lookup_returns_a_retained_value_with_the_time_it_was_observed() {
+        let mut c = Coalescer::new();
+        let before = Instant::now();
+        c.observe_delta(Delta {
+            addr: "/live/track/get/name".to_string(),
+            args: vec![serde_json::json!(1), serde_json::json!("Bass")],
+        });
+
+        let found = c.lookup("/live/track/get/name", &[serde_json::json!(1)]).unwrap();
+        assert_eq!(found.args[1], serde_json::json!("Bass"));
+        assert!(found.observed_at >= before);
+        assert!(c.lookup("/live/track/get/name", &[serde_json::json!(2)]).is_none());
+    }
+
+    #[test]
+    fn lookup_survives_a_drain_because_a_mirror_read_is_not_a_delta() {
+        let mut c = Coalescer::new();
+        c.observe_delta(Delta {
+            addr: "/live/track/get/name".to_string(),
+            args: vec![serde_json::json!(1), serde_json::json!("Bass")],
+        });
+        c.drain();
+        assert!(c.lookup("/live/track/get/name", &[serde_json::json!(1)]).is_some());
     }
 
     #[test]
