@@ -71,6 +71,7 @@ Existing suites must stay green: `cd src-tauri && cargo test` (68 tests) and
 | `src-tauri/src/osc/requests.rs` | Waiter map: `watch(id)`, fire on `resolve`, drop on `expire` |
 | `src-tauri/src/deltas.rs` | Per-key observation time; `lookup`; unify the two key-building paths |
 | `src-tauri/src/bulk.rs` | `mixer_data` carries the dB string |
+| `src-tauri/src/osc/budget.rs` | `mixer_chunks` — byte-budget the fader sweep |
 | `src-tauri/Cargo.toml` | `reqwest`; `wiremock` as a dev-dependency |
 
 **TypeScript — new**
@@ -307,7 +308,7 @@ is not. One extra value per track in the bulk reply closes both.
 - Modify: `src/ui/SetView.tsx:64-67, 82`
 
 **Interfaces:**
-- Produces: `MIXER_ADDRS: [&str; 3]` — Task 6's mirror read depends on
+- Produces: `MIXER_ADDRS: [&str; 3]` — Task 7's mirror read depends on
   `/live/track/get/volume_db` being populated
 
 - [ ] **Step 1: Write the failing test**
@@ -350,7 +351,11 @@ no change. Leave it.
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `cd src-tauri && cargo test mixer_data 2>&1 | tee /tmp/t2.log`
-Expected: FAIL — `assertion left == right` on `deltas.len()`, 4 vs 6.
+Expected: FAIL — `assertion left == right` on `deltas.len()`, **0 vs 6**. Not
+4 vs 6: `MIXER_ADDRS` still has 2 entries, so range `(0,2)` implies 4 values,
+the 6-value reply is a length mismatch, and `decode_bulk` fails closed and
+returns nothing. If you see 4, the decoder is no longer failing closed and
+that is a separate bug.
 
 - [ ] **Step 3: Widen `MIXER_ADDRS`**
 
@@ -362,12 +367,11 @@ In `src-tauri/src/bulk.rs`:
 ///
 /// The dB string roughly triples the reply's per-track cost (a formatted
 /// value like "-12.5 dB" pads to 12 bytes plus a type tag, against 4 bytes
-/// for a float). `mixer_data` is sent unbudgeted as `(0, -1)`, so this
-/// lowers the track count at which the reply would exceed `MAX_DATAGRAM`
-/// and vanish -- from roughly 900 to roughly 380. Both are far above any
-/// real set, and budgeting `mixer_data` properly needs the reply to echo
-/// its own range, which is the deferred keyless-attribution work in the
-/// spec's "Protocol realities".
+/// for a float), which is why the very next task stops asking for every
+/// track in one datagram and chunks the sweep by bytes instead -- see
+/// `budget::mixer_chunks`. Until that lands, a large set can exceed
+/// `MAX_DATAGRAM`, and the failure is total rather than partial: Live's
+/// `sendto` raises and the client receives nothing at all.
 pub const MIXER_ADDRS: [&str; 3] = [
     "/live/track/get/volume",
     "/live/track/get/panning",
@@ -454,7 +458,353 @@ git commit -m "feat: carry the formatted dB string in mixer_data"
 
 ---
 
-## Task 3: The awaitable request path
+## Task 3: Budget the `mixer_data` sweep by bytes
+
+Task 2 roughly triples what one track costs in a `mixer_data` reply, and the
+poll loop still asks for `(0, -1)` — every track, in one unbudgeted datagram.
+Past `MAX_DATAGRAM` Live's `sendto` raises and the client receives **nothing**,
+so this does not degrade at scale, it silently deletes the entire fader table.
+The spec's rule is explicit: every bulk query is budgeted in bytes.
+
+This also removes the last place a reply's extent was a guess. `(0, -1)` is
+resolved server-side, so Plan 1 had to record `(0, num_tracks)` from a
+separately-polled count and drop the reply whenever that count was unknown.
+Concrete ranges make the recorded range exact.
+
+**Files:**
+- Modify: `src-tauri/src/osc/budget.rs`
+- Modify: `src-tauri/src/lib.rs` (`poll_kind`'s `Faders` arm, `try_faders` → `drain_mixer_data_queue`, and two existing tests)
+
+**Interfaces:**
+- Consumes: `even_split`, `MAX_DATAGRAM`, `HEADER_SLACK` (already in `budget.rs`)
+- Produces: `budget::mixer_chunks(num_tracks: usize) -> Vec<(usize, usize)>`
+  and `drain_mixer_data_queue`, replacing `try_faders` and the `faders_pending` flag
+
+- [ ] **Step 1: Write the failing budget tests**
+
+Add to `src-tauri/src/osc/budget.rs`'s `mod tests`:
+
+```rust
+#[test]
+fn a_real_set_still_fits_in_one_mixer_chunk() {
+    // The producer's own sets, and anything like them, must not start
+    // paying for round trips they don't need.
+    assert_eq!(mixer_chunks(35), vec![(0, 35)]);
+    assert_eq!(mixer_chunks(200), vec![(0, 200)]);
+}
+
+#[test]
+fn every_mixer_chunk_fits_inside_the_datagram_cap() {
+    // The whole point. Past MAX_DATAGRAM the reply is not truncated -- it is
+    // never sent, and silence is indistinguishable from Live being closed.
+    let chunks = mixer_chunks(1000);
+    assert!(chunks.len() > 1, "1000 tracks must page");
+    for (min, max) in &chunks {
+        let bytes = (max - min) * BYTES_PER_MIXER_TRACK + HEADER_SLACK;
+        assert!(bytes <= MAX_DATAGRAM, "chunk {min}..{max} would be {bytes} bytes");
+    }
+}
+
+#[test]
+fn mixer_chunks_tile_with_no_gap_or_overlap() {
+    let chunks = mixer_chunks(1000);
+    let mut expected = 0;
+    for (min, max) in &chunks {
+        assert_eq!(*min, expected);
+        assert!(max > min);
+        expected = *max;
+    }
+    assert_eq!(expected, 1000);
+}
+
+#[test]
+fn mixer_chunks_of_zero_tracks_is_empty() {
+    assert_eq!(mixer_chunks(0), Vec::<(usize, usize)>::new());
+}
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd src-tauri && cargo test --lib budget 2>&1 | tee /tmp/t3.log`
+Expected: compile error — `cannot find function mixer_chunks`.
+
+- [ ] **Step 3: Write `mixer_chunks`**
+
+Add to `src-tauri/src/osc/budget.rs`:
+
+```rust
+/// Bytes one track costs in a `mixer_data` reply: `volume` and `panning` as
+/// 4-byte floats, plus the formatted dB string, plus one type-tag byte per
+/// value.
+///
+/// OSC strings are null-terminated and padded to a 4-byte boundary, so
+/// "-12.5 dB" (8 characters plus the null) occupies 12. 16 is that with a
+/// whole slot of headroom, covering everything Live produces here -- from
+/// "-inf dB" to "-70.0 dB".
+const MIXER_DB_STRING_BYTES: usize = 16;
+pub(crate) const BYTES_PER_MIXER_TRACK: usize = 4 + 4 + MIXER_DB_STRING_BYTES + 3;
+
+/// Chunks a `mixer_data` sweep by bytes.
+///
+/// Counts bytes directly rather than going through `budget_values()`, unlike
+/// `track_chunks`: two of the three values per track are 4-byte floats and
+/// the third is a padded string, so a flat 5-bytes-per-value estimate would
+/// be wrong in both directions at once.
+pub fn mixer_chunks(num_tracks: usize) -> Vec<(usize, usize)> {
+    let per_chunk = ((MAX_DATAGRAM - HEADER_SLACK) / BYTES_PER_MIXER_TRACK).max(1);
+    even_split(num_tracks, per_chunk)
+        .into_iter()
+        .map(|(start, span)| (start, start + span))
+        .collect()
+}
+```
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `cd src-tauri && cargo test --lib budget 2>&1 | tee /tmp/t3.log`
+Expected: PASS. `(9216 - 256) / 27` is 331 tracks per chunk, so 1000 tracks
+gives three chunks and 200 gives one.
+
+- [ ] **Step 5: Replace `try_faders` with a chunk queue**
+
+In `src-tauri/src/lib.rs`, delete `try_faders` and add, next to
+`drain_track_data_queue`:
+
+```rust
+/// Drains as much of the `mixer_data` chunk queue as the single-flight
+/// address currently allows. Same shape as `drain_track_data_queue`, and for
+/// the same reason: `mixer_data` is `KeyArity::Unkeyed`, so at most one
+/// chunk can be outstanding at a time, and the first `Deferred` means every
+/// later chunk would defer too.
+async fn drain_mixer_data_queue(
+    table: &Mutex<RequestTable>,
+    poll_socket: &OscSocket,
+    counts: &Mutex<TrackCounts>,
+    queue: &mut VecDeque<(usize, usize)>,
+    now: Instant,
+) {
+    while let Some(&(min, max)) = queue.front() {
+        let args = vec![OscType::Int(min as i32), OscType::Int(max as i32)];
+        let registration = match table.lock() {
+            Ok(mut t) => t.register(now, "/live/track/get/mixer_data", &args),
+            Err(_) => {
+                eprintln!(
+                    "osc request table lock poisoned; skipping mixer_data chunk this tick"
+                );
+                break;
+            }
+        };
+        match registration {
+            Registration::New(_) => {
+                let _ = poll_socket.send("/live/track/get/mixer_data", args).await;
+                queue.pop_front();
+                // The exact range just sent. Plan 1 asked for `(0, -1)` and
+                // had to reconstruct the extent from a separately-polled
+                // count, dropping the reply outright whenever that count was
+                // not yet known; a concrete range removes the guess.
+                if let Ok(mut c) = counts.lock() {
+                    c.inflight_mixer_data = Some((min as u32, max as u32));
+                    c.mixer_data_sent_at = Some(now);
+                }
+            }
+            Registration::Joined(_) | Registration::Deferred => break,
+        }
+    }
+}
+```
+
+- [ ] **Step 6: Rewrite the `Faders` arm**
+
+Replace `poll_kind`'s `PollKind::Faders` arm:
+
+```rust
+        PollKind::Faders => {
+            let num_tracks = match counts.lock() {
+                Ok(c) => c.num_tracks,
+                Err(_) => None,
+            };
+            // Nothing goes out until num_tracks is known: a chunked sweep
+            // needs a real count. That costs one poll interval on connect
+            // and saves a round trip whose reply could only be discarded.
+            if let Some(n) = num_tracks {
+                // `|| is_empty()` for the same reason TrackState has it (F1,
+                // 2026-08-16 whole-branch review): a sweep that drains must
+                // be rebuilt on the next tick, or faders freeze after one
+                // pass while everything else keeps updating.
+                if *mixer_built_for != Some(n) || mixer_queue.is_empty() {
+                    mixer_queue.clear();
+                    mixer_queue.extend(osc::budget::mixer_chunks(n));
+                    *mixer_built_for = Some(n);
+                }
+                drain_mixer_data_queue(table, poll_socket, counts, mixer_queue, now).await;
+            }
+        }
+```
+
+Change `poll_kind`'s signature: drop `faders_pending: &mut bool`, add
+`mixer_queue: &mut VecDeque<(usize, usize)>` and
+`mixer_built_for: &mut Option<usize>`. Update both call sites (the forced
+first pass and the `schedule.due` loop), replace the poll loop's
+`let mut faders_pending = false;` with the two new locals, and replace the
+`if faders_pending { try_faders(...) }` retry block with:
+
+```rust
+                    drain_mixer_data_queue(
+                        &poll_table,
+                        &poll_socket,
+                        &poll_counts,
+                        &mut mixer_queue,
+                        now,
+                    )
+                    .await;
+```
+
+- [ ] **Step 7: Replace the two `try_faders` tests**
+
+Delete `faders_pending_retries_a_deferred_mixer_data_poll` and
+`a_mixer_data_send_with_num_tracks_unknown_records_no_range`. Add:
+
+```rust
+#[tokio::test]
+async fn mixer_data_queue_retries_deferred_chunks_across_ticks() {
+    let listener = OscSocket::bind_to(0, 0).await.unwrap();
+    let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+    let table = Mutex::new(RequestTable::new());
+    let counts = Mutex::new(TrackCounts::default());
+    let mut queue: VecDeque<(usize, usize)> = VecDeque::from([(0, 331), (331, 400)]);
+    let start = Instant::now();
+
+    drain_mixer_data_queue(&table, &poll_socket, &counts, &mut queue, start).await;
+    let msg = recv_message(&listener).await;
+    assert_eq!(msg.addr, "/live/track/get/mixer_data");
+    assert_eq!(msg.args[0], OscType::Int(0));
+    assert_eq!(msg.args[1], OscType::Int(331));
+    assert_eq!(queue.len(), 1, "chunk 2 must stay queued, not be dropped");
+    assert_eq!(
+        counts.lock().unwrap().inflight_mixer_data,
+        Some((0, 331)),
+        "the exact range sent must be recorded, not a count-derived guess"
+    );
+
+    let later = start + Duration::from_secs(3);
+    {
+        let mut t = table.lock().unwrap();
+        t.expire(later, Duration::from_secs(2));
+    }
+    drain_mixer_data_queue(&table, &poll_socket, &counts, &mut queue, later).await;
+    let msg2 = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
+        .await
+        .expect("expected chunk 2 once the slot expired");
+    assert_eq!(msg2.args[0], OscType::Int(331));
+    assert_eq!(counts.lock().unwrap().inflight_mixer_data, Some((331, 400)));
+}
+
+#[tokio::test]
+async fn poll_kind_faders_sends_nothing_while_num_tracks_is_unknown() {
+    let listener = OscSocket::bind_to(0, 0).await.unwrap();
+    let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+    let table = Mutex::new(RequestTable::new());
+    let counts = Mutex::new(TrackCounts::default());
+    let mut track_queue: VecDeque<(usize, usize)> = VecDeque::new();
+    let mut track_built_for: Option<(usize, usize)> = None;
+    let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+    let mut mixer_built_for: Option<usize> = None;
+
+    poll_kind(
+        PollKind::Faders,
+        Instant::now(),
+        &table,
+        &poll_socket,
+        &counts,
+        &mut track_queue,
+        &mut track_built_for,
+        &mut mixer_queue,
+        &mut mixer_built_for,
+    )
+    .await;
+
+    let nothing =
+        tokio::time::timeout(Duration::from_millis(50), recv_message(&listener)).await;
+    assert!(nothing.is_err(), "a chunked sweep must wait for a real track count");
+    assert!(mixer_queue.is_empty());
+    assert_eq!(mixer_built_for, None);
+}
+
+#[tokio::test]
+async fn poll_kind_faders_refills_the_queue_after_it_drains() {
+    // The F1 lesson, applied to faders: a single-chunk sweep drains inside
+    // its own tick, so a refill condition that only fires on a count change
+    // would send mixer_data exactly once per session and freeze every fader.
+    let listener = OscSocket::bind_to(0, 0).await.unwrap();
+    let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+    let table = Mutex::new(RequestTable::new());
+    let counts = Mutex::new(TrackCounts { num_tracks: Some(8), ..Default::default() });
+    let mut track_queue: VecDeque<(usize, usize)> = VecDeque::new();
+    let mut track_built_for: Option<(usize, usize)> = None;
+    let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+    let mut mixer_built_for: Option<usize> = None;
+    let start = Instant::now();
+
+    poll_kind(
+        PollKind::Faders,
+        start,
+        &table,
+        &poll_socket,
+        &counts,
+        &mut track_queue,
+        &mut track_built_for,
+        &mut mixer_queue,
+        &mut mixer_built_for,
+    )
+    .await;
+    let first = recv_message(&listener).await;
+    assert_eq!(first.args[1], OscType::Int(8));
+
+    // Free the slot as the receive loop would once the reply lands.
+    {
+        let mut t = table.lock().unwrap();
+        t.resolve(&OscMessage {
+            addr: "/live/track/get/mixer_data".to_string(),
+            args: vec![],
+        });
+    }
+
+    let later = start + Duration::from_secs(2);
+    poll_kind(
+        PollKind::Faders,
+        later,
+        &table,
+        &poll_socket,
+        &counts,
+        &mut track_queue,
+        &mut track_built_for,
+        &mut mixer_queue,
+        &mut mixer_built_for,
+    )
+    .await;
+    let second = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
+        .await
+        .expect("mixer_data must be resent once the queue drained");
+    assert_eq!(second.addr, "/live/track/get/mixer_data");
+}
+```
+
+- [ ] **Step 8: Run the whole Rust suite**
+
+Run: `cd src-tauri && cargo test 2>&1 | tee /tmp/t3.log && grep -E "test result" /tmp/t3.log`
+Expected: all pass. Net test count is unchanged for the two replaced tests,
+plus 4 in `budget` and 1 new `Faders` refill test.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add src-tauri/src/osc/budget.rs src-tauri/src/lib.rs
+git commit -m "fix: budget the mixer_data sweep by bytes instead of asking for every track"
+```
+
+---
+
+## Task 4: The awaitable request path
 
 `RequestTable::resolve` already reports which `RequestId` a reply completed,
 and every caller throws that away. A tool call needs the opposite: send this
@@ -465,7 +815,7 @@ the arity map, and the timeout already work.
 - Modify: `src-tauri/src/osc/requests.rs`
 
 **Interfaces:**
-- Produces: `RequestTable::watch(&mut self, id: RequestId) -> tokio::sync::oneshot::Receiver<Vec<OscType>>` — Task 4's `LiveQuery` is its only production caller
+- Produces: `RequestTable::watch(&mut self, id: RequestId) -> tokio::sync::oneshot::Receiver<Vec<OscType>>` — Task 5's `LiveQuery` is its only production caller
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -650,7 +1000,7 @@ git commit -m "feat: let a caller await a specific request's reply"
 
 ---
 
-## Task 4: `LiveQuery`
+## Task 5: `LiveQuery`
 
 The awaitable path's production entry point: register, watch, send, await with
 a timeout. Handles all three `Registration` outcomes, and — the load-bearing
@@ -667,9 +1017,15 @@ awaiting.
   `LiveQuery::query(&self, addr: &str, args: Vec<OscType>, timeout: Duration) -> Result<Vec<OscType>, QueryError>`,
   and `enum QueryError { NoReply, Busy, Transport(String) }`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Declare the module, then write the failing tests**
 
-Create `src-tauri/src/osc/query.rs` containing only its `mod tests`:
+Add `pub mod query;` to `src-tauri/src/osc/mod.rs` **first**. A `.rs` file no
+`mod` declaration reaches is not compiled at all, so `cargo test --lib
+osc::query` would report success with zero tests run — a green that proves
+nothing and that a subagent following this plan literally would move straight
+past.
+
+Then create `src-tauri/src/osc/query.rs` containing only its `mod tests`:
 
 ```rust
 #[cfg(test)]
@@ -779,7 +1135,10 @@ mod tests {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd src-tauri && cargo test --lib osc::query 2>&1 | tee /tmp/t4.log`
-Expected: compile error — `LiveQuery` and `QueryError` not found.
+Expected: **compile error**, `cannot find type LiveQuery in this scope` and
+the same for `QueryError`. If instead you see `running 0 tests`, the module
+declaration in Step 1 is missing — fix that before going on, because every
+later "Expected: PASS" in this task would be meaningless.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -883,16 +1242,12 @@ impl LiveQuery {
 }
 ```
 
-- [ ] **Step 4: Register the module**
-
-In `src-tauri/src/osc/mod.rs`, add `pub mod query;`.
-
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd src-tauri && cargo test --lib osc::query 2>&1 | tee /tmp/t4.log`
 Expected: PASS, 3 tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src-tauri/src/osc/query.rs src-tauri/src/osc/mod.rs
@@ -901,7 +1256,7 @@ git commit -m "feat: add LiveQuery, the awaitable request path"
 
 ---
 
-## Task 5: `get_clip_notes`
+## Task 6: `get_clip_notes`
 
 The tool that proves the awaitable path end to end. A clip's notes come back
 as one flat tuple, so a dense clip blows the datagram cap and the client
@@ -918,9 +1273,14 @@ adaptive: try the whole clip, and halve any window that goes unanswered.
 - Produces: `tools::clip_notes::{Note, ClipNotes, decode_notes, get_clip_notes, QUERY_TIMEOUT}`.
   `get_clip_notes(q: &LiveQuery, track: i32, clip: i32, timeout: Duration) -> Result<ClipNotes, QueryError>`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Declare the modules, then write the failing tests**
 
-Create `src-tauri/src/tools/clip_notes.rs` with only its `mod tests`:
+**First** create `src-tauri/src/tools/mod.rs` containing `pub mod clip_notes;`
+and add `mod tools;` to `src-tauri/src/lib.rs`'s module list. An undeclared
+`.rs` file is not compiled, so without this `cargo test --lib
+tools::clip_notes` reports `running 0 tests` and exits 0 — a false green.
+
+Then create `src-tauri/src/tools/clip_notes.rs` with only its `mod tests`:
 
 ```rust
 #[cfg(test)]
@@ -970,10 +1330,17 @@ mod tests {
     /// A scripted stand-in for Live. `silent` names the `(time_start,
     /// time_span)` windows it must not answer -- which is what an oversized
     /// reply actually looks like from the client's side.
+    ///
+    /// `silent_all` exists because enumerating "every window" by hand is a
+    /// trap: the splitter halves 16 into 8, 4, 2, 1, 0.5, 0.25, and a
+    /// hand-written list that misses any of those spans lets the fake answer
+    /// an intermediate window. The test then returns notes and a `None`
+    /// missing_reason while its name says the opposite.
     struct FakeLive {
         length: f32,
         notes: Vec<(f32, i32)>,
         silent: Vec<(f32, f32)>,
+        silent_all: bool,
     }
 
     /// Spawns the fake, plus the receive loop the query path needs, and
@@ -1023,7 +1390,11 @@ mod tests {
                     }
                     "/live/clip/get/notes" => {
                         let (start, span) = (f(4), f(5));
-                        if fake.silent.iter().any(|(s, p)| (s - start).abs() < 1e-3 && (p - span).abs() < 1e-3) {
+                        let silent = fake.silent_all
+                            || fake.silent.iter().any(|(s, p)| {
+                                (s - start).abs() < 1e-3 && (p - span).abs() < 1e-3
+                            });
+                        if silent {
                             continue; // the reply Live could not send
                         }
                         let mut reply = vec![req.args[0].clone(), req.args[1].clone()];
@@ -1050,6 +1421,7 @@ mod tests {
             length: 16.0,
             notes: vec![(0.0, 60), (4.0, 63), (8.0, 67)],
             silent: vec![],
+            silent_all: false,
         })
         .await;
 
@@ -1071,6 +1443,7 @@ mod tests {
             length: 16.0,
             notes: vec![(0.0, 60), (4.0, 63), (8.0, 67), (12.0, 70)],
             silent: vec![(0.0, 16.0)],
+            silent_all: false,
         })
         .await;
 
@@ -1085,12 +1458,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_clip_that_never_answers_reports_too_large_and_stops() {
-        // Every window is silent. The splitter must give up at a bounded
-        // cost rather than halving forever.
+        // Every window is silent -- silent_all, not an enumerated list. See
+        // FakeLive's doc comment: a list that misses one span the splitter
+        // tries makes this test pass for the wrong reason.
         let (q, seen) = spawn(FakeLive {
             length: 16.0,
             notes: vec![(0.0, 60)],
-            silent: (0..64).map(|i| (i as f32 * 0.25, 0.25)).chain([(0.0, 16.0), (0.0, 8.0), (8.0, 8.0), (0.0, 4.0), (4.0, 4.0), (8.0, 4.0), (12.0, 4.0)]).collect(),
+            silent: vec![],
+            silent_all: true,
         })
         .await;
 
@@ -1108,8 +1483,10 @@ mod tests {
         // An empty slot makes `clip` None inside the handler, which raises
         // and answers nothing. "The clip has no notes" and "there is no
         // clip" are different facts and must not collapse.
-        let live = OscSocket::bind_to(0, 0).await.unwrap();
-        let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
+        // No responder is spawned: nothing answers, which is exactly what
+        // Live does here. `_live` only exists to own a port to aim at.
+        let _live = OscSocket::bind_to(0, 0).await.unwrap();
+        let app = Arc::new(OscSocket::bind_to(0, _live.local_port()).await.unwrap());
         let table = Arc::new(Mutex::new(RequestTable::new()));
         let q = LiveQuery::new(app, table);
         assert_eq!(get_clip_notes(&q, 9, 9, FAST).await, Err(QueryError::NoReply));
@@ -1120,19 +1497,11 @@ mod tests {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd src-tauri && cargo test --lib tools::clip_notes 2>&1 | tee /tmp/t5.log`
-Expected: compile error — module `tools` not declared.
+Expected: **compile error** — `cannot find function get_clip_notes`,
+`cannot find type Note`, and friends. `running 0 tests` means Step 1's module
+declarations are missing.
 
-- [ ] **Step 3: Create the module root**
-
-Create `src-tauri/src/tools/mod.rs`:
-
-```rust
-pub mod clip_notes;
-```
-
-and add `mod tools;` to `src-tauri/src/lib.rs`'s module list.
-
-- [ ] **Step 4: Write the implementation**
+- [ ] **Step 3: Write the implementation**
 
 Prepend to `src-tauri/src/tools/clip_notes.rs`:
 
@@ -1309,12 +1678,12 @@ pub async fn get_clip_notes(
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd src-tauri && cargo test --lib tools::clip_notes 2>&1 | tee /tmp/t5.log`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src-tauri/src/tools/ src-tauri/src/lib.rs
@@ -1323,7 +1692,7 @@ git commit -m "feat: add get_clip_notes with adaptive time-window paging"
 
 ---
 
-## Task 6: Fencing, mirror lookup, and `get_track_detail`
+## Task 7: Fencing, mirror lookup, and `get_track_detail`
 
 Three pieces that only make sense together: the mirror needs to say how old a
 value is, names need fencing before they reach the model, and
@@ -1523,9 +1892,13 @@ Create `shared/fence-vectors.json`:
 }
 ```
 
-- [ ] **Step 6: Write the failing fence tests**
+- [ ] **Step 6: Declare the module, then write the failing fence tests**
 
-Create `src-tauri/src/tools/fence.rs` with only its `mod tests`:
+Add `pub mod fence;` to `src-tauri/src/tools/mod.rs` **first** — an
+undeclared file is not compiled, and `cargo test --lib tools::fence` would
+report `running 0 tests` and exit 0.
+
+Then create `src-tauri/src/tools/fence.rs` with only its `mod tests`:
 
 ```rust
 #[cfg(test)]
@@ -1621,7 +1994,8 @@ describe("fence", () => {
 - [ ] **Step 7: Run to verify they fail**
 
 Run: `cd src-tauri && cargo test --lib tools::fence 2>&1 | tee /tmp/t6.log; cd .. && npm test fence 2>&1 | tee -a /tmp/t6.log`
-Expected: both fail — no `fence` function.
+Expected: both fail — no `fence` function. On the Rust side that must be a
+**compile error**, not `running 0 tests`.
 
 - [ ] **Step 8: Write both fence implementations**
 
@@ -1674,14 +2048,15 @@ export function fence(raw: string): string {
 }
 ```
 
-Add `pub mod fence;` to `src-tauri/src/tools/mod.rs`.
+`tsconfig.json` already sets `"resolveJsonModule": true`, so the shared
+vector import needs no config change.
 
-If `npm test` cannot import the JSON, add `"resolveJsonModule": true` to
-`tsconfig.json`'s `compilerOptions`.
+- [ ] **Step 9: Declare the module, then write the failing `get_track_detail` tests**
 
-- [ ] **Step 9: Write the failing `get_track_detail` tests**
+Add `pub mod track_detail;` to `src-tauri/src/tools/mod.rs` **first**, for
+the same reason as Step 6.
 
-Create `src-tauri/src/tools/track_detail.rs` with only its `mod tests`:
+Then create `src-tauri/src/tools/track_detail.rs` with only its `mod tests`:
 
 ```rust
 #[cfg(test)]
@@ -1762,7 +2137,8 @@ mod tests {
 - [ ] **Step 10: Run to verify they fail**
 
 Run: `cd src-tauri && cargo test --lib tools::track_detail 2>&1 | tee /tmp/t6.log`
-Expected: compile error.
+Expected: **compile error** — `cannot find function get_track_detail`. Not
+`running 0 tests`.
 
 - [ ] **Step 11: Write `get_track_detail`**
 
@@ -1851,8 +2227,6 @@ pub fn get_track_detail(
 }
 ```
 
-Add `pub mod track_detail;` to `src-tauri/src/tools/mod.rs`.
-
 - [ ] **Step 12: Run both suites**
 
 Run: `cd src-tauri && cargo test 2>&1 | tee /tmp/t6.log && cd .. && npm test 2>&1 | tee -a /tmp/t6.log`
@@ -1868,7 +2242,7 @@ git commit -m "feat: add name fencing, mirror lookup, and get_track_detail"
 
 ---
 
-## Task 7: Tool schema, dispatch, and the `execute_tool` command
+## Task 8: Tool schema, dispatch, and the `execute_tool` command
 
 The backend-owned tool list and the envelope every result carries. The webview
 never supplies a tool definition; it only names one and passes arguments.
@@ -1881,7 +2255,7 @@ never supplies a tool definition; it only names one and passes arguments.
 - Consumes: `clip_notes::get_clip_notes`, `track_detail::get_track_detail`, `LiveQuery`
 - Produces: `tools::{ToolResult, ToolContext, tool_schema, execute}`.
   `execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult`
-  is `async`. Task 9 calls `tool_schema()`; Task 12 calls the command.
+  is `async`. Task 10 calls `tool_schema()`; Task 13 calls the command.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1970,6 +2344,35 @@ mod tests {
         assert_eq!(result.value, serde_json::Value::Null);
     }
 
+    #[test]
+    fn track_identity_reads_the_mirrored_name() {
+        let coalescer = Mutex::new(one_track_mirror());
+        assert_eq!(track_identity(&coalescer, 0), Some(serde_json::json!("Bass")));
+        assert_eq!(track_identity(&coalescer, 4), None);
+    }
+
+    #[test]
+    fn topology_moved_reports_a_rename_a_reorder_and_a_delete() {
+        let bass = Some(serde_json::json!("Bass"));
+        let kick = Some(serde_json::json!("Kick"));
+        // A reorder shows up here exactly as a rename does: a different name
+        // now sits at the index the query was keyed on. That is the case a
+        // generation counter driven by num_tracks would miss entirely.
+        assert!(topology_moved(&bass, &kick));
+        // The track fell out of the mirror: deleted.
+        assert!(topology_moved(&bass, &None));
+        assert!(!topology_moved(&bass, &bass));
+    }
+
+    #[test]
+    fn topology_moved_abstains_when_the_mirror_never_held_the_track() {
+        // No baseline means no comparison. Reporting a change here would
+        // invent a warning, which is the same class of error as inventing a
+        // value.
+        assert!(!topology_moved(&None, &Some(serde_json::json!("Bass"))));
+        assert!(!topology_moved(&None, &None));
+    }
+
     #[tokio::test]
     async fn a_missing_or_wrongly_typed_argument_is_reported_not_defaulted() {
         // Defaulting a missing track index to 0 would answer a question the
@@ -2002,7 +2405,7 @@ use crate::osc::query::{LiveQuery, QueryError};
 use serde::Serialize;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// What every tool result carries, so the model can tell "Live said zero"
 /// from "Live said nothing" from "too large to send" -- and, for a mirror
@@ -2010,7 +2413,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// truth.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ToolResult {
-    /// `null` whenever `missing_reason` is set.
+    /// `null` when the call produced nothing at all.
+    ///
+    /// A value AND a `missing_reason` together is a real state, not a
+    /// contradiction: a paged clip read that answered some windows and not
+    /// others returns the notes it got with `missing_reason: "too_large"`.
+    /// `fresh` is false in that case, and the model is expected to say the
+    /// read was partial rather than present it as the whole clip.
     pub value: serde_json::Value,
     /// Epoch milliseconds at which this call ran.
     pub queried_at: u64,
@@ -2110,6 +2519,37 @@ fn int_arg(args: &serde_json::Value, name: &str) -> Option<i64> {
     args.get(name)?.as_i64()
 }
 
+/// One track's mirrored name, used as its identity across a paged query.
+///
+/// Live resolves `song.tracks[i]` when it HANDLES a message, not when the
+/// client sent it -- so a paged note fetch that straddles a track delete or
+/// reorder reads a DIFFERENT clip for its later windows and merges the notes
+/// into one answer. Sampling the name at both ends catches that. See the
+/// spec's "A generation counter" section for why this beats a counter here:
+/// a reorder leaves the track count untouched.
+fn track_identity(coalescer: &Mutex<Coalescer>, track: i64) -> Option<serde_json::Value> {
+    let c = coalescer.lock().ok()?;
+    c.lookup("/live/track/get/name", &[json!(track)])?
+        .args
+        .get(1)
+        .cloned()
+}
+
+/// Whether the track under a paged query moved between two identity samples.
+///
+/// Abstains when the mirror never held the track to begin with: with nothing
+/// to compare against, reporting a change would be a guess, and this is a
+/// guard against inventing data rather than a licence to invent a warning.
+fn topology_moved(before: &Option<serde_json::Value>, after: &Option<serde_json::Value>) -> bool {
+    match (before, after) {
+        (None, _) => false,
+        // The track fell out of the mirror entirely: a delete that shrank
+        // num_tracks past this index (see evict_tracks_at_or_beyond).
+        (Some(_), None) => true,
+        (Some(b), Some(a)) => b != a,
+    }
+}
+
 pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult {
     match name {
         "get_track_detail" => {
@@ -2151,14 +2591,23 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             let Some(query) = query else {
                 return ToolResult::missing("not_connected");
             };
-            match clip_notes::get_clip_notes(
+
+            // Bracket the fetch with an identity sample. A paged read can
+            // span several seconds, and merging two clips' notes into one
+            // answer is the failure this catches.
+            let before = track_identity(&ctx.coalescer, track);
+            let outcome = clip_notes::get_clip_notes(
                 &query,
                 track as i32,
                 clip as i32,
                 clip_notes::QUERY_TIMEOUT,
             )
-            .await
-            {
+            .await;
+            if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
+                return ToolResult::missing("topology_changed");
+            }
+
+            match outcome {
                 Ok(notes) => ToolResult::live(
                     json!({ "notes": notes.notes, "count": notes.notes.len() }),
                     notes.missing_reason,
@@ -2181,7 +2630,14 @@ is unused in the non-test build.
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `cd src-tauri && cargo test --lib tools:: 2>&1 | tee /tmp/t7.log`
-Expected: PASS, 6 new tests.
+Expected: PASS, 9 new tests.
+
+**Known test gap, stated rather than hidden.** The two halves of the
+topology guard are unit-tested, but nothing here exercises `execute`
+actually calling them around a real paged fetch — that would need Task 6's
+fake-Live harness lifted into this module, which costs more than it buys for
+a two-line bracket. The end-to-end case is item 11 on Task 14's manual
+checklist.
 
 - [ ] **Step 5: Wire the context and the command into the app**
 
@@ -2253,7 +2709,7 @@ git commit -m "feat: add the backend-owned tool schema and execute_tool command"
 
 ---
 
-## Task 8: Provider settings
+## Task 9: Provider settings
 
 Base URL, model, and key on disk. The key stays in Rust: no command returns it,
 and the view type the webview receives cannot carry it by construction.
@@ -2267,9 +2723,13 @@ and the view type the webview receives cannot carry it by construction.
   `load(dir: &Path) -> Settings`, `save(dir: &Path, s: &Settings) -> std::io::Result<()>`,
   `SettingsView::from(&Settings)`. Tasks 9 and 10 consume `Settings`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Declare the module, then write the failing tests**
 
-Create `src-tauri/src/settings.rs` with only its `mod tests`:
+Add `mod settings;` to `src-tauri/src/lib.rs` **first** — an undeclared file
+is not compiled, and `cargo test --lib settings` would report `running 0
+tests` and exit 0.
+
+Then create `src-tauri/src/settings.rs` with only its `mod tests`:
 
 ```rust
 #[cfg(test)]
@@ -2351,7 +2811,8 @@ mod tests {
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd src-tauri && cargo test --lib settings 2>&1 | tee /tmp/t8.log`
-Expected: compile error — module not declared.
+Expected: **compile error** — `cannot find type Settings`, `cannot find
+function load`, and friends. Not `running 0 tests`.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -2438,8 +2899,6 @@ pub fn save(dir: &Path, s: &Settings) -> std::io::Result<()> {
 }
 ```
 
-Add `mod settings;` to `src-tauri/src/lib.rs`.
-
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `cd src-tauri && cargo test --lib settings 2>&1 | tee /tmp/t8.log`
@@ -2454,7 +2913,7 @@ git commit -m "feat: persist provider settings, with the key confined to Rust"
 
 ---
 
-## Task 9: The OpenAI-compatible model client
+## Task 10: The OpenAI-compatible model client
 
 Rust owns the whole model call. The webview passes `messages` and nothing else,
 so it cannot widen the system prompt or the tool list.
@@ -2467,7 +2926,7 @@ so it cannot widen the system prompt or the tool list.
 - Consumes: `settings::Settings`, `tools::tool_schema`
 - Produces: `model::{ChatMessage, ToolCall, FunctionCall, Completion, complete, post_chat, SYSTEM_PROMPT}`.
   `complete(client: &reqwest::Client, s: &Settings, messages: Vec<ChatMessage>) -> Result<Completion, String>`.
-  Task 10 calls `post_chat`; Task 12 consumes `ChatMessage`/`ToolCall` through the command.
+  Task 11 calls `post_chat`; Task 13 consumes `ChatMessage`/`ToolCall` through the command.
 
 - [ ] **Step 1: Add the dependencies**
 
@@ -2487,9 +2946,13 @@ wiremock = "0.6"
 Run: `cd src-tauri && cargo build 2>&1 | tail -5`
 Expected: clean build.
 
-- [ ] **Step 2: Write the failing tests**
+- [ ] **Step 2: Declare the module, then write the failing tests**
 
-Create `src-tauri/src/model.rs` with only its `mod tests`:
+Add `mod model;` to `src-tauri/src/lib.rs` **first** — an undeclared file is
+not compiled, and `cargo test --lib model` would report `running 0 tests` and
+exit 0.
+
+Then create `src-tauri/src/model.rs` with only its `mod tests`:
 
 ```rust
 #[cfg(test)]
@@ -2654,7 +3117,8 @@ mod tests {
 - [ ] **Step 3: Run to verify they fail**
 
 Run: `cd src-tauri && cargo test --lib model 2>&1 | tee /tmp/t9.log`
-Expected: compile error — module not declared.
+Expected: **compile error** — `cannot find function complete`, `cannot find
+value SYSTEM_PROMPT`, and friends. Not `running 0 tests`.
 
 - [ ] **Step 4: Write the client**
 
@@ -2802,8 +3266,7 @@ pub async fn complete(
 ) -> Result<Completion, String> {
     // The system prompt is the backend's. A caller-supplied one is refused
     // rather than dropped, so the caller cannot believe it took effect.
-    if let Some(m) = messages.iter().find(|m| m.role == "system") {
-        let _ = m;
+    if messages.iter().any(|m| m.role == "system") {
         return Err("a system message may not be supplied by the caller; the system prompt is backend-owned".to_string());
     }
 
@@ -2838,8 +3301,6 @@ pub async fn complete(
 }
 ```
 
-Add `mod model;` to `src-tauri/src/lib.rs`.
-
 - [ ] **Step 5: Run to verify they pass**
 
 Run: `cd src-tauri && cargo test --lib model 2>&1 | tee /tmp/t9.log`
@@ -2854,7 +3315,7 @@ git commit -m "feat: add the OpenAI-compatible model client with a backend-owned
 
 ---
 
-## Task 10: Capability gating and the model commands
+## Task 11: Capability gating and the model commands
 
 The design requires working tool calls. A model that cannot make them does not
 degrade — it answers confidently from the context block alone, about data it
@@ -3027,7 +3488,7 @@ pub async fn probe(client: &reqwest::Client, s: &Settings) -> Result<(), ProbeFa
     };
 
     let raw = post_chat(client, s, body).await.map_err(&quote)?;
-    let parsed: ChatResponse = serde_json::from_value(raw.clone())
+    let parsed: ChatResponse = serde_json::from_value(raw)
         .map_err(|e| quote(format!("an unreadable response ({e})")))?;
     let Some(message) = parsed.choices.into_iter().next().map(|c| c.message) else {
         return Err(quote("no choices at all".to_string()));
@@ -3179,7 +3640,7 @@ git commit -m "feat: refuse models that fail the tool-calling probe"
 
 ---
 
-## Task 11: The lean context block
+## Task 12: The lean context block
 
 Deliberately small. Tempo, key, the producer's goal, one line per track —
 everything else the model fetches with a tool. A fat digest spends context on
@@ -3379,7 +3840,7 @@ git commit -m "feat: build the lean context block"
 
 ---
 
-## Task 12: The agent loop
+## Task 13: The agent loop
 
 Issue a completion, run whatever tools it asks for, feed the results back,
 repeat. The one piece of the model layer that lives in TypeScript, tested
@@ -3686,7 +4147,7 @@ git commit -m "feat: add the agent loop and the Tauri-backed provider"
 
 ---
 
-## Task 13: The chat pane, the goal field, and the settings pane
+## Task 14: The chat pane, the goal field, and the settings pane
 
 The producer-facing half. Verified manually against real Live, the way the rest
 of the UI in this repo is — the repo has no component-test framework, and
@@ -3926,6 +4387,11 @@ each left unticked for the producer to run against real Live:
    leaves the window working.
 9. The disclaimer is visible with no way to dismiss it.
 10. The fader column shows dB (`-3.0 dB`), not `0.8500000238418579`.
+11. Ask for the notes in a clip on a dense track, and while the answer is
+    being fetched, drag a different track above it in Live. The answer must
+    report that the set changed under it, not merge two clips' notes. (This
+    is the end-to-end half of the topology guard; the unit tests cover the
+    pieces, this covers the wiring.)
 
 - [ ] **Step 7: Commit**
 
@@ -3945,7 +4411,7 @@ executor may otherwise re-litigate mid-task.
 **Two windows of the same clip cannot be in flight at once.** `create_clip_callback`
 prepends `(track_index, clip_index)` and nothing else, so `/live/clip/get/notes`
 is `KeyArity::Args(2)` and two windows of one clip are indistinguishable — the
-second would in fact `Joined` the first and never be sent. Task 5's serial fetch
+second would in fact `Joined` the first and never be sent. Task 6's serial fetch
 is the only correct shape, not a simplification.
 
 **The query timeout cannot exceed `UNKEYED_REQUEST_TIMEOUT`.** The poll loop
@@ -3961,11 +4427,11 @@ clip, which is the honest seed for a splitter that has no note estimate.
 the same object. Nothing collided, because every track address arrives by
 exactly one path — but `evict_tracks_at_or_beyond`'s `parse::<u32>()` only ever
 worked on the second form, and a lookup API cannot be written against two
-conventions. Task 6 unifies them and pins it with a test.
+conventions. Task 7 unifies them and pins it with a test.
 
 **No component-test framework is introduced.** The repo tests pure logic in
 Vitest and verifies components manually; three new components do not justify
-changing that. Task 13's success criteria are the manual checklist.
+changing that. Task 14's success criteria are the manual checklist.
 
 **Nudges are not in this plan.** The spec's Nudges section has no task here,
 and that is on purpose: every rule it lists reads data this cut does not
@@ -3974,12 +4440,37 @@ collect (`off_scale_notes` needs the focused clip polled continuously,
 brace). Chat has to work before an interruption is worth earning. Nudges are
 the next plan.
 
-**Two further things this plan does not build**, both deliberate and both named
-in the spec: the generation counter (nothing here registers an index-keyed request
-under a changing topology — `get_clip_notes` is keyed, but a mid-flight track
-delete makes it answer for the wrong clip, which the `fresh_as_of` envelope
-already tells the model to distrust), and `mixer_data` echoing its own range,
-which is what would finally make the keyless replies self-attributing.
+**The generation counter is replaced, not skipped.** `get_clip_notes` is the
+first index-keyed production request, which is exactly the trigger the spec
+named for building the counter. An earlier draft of this plan waved that away
+on the grounds that `fresh_as_of` already tells the model to distrust the
+result; a Codex review of the plan called that out, correctly. The finding
+stood and the remedy changed: the dispatcher brackets the fetch with a
+mirror-identity sample (Task 8), which catches reorders — the case a
+`num_tracks`-driven counter cannot see at all — for a fraction of the
+machinery. The spec section now records the decision and its two blind spots.
+
+**One thing this plan still does not build**, deliberately: `mixer_data`
+echoing its own range. Task 3 makes the client's recorded range exact, which
+removes the guess in practice, but the reply stays keyless, so a zombie can
+still resolve the wrong entry. Making it self-attributing is an endpoint
+contract change and belongs with the wider keyless work in the spec's
+"Protocol realities".
+
+**The pre-execution review, and what came of it.** Codex raised five findings;
+I raised one more and cleared eight suspicions by testing rather than
+reasoning. Accepted and fixed: the missing module declarations (a `.rs` file
+cargo never compiles reports `running 0 tests` and exits 0 — a false green in
+five tasks), the unbudgeted `mixer_data` sweep (now Task 3), the enumerated
+silent-window list in Task 6's splitter test (simulated: the fake answered
+every 2-beat window, so all three assertions failed), the wrong
+expected-failure value in Task 2, and the topology guard above. Verified as
+non-issues rather than assumed: the `FnMut` borrow in Task 7 compiles under
+NLL; `TryRecvError` derives `PartialEq`; the `\u{ab}` prompt literal renders;
+serde defaults absent `Option` fields to `None`; `Object.fromEntries`
+satisfies `Record<number, T>`; `reqwest` 0.12 with rustls and `wiremock` 0.6
+build clean against Tauri 2; `/live/clip/get/length` does put length at reply
+index 2; and an empty clip slot does produce no reply at all.
 
 ---
 

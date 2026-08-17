@@ -176,19 +176,43 @@ requests issued under an older generation would have their table entries
 cancelled. It would be a marker, not a filter — it could not and would not
 reject inbound packets. **It is not built.** Why, and when it lands:
 
-This plan never registers an index-keyed request in production — polling only
-ever uses `KeyArity::None` and `KeyArity::Unkeyed` addresses — so there is
-nothing for a generation bump to cancel yet, and the real topology
-invalidation that exists today (`lib.rs`'s `queue_built_for`, which restarts
-a `track_data` sweep when `(num_tracks, num_scenes)` changes) doesn't go
-through `RequestTable` at all. An earlier build of this plan added the
-counter as unreachable production code with only its own tests exercising
-it; the 2026-08-16 whole-branch review removed it rather than leave an
-unmet promise in the table's API. It lands for real with whichever later
-plan first registers an index-keyed request, at which point a mid-flight
-bump also needs to account for `lib.rs`'s in-flight ranges (`TrackCounts`),
-not just `RequestTable`'s own `pending`/`unkeyed_outstanding` state — see
-that review for the hazard of wiring it naively.
+Plan 1 never registered an index-keyed request in production — polling only
+ever used `KeyArity::None` and `KeyArity::Unkeyed` addresses — so there was
+nothing for a generation bump to cancel, and the real topology invalidation
+that exists today (`lib.rs`'s `queue_built_for`, which restarts a
+`track_data` sweep when `(num_tracks, num_scenes)` changes) doesn't go
+through `RequestTable` at all. An earlier build added the counter as
+unreachable production code with only its own tests exercising it; the
+2026-08-16 whole-branch review removed it rather than leave an unmet promise
+in the table's API.
+
+**`get_clip_notes` is the first index-keyed production request, and it is
+guarded by a mirror-identity check instead.** A counter was the plan of
+record; on inspection it is the weaker of the two mechanisms here, for a
+reason specific to how Live resolves indices.
+
+Live resolves `song.tracks[i]` when it *handles* the message, not when the
+client sent it. So a reply is never misattributed in the usual sense — it
+always describes whatever sits at that index right now. The real hazard is
+narrower and worse: a paged note fetch issues several requests over seconds,
+and a track deleted or reordered midway makes the later windows read a
+*different clip*, whose notes are then merged into one result and presented
+as one clip's contents.
+
+The dispatcher therefore reads the track's mirrored name before and after a
+`get_clip_notes` call, and reports `missing_reason: "topology_changed"`
+rather than notes if it moved. Against that failure the identity check
+strictly dominates a generation counter: the counter would have to be driven
+by `num_tracks`, which is itself polled, so it shares the check's resolution
+while catching only count changes — a **reorder**, which changes nothing
+about the count and is the case most likely to swap one clip for another,
+would slip straight past it.
+
+Two limits, stated rather than papered over: both mechanisms see only what
+polling sees, so a change that lands and reverts inside one poll interval is
+invisible to either; and two tracks sharing a name defeat the identity check
+where a counter would not. A counter can still be added later, alongside
+rather than instead of this.
 
 ### Datagram budget
 
