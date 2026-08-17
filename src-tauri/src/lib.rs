@@ -432,9 +432,11 @@ fn get_settings(state: tauri::State<'_, Arc<ModelState>>) -> SettingsView {
 /// Probes before persisting. A model that fails is refused with a message
 /// naming it and showing what it returned instead -- see `model::probe`.
 ///
-/// `api_key` empty means "keep the stored key", so the settings pane can
-/// show a placeholder rather than the real key and still let the producer
-/// change only the model.
+/// `api_key` empty (after trimming) means "keep the stored key", so the
+/// settings pane can show a placeholder rather than the real key and still
+/// let the producer change only the model. Trimmed, not just checked, so a
+/// stray-whitespace paste can't silently overwrite a good stored key with
+/// blanks.
 #[tauri::command]
 async fn save_settings(
     base_url: String,
@@ -442,16 +444,29 @@ async fn save_settings(
     api_key: String,
     state: tauri::State<'_, Arc<ModelState>>,
 ) -> Result<SettingsView, String> {
-    let state = state.inner().clone();
+    save_settings_impl(base_url, model_name, api_key, state.inner().clone()).await
+}
+
+/// The body of `save_settings`, extracted so tests can drive the real
+/// probe-before-persist path without going through a `#[tauri::command]`
+/// (awkward to invoke directly from a unit test since it takes
+/// `tauri::State`).
+async fn save_settings_impl(
+    base_url: String,
+    model_name: String,
+    api_key: String,
+    state: Arc<ModelState>,
+) -> Result<SettingsView, String> {
     let candidate = {
         let stored = state
             .settings
             .lock()
             .map_err(|_| "settings lock poisoned".to_string())?;
+        let trimmed_key = api_key.trim();
         Settings {
             base_url: base_url.trim().to_string(),
             model: model_name.trim().to_string(),
-            api_key: if api_key.is_empty() { stored.api_key.clone() } else { api_key },
+            api_key: if trimmed_key.is_empty() { stored.api_key.clone() } else { trimmed_key.to_string() },
         }
     };
 
@@ -980,6 +995,9 @@ mod tests {
     use super::*;
     use rosc::OscMessage;
     use std::collections::HashSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[derive(serde::Deserialize)]
     struct HandledAddresses {
@@ -1718,5 +1736,140 @@ mod tests {
             .collect();
         assert_eq!(names.len(), 1, "track 1's retained row must go when the set shrinks to 1");
         assert_eq!(names[0].args[0], serde_json::json!(0));
+    }
+
+    // --- save_settings_impl -------------------------------------------
+    //
+    // Regression coverage for the probe-before-persist ordering: the whole
+    // point of capability gating is that a model which fails the probe is
+    // never written to disk. Nothing asserted that before these tests.
+
+    /// A unique scratch directory per test -- cargo runs tests in parallel,
+    /// so a shared path would be flaky only under load.
+    fn scratch_dir() -> PathBuf {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        std::env::temp_dir().join(format!(
+            "ableton-copilot-lib-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ))
+    }
+
+    fn model_state(dir: PathBuf, initial: Settings) -> Arc<ModelState> {
+        Arc::new(ModelState {
+            settings: Mutex::new(initial),
+            config_dir: dir,
+            client: reqwest::Client::new(),
+        })
+    }
+
+    /// A response with no `tool_calls` field -- the probe must refuse it.
+    async fn mount_failing_probe(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{ "message": { "role": "assistant", "content": "sure, I can help" } }]
+            })))
+            .mount(server)
+            .await;
+    }
+
+    /// A response carrying a real call to the probe's own tool -- see
+    /// `model::PROBE_TOOL`.
+    async fn mount_passing_probe(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{ "message": { "role": "assistant", "tool_calls": [{
+                    "id": "call_1", "type": "function",
+                    "function": { "name": model::PROBE_TOOL, "arguments": "{\"value\":1}" }
+                }]}}]
+            })))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_failing_probe_writes_nothing_and_leaves_stored_settings_untouched() {
+        let server = MockServer::start().await;
+        mount_failing_probe(&server).await;
+        let dir = scratch_dir();
+        let previous = Settings {
+            base_url: server.uri(),
+            model: "old/model".to_string(),
+            api_key: "sk-old".to_string(),
+        };
+        let state = model_state(dir.clone(), previous.clone());
+
+        let err = save_settings_impl(
+            server.uri(),
+            "new/model".to_string(),
+            "sk-new".to_string(),
+            state.clone(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("new/model"), "the refusal must name the model that failed: {err}");
+
+        assert!(
+            !dir.join(settings::SETTINGS_FILE).exists(),
+            "a model that fails the probe must never be written to disk"
+        );
+        assert_eq!(
+            *state.settings.lock().unwrap(),
+            previous,
+            "the in-memory settings must be untouched by a failed probe"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_passing_probe_writes_settings_and_returns_a_view_with_no_key() {
+        let server = MockServer::start().await;
+        mount_passing_probe(&server).await;
+        let dir = scratch_dir();
+        let state = model_state(dir.clone(), Settings::default());
+
+        let view = save_settings_impl(
+            server.uri(),
+            "good/model".to_string(),
+            "sk-good".to_string(),
+            state.clone(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(view.model, "good/model");
+        assert!(view.has_key);
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(!json.contains("sk-good"), "the returned view must carry no key material: {json}");
+
+        assert!(dir.join(settings::SETTINGS_FILE).exists(), "a passing probe must write the file");
+        let reloaded = settings::load(&dir);
+        assert_eq!(reloaded.model, "good/model");
+        assert_eq!(reloaded.api_key, "sk-good");
+        assert_eq!(*state.settings.lock().unwrap(), reloaded);
+    }
+
+    #[tokio::test]
+    async fn an_empty_api_key_keeps_the_stored_key() {
+        let server = MockServer::start().await;
+        mount_passing_probe(&server).await;
+        let dir = scratch_dir();
+        let state = model_state(dir.clone(), Settings::default());
+
+        save_settings_impl(server.uri(), "model/one".to_string(), "sk-keep".to_string(), state.clone())
+            .await
+            .unwrap();
+
+        // Whitespace-only, not just empty -- see the trim fix: a
+        // stray-whitespace paste must not overwrite a good stored key with
+        // blanks either.
+        save_settings_impl(server.uri(), "model/two".to_string(), "   ".to_string(), state.clone())
+            .await
+            .unwrap();
+
+        let stored = state.settings.lock().unwrap();
+        assert_eq!(stored.api_key, "sk-keep", "an empty/whitespace key must keep the stored key");
+        assert_eq!(stored.model, "model/two", "the model must still change");
     }
 }
