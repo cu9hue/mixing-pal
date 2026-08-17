@@ -15,8 +15,20 @@ pub const TRACK_DATA_ADDRS: [&str; 3] = [
 ];
 
 /// Addresses `decode_mixer_data` re-emits, in the order `copilot/mixer.py`'s
-/// `mixer_data` handler appends `volume, panning` per track.
-pub const MIXER_ADDRS: [&str; 2] = ["/live/track/get/volume", "/live/track/get/panning"];
+/// `mixer_data` handler appends `volume, panning, volume_db` per track.
+///
+/// The dB string roughly triples the reply's per-track cost (a formatted
+/// value like "-12.5 dB" pads to 12 bytes plus a type tag, against 4 bytes
+/// for a float), which is why the very next task stops asking for every
+/// track in one datagram and chunks the sweep by bytes instead -- see
+/// `budget::mixer_chunks`. Until that lands, a large set can exceed
+/// `MAX_DATAGRAM`, and the failure is total rather than partial: Live's
+/// `sendto` raises and the client receives nothing at all.
+pub const MIXER_ADDRS: [&str; 3] = [
+    "/live/track/get/volume",
+    "/live/track/get/panning",
+    "/live/track/get/volume_db",
+];
 
 /// Decodes a `track_data` reply -- `song.py` appends `name, mute, solo` per
 /// track, in index order, with no echoed range -- into per-track deltas at
@@ -106,26 +118,29 @@ mod tests {
     }
 
     #[test]
-    fn decodes_a_mixer_data_reply_into_volume_and_panning_per_track() {
+    fn decodes_a_mixer_data_reply_into_volume_panning_and_db_per_track() {
+        // copilot/mixer.py appends volume, panning, and the volume parameter's
+        // formatted dB string per track, in that order. The dB string is what
+        // makes a fader legible to a model -- 0.85 is a control position,
+        // -3.0 dB is a mixing fact.
         let args = vec![
             OscType::Float(0.8),
             OscType::Float(-0.2),
+            OscType::String("-3.0 dB".into()),
             OscType::Float(0.5),
             OscType::Float(0.0),
+            OscType::String("-12.5 dB".into()),
         ];
         let deltas = decode_mixer_data((0, 2), &args);
-        assert_eq!(deltas.len(), 4);
+        assert_eq!(deltas.len(), 6);
         assert_eq!(deltas[0].addr, "/live/track/get/volume");
-        assert_eq!(deltas[0].args[0], serde_json::json!(0));
         assert_eq!(deltas[0].args[1], serde_json::json!(0.8));
         assert_eq!(deltas[1].addr, "/live/track/get/panning");
-        assert_eq!(deltas[1].args[0], serde_json::json!(0));
         assert_eq!(deltas[1].args[1], serde_json::json!(-0.2));
-        assert_eq!(deltas[2].addr, "/live/track/get/volume");
-        assert_eq!(deltas[2].args[0], serde_json::json!(1));
-        assert_eq!(deltas[3].addr, "/live/track/get/panning");
-        assert_eq!(deltas[3].args[0], serde_json::json!(1));
-        assert_eq!(deltas[3].args[1], serde_json::json!(0.0));
+        assert_eq!(deltas[2].addr, "/live/track/get/volume_db");
+        assert_eq!(deltas[2].args, vec![serde_json::json!(0), serde_json::json!("-3.0 dB")]);
+        assert_eq!(deltas[5].addr, "/live/track/get/volume_db");
+        assert_eq!(deltas[5].args, vec![serde_json::json!(1), serde_json::json!("-12.5 dB")]);
     }
 
     #[test]

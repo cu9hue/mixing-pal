@@ -58,6 +58,7 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
     "/live/track/get/mute",
     "/live/track/get/solo",
     "/live/track/get/volume",
+    "/live/track/get/volume_db",
     "/live/track/get/panning",
     // PollKind::Selection, observed raw.
     "/live/view/get/selected_clip",
@@ -907,12 +908,12 @@ mod tests {
     fn every_frontend_handled_address_is_emitted_or_explicitly_allowed() {
         let manifest = load_handled_addresses();
 
-        // apply.ts models these ahead of backend support -- see C1 in the
-        // 2026-08-16 whole-branch review: a real dB readout and per-track
-        // meters both need mixer_data extended to carry them, which is
-        // Plan 2 work, not this wave.
-        let allowed_unemitted: &[&str] =
-            &["/live/track/get/volume_db", "/live/track/get/output_meter_level"];
+        // apply.ts models per-track meters ahead of backend support: they
+        // need mixer_data extended again, and the spec polls them only for
+        // the focused/armed/soloed subset, not the whole table. volume_db
+        // used to be here too -- C1 (2026-08-16 whole-branch review) -- and
+        // is now actually emitted.
+        let allowed_unemitted: &[&str] = &["/live/track/get/output_meter_level"];
 
         for addr in manifest.song_fields.iter().chain(manifest.track_fields.iter()) {
             assert!(

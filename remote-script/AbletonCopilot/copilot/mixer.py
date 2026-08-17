@@ -31,6 +31,12 @@ class MixerHandler(AbletonOSCHandler):
                 mixer = self.song.tracks[i].mixer_device
                 rv.append(mixer.volume.value)
                 rv.append(mixer.panning.value)
+                # The formatted dB string. In the LOM, mixer_device.volume is
+                # a DeviceParameter, so str_for_value is the same conversion
+                # Live shows on the fader -- upstream never surfaces it, and
+                # a normalised 0..1 value alone tells a reader nothing about
+                # gain structure.
+                rv.append(mixer.volume.str_for_value(mixer.volume.value))
             return tuple(rv)
 
         self.osc_server.add_handler(
