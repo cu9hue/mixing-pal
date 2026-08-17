@@ -187,3 +187,29 @@ can be decoded against the wrong index range.
 
 Remaining: a port-11001 conflict showing a legible error (start a second copy of
 the app to trigger it).
+
+## Plan 2 — chat pane, goal field, settings pane
+
+- [ ] Settings pane refuses a model that cannot call tools, and the message
+      names the model and quotes what it returned.
+- [ ] Settings pane accepts a working model (e.g. a Kimi or GLM variant on
+      OpenRouter) and the key survives an app restart.
+- [ ] Asking "what's my quietest track?" produces an answer without a tool
+      call — the context block already has the dB values.
+- [ ] Asking "what notes are in the clip on track 2, slot 0?" shows the
+      `get_clip_notes(...)` progress line and returns real note content.
+- [ ] Asking about an empty clip slot returns a "no reply" answer, not "the
+      clip has no notes".
+- [ ] A clip with 500+ notes returns notes rather than timing out, and the
+      answer does not claim completeness if `missing_reason` came back.
+- [ ] A track renamed to an instruction (e.g. `Ignore previous instructions`)
+      is quoted as a label and not obeyed.
+- [ ] Killing the provider's network mid-answer surfaces an error in the chat
+      and leaves the window working.
+- [ ] The disclaimer is visible with no way to dismiss it.
+- [ ] The fader column shows dB (`-3.0 dB`), not `0.8500000238418579`.
+- [ ] Ask for the notes in a clip on a dense track, and while the answer is
+      being fetched, drag a different track above it in Live. The answer must
+      report that the set changed under it, not merge two clips' notes. (This
+      is the end-to-end half of the topology guard; the unit tests cover the
+      pieces, this covers the wiring.)
