@@ -7,10 +7,13 @@ export interface ToolCall {
 }
 
 export interface ChatMessage {
-  // "system" is included so callers can check a history never contains one
-  // (see loop.test.ts); the loop itself never constructs one -- the system
-  // prompt is backend-owned (src-tauri/src/model.rs).
-  role: "user" | "assistant" | "tool" | "system";
+  // Deliberately narrow: no TypeScript in this codebase, present or future,
+  // can construct a system message. The system prompt is backend-owned
+  // (src-tauri/src/model.rs); Rust also refuses one at the wire boundary,
+  // but that is a runtime check. This is a compile-time guarantee, so it is
+  // worth keeping even though it means the "we never send one" test
+  // (loop.test.ts) has to assert an unrepresentable property with a cast.
+  role: "user" | "assistant" | "tool";
   content?: string | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
@@ -77,8 +80,10 @@ export async function runTurn(
           tool_call_id: c.id,
           content: JSON.stringify({
             value: null,
-            missing_reason: "bad_arguments",
+            queried_at: Date.now(),
+            fresh_as_of: null,
             fresh: false,
+            missing_reason: "bad_arguments",
           }),
         });
         continue;
@@ -91,6 +96,8 @@ export async function runTurn(
       } catch (err) {
         result = {
           value: null,
+          queried_at: Date.now(),
+          fresh_as_of: null,
           fresh: false,
           missing_reason: `tool_failed: ${String(err)}`,
         };

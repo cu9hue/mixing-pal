@@ -112,6 +112,50 @@ describe("runTurn", () => {
   it("never sends a system message; the backend owns that", async () => {
     const provider = scriptedProvider([{ text: "ok", toolCalls: [] }]);
     await runTurn(provider, echoTools, [{ role: "user", content: "hi" }]);
-    expect(provider.seen[0].some((m) => m.role === "system")).toBe(false);
+    // ChatMessage.role is deliberately narrowed to exclude "system", so this
+    // property is unrepresentable in the type system by design -- the cast
+    // is what lets the test still assert it at runtime.
+    expect(provider.seen[0].some((m) => (m.role as string) === "system")).toBe(false);
+  });
+
+  it("gives synthetic error payloads the same field set as a real ToolResult", async () => {
+    // Rust's SYSTEM_PROMPT tells the model every tool result carries fresh,
+    // fresh_as_of, and missing_reason. A synthetic payload missing fields
+    // the prompt promised would teach the model to distrust the envelope
+    // exactly where trusting it matters most.
+    const badArgs = scriptedProvider([
+      { text: "", toolCalls: [call("a", "get_track_detail", "not json")] },
+      { text: "recovered", toolCalls: [] },
+    ]);
+    const badArgsOut = await runTurn(badArgs, echoTools, [{ role: "user", content: "hi" }]);
+    const badArgsPayload = JSON.parse(badArgsOut.messages.find((m) => m.role === "tool")!.content!);
+    expect(badArgsPayload).toMatchObject({
+      value: null,
+      fresh_as_of: null,
+      fresh: false,
+      missing_reason: "bad_arguments",
+    });
+    expect(typeof badArgsPayload.queried_at).toBe("number");
+
+    const throwing: ToolRunner = {
+      run: async () => {
+        throw new Error("ipc died");
+      },
+    };
+    const toolFailed = scriptedProvider([
+      { text: "", toolCalls: [call("a", "get_clip_notes", '{"track":0,"clip":0}')] },
+      { text: "recovered", toolCalls: [] },
+    ]);
+    const toolFailedOut = await runTurn(toolFailed, throwing, [{ role: "user", content: "hi" }]);
+    const toolFailedPayload = JSON.parse(
+      toolFailedOut.messages.find((m) => m.role === "tool")!.content!,
+    );
+    expect(toolFailedPayload).toMatchObject({
+      value: null,
+      fresh_as_of: null,
+      fresh: false,
+    });
+    expect(toolFailedPayload.missing_reason).toContain("tool_failed");
+    expect(typeof toolFailedPayload.queried_at).toBe("number");
   });
 });
