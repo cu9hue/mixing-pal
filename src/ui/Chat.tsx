@@ -17,8 +17,21 @@ const DISCLAIMER = "AI can make mistakes. Treat responses as suggestions.";
 // webview reload, not just a re-render.
 const GOAL_STORAGE_KEY = "copilot.goal";
 
+// Reads the persisted goal. localStorage access can throw (e.g. a
+// SecurityError in some webview storage configurations); catching here
+// matters because this runs inside a useState initializer during render --
+// an uncaught throw there would unmount the whole chat pane, not just lose
+// the goal text. Do not remove this catch as unnecessary defensiveness.
+function loadStoredGoal(): string {
+  try {
+    return localStorage.getItem(GOAL_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export function Chat({ state }: { state: SetState }) {
-  const [goal, setGoal] = useState(() => localStorage.getItem(GOAL_STORAGE_KEY) ?? "");
+  const [goal, setGoal] = useState(loadStoredGoal);
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [progress, setProgress] = useState<string | null>(null);
@@ -63,7 +76,14 @@ export function Chat({ state }: { state: SetState }) {
         maxLength={500}
         onChange={(e) => {
           setGoal(e.target.value);
-          localStorage.setItem(GOAL_STORAGE_KEY, e.target.value);
+          // Losing persistence on a failed write is an acceptable
+          // degradation; letting it throw out of an input handler and break
+          // typing in the field is not. Do not remove this catch.
+          try {
+            localStorage.setItem(GOAL_STORAGE_KEY, e.target.value);
+          } catch {
+            // Best-effort only -- see comment above.
+          }
         }}
       />
       <div style={{ maxHeight: 240, overflowY: "auto" }}>
