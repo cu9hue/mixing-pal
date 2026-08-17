@@ -97,7 +97,7 @@ impl LiveQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::osc::requests::RequestTable;
+    use crate::osc::requests::{Registration, RequestTable};
 
     /// Stands in for `lib.rs`'s receive loop: the only part of it a query
     /// depends on is that every inbound datagram reaches
@@ -156,7 +156,14 @@ mod tests {
         // raises and the client receives nothing at all. The caller, which
         // knows whether a smaller window is worth trying, is what turns this
         // into "too_large".
-        let (_live, q, _table, _port) = fixture().await;
+        //
+        // The fake Live here does receive the request -- proving the New
+        // path really sent a datagram -- and deliberately never answers it,
+        // so this test fails both if the send is silently dropped and if
+        // the timeout path breaks.
+        let (live, q, _table, _port) = fixture().await;
+        let received = tokio::spawn(async move { live.recv().await });
+
         let err = q
             .query(
                 "/live/clip/get/length",
@@ -166,6 +173,56 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, QueryError::NoReply);
+
+        let req = received.await.unwrap().unwrap();
+        assert_eq!(req.addr, "/live/clip/get/length");
+        assert_eq!(req.args, vec![OscType::Int(1), OscType::Int(0)]);
+    }
+
+    #[tokio::test]
+    async fn a_joined_query_sends_no_second_datagram_and_still_receives_the_reply() {
+        // A request for this key is already in flight when the joined
+        // caller's query() runs. It must ride the existing request rather
+        // than send its own datagram, and it must still receive the answer
+        // that resolves the shared request id.
+        let (live, q, table, _port) = fixture().await;
+        let addr = "/live/clip/get/length";
+        let args = vec![OscType::Int(1), OscType::Int(0)];
+
+        {
+            let mut t = table.lock().unwrap();
+            match t.register(Instant::now(), addr, &args) {
+                Registration::New(_) => {}
+                other => panic!("expected New, got {other:?}"),
+            }
+        }
+
+        let q2 = q.clone();
+        let joined = tokio::spawn(async move {
+            q2.query(addr, args, Duration::from_millis(500)).await
+        });
+
+        // Give the spawned query a chance to run its register-and-watch
+        // before any reply arrives, so the resolve below finds a waiter.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let nothing = tokio::time::timeout(Duration::from_millis(50), live.recv()).await;
+        assert!(nothing.is_err(), "a joined query must not send its own datagram");
+
+        // LiveQuery never learns request ids, so the only way to complete
+        // the pre-registered request in this test is to resolve it
+        // directly, exactly as the real receive loop would on an inbound
+        // datagram.
+        {
+            let mut t = table.lock().unwrap();
+            t.resolve(&rosc::OscMessage {
+                addr: addr.to_string(),
+                args: vec![OscType::Int(1), OscType::Int(0), OscType::Float(8.0)],
+            });
+        }
+
+        let reply = joined.await.unwrap().unwrap();
+        assert_eq!(reply[2], OscType::Float(8.0));
     }
 
     #[tokio::test]
