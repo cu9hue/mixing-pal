@@ -85,6 +85,31 @@ pub fn track_chunks(
         .collect()
 }
 
+/// Bytes one track costs in a `mixer_data` reply: `volume` and `panning` as
+/// 4-byte floats, plus the formatted dB string, plus one type-tag byte per
+/// value.
+///
+/// OSC strings are null-terminated and padded to a 4-byte boundary, so
+/// "-12.5 dB" (8 characters plus the null) occupies 12. 16 is that with a
+/// whole slot of headroom, covering everything Live produces here -- from
+/// "-inf dB" to "-70.0 dB".
+const MIXER_DB_STRING_BYTES: usize = 16;
+pub(crate) const BYTES_PER_MIXER_TRACK: usize = 4 + 4 + MIXER_DB_STRING_BYTES + 3;
+
+/// Chunks a `mixer_data` sweep by bytes.
+///
+/// Counts bytes directly rather than going through `budget_values()`, unlike
+/// `track_chunks`: two of the three values per track are 4-byte floats and
+/// the third is a padded string, so a flat 5-bytes-per-value estimate would
+/// be wrong in both directions at once.
+pub fn mixer_chunks(num_tracks: usize) -> Vec<(usize, usize)> {
+    let per_chunk = ((MAX_DATAGRAM - HEADER_SLACK) / BYTES_PER_MIXER_TRACK).max(1);
+    even_split(num_tracks, per_chunk)
+        .into_iter()
+        .map(|(start, span)| (start, start + span))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +281,42 @@ mod tests {
             expected_min = *max;
         }
         assert_eq!(expected_min, 50);
+    }
+
+    #[test]
+    fn a_real_set_still_fits_in_one_mixer_chunk() {
+        // The producer's own sets, and anything like them, must not start
+        // paying for round trips they don't need.
+        assert_eq!(mixer_chunks(35), vec![(0, 35)]);
+        assert_eq!(mixer_chunks(200), vec![(0, 200)]);
+    }
+
+    #[test]
+    fn every_mixer_chunk_fits_inside_the_datagram_cap() {
+        // The whole point. Past MAX_DATAGRAM the reply is not truncated -- it is
+        // never sent, and silence is indistinguishable from Live being closed.
+        let chunks = mixer_chunks(1000);
+        assert!(chunks.len() > 1, "1000 tracks must page");
+        for (min, max) in &chunks {
+            let bytes = (max - min) * BYTES_PER_MIXER_TRACK + HEADER_SLACK;
+            assert!(bytes <= MAX_DATAGRAM, "chunk {min}..{max} would be {bytes} bytes");
+        }
+    }
+
+    #[test]
+    fn mixer_chunks_tile_with_no_gap_or_overlap() {
+        let chunks = mixer_chunks(1000);
+        let mut expected = 0;
+        for (min, max) in &chunks {
+            assert_eq!(*min, expected);
+            assert!(max > min);
+            expected = *max;
+        }
+        assert_eq!(expected, 1000);
+    }
+
+    #[test]
+    fn mixer_chunks_of_zero_tracks_is_empty() {
+        assert_eq!(mixer_chunks(0), Vec::<(usize, usize)>::new());
     }
 }

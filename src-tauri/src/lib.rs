@@ -4,7 +4,7 @@ mod osc;
 
 use bulk::{decode_mixer_data, decode_track_data, MIXER_ADDRS, TRACK_DATA_ADDRS};
 use deltas::{Coalescer, Delta};
-use osc::budget::track_chunks;
+use osc::budget::{mixer_chunks, track_chunks};
 use osc::pollers::{PollKind, PollSchedule};
 use osc::requests::{Registration, RequestTable};
 use osc::socket::OscSocket;
@@ -496,7 +496,10 @@ pub fn run() {
                 // mid-sweep queue instead of finishing a sweep that's
                 // already stale.
                 let mut queue_built_for: Option<(usize, usize)> = None;
-                let mut faders_pending = false;
+                let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+                // The num_tracks the queue above was built against, mirroring
+                // queue_built_for's role for track_data_queue.
+                let mut mixer_built_for: Option<usize> = None;
 
                 // `PollSchedule::new` seeds every kind's last-run to `now`,
                 // so nothing would be due for a full interval — up to 2s of
@@ -518,7 +521,8 @@ pub fn run() {
                         &poll_counts,
                         &mut track_data_queue,
                         &mut queue_built_for,
-                        &mut faders_pending,
+                        &mut mixer_queue,
+                        &mut mixer_built_for,
                     )
                     .await;
                     schedule.mark(kind, start);
@@ -568,10 +572,14 @@ pub fn run() {
                         now,
                     )
                     .await;
-                    if faders_pending {
-                        try_faders(&poll_table, &poll_socket, &poll_counts, now, &mut faders_pending)
-                            .await;
-                    }
+                    drain_mixer_data_queue(
+                        &poll_table,
+                        &poll_socket,
+                        &poll_counts,
+                        &mut mixer_queue,
+                        now,
+                    )
+                    .await;
 
                     for kind in schedule.due(now) {
                         poll_kind(
@@ -582,7 +590,8 @@ pub fn run() {
                             &poll_counts,
                             &mut track_data_queue,
                             &mut queue_built_for,
-                            &mut faders_pending,
+                            &mut mixer_queue,
+                            &mut mixer_built_for,
                         )
                         .await;
                         schedule.mark(kind, now);
@@ -624,7 +633,8 @@ async fn poll_kind(
     counts: &Mutex<TrackCounts>,
     track_data_queue: &mut VecDeque<(usize, usize)>,
     queue_built_for: &mut Option<(usize, usize)>,
-    faders_pending: &mut bool,
+    mixer_queue: &mut VecDeque<(usize, usize)>,
+    mixer_built_for: &mut Option<usize>,
 ) {
     match kind {
         PollKind::TrackState => {
@@ -676,8 +686,25 @@ async fn poll_kind(
             }
         }
         PollKind::Faders => {
-            *faders_pending = true;
-            try_faders(table, poll_socket, counts, now, faders_pending).await;
+            let num_tracks = match counts.lock() {
+                Ok(c) => c.num_tracks,
+                Err(_) => None,
+            };
+            // Nothing goes out until num_tracks is known: a chunked sweep
+            // needs a real count. That costs one poll interval on connect
+            // and saves a round trip whose reply could only be discarded.
+            if let Some(n) = num_tracks {
+                // `|| is_empty()` for the same reason TrackState has it (F1,
+                // 2026-08-16 whole-branch review): a sweep that drains must
+                // be rebuilt on the next tick, or faders freeze after one
+                // pass while everything else keeps updating.
+                if *mixer_built_for != Some(n) || mixer_queue.is_empty() {
+                    mixer_queue.clear();
+                    mixer_queue.extend(mixer_chunks(n));
+                    *mixer_built_for = Some(n);
+                }
+                drain_mixer_data_queue(table, poll_socket, counts, mixer_queue, now).await;
+            }
         }
         PollKind::Selection => {
             for addr in [
@@ -781,44 +808,44 @@ async fn drain_track_data_queue(
     }
 }
 
-async fn try_faders(
+/// Drains as much of the `mixer_data` chunk queue as the single-flight
+/// address currently allows. Same shape as `drain_track_data_queue`, and for
+/// the same reason: `mixer_data` is `KeyArity::Unkeyed`, so at most one
+/// chunk can be outstanding at a time, and the first `Deferred` means every
+/// later chunk would defer too.
+async fn drain_mixer_data_queue(
     table: &Mutex<RequestTable>,
     poll_socket: &OscSocket,
     counts: &Mutex<TrackCounts>,
+    queue: &mut VecDeque<(usize, usize)>,
     now: Instant,
-    pending: &mut bool,
 ) {
-    let addr = "/live/track/get/mixer_data";
-    let args = vec![OscType::Int(0), OscType::Int(-1)];
-    let registration = match table.lock() {
-        Ok(mut t) => t.register(now, addr, &args),
-        Err(_) => {
-            eprintln!("osc request table lock poisoned; skipping mixer_data this tick");
-            return; // leave `pending` set so a later tick retries
-        }
-    };
-    match registration {
-        Registration::New(_) => {
-            let _ = poll_socket.send(addr, args).await;
-            *pending = false;
-            // The wire args above ask for "every track" (`0, -1`); Live
-            // resolves that server-side, so the concrete upper bound this
-            // client can decode against is whatever `num_tracks` it last
-            // cached. If that's still unknown (e.g. the very first tick,
-            // before any `num_tracks` reply has arrived), no range is
-            // recorded and the receive loop drops this reply rather than
-            // guess -- self-correcting on the next poll, by which point
-            // `num_tracks` is almost always known.
-            if let Ok(mut c) = counts.lock() {
-                let range = c.num_tracks.map(|n| (0u32, n as u32));
-                c.inflight_mixer_data = range;
-                c.mixer_data_sent_at = range.map(|_| now);
+    while let Some(&(min, max)) = queue.front() {
+        let args = vec![OscType::Int(min as i32), OscType::Int(max as i32)];
+        let registration = match table.lock() {
+            Ok(mut t) => t.register(now, "/live/track/get/mixer_data", &args),
+            Err(_) => {
+                eprintln!(
+                    "osc request table lock poisoned; skipping mixer_data chunk this tick"
+                );
+                break;
             }
+        };
+        match registration {
+            Registration::New(_) => {
+                let _ = poll_socket.send("/live/track/get/mixer_data", args).await;
+                queue.pop_front();
+                // The exact range just sent. Plan 1 asked for `(0, -1)` and
+                // had to reconstruct the extent from a separately-polled
+                // count, dropping the reply outright whenever that count was
+                // not yet known; a concrete range removes the guess.
+                if let Ok(mut c) = counts.lock() {
+                    c.inflight_mixer_data = Some((min as u32, max as u32));
+                    c.mixer_data_sent_at = Some(now);
+                }
+            }
+            Registration::Joined(_) | Registration::Deferred => break,
         }
-        // mixer_data is also KeyArity::Unkeyed, so Joined is equally
-        // unreachable here -- same reasoning as drain_track_data_queue:
-        // retry rather than treat it as done.
-        Registration::Joined(_) | Registration::Deferred => {}
     }
 }
 
@@ -1097,7 +1124,8 @@ mod tests {
         });
         let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
         let mut queue_built_for: Option<(usize, usize)> = None;
-        let mut faders_pending = false;
+        let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut mixer_built_for: Option<usize> = None;
         let start = Instant::now();
 
         // First tick: counts are already known, so the queue builds and its
@@ -1111,7 +1139,8 @@ mod tests {
             &counts,
             &mut queue,
             &mut queue_built_for,
-            &mut faders_pending,
+            &mut mixer_queue,
+            &mut mixer_built_for,
         )
         .await;
 
@@ -1144,7 +1173,8 @@ mod tests {
             &counts,
             &mut queue,
             &mut queue_built_for,
-            &mut faders_pending,
+            &mut mixer_queue,
+            &mut mixer_built_for,
         )
         .await;
 
@@ -1181,7 +1211,8 @@ mod tests {
         });
         let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
         let mut queue_built_for: Option<(usize, usize)> = None;
-        let mut faders_pending = false;
+        let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut mixer_built_for: Option<usize> = None;
         let start = Instant::now();
 
         poll_kind(
@@ -1192,7 +1223,8 @@ mod tests {
             &counts,
             &mut queue,
             &mut queue_built_for,
-            &mut faders_pending,
+            &mut mixer_queue,
+            &mut mixer_built_for,
         )
         .await;
         // Drain the num_tracks/num_scenes/track_data datagrams this tick
@@ -1228,7 +1260,8 @@ mod tests {
             &counts,
             &mut queue,
             &mut queue_built_for,
-            &mut faders_pending,
+            &mut mixer_queue,
+            &mut mixer_built_for,
         )
         .await;
 
@@ -1257,7 +1290,8 @@ mod tests {
         let counts = Mutex::new(TrackCounts::default());
         let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
         let mut queue_built_for: Option<(usize, usize)> = None;
-        let mut faders_pending = false;
+        let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut mixer_built_for: Option<usize> = None;
         let start = Instant::now();
 
         poll_kind(
@@ -1268,7 +1302,8 @@ mod tests {
             &counts,
             &mut queue,
             &mut queue_built_for,
-            &mut faders_pending,
+            &mut mixer_queue,
+            &mut mixer_built_for,
         )
         .await;
 
@@ -1293,70 +1328,126 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn faders_pending_retries_a_deferred_mixer_data_poll() {
+    async fn mixer_data_queue_retries_deferred_chunks_across_ticks() {
         let listener = OscSocket::bind_to(0, 0).await.unwrap();
         let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
         let table = Mutex::new(RequestTable::new());
-        let counts = Mutex::new(TrackCounts { num_tracks: Some(4), ..Default::default() });
+        let counts = Mutex::new(TrackCounts::default());
+        let mut queue: VecDeque<(usize, usize)> = VecDeque::from([(0, 331), (331, 400)]);
         let start = Instant::now();
 
-        // Occupy mixer_data's single-flight slot directly, as if a
-        // previous poll had already claimed it.
-        {
-            let mut t = table.lock().unwrap();
-            let args = [OscType::Int(0), OscType::Int(-1)];
-            t.register(start, "/live/track/get/mixer_data", &args);
-        }
-
-        let mut pending = true;
-        try_faders(&table, &poll_socket, &counts, start, &mut pending).await;
-        assert!(
-            pending,
-            "mixer_data is already in flight; the retry must stay pending, not be dropped"
-        );
-        let nothing_sent =
-            tokio::time::timeout(Duration::from_millis(50), recv_message(&listener)).await;
-        assert!(
-            nothing_sent.is_err(),
-            "no poll should be sent while one is already in flight"
+        drain_mixer_data_queue(&table, &poll_socket, &counts, &mut queue, start).await;
+        let msg = recv_message(&listener).await;
+        assert_eq!(msg.addr, "/live/track/get/mixer_data");
+        assert_eq!(msg.args[0], OscType::Int(0));
+        assert_eq!(msg.args[1], OscType::Int(331));
+        assert_eq!(queue.len(), 1, "chunk 2 must stay queued, not be dropped");
+        assert_eq!(
+            counts.lock().unwrap().inflight_mixer_data,
+            Some((0, 331)),
+            "the exact range sent must be recorded, not a count-derived guess"
         );
 
-        // Once the slot expires, the retry succeeds.
         let later = start + Duration::from_secs(3);
         {
             let mut t = table.lock().unwrap();
             t.expire(later, Duration::from_secs(2));
         }
-        try_faders(&table, &poll_socket, &counts, later, &mut pending).await;
-        assert!(!pending);
-        let msg = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
+        drain_mixer_data_queue(&table, &poll_socket, &counts, &mut queue, later).await;
+        let msg2 = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
             .await
-            .expect("expected mixer_data to be sent once the slot expired");
-        assert_eq!(msg.addr, "/live/track/get/mixer_data");
-        // num_tracks was known (4) at send time, so the resolved range
-        // (0, num_tracks) is what gets recorded for the receive loop to
-        // decode this reply against.
-        assert_eq!(counts.lock().unwrap().inflight_mixer_data, Some((0, 4)));
+            .expect("expected chunk 2 once the slot expired");
+        assert_eq!(msg2.args[0], OscType::Int(331));
+        assert_eq!(counts.lock().unwrap().inflight_mixer_data, Some((331, 400)));
     }
 
     #[tokio::test]
-    async fn a_mixer_data_send_with_num_tracks_unknown_records_no_range() {
-        // The very first tick can fire before any num_tracks reply has
-        // arrived. Recording a guessed range would let the receive loop
-        // decode a reply under a range nothing confirmed; recording none
-        // means it gets dropped and logged instead, self-correcting on the
-        // next poll once num_tracks is known.
+    async fn poll_kind_faders_sends_nothing_while_num_tracks_is_unknown() {
         let listener = OscSocket::bind_to(0, 0).await.unwrap();
         let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
         let table = Mutex::new(RequestTable::new());
         let counts = Mutex::new(TrackCounts::default());
+        let mut track_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut track_built_for: Option<(usize, usize)> = None;
+        let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut mixer_built_for: Option<usize> = None;
+
+        poll_kind(
+            PollKind::Faders,
+            Instant::now(),
+            &table,
+            &poll_socket,
+            &counts,
+            &mut track_queue,
+            &mut track_built_for,
+            &mut mixer_queue,
+            &mut mixer_built_for,
+        )
+        .await;
+
+        let nothing =
+            tokio::time::timeout(Duration::from_millis(50), recv_message(&listener)).await;
+        assert!(nothing.is_err(), "a chunked sweep must wait for a real track count");
+        assert!(mixer_queue.is_empty());
+        assert_eq!(mixer_built_for, None);
+    }
+
+    #[tokio::test]
+    async fn poll_kind_faders_refills_the_queue_after_it_drains() {
+        // The F1 lesson, applied to faders: a single-chunk sweep drains inside
+        // its own tick, so a refill condition that only fires on a count change
+        // would send mixer_data exactly once per session and freeze every fader.
+        let listener = OscSocket::bind_to(0, 0).await.unwrap();
+        let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts { num_tracks: Some(8), ..Default::default() });
+        let mut track_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut track_built_for: Option<(usize, usize)> = None;
+        let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut mixer_built_for: Option<usize> = None;
         let start = Instant::now();
 
-        let mut pending = true;
-        try_faders(&table, &poll_socket, &counts, start, &mut pending).await;
-        assert!(!pending);
-        recv_message(&listener).await;
-        assert_eq!(counts.lock().unwrap().inflight_mixer_data, None);
+        poll_kind(
+            PollKind::Faders,
+            start,
+            &table,
+            &poll_socket,
+            &counts,
+            &mut track_queue,
+            &mut track_built_for,
+            &mut mixer_queue,
+            &mut mixer_built_for,
+        )
+        .await;
+        let first = recv_message(&listener).await;
+        assert_eq!(first.args[1], OscType::Int(8));
+
+        // Free the slot as the receive loop would once the reply lands.
+        {
+            let mut t = table.lock().unwrap();
+            t.resolve(&OscMessage {
+                addr: "/live/track/get/mixer_data".to_string(),
+                args: vec![],
+            });
+        }
+
+        let later = start + Duration::from_secs(2);
+        poll_kind(
+            PollKind::Faders,
+            later,
+            &table,
+            &poll_socket,
+            &counts,
+            &mut track_queue,
+            &mut track_built_for,
+            &mut mixer_queue,
+            &mut mixer_built_for,
+        )
+        .await;
+        let second = tokio::time::timeout(Duration::from_millis(200), recv_message(&listener))
+            .await
+            .expect("mixer_data must be resent once the queue drained");
+        assert_eq!(second.addr, "/live/track/get/mixer_data");
     }
 
     #[test]
