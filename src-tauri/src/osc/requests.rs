@@ -170,10 +170,18 @@ impl RequestTable {
     /// the same first n arguments, even with different trailing arguments --
     /// would `Joined` a dead entry and never be sent at all.
     ///
-    /// Only the caller that received `Registration::New` may cancel. A
-    /// `Joined` caller is riding someone else's in-flight request and must
-    /// never cancel it out from under them.
-    pub fn cancel(&mut self, addr: &str, args: &[OscType]) {
+    /// Only the caller that received `Registration::New` may cancel, and it
+    /// must pass the `RequestId` that came back with it. The id, not just
+    /// the caller's identity, is what `cancel` checks: `expire` can reclaim
+    /// this same key out from under a stalled caller and hand it to a fresh
+    /// registrant before the stalled caller gets here (A registers id=1,
+    /// `expire` reclaims it, B registers id=2 for the same key, A finally
+    /// calls cancel). Without the id, cancel would delete whatever entry
+    /// currently sits under the key -- B's live request -- which is the same
+    /// cross-caller cancellation the `New`-only rule exists to prevent,
+    /// reached by a different route. Matching on id makes a stale cancel a
+    /// no-op instead.
+    pub fn cancel(&mut self, addr: &str, args: &[OscType], id: RequestId) {
         let arity = key_arity(addr);
         let n = match arity {
             KeyArity::Args(n) => n,
@@ -183,7 +191,12 @@ impl RequestTable {
             addr: addr.to_string(),
             key: key_of(args, n),
         };
-        if let Some(pending) = self.pending.remove(&key) {
+        if let std::collections::hash_map::Entry::Occupied(entry) = self.pending.entry(key) {
+            if entry.get().id != id {
+                // Someone else now owns this key; leave their request alone.
+                return;
+            }
+            let pending = entry.remove();
             // Dropping the senders closes any receiver still waiting, which
             // is the same signal `expire` gives.
             self.waiters.remove(&pending.id);
@@ -541,12 +554,12 @@ mod tests {
         let mut t = RequestTable::new();
         let now = Instant::now();
         let args = [OscType::Int(1), OscType::Int(0)];
-        match t.register(now, "/live/clip/get/notes", &args) {
-            Registration::New(_) => {}
+        let id = match t.register(now, "/live/clip/get/notes", &args) {
+            Registration::New(id) => id,
             other => panic!("expected New, got {other:?}"),
-        }
+        };
 
-        t.cancel("/live/clip/get/notes", &args);
+        t.cancel("/live/clip/get/notes", &args, id);
 
         let after = t.register(now, "/live/clip/get/notes", &args);
         assert!(
@@ -566,7 +579,7 @@ mod tests {
         };
         let mut rx = t.watch(id);
 
-        t.cancel("/live/clip/get/notes", &args);
+        t.cancel("/live/clip/get/notes", &args, id);
 
         assert_eq!(rx.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Closed));
     }
@@ -575,12 +588,12 @@ mod tests {
     fn cancelling_an_unkeyed_request_clears_its_outstanding_flag() {
         let mut t = RequestTable::new();
         let now = Instant::now();
-        match t.register(now, "/live/track/get/mixer_data", &[]) {
-            Registration::New(_) => {}
+        let id = match t.register(now, "/live/track/get/mixer_data", &[]) {
+            Registration::New(id) => id,
             other => panic!("expected New, got {other:?}"),
-        }
+        };
 
-        t.cancel("/live/track/get/mixer_data", &[]);
+        t.cancel("/live/track/get/mixer_data", &[], id);
 
         let after = t.register(now, "/live/track/get/mixer_data", &[]);
         assert!(
@@ -599,11 +612,51 @@ mod tests {
         };
 
         // Nothing is pending for track 2; cancelling it must not touch
-        // track 1's entry.
-        t.cancel("/live/track/get/name", &[OscType::Int(2)]);
+        // track 1's entry. Pass id + 1 as a stand-in id -- there is no real
+        // registration for track 2's key at all, so any id is a non-match.
+        t.cancel("/live/track/get/name", &[OscType::Int(2)], id + 1);
 
         let still_joined = t.register(now, "/live/track/get/name", &[OscType::Int(1)]);
         assert_eq!(still_joined, Registration::Joined(id));
+    }
+
+    #[test]
+    fn cancelling_with_a_stale_id_does_not_delete_a_newer_owners_request() {
+        // The ABA sequence cancel's id check exists to rule out: A registers
+        // id1 for key K, expire() reclaims it (A stalls before reaching
+        // cancel), B registers id2 for the SAME key, and only then does A's
+        // stale cancel(id1) run. It must find id2 sitting under the key,
+        // refuse to touch it, and leave B's request -- and its waiter --
+        // fully intact.
+        let mut t = RequestTable::new();
+        let start = Instant::now();
+        let addr = "/live/clip/get/notes";
+        let args = [OscType::Int(1), OscType::Int(0)];
+
+        let id1 = match t.register(start, addr, &args) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+
+        let later = start + Duration::from_secs(3);
+        assert_eq!(t.expire(later, Duration::from_secs(2)), vec![id1]);
+
+        let id2 = match t.register(later, addr, &args) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+        assert_ne!(id1, id2);
+        let mut rx2 = t.watch(id2);
+
+        // A's stale cancel, arriving after expire already moved this key
+        // on to id2.
+        t.cancel(addr, &args, id1);
+
+        // The survivor: a fresh registration for K still Joins id2, and
+        // id2's waiter is still alive (not closed by A's stale cancel).
+        let still_joined = t.register(later, addr, &args);
+        assert_eq!(still_joined, Registration::Joined(id2));
+        assert_eq!(rx2.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty));
     }
 
     #[test]

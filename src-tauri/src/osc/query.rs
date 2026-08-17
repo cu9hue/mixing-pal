@@ -82,7 +82,16 @@ impl LiveQuery {
                 }
             }
 
-            let owns_request = matches!(registration, Registration::New(_));
+            // Only the New registrant may free the slot on give-up -- and it
+            // must cancel by this exact id, not just by key, or a cancel
+            // that arrives after `expire` has already handed the key to a
+            // fresh registrant would delete that registrant's live request
+            // instead of the dead one this caller owned. See `cancel`'s doc
+            // comment for the full sequence.
+            let owned_id = match registration {
+                Registration::New(id) => Some(id),
+                _ => None,
+            };
             let rx = rx.expect("New and Joined always produce a receiver");
             let remaining = deadline.saturating_duration_since(Instant::now());
             return match tokio::time::timeout(remaining, rx).await {
@@ -90,15 +99,12 @@ impl LiveQuery {
                 // The channel closed: `expire` reclaimed the slot and
                 // dropped the waiter. Same outcome as running out of time.
                 Ok(Err(_)) | Err(_) => {
-                    // Only the New registrant may free the slot -- a Joined
-                    // caller giving up must not cancel the request it never
-                    // owned out from under whoever is still waiting on it.
-                    if owns_request {
+                    if let Some(id) = owned_id {
                         let mut t = self
                             .table
                             .lock()
                             .map_err(|_| QueryError::Transport("request table lock poisoned".into()))?;
-                        t.cancel(addr, &args);
+                        t.cancel(addr, &args, id);
                     }
                     Err(QueryError::NoReply)
                 }
