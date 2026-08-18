@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import wireVersion from "../../shared/wire-version.json";
 
 // Mirrors src-tauri/src/lib.rs's ConnectionStatus. A one-shot fetch is
 // enough: the bind attempt happens once, at startup, before the window
@@ -9,12 +10,98 @@ export type ConnectionStatus =
   | { status: "bound" }
   | { status: "bind_failed"; port: number; error: string };
 
-export function Connection({ lastSeen }: { lastSeen: number | null }) {
+// How long traffic must be flowing with no version reply before the
+// installed-script-predates-the-handshake banner shows. There is a window
+// right after connecting where deltas are already arriving but the first
+// /live/copilot/get/version poll (every 5s, see PollKind::ScriptVersion)
+// hasn't answered yet; without this grace period that window would render a
+// confidently wrong "your script is out of date" diagnosis on every normal
+// startup -- the same false-positive failure mode already fixed once for
+// the port-conflict banner below.
+export const VERSION_GRACE_MS = 6000;
+
+// How long since the last delta before the connection counts as stale.
+// Shared between selectBanner (the "not connected" case) and the caller,
+// which uses the same threshold to decide when a fresh traffic run starts.
+export const STALE_MS = 5000;
+
+export type BannerState =
+  | { kind: "none" }
+  | { kind: "bind_failed"; port: number; error: string }
+  | { kind: "not_connected" }
+  | { kind: "version_mismatch"; required: number; actual: number }
+  | { kind: "stale_script" };
+
+// Pure decision function, kept separate from the component so it can be
+// unit-tested without rendering: given a snapshot of everything the banner
+// depends on, which one (if any) should show. Order matters -- earlier
+// cases pre-empt later ones, e.g. a bind failure means no traffic could
+// ever arrive, so it must win over "not connected" rather than the two
+// fighting for the same render.
+export function selectBanner(params: {
+  now: number;
+  connectionStatus: ConnectionStatus | null;
+  lastSeen: number | null;
+  scriptVersion: number | null;
+  requiredVersion: number;
+  trafficStartedAt: number | null;
+}): BannerState {
+  const { now, connectionStatus, lastSeen, scriptVersion, requiredVersion, trafficStartedAt } =
+    params;
+
+  // A port conflict means the socket never bound at all, so no traffic from
+  // Live could ever arrive regardless of Control Surface setup -- telling
+  // the producer to check that setting here would be a confidently wrong
+  // diagnosis (the failure this codebase's own author hit and restarted
+  // Live over, for nothing).
+  if (connectionStatus?.status === "bind_failed") {
+    return { kind: "bind_failed", port: connectionStatus.port, error: connectionStatus.error };
+  }
+
+  const stale = lastSeen === null || now - lastSeen > STALE_MS;
+  if (stale) {
+    return { kind: "not_connected" };
+  }
+
+  // Version received but doesn't match: most addresses still work under a
+  // skew, so this warns rather than refusing to run -- but it names both
+  // numbers so reinstalling is a specific, verifiable fix, not a guess.
+  if (scriptVersion !== null && scriptVersion !== requiredVersion) {
+    return { kind: "version_mismatch", required: requiredVersion, actual: scriptVersion };
+  }
+
+  // No version reply yet, but other traffic (faders, track state, ...) is
+  // arriving -- this is the incident the handshake exists to catch: a
+  // Remote Script old enough that it never registered the
+  // /live/copilot/get/version handler at all, so decode_bulk's arity
+  // mismatch silently drops every fader/pan/dB reading. Gated on
+  // VERSION_GRACE_MS so the ordinary "first poll hasn't landed yet" window
+  // right after connecting never triggers this.
+  if (
+    scriptVersion === null &&
+    trafficStartedAt !== null &&
+    now - trafficStartedAt > VERSION_GRACE_MS
+  ) {
+    return { kind: "stale_script" };
+  }
+
+  return { kind: "none" };
+}
+
+export function Connection({
+  lastSeen,
+  scriptVersion,
+}: {
+  lastSeen: number | null;
+  scriptVersion: number | null;
+}) {
   // This component only re-renders when SetView's state changes, which
   // happens when a delta arrives. But staleness is exactly the absence of
   // deltas — without this timer, the traffic that would trigger a re-render
   // never comes, so the banner would never appear no matter how long Live
   // has been disconnected. The interval forces a re-check every second.
+  // Also drives the version-grace-period check in selectBanner, on the same
+  // clock.
   const [, tick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => tick((n) => n + 1), 1000);
@@ -28,27 +115,64 @@ export function Connection({ lastSeen }: { lastSeen: number | null }) {
       .catch((err) => console.error("failed to fetch connection status", err));
   }, []);
 
-  // A port conflict means the socket never bound at all, so no traffic from
-  // Live could ever arrive regardless of Control Surface setup -- telling
-  // the producer to check that setting here would be a confidently wrong
-  // diagnosis (the failure this codebase's own author hit and restarted
-  // Live over, for nothing).
-  if (connectionStatus?.status === "bind_failed") {
-    return (
-      <div style={{ background: "#7a2020", color: "white", padding: "6px 10px" }}>
-        Can't reach Live: port {connectionStatus.port} is already in use by
-        another process (a leftover script, or a second copy of this app).
-        Close it and restart AbletonCopilot. ({connectionStatus.error})
-      </div>
-    );
+  const now = Date.now();
+  const stale = lastSeen === null || now - lastSeen > STALE_MS;
+
+  // Remembers when the current run of traffic began, so selectBanner can
+  // require VERSION_GRACE_MS of it before showing the stale-script banner.
+  // Resets whenever traffic actually stops (stale), so a disconnect/
+  // reconnect (or a project reload that re-instantiates the Control
+  // Surface) opens a fresh grace window rather than trusting a run that
+  // ended long ago.
+  const trafficStartedAt = useRef<number | null>(null);
+  if (stale) {
+    trafficStartedAt.current = null;
+  } else if (trafficStartedAt.current === null) {
+    trafficStartedAt.current = lastSeen;
   }
 
-  const stale = lastSeen === null || Date.now() - lastSeen > 5000;
-  if (!stale) return null;
-  return (
-    <div style={{ background: "#7a2020", color: "white", padding: "6px 10px" }}>
-      Not connected to Live. Open a set and choose <b>AbletonCopilot</b> under
-      Preferences → Link/Tempo/MIDI → Control Surface.
-    </div>
-  );
+  const banner = selectBanner({
+    now,
+    connectionStatus,
+    lastSeen,
+    scriptVersion,
+    requiredVersion: wireVersion.version,
+    trafficStartedAt: trafficStartedAt.current,
+  });
+
+  switch (banner.kind) {
+    case "none":
+      return null;
+    case "bind_failed":
+      return (
+        <div style={{ background: "#7a2020", color: "white", padding: "6px 10px" }}>
+          Can't reach Live: port {banner.port} is already in use by another
+          process (a leftover script, or a second copy of this app). Close it
+          and restart AbletonCopilot. ({banner.error})
+        </div>
+      );
+    case "not_connected":
+      return (
+        <div style={{ background: "#7a2020", color: "white", padding: "6px 10px" }}>
+          Not connected to Live. Open a set and choose <b>AbletonCopilot</b> under
+          Preferences → Link/Tempo/MIDI → Control Surface.
+        </div>
+      );
+    case "version_mismatch":
+      return (
+        <div style={{ background: "#7a5a20", color: "white", padding: "6px 10px" }}>
+          Remote Script version mismatch: this app expects wire version{" "}
+          {banner.required}, but the installed script reports version{" "}
+          {banner.actual}. Reinstall the Remote Script and restart Live.
+        </div>
+      );
+    case "stale_script":
+      return (
+        <div style={{ background: "#7a5a20", color: "white", padding: "6px 10px" }}>
+          The installed Remote Script predates this app's version handshake,
+          so some data (faders, pan, dB readings) may be silently missing.
+          Reinstall the Remote Script and restart Live.
+        </div>
+      );
+  }
 }

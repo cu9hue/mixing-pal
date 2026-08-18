@@ -8,6 +8,7 @@ pub enum PollKind {
     Selection,
     FocusedNotes,
     Meters,
+    ScriptVersion,
 }
 
 impl PollKind {
@@ -18,6 +19,7 @@ impl PollKind {
             PollKind::Selection,
             PollKind::FocusedNotes,
             PollKind::Meters,
+            PollKind::ScriptVersion,
         ]
     }
 
@@ -29,6 +31,12 @@ impl PollKind {
             PollKind::Meters => Duration::from_secs(2),
             PollKind::Selection => Duration::from_secs(1),
             PollKind::FocusedNotes => Duration::from_millis(1_500),
+            // The wire version never changes minute to minute, but it must
+            // re-detect after Live reloads the script (a reinstall + Live
+            // restart, or a project reload re-instantiating the Control
+            // Surface) -- 5s catches that without polling a near-constant
+            // value at the same rate as faders.
+            PollKind::ScriptVersion => Duration::from_secs(5),
         }
     }
 
@@ -41,6 +49,7 @@ impl PollKind {
             PollKind::Selection => 2,
             PollKind::FocusedNotes => 3,
             PollKind::Meters => 4,
+            PollKind::ScriptVersion => 5,
         }
     }
 }

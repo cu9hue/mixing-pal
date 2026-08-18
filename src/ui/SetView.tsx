@@ -44,7 +44,7 @@ export function SetView({ state, lastSeen }: { state: SetState; lastSeen: number
       {/* Must stay visible whether the table below is expanded or not --
           hiding "Not connected to Live" behind a collapsed section would be
           exactly the wrong failure mode. */}
-      <Connection lastSeen={lastSeen} />
+      <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} />
       <details
         open={expanded}
         onToggle={(e) => {

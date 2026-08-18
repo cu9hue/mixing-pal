@@ -41,7 +41,10 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/song/get/loop_length"
         | "/live/song/get/signature_numerator"
         | "/live/song/get/signature_denominator"
-        | "/live/song/get/beat" => KeyArity::None,
+        | "/live/song/get/beat"
+        // The wire-version handshake -- one int, no key. See
+        // shared/wire-version.json and copilot/version.py.
+        | "/live/copilot/get/version" => KeyArity::None,
 
         "/live/track/get/name"
         | "/live/track/get/mute"
@@ -119,6 +122,7 @@ mod tests {
             ("/live/song/get/signature_numerator", KeyArity::None),
             ("/live/song/get/signature_denominator", KeyArity::None),
             ("/live/song/get/beat", KeyArity::None),
+            ("/live/copilot/get/version", KeyArity::None),
             ("/live/clip/get/notes", KeyArity::Args(2)),
             ("/live/clip/get/length", KeyArity::Args(2)),
             ("/live/device/get/name", KeyArity::Args(2)),

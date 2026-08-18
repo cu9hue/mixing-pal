@@ -81,6 +81,8 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
     "/live/view/get/selected_device",
     // PollKind::Meters, observed raw.
     "/live/master/get/output_meter_level",
+    // PollKind::ScriptVersion, observed raw -- the wire-version handshake.
+    "/live/copilot/get/version",
 ];
 
 /// Every literal address the poll loop sends on the wire, outside of
@@ -108,6 +110,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/master/get/output_meter_level",
     "/live/clip/get/notes",
     "/live/clip/get/length",
+    "/live/copilot/get/version",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -972,6 +975,16 @@ async fn poll_kind(
             // Left unwired: a later plan owns the focused-clip digest and
             // calls `NoteTracker` directly.
         }
+        PollKind::ScriptVersion => {
+            register_and_send(
+                table,
+                poll_socket,
+                now,
+                "/live/copilot/get/version",
+                vec![],
+            )
+            .await;
+        }
     }
 }
 
@@ -1212,6 +1225,47 @@ mod tests {
                 "{addr} would be refused by send_to's read-only guard"
             );
         }
+    }
+
+    #[test]
+    fn wire_version_matches_the_shared_manifest() {
+        // Three-way tripwire for the wire-version handshake. The Python
+        // Remote Script is a separately deployed artefact -- copied into
+        // Live's Remote Scripts folder -- so it cannot read shared/ at
+        // runtime and hardcodes WIRE_VERSION as a literal instead. This test
+        // parses that literal out of the actual file and asserts it equals
+        // shared/wire-version.json, the one source of truth both the Rust
+        // and TypeScript sides read. Without this, the Python and the app
+        // could disagree about what "version 2" even means, which defeats
+        // the whole handshake -- exactly the class of silent drift that let
+        // the mixer_data 2-vs-3-argument incident ship undetected.
+        let py = include_str!("../../remote-script/AbletonCopilot/copilot/version.py");
+        let line = py
+            .lines()
+            .find(|l| l.trim_start().starts_with("WIRE_VERSION"))
+            .expect("copilot/version.py must define WIRE_VERSION");
+        let py_version: u64 = line
+            .split('=')
+            .nth(1)
+            .expect("WIRE_VERSION line must have a value")
+            .trim()
+            .parse()
+            .expect("WIRE_VERSION must be a plain integer literal");
+
+        #[derive(serde::Deserialize)]
+        struct WireVersion {
+            version: u64,
+        }
+        let manifest: WireVersion =
+            serde_json::from_str(include_str!("../../shared/wire-version.json"))
+                .expect("shared/wire-version.json must be valid JSON matching WireVersion");
+
+        assert_eq!(
+            py_version, manifest.version,
+            "copilot/version.py's WIRE_VERSION ({py_version}) must match \
+             shared/wire-version.json's version ({}) -- update both together",
+            manifest.version
+        );
     }
 
     #[test]

@@ -15,6 +15,7 @@ export interface SetState {
   rootNote: number | null;
   selectedTrack: number | null;
   tracks: Record<number, TrackState>;
+  scriptVersion: number | null;
 }
 
 export interface Delta {

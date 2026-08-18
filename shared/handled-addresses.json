@@ -6,7 +6,8 @@
     "/live/song/get/scale_name",
     "/live/song/get/root_note",
     "/live/view/get/selected_track",
-    "/live/song/get/num_tracks"
+    "/live/song/get/num_tracks",
+    "/live/copilot/get/version"
   ],
   "trackFields": [
     "/live/track/get/name",
