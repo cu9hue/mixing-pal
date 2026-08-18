@@ -11,14 +11,24 @@ export type ConnectionStatus =
   | { status: "bind_failed"; port: number; error: string };
 
 // How long traffic must be flowing with no version reply before the
-// installed-script-predates-the-handshake banner shows. There is a window
-// right after connecting where deltas are already arriving but the first
-// /live/copilot/get/version poll (every 5s, see PollKind::ScriptVersion)
-// hasn't answered yet; without this grace period that window would render a
-// confidently wrong "your script is out of date" diagnosis on every normal
-// startup -- the same false-positive failure mode already fixed once for
-// the port-conflict banner below.
-export const VERSION_GRACE_MS = 6000;
+// stale-script banner shows. There is a window right after connecting where
+// deltas are already arriving but the first /live/copilot/get/version poll
+// (every 5s, see PollKind::ScriptVersion) hasn't answered yet; without this
+// grace period that window would render a confidently wrong "your script is
+// out of date" diagnosis on every normal startup -- the same false-positive
+// failure mode already fixed once for the port-conflict banner below.
+//
+// Must stay well above PollKind::ScriptVersion's 5s interval, not just
+// past it: the first poll fires immediately on connect and normally replies
+// in about a millisecond, but if that single reply is lost, the retry
+// doesn't go out until the next 5s tick. A grace period of one interval
+// plus a sliver of margin would then fire the banner at the same moment the
+// retry lands -- a lost datagram, not a stale script, producing the exact
+// wrong diagnosis this banner exists to avoid. Clearing two full intervals
+// tolerates a lost poll and its retry before accusing the script. If
+// PollKind::ScriptVersion's interval ever changes, this constant must be
+// re-derived from it (at least ~2x, plus margin).
+export const VERSION_GRACE_MS = 12_000;
 
 // How long since the last delta before the connection counts as stale.
 // Shared between selectBanner (the "not connected" case) and the caller,
@@ -169,9 +179,10 @@ export function Connection({
     case "stale_script":
       return (
         <div style={{ background: "#7a5a20", color: "white", padding: "6px 10px" }}>
-          The installed Remote Script predates this app's version handshake,
-          so some data (faders, pan, dB readings) may be silently missing.
-          Reinstall the Remote Script and restart Live.
+          Receiving data from Live, but the Remote Script isn't reporting a
+          version -- usually a sign it's out of date, and some data (faders,
+          pan, dB readings) may be silently missing. Reinstall the Remote
+          Script and restart Live.
         </div>
       );
   }
