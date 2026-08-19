@@ -32,6 +32,13 @@
   --ok: #5ed6a0;
   --error: #e06c5c;
 
+  /* Banner label tints: a muted, desaturated form of the status colour, so
+     the label reads as a category rather than competing with the sentence
+     under it. Deliberately not --error/--accent themselves, which are used
+     at full strength for dots and rules. */
+  --error-label: #c78a80;
+  --warn-label: #d3b078;
+
   --radius-card: 12px;
   --radius-control: 8px;
   --radius-pill: 999px;

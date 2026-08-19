@@ -28,7 +28,7 @@
 }
 
 .banner--error .banner__label {
-  color: #c78a80;
+  color: var(--error-label);
 }
 
 .banner--warn .banner__dot {
@@ -36,7 +36,7 @@
 }
 
 .banner--warn .banner__label {
-  color: #d3b078;
+  color: var(--warn-label);
 }
 
 /* The port number, the two version numbers -- available, never leading.
