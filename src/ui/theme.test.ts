@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
+// @ts-expect-error no @types/node in this project; see vite.config.ts
 import { readFileSync, readdirSync, statSync } from "node:fs";
+// @ts-expect-error no @types/node in this project; see vite.config.ts
 import { join } from "node:path";
+// @ts-expect-error no @types/node in this project; see vite.config.ts
 import { fileURLToPath } from "node:url";
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));
