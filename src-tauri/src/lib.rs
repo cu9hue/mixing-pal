@@ -1,6 +1,7 @@
 mod bulk;
 mod connector;
 mod deltas;
+mod install;
 mod model;
 mod osc;
 mod settings;
