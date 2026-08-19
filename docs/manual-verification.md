@@ -213,3 +213,11 @@ the app to trigger it).
       report that the set changed under it, not merge two clips' notes. (This
       is the end-to-end half of the topology guard; the unit tests cover the
       pieces, this covers the wiring.)
+- [ ] Confirm Live 12's default track names against `DEFAULT_NAME` in
+      `src/rules/unnamedTracks.ts`. Create a fresh set, add six MIDI tracks
+      and six audio tracks without renaming any, and read the names Live
+      gives them off the track headers. The regex matches a bare `MIDI`/
+      `Audio` and a numbered `1 MIDI`/`2-Audio`, case-insensitively. If Live
+      produces a shape it does not match, the nudge never fires and the
+      failure is silent — the rule simply stays quiet forever. Fix the regex
+      and its test together.
