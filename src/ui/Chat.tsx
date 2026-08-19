@@ -4,6 +4,7 @@ import { ChatMessage, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
 import { buildContext } from "../digest/build";
 import { BlockNode, InlineNode, parseMarkdown } from "./markdown";
+import { loadGoal, saveGoal, GOAL_MAX_LENGTH } from "./goal";
 
 /**
  * Permanent and non-dismissible. Plan 1 could only display wrong data; from
@@ -12,24 +13,6 @@ import { BlockNode, InlineNode, parseMarkdown } from "./markdown";
  * airtight -- this sets the relationship the rest of the design assumes.
  */
 const DISCLAIMER = "AI can make mistakes. Treat responses as suggestions.";
-
-// The spec calls the goal field "a persistent free-text field" and
-// "probably the highest leverage" thing in the design -- it must survive a
-// webview reload, not just a re-render.
-const GOAL_STORAGE_KEY = "copilot.goal";
-
-// Reads the persisted goal. localStorage access can throw (e.g. a
-// SecurityError in some webview storage configurations); catching here
-// matters because this runs inside a useState initializer during render --
-// an uncaught throw there would unmount the whole chat pane, not just lose
-// the goal text. Do not remove this catch as unnecessary defensiveness.
-function loadStoredGoal(): string {
-  try {
-    return localStorage.getItem(GOAL_STORAGE_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
 
 // The chip that stands in for a «fenced» set-derived name (track names, in
 // practice). Faint and muted on purpose -- it should read as "this text
@@ -117,7 +100,7 @@ function MessageBody({ role, content }: { role: ChatMessage["role"]; content: st
 }
 
 export function Chat({ state }: { state: SetState }) {
-  const [goal, setGoal] = useState(loadStoredGoal);
+  const [goal, setGoal] = useState(loadGoal);
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [progress, setProgress] = useState<string | null>(null);
@@ -159,17 +142,10 @@ export function Chat({ state }: { state: SetState }) {
       <input
         placeholder="What are you working on? (genre, reference, today's goal)"
         value={goal}
-        maxLength={500}
+        maxLength={GOAL_MAX_LENGTH}
         onChange={(e) => {
           setGoal(e.target.value);
-          // Losing persistence on a failed write is an acceptable
-          // degradation; letting it throw out of an input handler and break
-          // typing in the field is not. Do not remove this catch.
-          try {
-            localStorage.setItem(GOAL_STORAGE_KEY, e.target.value);
-          } catch {
-            // Best-effort only -- see comment above.
-          }
+          saveGoal(e.target.value);
         }}
       />
       <div style={{ maxHeight: 240, overflowY: "auto" }}>
