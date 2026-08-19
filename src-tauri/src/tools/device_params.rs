@@ -227,20 +227,23 @@ pub async fn get_device_params(
     // already issues 2N+3 and catches every same-name device whose
     // parameter count differs. Identical twins with identical counts still
     // defeat it -- recorded in the spec's Known limits, not papered over.
-    let after_name = q
-        .query(
+    //
+    // The two re-reads are independent, so they are joined rather than
+    // awaited one after the other: on the failure path each waits out the
+    // full QUERY_TIMEOUT, and running them in sequence would add a second
+    // one to a call whose paging window can already reach ~32 s.
+    let (after_name, after_count) = tokio::join!(
+        q.query(
             "/live/device/get/name",
             vec![OscType::Int(track), OscType::Int(device)],
             timeout,
-        )
-        .await;
-    let after_count = q
-        .query(
+        ),
+        q.query(
             "/live/device/get/num_parameters",
             vec![OscType::Int(track), OscType::Int(device)],
             timeout,
         )
-        .await;
+    );
     let observed = match (
         after_name.as_ref().map(|r| r.get(2)),
         after_count.as_ref().map(|r| r.get(2)),
