@@ -5,6 +5,7 @@ mod osc;
 mod settings;
 mod tools;
 mod trace;
+mod window;
 
 use bulk::{decode_mixer_data, decode_track_data, MIXER_ADDRS, TRACK_DATA_ADDRS};
 use deltas::{Coalescer, Delta};
@@ -610,14 +611,10 @@ pub fn run() {
             save_settings,
             model_complete,
             trace,
-            clear_trace
+            clear_trace,
+            window::set_window_mode
         ])
         .setup(|app| {
-            // Set up regardless of whether the OSC socket binds -- a dead
-            // socket shouldn't hide the whole window.
-            let window = app.get_webview_window("main").unwrap();
-            window.set_always_on_top(true)?;
-
             let handle = app.handle().clone();
             let coalescer = Arc::new(Mutex::new(Coalescer::new()));
             // Managed state so the `snapshot` command can reach the same
