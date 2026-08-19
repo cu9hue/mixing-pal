@@ -1,4 +1,5 @@
 mod bulk;
+mod connector;
 mod deltas;
 mod model;
 mod osc;
