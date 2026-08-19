@@ -114,6 +114,33 @@ pub fn tool_schema() -> serde_json::Value {
                     "required": ["track", "clip"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_device_chains",
+                "description": "The device chain on every track, in order, named as the producer named them. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_device_params",
+                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. A device with more than 256 parameters is truncated and the result says so.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "track": { "type": "integer", "description": "Zero-based track index." },
+                        "device": { "type": "integer", "description": "Zero-based device index within that track's chain, as returned by get_device_chains." }
+                    },
+                    "required": ["track", "device"]
+                }
+            }
         }
     ])
 }
@@ -235,6 +262,106 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 }
             }
         }
+        "get_device_chains" => {
+            // Read the track count and the socket, dropping each guard
+            // before any await -- a std::sync::Mutex guard is !Send.
+            let num_tracks = match ctx.coalescer.lock() {
+                Ok(c) => c
+                    .lookup("/live/song/get/num_tracks", &[])
+                    .and_then(|r| r.args.first().and_then(|v| v.as_i64())),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            // Without a count there is nothing to iterate. Querying 0..0
+            // would return an empty map, which reads as "the set has no
+            // devices" -- an invented answer, not a missing one.
+            let Some(num_tracks) = num_tracks.filter(|n| *n >= 0) else {
+                return ToolResult::missing("not_in_mirror");
+            };
+            let query = match ctx.query.lock() {
+                Ok(q) => q.clone(),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            let Some(query) = query else {
+                return ToolResult::missing("not_connected");
+            };
+
+            let map = device_chains::get_device_chains(
+                query,
+                num_tracks as i32,
+                device_chains::QUERY_TIMEOUT,
+            )
+            .await;
+            // A whole-set read has no single track identity to bracket, so
+            // the guard here is the count: an add or delete mid-query means
+            // the indices in this map no longer name what they did.
+            let after = match ctx.coalescer.lock() {
+                Ok(c) => c
+                    .lookup("/live/song/get/num_tracks", &[])
+                    .and_then(|r| r.args.first().and_then(|v| v.as_i64())),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            if after != Some(num_tracks) {
+                return ToolResult::missing("topology_changed");
+            }
+
+            let missing_reason = (!map.missing.is_empty()).then(|| {
+                let names: Vec<String> = map.missing.iter().map(|t| t.to_string()).collect();
+                format!("no_reply_for_tracks: {}", names.join(", "))
+            });
+            ToolResult::live(
+                json!({ "tracks": map.tracks, "missing": map.missing }),
+                missing_reason,
+            )
+        }
+        "get_device_params" => {
+            let (Some(track), Some(device)) = (
+                int_arg(args, "track").filter(|t| *t >= 0),
+                int_arg(args, "device").filter(|d| *d >= 0),
+            ) else {
+                return ToolResult::missing("bad_arguments");
+            };
+            let query = match ctx.query.lock() {
+                Ok(q) => q.clone(),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            let Some(query) = query else {
+                return ToolResult::missing("not_connected");
+            };
+
+            // Same bracket as get_clip_notes: a paged read can span several
+            // seconds, and reading two different devices' parameters into
+            // one answer is the failure this catches.
+            let before = track_identity(&ctx.coalescer, track);
+            let outcome = device_params::get_device_params(
+                &query,
+                track as i32,
+                device as i32,
+                device_params::QUERY_TIMEOUT,
+            )
+            .await;
+            if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
+                return ToolResult::missing("topology_changed");
+            }
+
+            match outcome {
+                Ok(d) => ToolResult::live(
+                    json!({
+                        "device": d.device,
+                        "params": d.params,
+                        "total": d.total,
+                        "truncated": d.truncated,
+                    }),
+                    d.missing_reason,
+                ),
+                Err(QueryError::NoReply) => ToolResult::missing(
+                    "no_reply: the device index may not exist, or Live did not answer",
+                ),
+                Err(QueryError::Busy) => ToolResult::missing("busy"),
+                Err(QueryError::Transport(e)) => {
+                    ToolResult::missing(&format!("transport_error: {e}"))
+                }
+            }
+        }
         _ => ToolResult::missing("unknown_tool"),
     }
 }
@@ -260,8 +387,98 @@ mod tests {
         c
     }
 
+    fn mirror_with_tracks(n: i64) -> Coalescer {
+        let mut c = one_track_mirror();
+        c.observe_delta(Delta {
+            addr: "/live/song/get/num_tracks".to_string(),
+            args: vec![serde_json::json!(n)],
+        });
+        c
+    }
+
     #[test]
-    fn the_schema_lists_exactly_the_two_tools_the_first_cut_ships() {
+    fn the_schema_offers_both_device_tools() {
+        let schema = tool_schema();
+        let names: Vec<&str> = schema
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        assert!(names.contains(&"get_device_chains"));
+        assert!(names.contains(&"get_device_params"));
+    }
+
+    #[test]
+    fn get_device_chains_takes_no_arguments() {
+        // It reads the whole set; making the model supply a track index would
+        // defeat the one round trip that justifies the design.
+        let schema = tool_schema();
+        let tool = schema
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["function"]["name"] == "get_device_chains")
+            .unwrap()
+            .clone();
+        assert_eq!(tool["function"]["parameters"]["required"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn get_device_params_requires_both_indices() {
+        let schema = tool_schema();
+        let tool = schema
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["function"]["name"] == "get_device_params")
+            .unwrap()
+            .clone();
+        let required = tool["function"]["parameters"]["required"].as_array().unwrap();
+        assert!(required.iter().any(|r| r == "track"));
+        assert!(required.iter().any(|r| r == "device"));
+    }
+
+    #[tokio::test]
+    async fn get_device_chains_without_a_track_count_says_so() {
+        // Reports why it could not run instead of querying track 0..0 and
+        // returning an empty map, which would read as "the set has no
+        // devices".
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_device_chains", &json!({})).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("not_in_mirror"));
+    }
+
+    #[tokio::test]
+    async fn get_device_chains_reads_the_track_count_from_the_mirror() {
+        // Pins the lookup shape: num_tracks is KeyArity::None, so the mirror
+        // holds it with no key args and the count is args[0]. If this ever
+        // drifts, the tool silently degrades to not_in_mirror.
+        let ctx = disconnected_ctx(mirror_with_tracks(8));
+        let r = execute(&ctx, "get_device_chains", &json!({})).await;
+        assert_eq!(
+            r.missing_reason.as_deref(),
+            Some("not_connected"),
+            "got past the mirror read and failed on the socket, as expected"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_device_params_refuses_a_missing_device_index() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_device_params", &json!({ "track": 0 })).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"));
+    }
+
+    #[tokio::test]
+    async fn get_device_params_refuses_a_negative_index() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_device_params", &json!({ "track": 0, "device": -1 })).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"));
+    }
+
+    #[test]
+    fn the_schema_lists_exactly_the_four_tools_the_model_may_call() {
         let schema = tool_schema();
         let names: Vec<&str> = schema
             .as_array()
@@ -269,7 +486,15 @@ mod tests {
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, vec!["get_track_detail", "get_clip_notes"]);
+        assert_eq!(
+            names,
+            vec![
+                "get_track_detail",
+                "get_clip_notes",
+                "get_device_chains",
+                "get_device_params"
+            ]
+        );
         // Every entry must be a well-formed OpenAI function tool, or a
         // provider rejects the whole request with a 400 that reads like a
         // model problem.
