@@ -242,6 +242,44 @@ the app to trigger it).
       "not connected".
 - [ ] Count the uses of the accent colour in one view. At most two.
 
+## First run (added 2026-08-19)
+
+Run from a genuinely clean state — delete
+`~/Music/Ableton/User Library/Remote Scripts/AbletonCopilot` and clear
+the webview's localStorage first. A rerun on an already-set-up machine
+proves nothing about the flow this exists to test.
+
+Date: ___________  Live version: ___________  Tester: ___________
+
+- [ ] Setup opens centred and is not always-on-top. It can be dragged.
+- [ ] Install puts the connector in the User Library. Verify by listing
+      the Remote Scripts directory, not by trusting the success screen.
+- [ ] Opening Live advances the step with no button pressed.
+- [ ] **Process detection works.** In the installed connector directory, run
+      `/bin/ps -Axco command | grep -x Live` while Ableton is running. It must
+      match exactly, returning `Live` once. If the process name differs, the
+      fix is to update the exact-match string in `src-tauri/src/install.rs`'s
+      `live_is_running()` function (line 177), not to loosen the match to a
+      substring (which would false-positive on `liveactivitiesd` and
+      `PhotosReliveWidget`).
+- [ ] The step-3 screenshot matches this Live version's preferences pane.
+      If it does not, re-capture `public/control-surface.png` — this is the
+      step that decides whether a stranger completes setup.
+- [ ] Selecting the Control Surface advances to Connected on its own.
+- [ ] The connected screen names real tracks from the open set, and shows
+      the "I read your settings … I can't hear your audio" paragraph.
+- [ ] Finishing shrinks straight into the card, with no flash of the wrong
+      window size.
+- [ ] Relaunching goes straight to the card. Setup does not reappear.
+- [ ] Deleting the connector folder and relaunching reopens setup at the
+      install step.
+- [ ] Reinstalling over an existing install preserves `logs/` and its
+      contents. A running Live session writes there and an earlier
+      installer deleted it on every reinstall.
+- [ ] A non-default User Library: move it, relaunch, confirm the install
+      step reports that it could not find the library and accepts a pasted
+      path.
+
 ## The setup window (added 2026-08-19)
 
 - [ ] `public/control-surface.png` matches the Live version being shipped
