@@ -1,8 +1,6 @@
-import { useState } from "react";
 import "./Card.css";
 import { SetState } from "../live/model";
 import { Nudge } from "../rules/nudges";
-import { loadGoal, saveGoal } from "./goal";
 import { Header } from "./Header";
 import { Noticed } from "./Noticed";
 import { Conversation } from "./Conversation";
@@ -14,6 +12,8 @@ export function Card({
   lastSeen,
   connected,
   nudge,
+  goal,
+  onGoalChange,
   onDismissNudge,
   onTurnRunningChange,
   onAnswer,
@@ -24,25 +24,17 @@ export function Card({
   lastSeen: number | null;
   connected: boolean;
   nudge: Nudge | null;
+  goal: string;
+  onGoalChange: (value: string) => void;
   onDismissNudge: (id: string) => void;
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
   onCollapse: () => void;
   onInputEmptyChange: (empty: boolean) => void;
 }) {
-  const [goal, setGoal] = useState(loadGoal);
-
   return (
     <div className="card">
-      <Header
-        connected={connected}
-        goal={goal}
-        onGoalChange={(v) => {
-          setGoal(v);
-          saveGoal(v);
-        }}
-        onCollapse={onCollapse}
-      />
+      <Header connected={connected} goal={goal} onGoalChange={onGoalChange} onCollapse={onCollapse} />
       <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} />
       {nudge !== null && <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />}
       <Conversation

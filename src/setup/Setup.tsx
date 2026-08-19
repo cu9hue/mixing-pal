@@ -56,6 +56,8 @@ export function Setup({
           />
         ))}
       </div>
+      {/* "done" is deliberately absent: App only mounts Setup while
+          setupNeeded is true, so this component never sees that step. */}
       <div className="setup__main">
         {step === "install" && <InstallScreen folder={folder} onInstalled={onFactsChanged} />}
         {step === "open_live" && <OpenLiveScreen />}

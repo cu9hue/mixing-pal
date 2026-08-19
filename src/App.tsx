@@ -10,6 +10,10 @@ import { MODE_GEOMETRY, ModeEvent, WindowMode, nextMode } from "./ui/windowMode"
 import { STALE_MS } from "./ui/Connection";
 import { unnamedTracks } from "./rules/unnamedTracks";
 import { EMPTY_NUDGE_STATE, dismiss, offer } from "./rules/nudges";
+import wireVersion from "../shared/wire-version.json";
+import { Setup } from "./setup/Setup";
+import { SetupFacts, currentStep } from "./setup/step";
+import { loadGoal, saveGoal } from "./ui/goal";
 
 export default function App() {
   const [state, setState] = useState(emptySet());
@@ -69,6 +73,61 @@ export default function App() {
 
   const connected = lastSeen !== null && Date.now() - lastSeen <= STALE_MS;
 
+  const [goal, setGoal] = useState(loadGoal);
+  const [folder, setFolder] = useState("");
+  const [connectorInstalled, setConnectorInstalled] = useState<boolean | null>(null);
+  const [liveRunning, setLiveRunning] = useState(false);
+  const [connectedAcknowledged, setConnectedAcknowledged] = useState(false);
+  const [goalAnswered, setGoalAnswered] = useState(() => loadGoal().trim() !== "");
+
+  const refreshConnector = useCallback(() => {
+    invoke<{ folder: string; installed: boolean }>("connector_status")
+      .then((s) => {
+        setFolder(s.folder);
+        setConnectorInstalled(s.installed);
+      })
+      .catch((err) => console.error("failed to read connector status", err));
+  }, []);
+
+  useEffect(refreshConnector, [refreshConnector]);
+
+  // Polled only while setup is on screen. Once she is past it there is
+  // nothing to decide, and a process scan every two seconds forever is a
+  // cost with no buyer.
+  useEffect(() => {
+    if (mode !== "setup") return;
+    const poll = () => {
+      invoke<boolean>("live_is_running").then(setLiveRunning).catch(() => setLiveRunning(false));
+      refreshConnector();
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => clearInterval(id);
+  }, [mode, refreshConnector]);
+
+  const facts: SetupFacts = {
+    connectorInstalled: connectorInstalled ?? true,
+    // A version mismatch means the app updated and the part inside Live
+    // did not, and reinstalling is the fix -- the same fix as a missing
+    // connector, so it is the same step.
+    connectorCurrent: state.scriptVersion === null || state.scriptVersion === wireVersion.version,
+    liveRunning,
+    deltasArriving: connected,
+    connectedAcknowledged,
+    hasAccount: true, // the model-access plan replaces this
+    goalAnswered,
+  };
+
+  // connector_status has not answered yet on the very first render.
+  // Guessing "not installed" would flash the setup window at someone whose
+  // setup has been finished for months.
+  const setupNeeded = connectorInstalled !== null && currentStep(facts) !== "done";
+
+  useEffect(() => {
+    if (setupNeeded) setMode("setup");
+    else dispatch({ type: "setup_finished" });
+  }, [setupNeeded, dispatch]);
+
   // Rules run against every state change; `offer` is what stops a true
   // observation reappearing every two seconds.
   useEffect(() => {
@@ -106,14 +165,42 @@ export default function App() {
     );
   });
 
+  const trackNames = Object.keys(state.tracks)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((i) => state.tracks[i].name ?? "");
+
   return (
     <div ref={root}>
-      {mode === "card" ? (
+      {mode === "setup" && setupNeeded ? (
+        <Setup
+          facts={facts}
+          folder={folder}
+          trackCount={trackNames.length}
+          trackNames={trackNames}
+          goal={goal}
+          onGoalChange={(v) => {
+            setGoal(v);
+            saveGoal(v);
+          }}
+          onFactsChanged={refreshConnector}
+          onAcknowledgeConnected={() => setConnectedAcknowledged(true)}
+          onFinished={() => {
+            setGoalAnswered(true);
+            dispatch({ type: "setup_finished" });
+          }}
+        />
+      ) : mode === "card" ? (
         <Card
           state={state}
           lastSeen={lastSeen}
           connected={connected}
           nudge={nudge}
+          goal={goal}
+          onGoalChange={(v) => {
+            setGoal(v);
+            saveGoal(v);
+          }}
           onDismissNudge={(id) => setNudges((n) => dismiss(n, id))}
           onTurnRunningChange={setTurnRunning}
           onAnswer={() => {
