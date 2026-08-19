@@ -95,10 +95,12 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
 /// proves every address this codebase actually sends today passes that
 /// assertion, rather than trusting it by inspection.
 ///
-/// Also covers the two addresses `LiveQuery` sends on behalf of
-/// `get_clip_notes` -- not sent by the poll loop itself, but still a
-/// `send`/`send_to` call site this codebase uses today, so still in scope
-/// for the same tripwire (MINOR 11, 2026-08-16 whole-branch review).
+/// Also covers the addresses `LiveQuery` sends on behalf of the tools --
+/// not sent by the poll loop itself, but still `send`/`send_to` call sites
+/// this codebase uses today, so still in scope for the same tripwire
+/// (MINOR 11, 2026-08-16 whole-branch review). The list only means what it
+/// says while it stays complete, so a new tool address belongs here in the
+/// same commit that first sends it.
 #[cfg(test)]
 const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/song/get/num_tracks",
@@ -110,6 +112,12 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/master/get/output_meter_level",
     "/live/clip/get/notes",
     "/live/clip/get/length",
+    // get_device_chains and get_device_params.
+    "/live/track/get/devices/name",
+    "/live/device/get/name",
+    "/live/device/get/num_parameters",
+    "/live/device/get/parameters/name_range",
+    "/live/device/get/parameters/value_string_range",
     "/live/copilot/get/version",
 ];
 
@@ -242,12 +250,24 @@ fn handle_inbound(
     //   reload -- and unlike track_data/mixer_data it never evicts, since
     //   evict_tracks_at_or_beyond is only called with the track/mixer
     //   address lists. IMPORTANT 3, 2026-08-16 whole-branch review.
+    // - the five device addresses are the same case again, for
+    //   get_device_chains and get_device_params. The spec's Devices section
+    //   says "no mirror storage for chains" outright, and a parameter page
+    //   is keyed on (track, device, start), so one call on a 300-parameter
+    //   device would leave four-plus retained entries holding up to 512
+    //   strings for the rest of the session -- never evicted, for the same
+    //   reason clip notes never were.
     let is_resolve_only = matches!(
         msg.addr.as_str(),
         "/live/song/get/track_data"
             | "/live/track/get/mixer_data"
             | "/live/clip/get/notes"
             | "/live/clip/get/length"
+            | "/live/track/get/devices/name"
+            | "/live/device/get/name"
+            | "/live/device/get/num_parameters"
+            | "/live/device/get/parameters/name_range"
+            | "/live/device/get/parameters/value_string_range"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
@@ -1294,6 +1314,40 @@ mod tests {
             coalescer.lock().unwrap().snapshot().is_empty(),
             "a clip-notes reply must not be retained in the coalescer"
         );
+    }
+
+    #[test]
+    fn a_device_reply_never_enters_the_coalescer() {
+        // The twin of the clip-notes case above, for Plan 3's five device
+        // addresses. Each one resolves a LiveQuery caller directly; nothing
+        // in apply.ts reads any of them, and a parameter page keyed on
+        // (track, device, start) would otherwise be retained for the whole
+        // session and replayed on every reload.
+        for addr in [
+            "/live/track/get/devices/name",
+            "/live/device/get/name",
+            "/live/device/get/num_parameters",
+            "/live/device/get/parameters/name_range",
+            "/live/device/get/parameters/value_string_range",
+        ] {
+            let coalescer = Mutex::new(Coalescer::new());
+            let table = Mutex::new(RequestTable::new());
+            let counts = Mutex::new(TrackCounts::default());
+            let msg = OscMessage {
+                addr: addr.to_string(),
+                args: vec![
+                    OscType::Int(0),
+                    OscType::Int(0),
+                    OscType::Int(0),
+                    OscType::String("Frequency".to_string()),
+                ],
+            };
+            handle_inbound(&msg, &coalescer, &table, &counts);
+            assert!(
+                coalescer.lock().unwrap().snapshot().is_empty(),
+                "{addr} must not be retained in the coalescer"
+            );
+        }
     }
 
     #[test]
