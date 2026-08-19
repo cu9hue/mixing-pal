@@ -705,6 +705,45 @@ mod tests {
         assert_eq!(tracks.len() + missing.len(), 512, "the count wrapped instead of clamping");
     }
 
+    #[test]
+    fn a_track_count_past_i32_still_finishes_the_identity_bracket() {
+        // The clamp bounds the two identity brackets as well as the fan-out,
+        // and those brackets are SYNCHRONOUS loops over `0..read_tracks`.
+        // Move the clamp below them and the loops run over ~4.29e9 indices;
+        // the test above would then hang instead of failing, and a hang is
+        // a regression nobody reads as one.
+        //
+        // Asserting on it needs no bracket length exposed from production
+        // code -- run the call under a deadline instead. Three details make
+        // that report a failure rather than reproduce the hang:
+        //   - multi_thread, so the deadline's timer runs on a worker the
+        //     synchronous loop is not occupying;
+        //   - `tokio::spawn`, so the loop is on a task the deadline can
+        //     stop waiting on;
+        //   - `shutdown_background`, because dropping a runtime waits for
+        //     its tasks, and a task inside a synchronous loop never yields
+        //     -- a normal drop would hang the binary after the assertion
+        //     failed but before libtest printed it.
+        // The clamped path finishes in ~0.02 s against a 5 s deadline.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let finished = rt.block_on(async {
+            let ctx = answering_ctx(mirror_with_tracks(4_294_967_301)).await;
+            let call =
+                tokio::spawn(async move { execute(&ctx, "get_device_chains", &json!({})).await });
+            tokio::time::timeout(std::time::Duration::from_secs(5), call).await
+        });
+        rt.shutdown_background();
+
+        let r = finished
+            .expect("the identity bracket ran unclamped over the raw mirrored count")
+            .unwrap();
+        assert!(r.missing_reason.unwrap_or_default().contains("4294967301"));
+    }
+
     #[tokio::test]
     async fn get_device_params_refuses_a_missing_device_index() {
         let ctx = disconnected_ctx(one_track_mirror());
