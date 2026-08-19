@@ -269,6 +269,12 @@ pub async fn get_device_params(
         // here would assert an event nobody witnessed, to a producer who
         // knows they touched nothing. Fails closed either way; the two say
         // different things and are worth telling apart.
+        //
+        // This is NOT "probably nothing changed", though: deleting the LAST
+        // device in the chain -- the very one being read -- also lands here
+        // rather than on `topology_changed`, because the now-out-of-range
+        // index answers nothing and "no reply" is byte-identical to a lost
+        // datagram.
         None => {
             params.clear();
             missing_reason = Some("device_identity_unverified".to_string());

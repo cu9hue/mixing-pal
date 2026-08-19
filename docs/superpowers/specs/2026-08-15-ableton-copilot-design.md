@@ -592,7 +592,11 @@ wrong answer in production.**
   Live does not expose over this address family. A re-check that cannot be
   read at all — no reply, a busy address, a transport failure — reports
   `device_identity_unverified` rather than `topology_changed`: both drop the
-  parameters, but only one of them claims an event was observed.
+  parameters, but only one of them claims an event was observed. That reason
+  does not mean "probably nothing changed", though: deleting the last device
+  in the chain, the one being read, lands here too, because the
+  now-out-of-range index answers nothing and "no reply" is byte-identical to
+  a lost datagram.
 
 **No Remote Script work.** `copilot/device_range.py` shipped in wire version
 2 and is installed. The wire version does not change, and neither a
