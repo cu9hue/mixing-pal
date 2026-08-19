@@ -46,6 +46,14 @@ describe("saveGoal", () => {
     expect(setItem).toHaveBeenCalledWith(GOAL_STORAGE_KEY, "dark garage, 2am");
   });
 
+  // Pins the literal independently of the constant. Asserting against
+  // GOAL_STORAGE_KEY alone is tautological: changing the key's value in
+  // goal.ts would leave that assertion green while silently discarding
+  // the stored goal of every producer who already has one.
+  it("uses the key existing installs already have data under", () => {
+    expect(GOAL_STORAGE_KEY).toBe("copilot.goal");
+  });
+
   // Called from an input handler on every keystroke. A throw here would
   // break typing in the field, which is far worse than losing persistence.
   it("swallows a failing write rather than breaking the keystroke", () => {
