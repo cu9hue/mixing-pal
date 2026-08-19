@@ -64,7 +64,7 @@ pub struct DeviceParams {
 /// `MAX_PARAMS` pairs of them go straight into the model's prompt, so they
 /// need the same delimiter stripping, control-character flattening, and
 /// length cap every other set-derived name gets.
-fn decode_strings(reply: &[OscType], expect_start: usize) -> Option<Vec<String>> {
+fn decode_strings(reply: &[OscType], expect_start: usize, span: usize) -> Option<Vec<String>> {
     match reply.get(2)? {
         OscType::Int(i) if *i as usize == expect_start => {}
         _ => return None,
@@ -76,7 +76,13 @@ fn decode_strings(reply: &[OscType], expect_start: usize) -> Option<Vec<String>>
             _ => return None,
         }
     }
-    Some(out)
+    // Fewer than `span` is normal -- the last window may run past the real
+    // parameter count. More is not: those extra strings would be indexed
+    // `start + n` into the NEXT window's range, and the merged list would
+    // carry two parameters under one index. Visible as duplicate indices
+    // after the sort rather than silent, but a decoder here refuses what it
+    // cannot attribute instead of leaving that to a reader.
+    (out.len() <= span).then_some(out)
 }
 
 async fn fetch_window(
@@ -103,8 +109,8 @@ async fn fetch_window(
         .await?;
 
     let (Some(names), Some(values)) = (
-        decode_strings(&names, start),
-        decode_strings(&values, start),
+        decode_strings(&names, start, span),
+        decode_strings(&values, start, span),
     ) else {
         return Ok(None);
     };
@@ -181,6 +187,11 @@ pub async fn get_device_params(
 
         match fetch_window(q, track, device, start, span, timeout).await {
             Ok(Some(mut window)) => params.append(&mut window),
+            // Last writer wins across windows: a `malformed_reply` followed
+            // by a `too_large` reports only `too_large`. Left that way on
+            // purpose -- both say the same thing to the model, "this read is
+            // partial", and the exact mix of causes across windows would
+            // cost a list to carry and change no answer.
             Ok(None) => missing_reason = Some("malformed_reply".to_string()),
             // Halve and retry: the reply may simply have been too large for
             // one datagram. Windows tile as [start, start + span), so the
@@ -206,8 +217,16 @@ pub async fn get_device_params(
     // name fetched at the top pairs with the next device's parameters --
     // plausible, wrong, unfalsifiable, and reported as fresh. The
     // paging window reaches ~32s on a slow set and the producer is, by
-    // definition, working in Live while asking. Re-reading the name is one
-    // extra message on a tool that already issues 2N+2.
+    // definition, working in Live while asking.
+    //
+    // The name alone does not identify a device: stock names are not
+    // unique, and two default-named `EQ Eight`s on one track is an ordinary
+    // chain. Delete the first mid-page and the name still matches, so the
+    // check would pass on a merge of two devices' windows. Re-reading
+    // `num_parameters` alongside it costs one more message on a call that
+    // already issues 2N+3 and catches every same-name device whose
+    // parameter count differs. Identical twins with identical counts still
+    // defeat it -- recorded in the spec's Known limits, not papered over.
     let after_name = q
         .query(
             "/live/device/get/name",
@@ -215,19 +234,42 @@ pub async fn get_device_params(
             timeout,
         )
         .await;
-    let still_the_same_device = match after_name.as_ref().map(|r| r.get(2)) {
-        Ok(Some(OscType::String(s))) => fence(s) == device_name,
-        // A name that cannot be re-read is not a confirmation that the
-        // device stayed put, so it fails closed like everything else here.
-        _ => false,
+    let after_count = q
+        .query(
+            "/live/device/get/num_parameters",
+            vec![OscType::Int(track), OscType::Int(device)],
+            timeout,
+        )
+        .await;
+    let observed = match (
+        after_name.as_ref().map(|r| r.get(2)),
+        after_count.as_ref().map(|r| r.get(2)),
+    ) {
+        (Ok(Some(OscType::String(s))), Ok(Some(OscType::Int(n)))) if *n >= 0 => {
+            Some((fence(s), *n as usize))
+        }
+        _ => None,
     };
-    if !still_the_same_device {
-        // `total` and `truncated` were read in the same moment as
-        // `device_name`, so they stay consistent with it. The parameters
-        // were not, and there is no way to say which of them belong to
-        // which device.
-        params.clear();
-        missing_reason = Some("topology_changed".to_string());
+    // `total` and `truncated` were read in the same moment as `device_name`,
+    // so they stay consistent with it. The parameters were not, and once the
+    // identity is in doubt there is no way to say which device they belong
+    // to -- so both branches below drop them.
+    match observed {
+        Some((name, count)) if name == device_name && count == total => {}
+        // Observed different: something really did move under the loop.
+        Some(_) => {
+            params.clear();
+            missing_reason = Some("topology_changed".to_string());
+        }
+        // Not observed at all -- no reply, a busy address, a transport
+        // failure, a reply this decoder refused. Reporting `topology_changed`
+        // here would assert an event nobody witnessed, to a producer who
+        // knows they touched nothing. Fails closed either way; the two say
+        // different things and are worth telling apart.
+        None => {
+            params.clear();
+            missing_reason = Some("device_identity_unverified".to_string());
+        }
     }
 
     params.sort_by_key(|p| p.index);
@@ -272,6 +314,15 @@ mod tests {
         /// is what deleting the device in front of this one looks like from
         /// the client's side.
         renamed_after_first_name_query: Option<String>,
+        /// Answer the second and later parameter-count queries with this
+        /// count. What deleting one of two same-named devices looks like
+        /// when the survivor has a different parameter count.
+        recount_after_first_count_query: Option<usize>,
+        /// Answer the first name query and then go silent, which is what a
+        /// lost reply on the identity re-check looks like.
+        silent_after_first_name_query: bool,
+        /// Append this many strings past the end of every requested window.
+        extra_strings: usize,
     }
 
     fn fake(total: usize) -> FakeLive {
@@ -284,6 +335,9 @@ mod tests {
             wrong_start: None,
             hostile_strings: None,
             renamed_after_first_name_query: None,
+            recount_after_first_count_query: None,
+            silent_after_first_name_query: false,
+            extra_strings: 0,
         }
     }
 
@@ -309,6 +363,7 @@ mod tests {
         let seen = counts.clone();
         tokio::spawn(async move {
             let mut name_queries = 0usize;
+            let mut count_queries = 0usize;
             loop {
                 let req = match live.recv().await {
                     Ok(r) => r,
@@ -326,6 +381,9 @@ mod tests {
                             continue;
                         }
                         name_queries += 1;
+                        if fake.silent_after_first_name_query && name_queries > 1 {
+                            continue;
+                        }
                         let name = match &fake.renamed_after_first_name_query {
                             Some(n) if name_queries > 1 => n.clone(),
                             _ => fake.name.clone(),
@@ -343,6 +401,11 @@ mod tests {
                             .await;
                     }
                     "/live/device/get/num_parameters" => {
+                        count_queries += 1;
+                        let total = match fake.recount_after_first_count_query {
+                            Some(n) if count_queries > 1 => n,
+                            _ => fake.total,
+                        };
                         let _ = live
                             .send_to(
                                 app_port,
@@ -350,7 +413,7 @@ mod tests {
                                 vec![
                                     OscType::Int(track),
                                     OscType::Int(device),
-                                    OscType::Int(fake.total as i32),
+                                    OscType::Int(total as i32),
                                 ],
                             )
                             .await;
@@ -375,7 +438,7 @@ mod tests {
                             OscType::Int(device),
                             OscType::Int(echoed_start),
                         ];
-                        for n in 0..count {
+                        for n in 0..count + fake.extra_strings {
                             let idx = start as usize + n;
                             reply.push(OscType::String(match &fake.hostile_strings {
                                 Some(h) => h.clone(),
@@ -544,6 +607,53 @@ mod tests {
             d.params.is_empty(),
             "parameters that may belong to another device must not be returned"
         );
+    }
+
+    #[tokio::test]
+    async fn a_same_named_device_with_a_different_parameter_count_is_refused() {
+        // Stock names are not unique: two default-named `EQ Eight`s on one
+        // track is an ordinary chain. Delete the first mid-page and the
+        // survivor answers the re-check with the same name, so the name
+        // alone re-identifies nothing. The parameter count separates them.
+        let mut f = fake(200);
+        f.recount_after_first_count_query = Some(199);
+        let (q, _) = spawn(f).await;
+
+        let d = get_device_params(&q, 0, 0, FAST).await.unwrap();
+        assert_eq!(d.missing_reason.as_deref(), Some("topology_changed"));
+        assert!(
+            d.params.is_empty(),
+            "parameters that may belong to another device must not be returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_identity_recheck_is_unverified_not_a_topology_change() {
+        // Nothing moved -- the re-check just did not come back. Saying
+        // `topology_changed` would assert an event nobody witnessed to a
+        // producer who knows they touched nothing. Both fail closed; the
+        // reason is the whole difference.
+        let mut f = fake(3);
+        f.silent_after_first_name_query = true;
+        let (q, _) = spawn(f).await;
+
+        let d = get_device_params(&q, 0, 0, FAST).await.unwrap();
+        assert_eq!(d.missing_reason.as_deref(), Some("device_identity_unverified"));
+        assert!(d.params.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_window_answering_with_more_strings_than_it_asked_for_fails_closed() {
+        // The surplus would be indexed `start + n` into the NEXT window's
+        // range, and the merged list would carry two parameters under one
+        // index.
+        let mut f = fake(5);
+        f.extra_strings = 2;
+        let (q, _) = spawn(f).await;
+
+        let d = get_device_params(&q, 0, 0, FAST).await.unwrap();
+        assert_eq!(d.missing_reason.as_deref(), Some("malformed_reply"));
+        assert!(d.params.is_empty());
     }
 
     #[tokio::test]
