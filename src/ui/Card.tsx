@@ -19,6 +19,7 @@ export function Card({
   onAnswer,
   onCollapse,
   onInputEmptyChange,
+  onShowSetup,
 }: {
   state: SetState;
   lastSeen: number | null;
@@ -31,12 +32,15 @@ export function Card({
   onAnswer: () => void;
   onCollapse: () => void;
   onInputEmptyChange: (empty: boolean) => void;
+  onShowSetup: () => void;
 }) {
   return (
     <div className="card">
       <Header connected={connected} goal={goal} onGoalChange={onGoalChange} onCollapse={onCollapse} />
-      <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} />
-      {nudge !== null && <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />}
+      <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />
+      {nudge !== null && connected && (
+        <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />
+      )}
       <Conversation
         state={state}
         goal={goal}

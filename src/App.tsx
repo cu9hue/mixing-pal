@@ -209,6 +209,7 @@ export default function App() {
           }}
           onCollapse={() => dispatch({ type: "chevron_closed" })}
           onInputEmptyChange={setInputEmpty}
+          onShowSetup={() => setMode("setup")}
         />
       ) : (
         <Pill

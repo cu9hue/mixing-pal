@@ -46,3 +46,14 @@
   color: var(--text-faint);
   margin-top: 7px;
 }
+
+.banner__action {
+  display: block;
+  background: none;
+  border: none;
+  padding: 8px 0 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+}
