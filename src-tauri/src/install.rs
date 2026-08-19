@@ -192,5 +192,13 @@ mod tests {
         let root = scratch();
         let result = sync_dir(&root.join("nope"), &root.join("dest"), EXCLUDE);
         assert!(result.is_err());
+        // Not just "it errored" -- it must not have created the destination
+        // on the way out. connector_status() decides "installed" from
+        // is_dir() on this exact path, so a stray empty directory left by a
+        // failed install reads as a successful one.
+        assert!(
+            !root.join("dest").exists(),
+            "a failed install must not leave a directory connector_status() would call installed"
+        );
     }
 }
