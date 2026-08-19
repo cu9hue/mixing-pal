@@ -1,0 +1,48 @@
+.banner {
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.banner__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 7px;
+}
+
+.banner__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  flex: none;
+}
+
+.banner--error .banner__dot {
+  background: var(--error);
+}
+
+.banner--error .banner__label {
+  color: #c78a80;
+}
+
+.banner--warn .banner__dot {
+  background: var(--accent);
+}
+
+.banner--warn .banner__label {
+  color: #d3b078;
+}
+
+/* The port number, the two version numbers -- available, never leading.
+   Nobody reads a port number and works out what to do with it. */
+.banner__detail {
+  font: 11px ui-monospace, monospace;
+  color: var(--text-faint);
+  margin-top: 7px;
+}
