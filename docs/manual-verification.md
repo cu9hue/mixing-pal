@@ -241,3 +241,17 @@ the app to trigger it).
 - [ ] Quit Live. The banner appears, and the collapsed pill grows to read
       "not connected".
 - [ ] Count the uses of the accent colour in one view. At most two.
+
+## The setup window (added 2026-08-19)
+
+- [ ] `public/control-surface.png` matches the Live version being shipped
+      against. Re-capture it whenever Live's preferences layout changes —
+      a stale screenshot of this one pane is the single most likely cause
+      of a failed first run.
+
+      The file committed with this task is a placeholder: a flat,
+      striped colour block, not a screenshot. It must be replaced with a
+      real screenshot of Live's Preferences → Link, Tempo & MIDI pane
+      before release, or the setup flow ships showing a fake image on the
+      one screen where a producer is meant to compare what is in front of
+      her to what is on screen.
