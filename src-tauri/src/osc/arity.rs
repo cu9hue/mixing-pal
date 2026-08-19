@@ -55,6 +55,9 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/track/get/output_meter_level"
         | "/live/track/get/clips/name"
         | "/live/track/get/arrangement_clips/name"
+        // Reply is (track_index, *device_names) -- the track index alone is
+        // the key, so every track's chain can be in flight at once.
+        | "/live/track/get/devices/name"
         | "/live/return/get/volume"
         | "/live/return/get/panning"
         | "/live/return/get/name" => KeyArity::Args(1),
@@ -110,6 +113,7 @@ mod tests {
             ("/live/track/get/output_meter_level", KeyArity::Args(1)),
             ("/live/track/get/clips/name", KeyArity::Args(1)),
             ("/live/track/get/arrangement_clips/name", KeyArity::Args(1)),
+            ("/live/track/get/devices/name", KeyArity::Args(1)),
             ("/live/track/get/send", KeyArity::Args(2)),
             ("/live/return/get/volume", KeyArity::Args(1)),
             ("/live/return/get/panning", KeyArity::Args(1)),
