@@ -133,14 +133,14 @@ pub fn param_string_windows(num_params: usize) -> Vec<(usize, usize)> {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cd src-tauri && cargo test --lib budget 2>&1 | tee /tmp/t1.log; grep -E "^test result" /tmp/t1.log`
+Run: `set -o pipefail; cd src-tauri && cargo test --lib budget 2>&1 | tee /tmp/t1.log && grep -E "^test result: ok\." /tmp/t1.log`
 
 Expected: all pass.
 
 - [ ] **Step 5: Run the whole suite and commit**
 
 ```bash
-cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log; grep -E "^test result" /tmp/all.log
+set -o pipefail; cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log && grep -E "^test result: ok\." /tmp/all.log
 git add src-tauri/src/osc/budget.rs
 git commit -m "Add string-aware parameter windows to the datagram budget
 
@@ -211,9 +211,16 @@ And add the matching line to the `cases` table in `classifies_every_endpoint_the
 
 - [ ] **Step 2: Write the failing tests**
 
-Create `src-tauri/src/tools/device_chains.rs` containing ONLY the test module for now, so the tests fail on missing items rather than on a missing file:
+Create `src-tauri/src/tools/device_chains.rs` with the module imports and the test module — no implementation yet. Writing the imports now is what keeps the expected failure precise: the compiler names the three missing items instead of also complaining about unresolved `Duration`, `LiveQuery`, and `OscType`. Unused-import warnings at this step are expected and disappear in Step 4.
 
 ```rust
+use crate::osc::query::LiveQuery;
+use crate::tools::fence::fence;
+use rosc::OscType;
+use serde::Serialize;
+use std::sync::Arc;
+use std::time::Duration;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,16 +423,9 @@ Expected: compile errors for `decode_chain`, `get_device_chains`, `ChainMap` not
 
 - [ ] **Step 4: Write the implementation**
 
-Prepend to `src-tauri/src/tools/device_chains.rs`, above the test module:
+Insert into `src-tauri/src/tools/device_chains.rs`, between the imports from Step 2 and the test module:
 
 ```rust
-use crate::osc::query::LiveQuery;
-use crate::tools::fence::fence;
-use rosc::OscType;
-use serde::Serialize;
-use std::sync::Arc;
-use std::time::Duration;
-
 /// Deliberately equal to `clip_notes::QUERY_TIMEOUT` and for the same
 /// reason: the poll loop calls `RequestTable::expire` on that window every
 /// tick and expiry drops the waiter, so a longer timeout here could never
@@ -524,14 +524,14 @@ pub async fn get_device_chains(
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `cd src-tauri && cargo test --lib device_chains 2>&1 | tee /tmp/t2.log; grep -E "^test result" /tmp/t2.log`
+Run: `set -o pipefail; cd src-tauri && cargo test --lib device_chains 2>&1 | tee /tmp/t2.log && grep -E "^test result: ok\." /tmp/t2.log`
 
 Expected: all pass. Then `cargo test --lib arity` to confirm the arity table test still passes.
 
 - [ ] **Step 6: Run the whole suite and commit**
 
 ```bash
-cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log; grep -E "^test result" /tmp/all.log
+set -o pipefail; cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log && grep -E "^test result: ok\." /tmp/all.log
 git add src-tauri/src/tools/device_chains.rs src-tauri/src/tools/mod.rs src-tauri/src/osc/arity.rs
 git commit -m "Add the device chain query
 
@@ -578,9 +578,17 @@ pub mod track_detail;
 
 - [ ] **Step 2: Write the failing tests**
 
-Create `src-tauri/src/tools/device_params.rs` containing only the test module:
+Create `src-tauri/src/tools/device_params.rs` with the module imports and the test module — no implementation yet, for the same reason as Task 2. Unused-import warnings at this step are expected.
 
 ```rust
+use crate::osc::budget::param_string_windows;
+use crate::osc::query::{LiveQuery, QueryError};
+use crate::tools::fence::fence;
+use rosc::OscType;
+use serde::Serialize;
+use std::collections::VecDeque;
+use std::time::Duration;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -845,17 +853,9 @@ Expected: compile errors for `get_device_params`, `Param`, `MAX_PARAMS`. **Not**
 
 - [ ] **Step 4: Write the implementation**
 
-Prepend to `src-tauri/src/tools/device_params.rs`:
+Insert into `src-tauri/src/tools/device_params.rs`, between the imports from Step 2 and the test module:
 
 ```rust
-use crate::osc::budget::param_string_windows;
-use crate::osc::query::{LiveQuery, QueryError};
-use crate::tools::fence::fence;
-use rosc::OscType;
-use serde::Serialize;
-use std::collections::VecDeque;
-use std::time::Duration;
-
 /// Deliberately equal to `clip_notes::QUERY_TIMEOUT`; see that constant.
 pub const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -1044,14 +1044,14 @@ pub async fn get_device_params(
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `cd src-tauri && cargo test --lib device_params 2>&1 | tee /tmp/t3.log; grep -E "^test result" /tmp/t3.log`
+Run: `set -o pipefail; cd src-tauri && cargo test --lib device_params 2>&1 | tee /tmp/t3.log && grep -E "^test result: ok\." /tmp/t3.log`
 
 Expected: all pass.
 
 - [ ] **Step 6: Run the whole suite and commit**
 
 ```bash
-cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log; grep -E "^test result" /tmp/all.log
+set -o pipefail; cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log && grep -E "^test result: ok\." /tmp/all.log
 git add src-tauri/src/tools/device_params.rs src-tauri/src/tools/mod.rs
 git commit -m "Add the paged device-parameter query
 
@@ -1078,7 +1078,41 @@ pair every name past the gap with the wrong value."
 - Consumes: `device_chains::{get_device_chains, QUERY_TIMEOUT}`, `device_params::{get_device_params, QUERY_TIMEOUT, MAX_PARAMS}` from Tasks 2 and 3; the existing `ToolResult`, `ToolContext`, `int_arg`, `track_identity`, `topology_moved`.
 - Produces: two entries in `tool_schema()` and two arms in `execute()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Update the existing schema tripwire**
+
+`src-tauri/src/tools/mod.rs` already has a test named
+`the_schema_lists_exactly_the_two_tools_the_first_cut_ships`, which asserts
+the tool list is exactly `["get_track_detail", "get_clip_notes"]`. That
+assertion is a deliberate tripwire on the first cut's scope, and this task
+is the change it was watching for. It will fail once the schema entries land,
+so update it *now*, before adding anything — otherwise Step 5 reports a
+failure that looks like a mistake in the new code.
+
+Replace the name and the one assertion, keeping the well-formedness loop
+below it exactly as it is:
+
+```rust
+    #[test]
+    fn the_schema_lists_exactly_the_four_tools_the_model_may_call() {
+        let schema = tool_schema();
+        let names: Vec<&str> = schema
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "get_track_detail",
+                "get_clip_notes",
+                "get_device_chains",
+                "get_device_params"
+            ]
+        );
+```
+
+- [ ] **Step 2: Write the failing tests**
 
 Add to the existing `mod tests` in `src-tauri/src/tools/mod.rs`:
 
@@ -1173,13 +1207,13 @@ async fn get_device_params_refuses_a_negative_index() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `cd src-tauri && cargo test --lib tools:: 2>&1 | tee /tmp/t4.log; grep -E "^(error|test result|---- )" /tmp/t4.log | head -20`
 
 Expected: the schema tests fail on missing tool names; the `execute` tests fail with `unknown_tool`.
 
-- [ ] **Step 3: Add the schema entries**
+- [ ] **Step 4: Add the schema entries**
 
 In `tool_schema()` in `src-tauri/src/tools/mod.rs`, add both objects to the `json!([...])` array after the `get_clip_notes` entry. The descriptions are load-bearing: they are the only place the model learns that devices exist at all, because nothing about devices is in the context block.
 
@@ -1213,7 +1247,7 @@ In `tool_schema()` in `src-tauri/src/tools/mod.rs`, add both objects to the `jso
         }
 ```
 
-- [ ] **Step 4: Add the two `execute` arms**
+- [ ] **Step 5: Add the two `execute` arms**
 
 In `execute()`, add both arms before the `_ => ToolResult::missing("unknown_tool")` fallback:
 
@@ -1264,7 +1298,10 @@ In `execute()`, add both arms before the `_ => ToolResult::missing("unknown_tool
                 let names: Vec<String> = map.missing.iter().map(|t| t.to_string()).collect();
                 format!("no_reply_for_tracks: {}", names.join(", "))
             });
-            ToolResult::live(json!({ "tracks": map.tracks }), missing_reason)
+            ToolResult::live(
+                json!({ "tracks": map.tracks, "missing": map.missing }),
+                missing_reason,
+            )
         }
         "get_device_params" => {
             let (Some(track), Some(device)) = (
@@ -1317,17 +1354,17 @@ In `execute()`, add both arms before the `_ => ToolResult::missing("unknown_tool
         }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `cd src-tauri && cargo test --lib tools:: 2>&1 | tee /tmp/t4.log; grep -E "^test result" /tmp/t4.log`
+Run: `set -o pipefail; cd src-tauri && cargo test --lib tools:: 2>&1 | tee /tmp/t4.log && grep -E "^test result: ok\." /tmp/t4.log`
 
 Expected: all pass. If `get_device_chains_reads_the_track_count_from_the_mirror` still reports `not_in_mirror`, the `lookup` key shape is wrong — check how `apply` stores a `KeyArity::None` address before changing the test.
 
-- [ ] **Step 6: Run the whole suite and commit**
+- [ ] **Step 7: Run the whole suite and commit**
 
 ```bash
-cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log; grep -E "^test result" /tmp/all.log
-cd .. && npm test 2>&1 | tee /tmp/ts.log; grep -E "Tests " /tmp/ts.log
+set -o pipefail; cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log && grep -E "^test result: ok\." /tmp/all.log
+set -o pipefail; cd .. && npm test 2>&1 | tee /tmp/ts.log && grep -E "Tests " /tmp/ts.log
 git add src-tauri/src/tools/mod.rs
 git commit -m "Expose get_device_chains and get_device_params to the model
 
@@ -1405,7 +1442,7 @@ devices that matter. A track name is not evidence about what is on it.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `cd src-tauri && cargo test --lib model 2>&1 | tee /tmp/t5.log; grep -E "^test result" /tmp/t5.log`
+Run: `set -o pipefail; cd src-tauri && cargo test --lib model 2>&1 | tee /tmp/t5.log && grep -E "^test result: ok\." /tmp/t5.log`
 
 Expected: PASS.
 
@@ -1443,9 +1480,9 @@ Append to `docs/manual-verification.md`:
 - [ ] **Step 6: Run everything and commit**
 
 ```bash
-cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log; grep -E "^test result" /tmp/all.log
-cd .. && npm test 2>&1 | tee /tmp/ts.log; grep -E "Tests " /tmp/ts.log
-npm run build 2>&1 | tail -5
+set -o pipefail; cd src-tauri && cargo test --lib 2>&1 | tee /tmp/all.log && grep -E "^test result: ok\." /tmp/all.log
+set -o pipefail; cd .. && npm test 2>&1 | tee /tmp/ts.log && grep -E "Tests " /tmp/ts.log
+set -o pipefail; npm run build 2>&1 | tee /tmp/build.log && tail -5 /tmp/build.log
 git add src-tauri/src/model.rs docs/manual-verification.md
 git commit -m "Point the system prompt at the device tools
 
@@ -1465,3 +1502,20 @@ only place the model learns to go and fetch them."
 **Type consistency.** `param_string_windows` returns `(start, span)` in Task 1 and is consumed as `(start, span)` in Task 3. `get_device_chains` takes `Arc<LiveQuery>` (it spawns tasks that must own it) while `get_device_params` takes `&LiveQuery` (it awaits inline); Task 4 calls each accordingly, passing `query` by value to the first and by reference to the second. `ChainMap.missing` is `Vec<i32>` and Task 4 formats it to a string. `MAX_PARAMS` is defined in Task 3 and asserted in Task 3's own truncation test.
 
 **Known gap, deliberately left.** `get_device_chains` guards on the track count, so a pure **reorder** — which leaves `num_tracks` unchanged — is not caught. The exposure is one Live tick, roughly 100 ms, because every request goes out at once; and each entry carries its own track index, so a reorder mis-labels rather than merges. Closing it would mean sampling every track's name before and after, doubling the traffic of the one call whose cheapness is its entire justification. Not worth it. `get_device_params`, which is a paged read over seconds, does use the full `track_identity` bracket.
+
+**External review (codex, 2026-08-19).** Four findings, all accepted and fixed
+in this document: false-green test commands (every verification command now
+sets `pipefail` and matches `test result: ok.` exactly, so a failing run cannot
+exit 0); the existing `the_schema_lists_exactly_the_two_tools_the_first_cut_ships`
+tripwire, which Task 4 trips and now updates as its first step; imports moved
+into the failing-test steps so the expected compile error names the missing
+items; and `get_device_chains`'s value now really carrying the `missing` field
+its tool description promises.
+
+Independently verified as correct by that review, so do not re-litigate them:
+`/live/track/get/devices/name` is `Args(1)` and the ranged addresses are
+`Args(3)`, both read off the Python; the halved-retry-joins-a-dead-entry hazard
+really is closed by `LiveQuery::query`'s own `cancel`; `(9216 - 256) / 64 = 140`
+and `even_split` pages at exactly that boundary; `lookup("/live/song/get/num_tracks", &[])`
+does find what `observe_delta` stores; and the Task 2 concurrency claim, with
+the hold-until-all fake as a valid test of it.
