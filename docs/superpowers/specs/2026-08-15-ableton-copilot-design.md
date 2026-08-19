@@ -463,7 +463,10 @@ call the model is expected to make routinely, to recover a type it can infer.
 
 Device names are producer-controlled text, so the chain map fences every one
 of them through `tools::fence::fence`, exactly as track and clip names are
-fenced.
+fenced. So are parameter names and formatted values: rack macros are renamed
+by hand, and third-party parameter names and `str_for_value` output come from
+a plugin that arrived inside a downloaded preset or template pack. Both are
+fenced in `decode_strings`, on the way out of the wire.
 
 **Formatted values only, not raw floats.** `str_for_value` yields `80.0 Hz`
 and `-12.0 dB`; the underlying `0.42` is a normalised control position that
@@ -495,6 +498,14 @@ reach the wire — the same defect that required `RequestTable::cancel`, in a
 narrower form. The retry path calls `cancel` first, and a test asserts the
 shrunken retry is actually *sent*.
 
+That same key is also what rejects a mis-attributed reply, and it does so in
+`RequestTable::resolve`, not in the decoder: a reply echoing a `start` nobody
+asked for matches no pending entry, is dropped there, and the window times
+out. `decode_strings` checks the echoed `start` as well, but only as cheap
+defence in depth — a reply that reaches it has already matched on that field.
+Clip notes' range filter is the mechanism this replaces, and it sits one layer
+lower.
+
 **Failure is partial, not total.** If three tracks fail to answer,
 `get_device_chains` returns the other thirty-seven and names the three in
 `missing_reason`. Absence of devices is never reported as absence of data:
@@ -510,6 +521,20 @@ to a lost reply. There is no client-side fix, so the tool says so:
 `"no reply — the device index may not exist, or Live did not answer"`. The
 model gets its indices from `get_device_chains()`, so this is a model error
 rather than a normal path.
+
+**Known limits, recorded so the next plan does not rediscover them from a
+wrong answer in production.**
+
+- **Return and master devices are not covered.** `get_device_chains` iterates
+  `song.tracks`, so it sees regular tracks only; returns and master live
+  behind `/live/return/get/*`, a separate address family. A model asked
+  "anything sticking out in my mix?" would otherwise conclude there is no
+  reverb when the reverb sits on a return, so the tool description says
+  outright that returns and master are not covered.
+- **Device on/off state is not exposed.** `is_active` appears nowhere in this
+  design, so a bypassed EQ is byte-identical to an active one and the model
+  has no way to ask. Every statement it makes about a chain silently assumes
+  every device in it is on.
 
 **No Remote Script work.** `copilot/device_range.py` shipped in wire version
 2 and is installed. The wire version does not change, and neither a
