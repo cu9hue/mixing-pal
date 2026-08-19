@@ -119,7 +119,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_chains",
-                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
+                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device and the devices inside it are not listed. Whether a device is switched on or bypassed is not reported. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -131,7 +131,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_params",
-                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. A device with more than 256 parameters is truncated and the result says so.",
+                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. Whether the device is switched on or bypassed is not reported. On a Rack this returns the Rack's own macros, not the devices inside it. A device with more than 256 parameters is truncated and the result says so.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -205,6 +205,24 @@ fn topology_moved(before: &Option<serde_json::Value>, after: &Option<serde_json:
     }
 }
 
+/// Bounds the whole-set device-chain fan-out.
+///
+/// `get_device_chains` is the only concurrency in this codebase sized by a
+/// mirrored value: it spawns one task per track and samples one mirrored
+/// name per track at each end of the fetch, all off a count the mirror
+/// handed over. A corrupt or absurd count must not become that many tasks
+/// or that many samples, so the count is clamped to this ONCE, on the
+/// `i64`, before the fan-out, the identity brackets, or the `as i32`
+/// narrowing consume it. Clamping later leaves each unclamped consumer
+/// holding the raw count, and `as i32` alone WRAPS: `2^32 + 5` narrows to
+/// 5.
+///
+/// A real set is nowhere near this, and it is not unreachable either: only
+/// Live Intro (16 tracks) and Lite (8) cap the count -- Standard and Suite
+/// do not. A set past this is legal, so the result reports the truncation
+/// instead of presenting the first `MAX_FANOUT_TRACKS` tracks as the set.
+const MAX_FANOUT_TRACKS: i64 = 512;
+
 /// Whether the device-chain read's bracket caught a topology change.
 ///
 /// A count comparison alone catches an add or a delete but misses a
@@ -220,6 +238,26 @@ fn topology_moved(before: &Option<serde_json::Value>, after: &Option<serde_json:
 /// traffic: `track_identity` and `track_count` both read the local mirror,
 /// which is already kept warm by the periodic poll, so this costs nothing
 /// on the wire.
+///
+/// NARROWED, NOT CLOSED, and bounded by mirror staleness -- do not read
+/// this as a complete reorder guard. Every value it compares, names and
+/// count alike, comes from the SAME mirror, which the poll refreshes about
+/// every two seconds (`PollKind::TrackState`). So the guard fires only when
+/// a poll lands between the two samples. A whole-set fetch finishes in
+/// about one Live tick (~100 ms), so on a healthy set most calls sample
+/// the same poll twice and see nothing; and a reorder in the up-to-2 s
+/// window BEFORE the call is invisible to it entirely -- both samples read
+/// identically stale names while the fetch reads Live's new ordering, and
+/// the returned indices then pair against the stale index-to-name lines in
+/// the context block.
+///
+/// It is kept because its coverage grows with exactly the calls that need
+/// it: the residual is (fetch duration / poll interval), so a slow set --
+/// timeouts, retries, a fetch stretching toward the 2 s timeout -- is
+/// where a track move is both most likely and most likely to be caught.
+/// It costs nothing on the wire, so there is no case for dropping it.
+/// Closing it properly needs a change Live tells us about, not one we
+/// sample: see the spec's "A generation counter".
 fn chains_moved(
     before_count: i64,
     after_count: Option<i64>,
@@ -305,6 +343,9 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             let Some(num_tracks) = track_count(&ctx.coalescer).filter(|n| *n >= 0) else {
                 return ToolResult::missing("not_in_mirror");
             };
+            // Everything below is sized by `read_tracks`, never by
+            // `num_tracks`: see MAX_FANOUT_TRACKS.
+            let read_tracks = num_tracks.min(MAX_FANOUT_TRACKS);
             let query = match ctx.query.lock() {
                 Ok(q) => q.clone(),
                 Err(_) => return ToolResult::missing("mirror_unavailable"),
@@ -317,30 +358,45 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // not just the count -- see `chains_moved` for why the count
             // alone is not enough.
             let before: Vec<Option<serde_json::Value>> =
-                (0..num_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
 
             let map = device_chains::get_device_chains(
                 query,
                 // One spawned task per track -- the widest fan-out in this
                 // codebase, and the only one sized by a mirrored value.
-                // Clamped so a corrupt or absurd count cannot turn into that
-                // many concurrent tasks; a real set is nowhere near this.
-                (num_tracks as i32).min(512),
+                // Already clamped to MAX_FANOUT_TRACKS, which is what makes
+                // this narrowing safe.
+                read_tracks as i32,
                 device_chains::QUERY_TIMEOUT,
             )
             .await;
 
             let after_count = track_count(&ctx.coalescer);
             let after: Vec<Option<serde_json::Value>> =
-                (0..num_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            // The counts compared here are the REAL ones, clamped or not: a
+            // set that grew from 600 to 700 tracks moved, and comparing two
+            // clamped counts would call that stable.
             if chains_moved(num_tracks, after_count, &before, &after) {
                 return ToolResult::missing("topology_changed");
             }
 
-            let missing_reason = (!map.missing.is_empty()).then(|| {
+            // Both conditions can hold at once, so they are joined rather
+            // than one overwriting the other. The truncated tail is named as
+            // a count, not pushed into `map.missing` as thousands of
+            // indices: `missing` means "asked, no usable answer", and these
+            // were never asked.
+            let mut reasons: Vec<String> = Vec::new();
+            if num_tracks > read_tracks {
+                reasons.push(format!(
+                    "truncated_to_first_{read_tracks}_tracks: the set has {num_tracks}"
+                ));
+            }
+            if !map.missing.is_empty() {
                 let names: Vec<String> = map.missing.iter().map(|t| t.to_string()).collect();
-                format!("no_reply_for_tracks: {}", names.join(", "))
-            });
+                reasons.push(format!("no_reply_for_tracks: {}", names.join(", ")));
+            }
+            let missing_reason = (!reasons.is_empty()).then(|| reasons.join("; "));
             ToolResult::live(
                 json!({ "tracks": map.tracks, "missing": map.missing }),
                 missing_reason,
@@ -420,6 +476,49 @@ mod tests {
         c
     }
 
+    /// A `ToolContext` whose Live answers every device-chain query with an
+    /// empty chain. Deliberately minimal -- `device_chains`'s own tests own
+    /// the wire behaviour of the fan-out; this one only needs the call to
+    /// reach its end so the assembled `missing_reason` can be read.
+    async fn answering_ctx(c: Coalescer) -> ToolContext {
+        use crate::osc::requests::RequestTable;
+        use crate::osc::socket::OscSocket;
+
+        let live = OscSocket::bind_to(0, 0).await.unwrap();
+        let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
+        let app_port = app.local_port();
+        let table = Arc::new(Mutex::new(RequestTable::new()));
+
+        let recv_socket = app.clone();
+        let recv_table = table.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Ok(msg) = recv_socket.recv().await {
+                    if let Ok(mut t) = recv_table.lock() {
+                        t.resolve(&msg);
+                    }
+                }
+            }
+        });
+        tokio::spawn(async move {
+            loop {
+                let Ok(req) = live.recv().await else { continue };
+                let Some(&rosc::OscType::Int(track)) = req.args.first() else {
+                    continue;
+                };
+                // Echoing just the track index is a track with no devices.
+                let _ = live
+                    .send_to(app_port, &req.addr, vec![rosc::OscType::Int(track)])
+                    .await;
+            }
+        });
+
+        ToolContext {
+            coalescer: Arc::new(Mutex::new(c)),
+            query: Arc::new(Mutex::new(Some(Arc::new(LiveQuery::new(app, table))))),
+        }
+    }
+
     fn mirror_with_tracks(n: i64) -> Coalescer {
         let mut c = one_track_mirror();
         c.observe_delta(Delta {
@@ -457,24 +556,54 @@ mod tests {
         assert_eq!(tool["function"]["parameters"]["required"].as_array().unwrap().len(), 0);
     }
 
+    fn description_of(name: &str) -> String {
+        tool_schema()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["function"]["name"] == name)
+            .unwrap()["function"]["description"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
     #[test]
     fn the_chain_map_does_not_claim_to_cover_returns_or_master() {
         // It iterates song.tracks; returns and master need
         // /live/return/get/*, a separate address family. A model told it saw
         // the whole mix will report no reverb when the reverb is on a
         // return.
-        let schema = tool_schema();
-        let description = schema
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["function"]["name"] == "get_device_chains")
-            .unwrap()["function"]["description"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let description = description_of("get_device_chains");
         assert!(description.contains("every regular track"));
         assert!(description.contains("Return and master tracks are not covered"));
+    }
+
+    #[test]
+    fn neither_device_tool_lets_the_model_assume_a_listed_device_is_switched_on() {
+        // `is_active` is exposed nowhere, and the description is the only
+        // channel the model reads -- a limit recorded in the spec alone does
+        // not reach it. Without this it describes a bypassed EQ's 80 Hz low
+        // cut as if it were shaping the bass.
+        for tool in ["get_device_chains", "get_device_params"] {
+            assert!(
+                description_of(tool).contains("switched on or bypassed is not reported"),
+                "{tool} must say bypass state is unavailable"
+            );
+        }
+    }
+
+    #[test]
+    fn neither_device_tool_claims_to_see_inside_a_rack() {
+        // `track.devices` is top-level only, so an Instrument, Audio Effect
+        // or Drum Rack is one entry with everything inside it invisible.
+        // Racks are ubiquitous, and a model seeing only «Drum Rack» will
+        // tell the producer there is no compression on their drums while the
+        // compressor sits inside it.
+        assert!(description_of("get_device_chains")
+            .contains("A Rack is listed as one device and the devices inside it are not listed"));
+        assert!(description_of("get_device_params")
+            .contains("On a Rack this returns the Rack's own macros, not the devices inside it"));
     }
 
     #[test]
@@ -514,6 +643,46 @@ mod tests {
             Some("not_connected"),
             "got past the mirror read and failed on the socket, as expected"
         );
+    }
+
+    #[tokio::test]
+    async fn a_track_count_past_the_fan_out_clamp_is_reported_as_truncated() {
+        // Live Standard and Suite put no ceiling on the track count, so a
+        // set past the clamp is unusual but legal. Returning the first 512
+        // tracks with `missing` empty and `missing_reason: null` would tell
+        // the model it saw "every regular track", exactly what the tool
+        // description promises -- when it saw 512 of 600.
+        let ctx = answering_ctx(mirror_with_tracks(600)).await;
+        let r = execute(&ctx, "get_device_chains", &json!({})).await;
+
+        let reason = r.missing_reason.clone().unwrap_or_default();
+        assert!(reason.starts_with("truncated_to_first_512_tracks"), "{reason}");
+        assert!(reason.contains("600"), "the real count has to be named: {reason}");
+        assert!(!r.fresh, "a truncated map is not a complete read of the set");
+
+        let tracks = r.value["tracks"].as_array().unwrap();
+        let missing = r.value["missing"].as_array().unwrap();
+        assert_eq!(
+            tracks.len() + missing.len(),
+            512,
+            "every queried track is accounted for, and none past the clamp was queried"
+        );
+        assert!(tracks.iter().all(|t| t["track"].as_i64().unwrap() < 512));
+    }
+
+    #[tokio::test]
+    async fn a_track_count_past_i32_does_not_wrap_into_a_small_fan_out() {
+        // 2^32 + 5 narrows to 5 under `as i32`. Clamping on the i64 first is
+        // what stops a corrupt mirrored count from turning a whole-set read
+        // into a five-track one that reports itself complete.
+        let ctx = answering_ctx(mirror_with_tracks(4_294_967_301)).await;
+        let r = execute(&ctx, "get_device_chains", &json!({})).await;
+
+        let reason = r.missing_reason.clone().unwrap_or_default();
+        assert!(reason.contains("4294967301"), "{reason}");
+        let tracks = r.value["tracks"].as_array().unwrap();
+        let missing = r.value["missing"].as_array().unwrap();
+        assert_eq!(tracks.len() + missing.len(), 512, "the count wrapped instead of clamping");
     }
 
     #[tokio::test]
