@@ -62,7 +62,9 @@ export function buildContext(state: SetState, goal: string): string {
   lines.push(
     "This is everything cached locally. For pan, exact fader values, or a " +
       "track's full mixer state use get_track_detail; for the notes in a clip " +
-      "use get_clip_notes.",
+      "use get_clip_notes; for what devices are on each track use " +
+      "get_device_chains; for one device's parameter values use " +
+      "get_device_params.",
   );
   return lines.join("\n");
 }

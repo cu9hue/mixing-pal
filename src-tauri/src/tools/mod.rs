@@ -119,7 +119,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_chains",
-                "description": "The device chain on every track, in order, named as the producer named them. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
+                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -321,7 +321,11 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
 
             let map = device_chains::get_device_chains(
                 query,
-                num_tracks as i32,
+                // One spawned task per track -- the widest fan-out in this
+                // codebase, and the only one sized by a mirrored value.
+                // Clamped so a corrupt or absurd count cannot turn into that
+                // many concurrent tasks; a real set is nowhere near this.
+                (num_tracks as i32).min(512),
                 device_chains::QUERY_TIMEOUT,
             )
             .await;
@@ -383,7 +387,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                     d.missing_reason,
                 ),
                 Err(QueryError::NoReply) => ToolResult::missing(
-                    "no_reply: the device index may not exist, or Live did not answer",
+                    "no_reply: the track or device index may not exist, or Live did not answer",
                 ),
                 Err(QueryError::Busy) => ToolResult::missing("busy"),
                 Err(QueryError::Transport(e)) => {
@@ -451,6 +455,26 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(tool["function"]["parameters"]["required"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_chain_map_does_not_claim_to_cover_returns_or_master() {
+        // It iterates song.tracks; returns and master need
+        // /live/return/get/*, a separate address family. A model told it saw
+        // the whole mix will report no reverb when the reverb is on a
+        // return.
+        let schema = tool_schema();
+        let description = schema
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["function"]["name"] == "get_device_chains")
+            .unwrap()["function"]["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(description.contains("every regular track"));
+        assert!(description.contains("Return and master tracks are not covered"));
     }
 
     #[test]

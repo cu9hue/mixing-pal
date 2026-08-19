@@ -79,7 +79,14 @@ describe("buildContext", () => {
 
   it("names the tools rather than leaving the model to infer the gaps", () => {
     // The block is small on purpose. Saying so is what turns "I don't have
-    // that" into "I'll fetch that".
-    expect(buildContext(setWith({ 0: { name: "Kick" } }), "")).toContain("get_clip_notes");
+    // that" into "I'll fetch that". It is also the last thing the model
+    // reads before the producer's question, so a list naming only some of
+    // the tools reads as a closed menu -- which is how the device tools
+    // stayed invisible even after they shipped. Every tool goes on it.
+    const out = buildContext(setWith({ 0: { name: "Kick" } }), "");
+    expect(out).toContain("get_track_detail");
+    expect(out).toContain("get_clip_notes");
+    expect(out).toContain("get_device_chains");
+    expect(out).toContain("get_device_params");
   });
 });
