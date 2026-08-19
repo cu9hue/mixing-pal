@@ -87,4 +87,18 @@ describe("currentStep", () => {
       }),
     ).toBe("install");
   });
+
+  // The account step sits after the connected screen deliberately: she
+  // reaches a visible working result before being asked for a code she has
+  // to go and find. With both unsatisfied, "connected" must win — a test
+  // that leaves one of them satisfied cannot tell the two orderings apart.
+  it("shows the connected screen before asking for an account", () => {
+    expect(
+      currentStep({ ...DONE, connectedAcknowledged: false, hasAccount: false }),
+    ).toBe("connected");
+  });
+
+  it("asks for an account before asking what she is making", () => {
+    expect(currentStep({ ...DONE, hasAccount: false, goalAnswered: false })).toBe("account");
+  });
 });
