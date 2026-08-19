@@ -47,6 +47,27 @@ pub fn param_windows(num_params: usize) -> Vec<(usize, usize)> {
     even_split(num_params, budget_values())
 }
 
+/// A parameter name or formatted value arrives as an OSC string, not a
+/// 4-byte number: `4*ceil((len+1)/4) + 1` bytes. 64 covers a 59-character
+/// name, longer than any stock Live parameter.
+const BYTES_PER_PARAM_STRING: usize = 64;
+
+/// Windows over a device's parameter list for the STRING-valued ranged
+/// queries -- `/live/device/get/parameters/name_range` and
+/// `.../value_string_range`.
+///
+/// `param_windows` above is not a substitute. It sizes with
+/// `BYTES_PER_VALUE = 5`, correct for `value_range`'s floats but roughly
+/// 13x too generous for strings: it would return a 1792-parameter window
+/// serialising to about 30 KB, three times over `MAX_DATAGRAM` -- and past
+/// the cap Live's `sendto` raises and the client receives nothing at all,
+/// which is indistinguishable from Live being silent.
+///
+/// Derived from `MAX_DATAGRAM` rather than hardcoded, so it tracks the cap.
+pub fn param_string_windows(num_params: usize) -> Vec<(usize, usize)> {
+    even_split(num_params, (MAX_DATAGRAM - HEADER_SLACK) / BYTES_PER_PARAM_STRING)
+}
+
 /// Known ceiling: `track_data` takes only a track range, and clip values are
 /// emitted per scene for every track in that range, so a chunk cannot be
 /// split any finer than one track. When a *single* track's own per-scene
@@ -318,5 +339,47 @@ mod tests {
     #[test]
     fn mixer_chunks_of_zero_tracks_is_empty() {
         assert_eq!(mixer_chunks(0), Vec::<(usize, usize)>::new());
+    }
+
+    #[test]
+    fn param_string_windows_page_at_the_string_budget_boundary() {
+        // 64 bytes per parameter covers a 59-character name, longer than any
+        // stock Live parameter. (9216 - 256) / 64 = 140.
+        let max = 140;
+        assert_eq!(param_string_windows(max).len(), 1);
+        assert_eq!(param_string_windows(max + 1).len(), 2);
+    }
+
+    #[test]
+    fn a_full_string_window_fits_inside_one_datagram() {
+        // The claim the constant is making, asserted rather than trusted: a
+        // full window of worst-case-length names must still fit, because past
+        // MAX_DATAGRAM Live's sendto raises and we receive nothing at all.
+        let (_, span) = param_string_windows(10_000)[0];
+        assert!(span * 64 + 256 <= MAX_DATAGRAM, "a full window overflows the datagram cap");
+    }
+
+    #[test]
+    fn param_string_windows_are_far_tighter_than_the_float_form() {
+        // Guards the mistake this function exists to prevent: param_windows
+        // sizes for 4-byte values and would hand back one window where the
+        // string form needs many.
+        assert!(param_string_windows(1000).len() > param_windows(1000).len());
+    }
+
+    #[test]
+    fn param_string_windows_of_zero_params_is_empty() {
+        assert_eq!(param_string_windows(0), Vec::<(usize, usize)>::new());
+    }
+
+    #[test]
+    fn param_string_windows_tile_with_no_gap_or_overlap() {
+        let w = param_string_windows(1000);
+        let mut expected_start = 0;
+        for (start, span) in &w {
+            assert_eq!(*start, expected_start);
+            expected_start += span;
+        }
+        assert_eq!(expected_start, 1000);
     }
 }
