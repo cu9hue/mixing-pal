@@ -38,6 +38,24 @@ describe("offer", () => {
     expect(offer(dismissed, NUDGE, T0 + COOLDOWN_MS * 10).current).toBeNull();
   });
 
+  // offer() runs on every state change, so a nudge on screen is re-offered
+  // constantly. If any of those re-offers moved lastFiredAt, the cooldown
+  // would stretch for as long as she left the nudge up. Asserting .current
+  // alone cannot see that — the clock has to be measured.
+  it("re-offering a nudge already on screen does not restart its cooldown", () => {
+    const shown = offer(EMPTY_NUDGE_STATE, NUDGE, T0);
+    // Re-offered repeatedly while still on screen, as the real caller does.
+    const stillShown = offer(offer(shown, NUDGE, T0 + 5_000), NUDGE, T0 + 60_000);
+    expect(stillShown.lastFiredAt).toBe(T0);
+
+    const dismissed = dismiss(stillShown, NUDGE.id);
+    const other = { id: "master_level_high", text: "Master has been near full scale." };
+    // Still inside the cooldown when measured from T0; would be outside it
+    // if any re-offer had moved the clock forward.
+    expect(offer(dismissed, other, T0 + COOLDOWN_MS - 1).current).toBeNull();
+    expect(offer(dismissed, other, T0 + COOLDOWN_MS).current).toEqual(other);
+  });
+
   it("clears the slot when the condition stops holding", () => {
     const shown = offer(EMPTY_NUDGE_STATE, NUDGE, T0);
     expect(offer(shown, null, T0 + 1000).current).toBeNull();
