@@ -105,7 +105,8 @@ leak. Registered once on connect, torn down only on disconnect:
 
 | What | Rate | Cost |
 | --- | --- | --- |
-| Track names, mute, solo, device class lists | 2 s | one `track_data` call |
+| Track names, mute, solo | 2 s | one `track_data` call |
+| ~~Device class lists~~ | — | **Not polled.** Queried on demand; see **Devices** |
 | Track faders and pans | 2 s | one `track_data` call (fork) |
 | Selected clip, selected device | 1 s | two messages |
 | Focused MIDI clip notes | 1.5 s | paged, focused clip only |
@@ -320,6 +321,14 @@ leverage. Chat history persists for the session alongside it.
 
 ### Mixer summary
 
+> **Amended 2026-08-19 — the extractor below is deferred, not cancelled.**
+> The argument for precomputing it rests on the model being blind to device
+> chains, and that blindness was an artefact of nothing polling them rather
+> than a fact about the protocol. See **Devices** below, which removes the
+> blindness for two round trips and lets the model drill into the two or
+> three chains that look wrong instead of the app pre-chewing all thirty.
+> Revisit this section only if drill-down proves insufficient in practice.
+
 Precomputed into the structured payload, refreshed on device-chain change rather
 than per question: per track — fader, pan, sends — plus **extracted headline
 parameters for known stock device classes**:
@@ -352,11 +361,15 @@ labelled by position (`intro`, then `A`, `B`, …), never by genre function.
 ### Budget
 
 The digest is capped at **~4k tokens**. Included in full by default: the focused
-clip's raw notes, and the selected device's parameters. Both are unbounded in
-principle — Operator has ~130 parameters, an Instrument Rack can exceed a
-thousand — so both are capped with an explicit truncation marker. Large sets cap
-track count the same way: focused track and neighbours in full, the rest
-summarized.
+clip's raw notes, capped with an explicit truncation marker.
+
+*Amended 2026-08-19:* the selected device's parameters were also listed here.
+They are not in the digest. Device data reaches the model only through
+`get_device_params`, which applies its own 256-parameter cap and truncation
+marker — see **Devices**. Nothing about devices is paid for on every message.
+
+Large sets cap track count the same way: focused track and neighbours in full,
+the rest summarized.
 
 ### Tools
 
@@ -368,7 +381,8 @@ the model rather than hidden from it.
 | --- | --- | --- |
 | `get_track_detail(track)` | **Mirror** | Name, fader (normalised and dB), pan, mute, solo for one track |
 | `get_clip_notes(track, clip)` | **Live query** | Raw note list, paged |
-| `get_device_params(track, device)` | Live query | Parameter names and formatted values, paged |
+| `get_device_chains()` | Live query | Every track's device class list, all tracks in one round trip |
+| `get_device_params(track, device)` | Live query | Device name, parameter names and formatted values, paged |
 | `get_arrangement()` | Live query | Every arrangement clip with start and length |
 
 `get_track_detail` carries no device names. Nothing polls them, so the mirror
@@ -386,8 +400,9 @@ poll covers all three and the app never issues a per-track dB query.
 **The first cut ships the top two only** — `get_track_detail` and
 `get_clip_notes`. They are deliberately asymmetric: one proves the mirror-read
 path and costs nothing, the other proves the awaitable request path end to end.
-`get_device_params` and `get_arrangement` follow once that loop is trustworthy;
-each needs its own decode path, and device parameters need paging.
+`get_device_chains`, `get_device_params`, and `get_arrangement` follow once
+that loop is trustworthy; each needs its own decode path, and device
+parameters need paging.
 
 `get_track_detail` costs no OSC traffic. Polling already refreshes track state
 every 2 seconds, so the mirror is the authoritative local copy and a round trip
@@ -399,6 +414,90 @@ so the model can tell "this is zero" from "Live did not answer" from "too large
 to send" — and, for mirror reads, how old the value is. A mirror read is up to
 one poll interval stale, and longer if a reply was lost. The model is told the
 age rather than left to imply live truth.
+
+### Devices
+
+*Added 2026-08-19. Supersedes the extractor mandate in **Mixer summary**.*
+
+Two tools, both live queries. Nothing about devices enters the standing
+context block, and nothing about devices is polled.
+
+| Tool | Cost | Returns |
+| --- | --- | --- |
+| `get_device_chains()` | One round trip, every track in parallel | Each track's device class list |
+| `get_device_params(track, device)` | Paged round trips | Device name, parameter names, formatted values |
+
+**Why query instead of poll.** The chain map is tool-gated, so polling it
+would pay standing OSC traffic for data nobody is asking for. Querying it
+costs nothing until asked and is never stale, which deletes an entire class
+of reasoning: no new `PollKind`, no mirror storage for chains, no staleness
+window, no interaction with the topology guard's freshness rules.
+
+**Why the query is one round trip and not N.** `/live/track/get/devices/class_name`
+keys on `KeyArity::Args(1)` — the track index — so every reply identifies
+itself and all tracks can be in flight at once. `osc_server.py:154` drains
+its socket with `while True: recvfrom(...)` until it blocks, so all pending
+requests are served within a single Live tick (~100 ms). Serialising them
+would cost one tick each: roughly four seconds on a forty-track set, for a
+tool the model is expected to call routinely. This is the opposite of
+`track_data`, which is `Unkeyed` and must be serialised precisely because
+its replies are indistinguishable.
+
+**Class names only, not device names.** The chain map answers "what kind of
+processing is on this track", which `class_name` answers exactly. Device
+names are producer-controlled text — unbounded length, an injection surface,
+and a second message per track — and they carry intent that only matters
+once the model has already chosen where to look. So names arrive with
+`get_device_params`, on the drill-down path, where there is one of them
+rather than hundreds.
+
+**Formatted values only, not raw floats.** `str_for_value` yields `80.0 Hz`
+and `-12.0 dB`; the underlying `0.42` is a normalised control position that
+means nothing without that parameter's min and max. This is the same
+argument that made `volume_db` worth carrying for faders, and it halves the
+queries per page — `value_range` is not used at all.
+
+**Windows are sized for strings, and `param_windows` cannot be reused.**
+`osc/budget.rs::param_windows` sizes with `BYTES_PER_VALUE = 5`, correct for
+an int or float. Both queries this design issues return strings, which cost
+`4·ceil((len+1)/4) + 1` bytes — a 16-character parameter name is 21 bytes,
+not 5. Reusing it would produce a 1792-parameter window serialising to
+roughly 30 KB, three times over `MAX_DATAGRAM`, which makes `sendto` raise
+inside Live and delivers nothing at all. A string-aware sibling is added and
+`param_windows` is left alone: it is correct for what its name says.
+Budgeting 64 bytes per parameter (a 59-character name, longer than any stock
+parameter) gives `(9216 − 256) / 64 = 140`, so the window is **128
+parameters**, capped at **256 parameters** per device with an explicit
+truncation marker.
+
+**`span` is not in the key.** The ranged addresses key on `Args(3)` —
+`(track, device, start)` — so unlike `/live/clip/get/notes`, each window is
+independently addressable and a stalled window cannot poison its neighbours.
+But two different spans at the same start still collide. A window that times
+out and is retried with a halved span would join the dead entry and never
+reach the wire — the same defect that required `RequestTable::cancel`, in a
+narrower form. The retry path calls `cancel` first, and a test asserts the
+shrunken retry is actually *sent*.
+
+**Failure is partial, not total.** If three tracks fail to answer,
+`get_device_chains` returns the other thirty-seven and names the three in
+`missing_reason`. Absence of devices is never reported as absence of data:
+a track with no devices and a device with no parameters both return an empty
+list with `missing_reason: null`. "This track has nothing on it" is a real
+mixing observation, and rendering it as missing data is the failure mode
+that had the model reasoning about track names while the faders were being
+silently dropped.
+
+**One error that cannot be distinguished.** An out-of-range device index
+makes AbletonOSC raise inside Live and send nothing, which is byte-identical
+to a lost reply. There is no client-side fix, so the tool says so:
+`"no reply — the device index may not exist, or Live did not answer"`. The
+model gets its indices from `get_device_chains()`, so this is a model error
+rather than a normal path.
+
+**No Remote Script work.** `copilot/device_range.py` shipped in wire version
+2 and is installed. The wire version does not change, and neither a
+reinstall nor a Live restart is required.
 
 ### The awaitable request path
 
