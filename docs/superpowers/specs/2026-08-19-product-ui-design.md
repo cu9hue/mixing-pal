@@ -31,10 +31,10 @@ inline styles means building them twice.
 and failure states, the nudge surface plus one rule, the Advanced pane, design
 tokens, and the `install_connector` command that onboarding step 1 calls.
 
-**Out:** the product name (blocks A, see Open questions), signing and
-notarization (A), the proxy and real accounts (B), the reader panel (designed
-here, built after the card is in use), `off_scale_notes` (blocked on
-`PollKind::FocusedNotes`, still unwired at `lib.rs:974`).
+**Out:** the rename sweep itself (A — see The name), signing and notarization (A),
+the proxy and real accounts (B), the reader panel (designed here, built after the
+card is in use), `off_scale_notes` (blocked on `PollKind::FocusedNotes`, still
+unwired at `lib.rs:974`).
 
 ## Principles
 
@@ -197,7 +197,7 @@ shrinks into the card when setup completes.
 
 ### The steps
 
-**1 — Install.** "⟨Name⟩ needs a small connector inside Live." One button. Copies
+**1 — Install.** "Mixing Pal needs a small connector inside Live." One button. Copies
 the bundled Remote Script into the Ableton User Library. Reassurance underneath:
 "Goes to your Ableton User Library. Nothing else on your computer is touched."
 
@@ -212,10 +212,19 @@ pane with the Control Surface dropdown highlighted — not a drawing, and captur
 from a current Live version. One note underneath, because it is the thing people
 get wrong: **Input and Output stay None.**
 
-**4 — Connected.** The payoff. A green dot, "Connected.", and then the one place
-in the whole product where mirroring Live earns its keep:
-"I can see **12 tracks** — Kick, 808 Sub, Pad Wide, Vox Chop…". That sentence is
-proof, and it is the moment the setup pays for itself.
+**4 — Connected.** The payoff, and the only place in the product where mirroring
+Live earns its keep. A green dot, then proof, then the scope of the promise:
+
+> Connected. I can see **12 tracks** — Kick, 808 Sub, Pad Wide, Vox Chop…
+>
+> I read your settings — devices, faders, routing, notes. I can't hear your
+> audio, so I'll never tell you something sounds muddy. I'll tell you what's set
+> to what, and what that usually means.
+
+The first paragraph is proof and it is the moment the setup pays for itself. The
+second is not boilerplate and must not be demoted to fine print: the product is
+called Mixing Pal, and this is the one screen that scopes what that means before
+she forms an expectation the app cannot meet. See The name.
 
 **5 — Account.** Redeem a code. Placed *after* Connected on purpose: she reaches
 a working, visible result in three steps, and only then is asked for something
@@ -245,9 +254,9 @@ words, given room, each ending in a control that does the fixable part:
 
 | Condition | Copy | Action |
 | --- | --- | --- |
-| Port in use | "Something else is already using port 11001 — usually a leftover script, or a second copy of ⟨Name⟩. Close it and open ⟨Name⟩ again." | — |
-| Nothing arriving | "Live is running but nothing is coming through. Check that **⟨Name⟩** is still selected under Preferences → Link, Tempo & MIDI." | *Show me where* → reopens step 3 |
-| Connector out of date | "⟨Name⟩ updated, but the part inside Live didn't. Some readings will be missing until you reinstall it." | *Reinstall and restart Live* |
+| Port in use | "Something else is already using port 11001 — usually a leftover script, or a second copy of Mixing Pal. Close it and open Mixing Pal again." | — |
+| Nothing arriving | "Live is running but nothing is coming through. Check that **Mixing Pal** is still selected under Preferences → Link, Tempo & MIDI." | *Show me where* → reopens step 3 |
+| Connector out of date | "Mixing Pal updated, but the part inside Live didn't. Some readings will be missing until you reinstall it." | *Reinstall and restart Live* |
 
 No one reads a port number and works out what to do with it. The technical detail
 stays available in the disclosure; it does not lead.
@@ -372,7 +381,7 @@ token system and are replaced.
 New Rust commands:
 
 - `install_connector() -> Result<InstallReport, InstallError>` — copies the
-  bundled Remote Script to `~/Music/Ableton/User Library/Remote Scripts/<Name>`,
+  bundled Remote Script to `~/Music/Ableton/User Library/Remote Scripts/MixingPal`,
   preserving the `logs/` and `__pycache__/` exclusions that
   `scripts/install-remote-script.sh` already gets right. If the User Library is
   not at the default path, return an error variant that asks her to pick the
@@ -419,14 +428,60 @@ card.
 - The default-name pattern for `unnamed_tracks` is verified against a real Live
   12 set before the rule is trusted.
 
+## The name
+
+**Mixing Pal.** Settled 2026-08-19. It clears both trademarks the placeholder did
+not: "Ableton" belongs to Ableton AG and is usable only as a descriptor ("for
+Ableton Live"), and "Copilot" is Microsoft's in a software context. A search of
+music-software and plugin names found nothing using it.
+
+### The promise the name makes
+
+Mixing Pal names one of the three things the product does, and it is the one the
+product is most constrained on. It cannot hear. `SYSTEM_PROMPT` forbids it from
+claiming anything about how a set sounds — masking, loudness, tone, timbre — and
+that constraint is load-bearing, not a limitation to be grown out of. A producer
+who downloads something called Mixing Pal reasonably expects it to listen.
+
+This is a copy problem, not a naming problem, and it is solved in exactly one
+place: **step 4 of first run**. The connected screen must say what it reads and
+what it cannot hear, plainly, before she ever asks a question:
+
+> Connected. I can see **12 tracks** — Kick, 808 Sub, Pad Wide, Vox Chop…
+>
+> I read your settings — devices, faders, routing, notes. I can't hear your
+> audio, so I'll never tell you something sounds muddy. I'll tell you what's set
+> to what, and what that usually means.
+
+Get that right and the name costs nothing. Leave it out and every first session
+opens with a small disappointment, which is the most expensive kind.
+
+### The rename
+
+The name is not one string. The Remote Script's **folder name is the entry that
+appears in Live's Control Surface dropdown**, so this touches:
+
+| Today | Becomes |
+| --- | --- |
+| `remote-script/AbletonCopilot/` | `remote-script/MixingPal/` |
+| `/live/copilot/*` OSC namespace | `/live/mixingpal/*` |
+| `com.abletoncopilot.app` | `com.mixingpal.app` |
+| `productName: ableton-copilot` | `Mixing Pal` |
+| Cargo `name = "ableton-copilot"`, `description = "A Tauri App"`, `authors = ["you"]` | real values |
+| `scripts/install-remote-script.sh` destination | `…/Remote Scripts/MixingPal` |
+| `remote-script/AbletonCopilot/copilot/` | `remote-script/MixingPal/mixingpal/` |
+
+The OSC namespace rename must move in lockstep with `shared/wire-version.json`,
+`shared/handled-addresses.json`, and the version handshake in `Connection.tsx` —
+an app on the new namespace talking to an installed script on the old one is
+exactly the silent-failure class that handshake was built to catch.
+
+**This rename belongs to A, not to C.** It is mechanical, it touches Rust,
+Python, TypeScript, and shell in one sweep, and doing it inside a UI plan would
+bury it. C uses the new name in all user-facing copy; A performs the rename.
+
 ## Open questions
 
-**The product name blocks A.** "Ableton" is a registered trademark of Ableton AG:
-usable as a descriptor ("for Ableton Live"), not as a product name. "Copilot" is
-Microsoft's in a software context. This is not one string — the Remote Script's
-**folder name is the entry that appears in Live's Control Surface dropdown**, so
-the name is currently baked into `remote-script/AbletonCopilot/`, the
-`/live/copilot/*` OSC namespace, `scripts/install-remote-script.sh`, and the
-bundle identifier `com.abletoncopilot.app`. Renaming now is an afternoon.
-Renaming after release is a migration for every installed user. It must be
-settled before A, and this spec uses ⟨Name⟩ throughout.
+None blocking. The two carried items are verification tasks, not decisions: the
+Live 12 default track-naming pattern for `unnamed_tracks`, and a current
+screenshot of the Control Surface pane for first-run step 3.
