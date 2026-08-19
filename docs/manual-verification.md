@@ -221,3 +221,23 @@ the app to trigger it).
       produces a shape it does not match, the nudge never fires and the
       failure is silent — the rule simply stays quiet forever. Fix the regex
       and its test together.
+
+## The shell (added 2026-08-19)
+
+- [ ] The window is frameless and transparent: rounded corners, no square
+      grey system shadow behind the pill. If the pill is a black square,
+      `macOSPrivateApi` is not set in `tauri.conf.json`.
+- [ ] Dragging the card header moves the window. There is no titlebar, so
+      if this fails the window cannot be moved at all.
+- [ ] Drag the card to a second display, quit, unplug the display, reopen.
+      The card must appear on the remaining screen — `clamp_to_visible`
+      exists for exactly this, and the failure mode is an invisible window
+      with no titlebar to drag back.
+- [ ] Escape collapses to the pill; clicking the pill reopens the card.
+- [ ] With text typed in the input, clicking into Live leaves the card
+      open. With the input empty, it collapses.
+- [ ] Ask something that makes the model read a track. The progress line
+      names the track, never a function name or JSON.
+- [ ] Quit Live. The banner appears, and the collapsed pill grows to read
+      "not connected".
+- [ ] Count the uses of the accent colour in one view. At most two.

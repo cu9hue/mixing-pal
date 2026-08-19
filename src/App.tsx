@@ -1,28 +1,44 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { Delta } from "./live/model";
 import { emptySet, applyDelta } from "./live/apply";
-import { SetView } from "./ui/SetView";
-import { Chat } from "./ui/Chat";
-import { Settings } from "./ui/Settings";
-import { Trace } from "./ui/Trace";
+import { Card } from "./ui/Card";
+import { Pill } from "./ui/Pill";
+import { pillState } from "./ui/pillState";
+import { MODE_GEOMETRY, ModeEvent, WindowMode, nextMode } from "./ui/windowMode";
+import { STALE_MS } from "./ui/Connection";
+import { unnamedTracks } from "./rules/unnamedTracks";
+import { EMPTY_NUDGE_STATE, dismiss, offer } from "./rules/nudges";
 
 export default function App() {
   const [state, setState] = useState(emptySet());
   const [lastSeen, setLastSeen] = useState<number | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
+  const [mode, setMode] = useState<WindowMode>("card");
+  const [nudges, setNudges] = useState(EMPTY_NUDGE_STATE);
+  const [turnRunning, setTurnRunning] = useState(false);
+  const [unread, setUnread] = useState(false);
+  const [inputEmpty, setInputEmpty] = useState(true);
+
+  // The mode machine needs the current context on every event, but the
+  // context changes far more often than the mode does. A ref keeps the
+  // dispatch callback stable so it does not re-subscribe the blur listener
+  // on every keystroke.
+  const ctx = useRef({ inputEmpty, turnRunning, unread });
+  ctx.current = { inputEmpty, turnRunning, unread };
+
+  const dispatch = useCallback((event: ModeEvent) => {
+    setMode((current) => nextMode(current, event, ctx.current));
+  }, []);
 
   useEffect(() => {
-    // Rust never resends a subscription's initial value on its own — it
+    // Rust never resends a subscription's initial value on its own -- it
     // arrives once, at subscribe time, and the emit loop can drain and
     // forward it before this listener even exists. Attach the listener
     // FIRST, then fetch the retained snapshot: nothing can slip through
-    // the gap between the two, because applyDelta is last-write-wins, so a
-    // delta that arrives mid-fetch and also appears in the snapshot just
-    // gets applied twice, harmlessly. Fetching first would risk the
-    // opposite — a value changing between the snapshot response and the
-    // listener attaching would never be seen at all.
+    // the gap, because applyDelta is last-write-wins, so a delta that
+    // arrives mid-fetch and also appears in the snapshot just gets applied
+    // twice, harmlessly. Fetching first would risk the opposite.
     const stop = listen<Delta[]>("live://deltas", (event) => {
       setState((prev) => event.payload.reduce(applyDelta, prev));
       setLastSeen(Date.now());
@@ -32,15 +48,9 @@ export default function App() {
       .then((snapshot) => {
         if (snapshot.length === 0) return;
         setState((prev) => snapshot.reduce(applyDelta, prev));
-        // A non-empty snapshot means the app is (or recently was) connected;
-        // clear the "not connected" banner immediately instead of waiting
-        // for the next change to produce a delta.
         setLastSeen(Date.now());
       })
       .catch((err) => {
-        // A rejected invoke would otherwise become an unhandled promise
-        // rejection; the live deltas listener above still works on its
-        // own, so this is a missed catch-up, not a fatal error.
         console.error("failed to fetch initial snapshot", err);
       });
 
@@ -49,17 +59,79 @@ export default function App() {
     };
   }, []);
 
+  // Staleness is the absence of deltas, so no delta will ever arrive to
+  // trigger the re-render that notices it. This forces the check.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const connected = lastSeen !== null && Date.now() - lastSeen <= STALE_MS;
+
+  // Rules run against every state change; `offer` is what stops a true
+  // observation reappearing every two seconds.
+  useEffect(() => {
+    setNudges((n) => offer(n, unnamedTracks(state), Date.now()));
+  }, [state]);
+
+  const nudge = nudges.current;
+  useEffect(() => {
+    if (nudge !== null) dispatch({ type: "nudge_arrived" });
+  }, [nudge, dispatch]);
+
+  useEffect(() => {
+    const onBlur = () => dispatch({ type: "blur" });
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") dispatch({ type: "escape" });
+    };
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [dispatch]);
+
+  // Resize after the DOM has the new content but before the frame paints,
+  // so the window never shows a card at the pill's size or the reverse.
+  const root = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const geometry = MODE_GEOMETRY[mode];
+    const height =
+      geometry.height ??
+      Math.min(root.current?.scrollHeight ?? 0, geometry.maxHeight ?? Infinity);
+    invoke("set_window_mode", { mode, width: geometry.width, height: Math.ceil(height) }).catch(
+      (err) => console.error("failed to apply window mode", err),
+    );
+  });
+
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", padding: "6px 10px" }}>
-        <button onClick={() => setShowSettings((v) => !v)}>
-          {showSettings ? "Close settings" : "Settings"}
-        </button>
-      </div>
-      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
-      <SetView state={state} lastSeen={lastSeen} />
-      <Chat state={state} />
-      <Trace />
+    <div ref={root}>
+      {mode === "card" ? (
+        <Card
+          state={state}
+          lastSeen={lastSeen}
+          connected={connected}
+          nudge={nudge}
+          onDismissNudge={(id) => setNudges((n) => dismiss(n, id))}
+          onTurnRunningChange={setTurnRunning}
+          onAnswer={() => {
+            setUnread(true);
+            dispatch({ type: "answer_completed" });
+          }}
+          onCollapse={() => dispatch({ type: "chevron_closed" })}
+          onInputEmptyChange={setInputEmpty}
+        />
+      ) : (
+        <Pill
+          state={pillState({ connected, unread, turnRunning })}
+          onClick={() => {
+            setUnread(false);
+            dispatch({ type: "pill_clicked" });
+          }}
+        />
+      )}
     </div>
   );
 }

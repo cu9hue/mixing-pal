@@ -18,6 +18,7 @@ export function Card({
   onTurnRunningChange,
   onAnswer,
   onCollapse,
+  onInputEmptyChange,
 }: {
   state: SetState;
   lastSeen: number | null;
@@ -27,6 +28,7 @@ export function Card({
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
   onCollapse: () => void;
+  onInputEmptyChange: (empty: boolean) => void;
 }) {
   const [goal, setGoal] = useState(loadGoal);
 
@@ -48,6 +50,7 @@ export function Card({
         goal={goal}
         onTurnRunningChange={onTurnRunningChange}
         onAnswer={onAnswer}
+        onInputEmptyChange={onInputEmptyChange}
       />
       <WhatICanSee state={state} />
     </div>
