@@ -209,11 +209,26 @@ while catching only count changes — a **reorder**, which changes nothing
 about the count and is the case most likely to swap one clip for another,
 would slip straight past it.
 
-Two limits, stated rather than papered over: both mechanisms see only what
+Three limits, stated rather than papered over. Both mechanisms see only what
 polling sees, so a change that lands and reverts inside one poll interval is
-invisible to either; and two tracks sharing a name defeat the identity check
-where a counter would not. A counter can still be added later, alongside
-rather than instead of this.
+invisible to either. Two tracks sharing a name defeat the identity check
+where a counter would not.
+
+And the check is **narrowed, not closed, bounded by mirror staleness** — the
+limit that matters most in practice, and the one easiest to overstate. Both
+samples read the *same* mirror, refreshed about every two seconds
+(`PollKind::TrackState`), while the call they bracket is usually much
+shorter: `get_device_chains` fans out in about one Live tick (~100 ms). So
+the check fires only when a poll happens to land *between* the two samples,
+and a move in the up-to-2 s window *before* the call is invisible to it
+entirely — both samples read identically stale names while the fetch reads
+Live's current ordering, and `get_device_chains`'s returned indices then pair
+against the stale index→name lines in the context block. The residual is
+roughly (call duration / poll interval), which is why the check is kept
+rather than dropped: its coverage rises with exactly the slow, paged,
+retrying reads where a track move is both likeliest and worst. Closing it
+properly needs a change Live *tells* us about. A counter can still be added
+later, alongside rather than instead of this.
 
 ### Datagram budget
 
@@ -515,12 +530,22 @@ mixing observation, and rendering it as missing data is the failure mode
 that had the model reasoning about track names while the faders were being
 silently dropped.
 
+The fan-out is also bounded. `get_device_chains` spawns one task per track
+off a count the mirror handed over, so the count is clamped to
+`MAX_FANOUT_TRACKS` (512) before anything consumes it — the fan-out, the
+identity brackets, and the `as i32` narrowing alike, since a corrupt count
+past `i32::MAX` would otherwise wrap to something small. Only Live Intro
+(16) and Lite (8) cap the track count, so a set past 512 is legal, and the
+result reports the truncation and the real count rather than presenting the
+first 512 tracks as the whole set.
+
 **One error that cannot be distinguished.** An out-of-range device index
 makes AbletonOSC raise inside Live and send nothing, which is byte-identical
-to a lost reply. There is no client-side fix, so the tool says so:
-`"no reply — the device index may not exist, or Live did not answer"`. The
-model gets its indices from `get_device_chains()`, so this is a model error
-rather than a normal path.
+to a lost reply. There is no client-side fix, so the tool says so, in the
+exact words the code sends:
+`"no_reply: the track or device index may not exist, or Live did not answer"`.
+The model gets its indices from `get_device_chains()`, so this is a model
+error rather than a normal path.
 
 **Known limits, recorded so the next plan does not rediscover them from a
 wrong answer in production.**
@@ -534,7 +559,27 @@ wrong answer in production.**
 - **Device on/off state is not exposed.** `is_active` appears nowhere in this
   design, so a bypassed EQ is byte-identical to an active one and the model
   has no way to ask. Every statement it makes about a chain silently assumes
-  every device in it is on.
+  every device in it is on. Both tool descriptions say so outright: the spec
+  is not a channel the model reads, and without the sentence it describes a
+  bypassed EQ's 80 Hz low cut as if it were shaping the bass.
+- **Devices inside Racks are not listed.** `track.devices` is top-level only,
+  so an Instrument Rack, Audio Effect Rack or Drum Rack appears as one device
+  and everything inside it is invisible; `get_device_params` on a Rack
+  returns its macros, not its contents. Racks are ubiquitous in electronic
+  production, and a model seeing only «Drum Rack» will tell the producer
+  there is no compression on their drums while the compressor sits inside it.
+  Both tool descriptions say so, for the same reason as the bullet above.
+- **Two identical devices still defeat the parameter read's identity
+  re-check.** `get_device_params` re-reads the device's name *and*
+  `num_parameters` after its paging loop and refuses the read if either
+  moved, because stock names are not unique — two default-named `EQ Eight`s
+  on one track is an ordinary chain. Two devices with the same name *and* the
+  same parameter count are indistinguishable to it, so deleting one mid-page
+  can still merge two windows into one answer. Closing that needs an identity
+  Live does not expose over this address family. A re-check that cannot be
+  read at all — no reply, a busy address, a transport failure — reports
+  `device_identity_unverified` rather than `topology_changed`: both drop the
+  parameters, but only one of them claims an event was observed.
 
 **No Remote Script work.** `copilot/device_range.py` shipped in wire version
 2 and is installed. The wire version does not change, and neither a
