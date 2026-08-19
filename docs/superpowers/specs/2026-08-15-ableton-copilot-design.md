@@ -424,7 +424,7 @@ context block, and nothing about devices is polled.
 
 | Tool | Cost | Returns |
 | --- | --- | --- |
-| `get_device_chains()` | One round trip, every track in parallel | Each track's device class list |
+| `get_device_chains()` | One round trip, every track in parallel | Each track's device names, fenced |
 | `get_device_params(track, device)` | Paged round trips | Device name, parameter names, formatted values |
 
 **Why query instead of poll.** The chain map is tool-gated, so polling it
@@ -433,7 +433,7 @@ costs nothing until asked and is never stale, which deletes an entire class
 of reasoning: no new `PollKind`, no mirror storage for chains, no staleness
 window, no interaction with the topology guard's freshness rules.
 
-**Why the query is one round trip and not N.** `/live/track/get/devices/class_name`
+**Why the query is one round trip and not N.** `/live/track/get/devices/name`
 keys on `KeyArity::Args(1)` — the track index — so every reply identifies
 itself and all tracks can be in flight at once. `osc_server.py:154` drains
 its socket with `while True: recvfrom(...)` until it blocks, so all pending
@@ -443,13 +443,27 @@ tool the model is expected to call routinely. This is the opposite of
 `track_data`, which is `Unkeyed` and must be serialised precisely because
 its replies are indistinguishable.
 
-**Class names only, not device names.** The chain map answers "what kind of
-processing is on this track", which `class_name` answers exactly. Device
-names are producer-controlled text — unbounded length, an injection surface,
-and a second message per track — and they carry intent that only matters
-once the model has already chosen where to look. So names arrive with
-`get_device_params`, on the drill-down path, where there is one of them
-rather than hundreds.
+**Device names, not class names.** The obvious choice is `class_name`, on
+the grounds that the chain map answers "what kind of processing is here".
+It does not survive contact with the LOM: every third-party plugin reports
+`class_name` as `PluginDevice` or `AuPluginDevice`, so a producer's chain
+would render as `Operator > PluginDevice > PluginDevice` — the plugins, the
+ones most worth asking about, made invisible by the field chosen to identify
+them. `name` gives the plugin's actual name, the stock device's display
+name, or whatever the producer renamed it to, and costs the same one message
+per track.
+
+What `name` loses is the exact type of a *renamed* stock device: a
+compressor called `Bass Glue` no longer announces that it is a compressor.
+That is a small loss and partly self-repairing — the rename carries the
+producer's intent, which is at least as useful as the type, and drilling in
+identifies the device immediately from its parameter names. Fetching both
+fields was considered and rejected: it doubles the reply size on the one
+call the model is expected to make routinely, to recover a type it can infer.
+
+Device names are producer-controlled text, so the chain map fences every one
+of them through `tools::fence::fence`, exactly as track and clip names are
+fenced.
 
 **Formatted values only, not raw floats.** `str_for_value` yields `80.0 Hz`
 and `-12.0 dB`; the underlying `0.42` is a normalised control position that
@@ -466,9 +480,11 @@ roughly 30 KB, three times over `MAX_DATAGRAM`, which makes `sendto` raise
 inside Live and delivers nothing at all. A string-aware sibling is added and
 `param_windows` is left alone: it is correct for what its name says.
 Budgeting 64 bytes per parameter (a 59-character name, longer than any stock
-parameter) gives `(9216 − 256) / 64 = 140`, so the window is **128
-parameters**, capped at **256 parameters** per device with an explicit
-truncation marker.
+parameter) gives a window of 140 parameters, derived from `MAX_DATAGRAM`
+rather than hardcoded so it tracks the cap. A device is capped at **256
+parameters** with an explicit truncation marker — that cap is a prompt-token
+decision, not a datagram one, so it lives with the tool and not in the byte
+budget.
 
 **`span` is not in the key.** The ranged addresses key on `Args(3)` —
 `(track, device, start)` — so unlike `/live/clip/get/notes`, each window is
