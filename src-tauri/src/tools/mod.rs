@@ -178,6 +178,18 @@ fn track_identity(coalescer: &Mutex<Coalescer>, track: i64) -> Option<serde_json
         .cloned()
 }
 
+/// The mirrored track count. `num_tracks` is `KeyArity::None`, so the mirror
+/// holds it with no key args and the count is `args[0]`. Shared by
+/// `get_device_chains`, which reads it once to size the whole-set fetch and
+/// again afterward to detect a topology change.
+fn track_count(coalescer: &Mutex<Coalescer>) -> Option<i64> {
+    let c = coalescer.lock().ok()?;
+    c.lookup("/live/song/get/num_tracks", &[])?
+        .args
+        .first()?
+        .as_i64()
+}
+
 /// Whether the track under a paged query moved between two identity samples.
 ///
 /// Abstains when the mirror never held the track to begin with: with nothing
@@ -191,6 +203,30 @@ fn topology_moved(before: &Option<serde_json::Value>, after: &Option<serde_json:
         (Some(_), None) => true,
         (Some(b), Some(a)) => b != a,
     }
+}
+
+/// Whether the device-chain read's bracket caught a topology change.
+///
+/// A count comparison alone catches an add or a delete but misses a
+/// same-count REORDER: the indices in the returned `TrackChain` list would
+/// then silently name the wrong tracks' devices, and the result would go
+/// back as a fresh, fully-formed answer with nothing marking it wrong. So
+/// this compares every sampled index's mirrored name too, via the same
+/// `topology_moved` rule `get_clip_notes` and `get_device_params` use for
+/// one track -- an index the mirror never held abstains rather than
+/// reporting a change, exactly as `topology_moved` already does.
+///
+/// Sampling every index doubles the `track_identity` calls, not the OSC
+/// traffic: `track_identity` and `track_count` both read the local mirror,
+/// which is already kept warm by the periodic poll, so this costs nothing
+/// on the wire.
+fn chains_moved(
+    before_count: i64,
+    after_count: Option<i64>,
+    before: &[Option<serde_json::Value>],
+    after: &[Option<serde_json::Value>],
+) -> bool {
+    after_count != Some(before_count) || before.iter().zip(after).any(|(b, a)| topology_moved(b, a))
 }
 
 pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult {
@@ -263,18 +299,10 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             }
         }
         "get_device_chains" => {
-            // Read the track count and the socket, dropping each guard
-            // before any await -- a std::sync::Mutex guard is !Send.
-            let num_tracks = match ctx.coalescer.lock() {
-                Ok(c) => c
-                    .lookup("/live/song/get/num_tracks", &[])
-                    .and_then(|r| r.args.first().and_then(|v| v.as_i64())),
-                Err(_) => return ToolResult::missing("mirror_unavailable"),
-            };
             // Without a count there is nothing to iterate. Querying 0..0
             // would return an empty map, which reads as "the set has no
             // devices" -- an invented answer, not a missing one.
-            let Some(num_tracks) = num_tracks.filter(|n| *n >= 0) else {
+            let Some(num_tracks) = track_count(&ctx.coalescer).filter(|n| *n >= 0) else {
                 return ToolResult::missing("not_in_mirror");
             };
             let query = match ctx.query.lock() {
@@ -285,22 +313,23 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 return ToolResult::missing("not_connected");
             };
 
+            // Bracket the whole-set read with every track's mirrored name,
+            // not just the count -- see `chains_moved` for why the count
+            // alone is not enough.
+            let before: Vec<Option<serde_json::Value>> =
+                (0..num_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+
             let map = device_chains::get_device_chains(
                 query,
                 num_tracks as i32,
                 device_chains::QUERY_TIMEOUT,
             )
             .await;
-            // A whole-set read has no single track identity to bracket, so
-            // the guard here is the count: an add or delete mid-query means
-            // the indices in this map no longer name what they did.
-            let after = match ctx.coalescer.lock() {
-                Ok(c) => c
-                    .lookup("/live/song/get/num_tracks", &[])
-                    .and_then(|r| r.args.first().and_then(|v| v.as_i64())),
-                Err(_) => return ToolResult::missing("mirror_unavailable"),
-            };
-            if after != Some(num_tracks) {
+
+            let after_count = track_count(&ctx.coalescer);
+            let after: Vec<Option<serde_json::Value>> =
+                (0..num_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            if chains_moved(num_tracks, after_count, &before, &after) {
                 return ToolResult::missing("topology_changed");
             }
 
@@ -581,6 +610,45 @@ mod tests {
         // value.
         assert!(!topology_moved(&None, &Some(serde_json::json!("Bass"))));
         assert!(!topology_moved(&None, &None));
+    }
+
+    #[test]
+    fn track_count_reads_the_mirrored_count_with_no_key_args() {
+        // num_tracks is KeyArity::None, so the mirror holds it with no key
+        // args and the count is args[0]. If this ever drifts, every reader
+        // of track_count silently degrades to not_in_mirror.
+        let coalescer = Mutex::new(mirror_with_tracks(8));
+        assert_eq!(track_count(&coalescer), Some(8));
+        assert_eq!(track_count(&Mutex::new(Coalescer::new())), None);
+    }
+
+    #[test]
+    fn chains_moved_catches_a_same_count_reorder_a_count_check_alone_would_miss() {
+        // This is the bug the count-only guard had: an add or delete changes
+        // num_tracks, but a reorder does not. Two tracks swapping places
+        // leaves the count identical while every downstream index now names
+        // a different track's devices.
+        let bass = Some(serde_json::json!("Bass"));
+        let kick = Some(serde_json::json!("Kick"));
+        let before = vec![bass.clone(), kick.clone()];
+        let reordered = vec![kick, bass];
+        assert!(chains_moved(2, Some(2), &before, &reordered));
+    }
+
+    #[test]
+    fn chains_moved_reports_an_added_or_deleted_track() {
+        let bass = Some(serde_json::json!("Bass"));
+        let before = vec![bass.clone()];
+        assert!(chains_moved(1, Some(2), &before, &[bass.clone(), None]));
+        assert!(chains_moved(1, Some(0), &before, &[]));
+    }
+
+    #[test]
+    fn chains_moved_abstains_on_a_stable_set() {
+        let bass = Some(serde_json::json!("Bass"));
+        let kick = Some(serde_json::json!("Kick"));
+        let names = vec![bass, kick];
+        assert!(!chains_moved(2, Some(2), &names, &names));
     }
 
     #[tokio::test]
