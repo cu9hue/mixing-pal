@@ -131,7 +131,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_params",
-                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. Whether the device is switched on or bypassed is not reported. On a Rack this returns the Rack's own macros, not the devices inside it. A device with more than 256 parameters is truncated and the result says so.",
+                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. The device's on/off switch is itself a parameter, conventionally the first one and named Device On, so a device listed in the chain may be switched off and this is how to find out. On a Rack this returns the Rack's own macros, not the devices inside it. A device with more than 256 parameters is truncated and the result says so.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -580,17 +580,32 @@ mod tests {
     }
 
     #[test]
-    fn neither_device_tool_lets_the_model_assume_a_listed_device_is_switched_on() {
-        // `is_active` is exposed nowhere, and the description is the only
+    fn the_chain_map_does_not_let_the_model_assume_a_listed_device_is_switched_on() {
+        // The chain map carries names and nothing else, so a bypassed EQ is
+        // byte-identical to an active one in it. The description is the only
         // channel the model reads -- a limit recorded in the spec alone does
         // not reach it. Without this it describes a bypassed EQ's 80 Hz low
         // cut as if it were shaping the bass.
-        for tool in ["get_device_chains", "get_device_params"] {
-            assert!(
-                description_of(tool).contains("switched on or bypassed is not reported"),
-                "{tool} must say bypass state is unavailable"
-            );
-        }
+        assert!(description_of("get_device_chains")
+            .contains("Whether a device is switched on or bypassed is not reported"));
+    }
+
+    #[test]
+    fn the_parameter_read_says_it_does_report_the_on_off_switch() {
+        // The mirror image of the test above, and the reason the two are
+        // separate: `Device.parameters[0]` is the device's on/off switch,
+        // named `Device On`, for built-ins, plugins and Racks alike, and
+        // `device_range.py` returns every parameter's name and formatted
+        // value verbatim -- so this tool DOES carry bypass state. Copying
+        // the chain map's sentence here told the model it knew less than it
+        // did, so it discarded true evidence it was already holding.
+        let description = description_of("get_device_params");
+        assert!(description.contains("on/off switch"));
+        assert!(description.contains("Device On"));
+        assert!(
+            !description.contains("bypassed is not reported"),
+            "the chain map's sentence must not come back onto the parameter read"
+        );
     }
 
     #[test]

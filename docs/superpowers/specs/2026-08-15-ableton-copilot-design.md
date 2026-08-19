@@ -556,12 +556,23 @@ wrong answer in production.**
   "anything sticking out in my mix?" would otherwise conclude there is no
   reverb when the reverb sits on a return, so the tool description says
   outright that returns and master are not covered.
-- **Device on/off state is not exposed.** `is_active` appears nowhere in this
-  design, so a bypassed EQ is byte-identical to an active one and the model
-  has no way to ask. Every statement it makes about a chain silently assumes
-  every device in it is on. Both tool descriptions say so outright: the spec
-  is not a channel the model reads, and without the sentence it describes a
-  bypassed EQ's 80 Hz low cut as if it were shaping the bass.
+- **Device on/off state is carried by `get_device_params` only.** `is_active`
+  appears nowhere in this design, so the chain map is names alone and a
+  bypassed EQ is byte-identical to an active one in it; `get_device_chains`'s
+  description says so outright, because the spec is not a channel the model
+  reads and without the sentence it describes a bypassed EQ's 80 Hz low cut as
+  if it were shaping the bass. The parameter read is the opposite case: in the
+  Live Object Model `Device.parameters[0]` is the device's on/off switch,
+  named `Device On`, for built-in devices, plugins and Racks alike, and
+  `copilot/device_range.py` slices `device.parameters` and returns `p.name`
+  and `p.str_for_value(p.value)` verbatim — so parameter 0 arrives as
+  «Device On» / «Off» and the bypass state is right there in the answer.
+  `get_device_params`'s description says that, rather than repeating the chain
+  map's sentence: telling the model it cannot see the switch makes it discard
+  true evidence it is already holding, which is overclaiming in the other
+  direction. The claim rests entirely on `parameters[0]` being `Device On`;
+  a device whose first parameter is something else would falsify it, so
+  `docs/manual-verification.md` checks it against a running Live.
 - **Devices inside Racks are not listed.** `track.devices` is top-level only,
   so an Instrument Rack, Audio Effect Rack or Drum Rack appears as one device
   and everything inside it is invisible; `get_device_params` on a Rack

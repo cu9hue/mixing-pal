@@ -226,6 +226,10 @@ the app to trigger it).
 - [ ] Asking "what's the EQ doing on my bass?" calls `get_device_params` and
       returns real values with units (`80.0 Hz`, `-12.0 dB`), not normalised
       floats.
+- [ ] Call `get_device_params` on any device and confirm parameter 0 is
+      `Device On`, with a value of `On` or `Off`. The tool description tells
+      the model it can read bypass state from the parameter list; that claim
+      rests on this, and only a running Live can settle it.
 - [ ] Asking about a device index that does not exist returns a "no reply"
       answer that mentions the index may not exist, and does not invent
       parameters.
