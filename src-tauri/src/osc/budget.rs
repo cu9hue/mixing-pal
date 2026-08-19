@@ -355,8 +355,13 @@ mod tests {
         // The claim the constant is making, asserted rather than trusted: a
         // full window of worst-case-length names must still fit, because past
         // MAX_DATAGRAM Live's sendto raises and we receive nothing at all.
+        // Derived, not hardcoded: written as literals this assertion stops
+        // testing anything the moment either constant moves.
         let (_, span) = param_string_windows(10_000)[0];
-        assert!(span * 64 + 256 <= MAX_DATAGRAM, "a full window overflows the datagram cap");
+        assert!(
+            span * BYTES_PER_PARAM_STRING + HEADER_SLACK <= MAX_DATAGRAM,
+            "a full window overflows the datagram cap"
+        );
     }
 
     #[test]
