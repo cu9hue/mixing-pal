@@ -12,6 +12,10 @@
   --surface: #151619;
   --surface-raised: #1b1d21;
   --surface-sunken: #101113;
+  /* A faint white wash for things that sit ON a surface rather than beside
+     it: inline chips, code. Deliberately not --border, which happens to
+     share this value today but means something else and may be retuned. */
+  --surface-overlay: rgba(255, 255, 255, 0.07);
 
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.12);
