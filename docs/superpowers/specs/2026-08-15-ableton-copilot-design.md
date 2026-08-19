@@ -223,11 +223,13 @@ the check fires only when a poll happens to land *between* the two samples,
 and a move in the up-to-2 s window *before* the call is invisible to it
 entirely — both samples read identically stale names while the fetch reads
 Live's current ordering, and `get_device_chains`'s returned indices then pair
-against the stale index→name lines in the context block. The residual is
-roughly (call duration / poll interval), which is why the check is kept
-rather than dropped: its coverage rises with exactly the slow, paged,
-retrying reads where a track move is both likeliest and worst. Closing it
-properly needs a change Live *tells* us about. A counter can still be added
+against the stale index→name lines in the context block. Its *coverage* is
+roughly (call duration / poll interval) — about 5% for a 100 ms call against
+a 2 s poll, leaving a residual of roughly 95%. The check therefore catches a
+small fraction of in-flight moves and is no completeness guarantee. It is
+kept rather than dropped because that fraction rises with exactly the slow,
+paged, retrying reads where a track move is both likeliest and worst.
+Closing it properly needs a change Live *tells* us about. A counter can still be added
 later, alongside rather than instead of this.
 
 ### Datagram budget

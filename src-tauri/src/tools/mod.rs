@@ -252,9 +252,14 @@ const MAX_FANOUT_TRACKS: i64 = 512;
 /// the context block.
 ///
 /// It is kept because its coverage grows with exactly the calls that need
-/// it: the residual is (fetch duration / poll interval), so a slow set --
-/// timeouts, retries, a fetch stretching toward the 2 s timeout -- is
-/// where a track move is both most likely and most likely to be caught.
+/// it. That COVERAGE -- not the residual -- is (fetch duration / poll
+/// interval): about 5% for a ~100 ms fetch against a 2 s poll, which
+/// leaves a residual of 1 - (fetch duration / poll interval), roughly
+/// 95%. So the guard catches a small fraction of in-flight reorders and
+/// is not a completeness guarantee. What it has going for it is that the
+/// fraction rises with the calls that need it: a slow set -- timeouts,
+/// retries, a fetch stretching toward the 2 s timeout -- is where a track
+/// move is both most likely and most likely to be caught.
 /// It costs nothing on the wire, so there is no case for dropping it.
 /// Closing it properly needs a change Live tells us about, not one we
 /// sample: see the spec's "A generation counter".
