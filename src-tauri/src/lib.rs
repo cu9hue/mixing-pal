@@ -614,7 +614,10 @@ pub fn run() {
             model_complete,
             trace,
             clear_trace,
-            window::set_window_mode
+            window::set_window_mode,
+            install::connector_status,
+            install::install_connector,
+            install::live_is_running
         ])
         .setup(|app| {
             let handle = app.handle().clone();

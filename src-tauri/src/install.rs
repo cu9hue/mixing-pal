@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 /// Mirrors `remote-script/<folder>/` into the installed location.
@@ -9,7 +10,6 @@ use std::path::{Path, PathBuf};
 ///
 /// Excluded names are neither copied from the source nor removed from the
 /// destination.
-#[allow(dead_code)]
 pub fn sync_dir(src: &Path, dest: &Path, exclude: &[&str]) -> std::io::Result<()> {
     if !src.is_dir() {
         return Err(std::io::Error::new(
@@ -59,11 +59,124 @@ pub fn sync_dir(src: &Path, dest: &Path, exclude: &[&str]) -> std::io::Result<()
 /// directory ourselves would install into somewhere Live never reads, and
 /// the producer would be left selecting a Control Surface entry that is
 /// not there. Better to say we could not find it and ask.
-#[allow(dead_code)]
 pub fn default_user_library() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let path = PathBuf::from(home).join("Music").join("Ableton").join("User Library");
     path.is_dir().then_some(path)
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConnectorStatus {
+    /// The name Live shows in its Control Surface dropdown. The frontend
+    /// interpolates this into the setup instructions rather than
+    /// hardcoding it, so a rename cannot make the instructions wrong.
+    pub folder: String,
+    pub installed: bool,
+    /// None means we could not find the User Library at its default path.
+    pub user_library: Option<String>,
+}
+
+#[tauri::command]
+pub fn connector_status() -> ConnectorStatus {
+    let folder = crate::connector::folder().to_string();
+    let library = default_user_library();
+    // Not `is_dir()` on the folder: sync_dir creates the destination before
+    // it copies, so a permission error or an interrupted copy leaves a
+    // directory that exists but has nothing useful in it. Testing for the
+    // version module -- which the wire-version handshake requires -- means
+    // "installed" reports on a connector that got far enough to work,
+    // rather than on the presence of an empty folder.
+    let installed = library
+        .as_ref()
+        .map(|l| {
+            l.join("Remote Scripts")
+                .join(&folder)
+                .join("copilot")
+                .join("version.py")
+                .is_file()
+        })
+        .unwrap_or(false);
+    ConnectorStatus {
+        folder,
+        installed,
+        user_library: library.map(|p| p.display().to_string()),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstallReport {
+    pub destination: String,
+}
+
+/// Where the connector is copied from.
+///
+/// In a shipped app it is bundled as a Tauri resource. In development
+/// that resource does not exist, so it falls back to the repo copy. The
+/// distribution plan adds the bundling; this signature does not change
+/// when it does -- only which branch is taken.
+fn connector_source(app: &tauri::AppHandle) -> PathBuf {
+    use tauri::Manager;
+    let folder = crate::connector::folder();
+    if let Ok(resources) = app.path().resource_dir() {
+        let bundled = resources.join(folder);
+        if bundled.is_dir() {
+            return bundled;
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("remote-script")
+        .join(folder)
+}
+
+/// Copies the connector into the User Library.
+///
+/// `user_library` overrides the default path, for the producer who moved
+/// hers. The frontend sends null unless she typed one.
+#[tauri::command]
+pub fn install_connector(
+    app: tauri::AppHandle,
+    user_library: Option<String>,
+) -> Result<InstallReport, String> {
+    let library = match user_library {
+        Some(raw) => {
+            let path = PathBuf::from(raw.trim());
+            if !path.is_dir() {
+                return Err(format!("There's no folder at {}.", path.display()));
+            }
+            path
+        }
+        None => default_user_library().ok_or_else(|| {
+            "Couldn't find your Ableton User Library where Live usually keeps it. \
+             In Live, open Preferences → Library to see where yours is."
+                .to_string()
+        })?,
+    };
+
+    let dest = library.join("Remote Scripts").join(crate::connector::folder());
+    sync_dir(&connector_source(&app), &dest, &["logs", "__pycache__"])
+        .map_err(|e| format!("Couldn't install the connector: {e}"))?;
+
+    Ok(InstallReport { destination: dest.display().to_string() })
+}
+
+/// Whether Ableton Live is running right now.
+///
+/// Used only to choose which sentence the restart step shows. It is never
+/// a gate: arriving deltas are the real evidence that setup worked, and
+/// this returning false must not block anyone whose Live is running under
+/// a name we did not anticipate.
+#[tauri::command]
+pub fn live_is_running() -> bool {
+    std::process::Command::new("/bin/ps")
+        .args(["-Axco", "command"])
+        .output()
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line.trim() == "Live")
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
