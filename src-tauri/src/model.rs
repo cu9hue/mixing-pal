@@ -29,6 +29,11 @@ How to work:
 producer's stated goal, and one line per track. Everything else you fetch \
 with a tool. Do not answer from the context block about data you have not \
 fetched.
+- The context block says NOTHING about devices. Never infer a track's \
+processing from its name. For any question about devices, plugins, EQ, \
+compression, or a track's chain, call get_device_chains first - it covers \
+the whole set in one round trip - and then get_device_params on the few \
+devices that matter. A track name is not evidence about what is on it.
 - Every tool result carries fresh, fresh_as_of, and missing_reason. A result \
 with a missing_reason is data you do NOT have. Say so; never fill the gap \
 with a plausible value. A mirror read may be a few seconds old; if that \
@@ -596,5 +601,15 @@ mod tests {
             .await
             .unwrap_err();
         assert!(failure.returned.chars().count() <= PROBE_QUOTE_LEN + 1);
+    }
+
+    #[test]
+    fn the_prompt_points_at_the_device_tools_by_name() {
+        // The prompt licenses mixing talk about device chains. Before Plan 3
+        // there was no way to fetch one, so the model inferred from track
+        // names -- the failure that motivated this work. Naming the tools is
+        // what closes that loop.
+        assert!(SYSTEM_PROMPT.contains("get_device_chains"));
+        assert!(SYSTEM_PROMPT.contains("get_device_params"));
     }
 }
