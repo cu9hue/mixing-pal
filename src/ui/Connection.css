@@ -31,8 +31,12 @@
   color: var(--error-label);
 }
 
+/* Not --accent: the banner action below already spends the view's accent
+   budget, and the nudge rule spends the other. Pairing the dot with its own
+   label colour also matches how the error banner pairs --error with
+   --error-label. */
 .banner--warn .banner__dot {
-  background: var(--accent);
+  background: var(--warn-label);
 }
 
 .banner--warn .banner__label {
