@@ -33,13 +33,18 @@ export function Advanced({
   const [view, setView] = useState<SettingsView | null>(null);
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Distinct from `view === null`, which also means "still loading". Folding
+  // the two together is what left this pane blank with no way out.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [connector, setConnector] = useState<ConnectorView | null>(null);
   const [connectorNote, setConnectorNote] = useState<string | null>(null);
   const [reinstalling, setReinstalling] = useState(false);
 
   useEffect(() => {
-    invoke<SettingsView>("get_settings").then(setView).catch(() => setView(null));
+    invoke<SettingsView>("get_settings")
+      .then(setView)
+      .catch((e) => setLoadError(String(e)));
     invoke<ConnectorView>("connector_status").then(setConnector).catch(() => setConnector(null));
   }, []);
 
@@ -59,7 +64,24 @@ export function Advanced({
     }
   }
 
-  if (view === null) return null;
+  // Returning null here rendered an empty box with no Cancel button and no
+  // way back to the card. This is the pane that exists for the day the
+  // provider is unreachable, so failing to open is precisely when it must
+  // still offer a way out.
+  if (view === null) {
+    return (
+      <div className="advanced">
+        {loadError === null ? (
+          <div className="advanced__note">Reading your settings…</div>
+        ) : (
+          <div className="advanced__error">{`Couldn't read your settings.\n${loadError}`}</div>
+        )}
+        <button className="advanced__button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    );
+  }
 
   async function save() {
     setSaving(true);
