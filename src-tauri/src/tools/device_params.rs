@@ -195,7 +195,8 @@ pub async fn get_device_params(
 ) -> Result<DeviceParams, QueryError> {
     // No reply here is also how "there is no device at that path" arrives:
     // the Remote Script raises inside Live and sends nothing, which is
-    // byte-identical to a lost reply. See the spec's Racks section.
+    // byte-identical to a lost reply. See the spec's Devices section,
+    // under "One error that cannot be distinguished".
     let Some((device_name, total)) = device_identity(q, track, path, timeout).await else {
         return Err(QueryError::NoReply);
     };
