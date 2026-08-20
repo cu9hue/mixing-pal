@@ -3,6 +3,7 @@ pub mod device_chains;
 pub mod device_params;
 pub mod fence;
 pub mod path;
+pub mod rack_contents;
 pub mod track_detail;
 
 use crate::deltas::Coalescer;

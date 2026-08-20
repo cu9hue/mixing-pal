@@ -121,6 +121,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/device/get/parameters/name_range",
     "/live/device/get/parameters/value_string_range",
     "/live/mixingpal/get/version",
+    "/live/copilot/get/rack/chains",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -269,6 +270,7 @@ fn handle_inbound(
             | "/live/copilot/get/device/identity"
             | "/live/device/get/parameters/name_range"
             | "/live/device/get/parameters/value_string_range"
+            | "/live/copilot/get/rack/chains"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
