@@ -23,10 +23,12 @@ const cargoVersion = /^version = "([^"]+)"$/m.exec(
  *
  * Tauri takes the running app's version from `tauri.conf.json`, and stage 3's
  * updater compares that against the version in the hosted manifest. So
- * `tauri.conf.json` is the one that decides whether an update is offered, and
- * the other two are free to drift without anything failing -- which is the
- * problem. A release whose Cargo package and npm package claim a different
- * number than the app reports is a release nobody can reason about later.
+ * `tauri.conf.json` is the one the updater trusts. `package.json`'s copy is
+ * what `src/ui/Advanced.tsx` reads and shows a producer as "Mixing Pal
+ * v{appVersion}". `Cargo.toml`'s copy is read by nothing at runtime. Let the
+ * three drift and you get a release that reports a different number
+ * depending on where you look -- the updater checking one, the Advanced pane
+ * showing another, and Cargo's own copy agreeing with neither.
  *
  * Bumping a version is a human action across three files. This is the check
  * that the human did all three.

@@ -361,9 +361,12 @@ no connector, no settings, and no repository.
 Date: ___________  macOS version: ___________  Tester: ___________
 
 - [ ] Create a new account in System Settings → Users & Groups, log into it,
-      and copy the `.dmg` across over USB or the local network — **not**
-      AirDrop, and not a browser download. Both of those set
-      `com.apple.quarantine`, and macOS blocks a quarantined unsigned app.
+      and copy the `.dmg` across through `/Users/Shared` — **not** AirDrop,
+      and not a browser download, and not anything fetched over the local
+      network (an HTTP fetch from another machine on your LAN sets the
+      attribute too). AirDrop and browser downloads set
+      `com.apple.quarantine`, and macOS blocks a quarantined unsigned app;
+      `/Users/Shared` sets nothing and is readable from the new account.
       Stage 2 removes that difference; until then, the delivery route is
       part of what is being tested.
 - [ ] Open the `.dmg`. It shows the app beside an Applications folder. Drag
@@ -376,12 +379,17 @@ Date: ___________  macOS version: ___________  Tester: ___________
       connector.
 - [ ] **Write down whether macOS asked permission for anything**, and what
       it named. Stage 2 depends on the answer: permission grants are keyed
-      to an app's code signature, and an unsigned build gets a new signature
-      every time it is built, so any grant needed here is a grant that
+      to an app's code signature, and this bundle is unsigned — macOS
+      identifies it by path and by the hash of its contents instead, which
+      changes on every build, so any grant needed here is a grant that
       every future update would silently lose.
 - [ ] Start Live. Add MixingPal under Preferences → Link, Tempo & MIDI →
       Control Surface. Deltas arrive and setup advances to the connected
       step.
+- [ ] Move past the connected screen, then answer the goal question or press
+      Skip. This is what closes setup and persists the flag that keeps it
+      closed — the card, and the Advanced link on it, do not exist until it
+      happens, and the last check on this list is testing that same flag.
 - [ ] Open Advanced, set an OpenRouter key and a model, then ask a question
       about the set and get an answer. **Expect to do this by hand.** The
       app installs cleanly and then cannot answer anything until both are

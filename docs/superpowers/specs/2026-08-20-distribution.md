@@ -136,8 +136,9 @@ take for the same reason.
 ### The DMG
 
 - `bundle.targets` becomes the explicit `["app", "dmg"]`. On macOS `"all"`
-  already means these two, so this changes nothing today and stops stage 3's
-  updater artifacts from arriving as a surprise.
+  already means these two, so this changes nothing today; it is being
+  explicit about what the build produces instead of inheriting whatever
+  `"all"` expands to.
 - `bundle.category` becomes `"Music"` — Tauri's `AppCategory` enum name, which
   it maps to the `public.app-category.music` UTI in `Info.plist`. Writing the
   UTI directly is rejected by the config schema.
@@ -225,10 +226,11 @@ confirm it opens with no dialog at all.
 
 ### What this fixes beyond the warning
 
-macOS keys an app's privacy permissions to its code signature. An ad-hoc signed
-build gets a new signature every time it is built, so each update looks like a
-different application and starts from zero. A stable Developer ID makes those
-grants persist across updates. Whether this app needs any such grant is what
+macOS keys an app's privacy permissions to its code signature. This build has
+no signature at all, so macOS identifies it by path and by the hash of its
+contents instead, and that hash changes on every build — each update looks
+like a different application and starts from zero. A stable Developer ID
+makes those grants persist across updates. Whether this app needs any such grant is what
 stage 1's clean-account run determines; if it does, stage 3 is not safe to
 build on ad-hoc signing.
 
