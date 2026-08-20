@@ -342,3 +342,39 @@ Plan 1 has no dependency on plan 2. Plan 2 cannot go first.
    preferably, a domain to serve artifacts from. Neither exists yet.
 2. **Whether `~/Music/Ableton` raises a privacy prompt.** Answered by stage 1's
    clean-account run, at no extra cost.
+
+---
+
+## Carried forward from stage 1's execution
+
+Two things stage 1 discovered that stages 2 and 3 have to plan around. Both were
+found by building the real artifact, not by reading documentation.
+
+**The DMG step needs a window server.** Tauri's stock `bundle_dmg.sh` shells out
+to `osascript` to lay out the volume window. A build run as a fully detached,
+non-GUI process compiles both architectures cleanly and then fails at bundling.
+This is a property of tauri-bundler, not of anything in this repository, and
+dropping the `bundle.macOS.dmg` position keys does not avoid it — the AppleScript
+runs regardless, using defaults. That script documents a `SANDBOX_SAFE` mode
+"useful in Sandbox and non-GUI environments" which tauri-bundler does not invoke;
+that flag is the lead to chase when stage 3's release job hits this.
+
+**The bundle carries no signature at all.** Not an ad-hoc bundle signature — none.
+There is no `Contents/_CodeSignature`, and `codesign --verify --strict` reports
+"code object is not signed at all"; only the inner Mach-O has the linker's ad-hoc
+signature. Three consequences:
+
+- macOS shows "…is damaged and can't be opened" for this case, rather than the
+  "Apple could not verify…" wording that reliably offers an **Open Anyway**
+  button. `docs/opening-an-unsigned-build.md` now covers both, but the remedy it
+  can offer for the first is "get the file by a route that does not mark it as
+  downloaded", not a button.
+- Stage 2's plan to confirm entitlements with `codesign -d --entitlements` has
+  nothing to read on today's artifact. That check only becomes meaningful once
+  the bundle is signed.
+- Setting `bundle.macOS.signingIdentity` to `"-"` should produce a sealed
+  `_CodeSignature` via ad-hoc signing, which would make the Open Anyway path
+  predictable before the Developer ID arrives. This was deliberately not done in
+  stage 1: it is a build-configuration change, which is stage 2's subject, and
+  Tauri's handling of `"-"` was not verified. Verify it early in stage 2 — it may
+  be worth landing before enrollment completes.
