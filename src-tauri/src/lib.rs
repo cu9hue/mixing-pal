@@ -117,6 +117,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/clip/get/length",
     // get_device_chains and get_device_params.
     "/live/track/get/devices/name",
+    "/live/track/get/devices/can_have_chains",
     "/live/copilot/get/device/identity",
     "/live/device/get/parameters/name_range",
     "/live/device/get/parameters/value_string_range",
@@ -267,6 +268,7 @@ fn handle_inbound(
             | "/live/clip/get/notes"
             | "/live/clip/get/length"
             | "/live/track/get/devices/name"
+            | "/live/track/get/devices/can_have_chains"
             | "/live/copilot/get/device/identity"
             | "/live/device/get/parameters/name_range"
             | "/live/device/get/parameters/value_string_range"
