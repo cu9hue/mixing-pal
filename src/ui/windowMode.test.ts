@@ -12,8 +12,16 @@ describe("nextMode", () => {
     expect(nextMode("pill", { type: "nudge_arrived" }, QUIET)).toBe("card");
   });
 
-  it("opens the card when an answer completes", () => {
-    expect(nextMode("pill", { type: "answer_completed" }, QUIET)).toBe("card");
+  // Deliberately NOT "card". Forcing the card open here made the pill's
+  // unread state unreachable -- the same batch that set `unread` flipped the
+  // view to card, and the effect that clears it ran before Pill ever
+  // rendered. It also reopened a window over Live that she had just closed.
+  it("leaves a collapsed card collapsed when an answer completes", () => {
+    expect(nextMode("pill", { type: "answer_completed" }, QUIET)).toBe("pill");
+  });
+
+  it("leaves an open card open when an answer completes", () => {
+    expect(nextMode("card", { type: "answer_completed" }, QUIET)).toBe("card");
   });
 
   it("collapses to the pill on escape", () => {

@@ -124,8 +124,18 @@ export function nextMode(mode: WindowMode, event: ModeEvent, ctx: ModeContext): 
       return mode;
     case "pill_clicked":
     case "nudge_arrived":
-    case "answer_completed":
       return "card";
+    // Not "card". An answer she is already watching needs no transition, and
+    // one that lands after she has deliberately collapsed the card must not
+    // reopen a window over Live -- she closed it on purpose, and the spec is
+    // explicit that this app never takes the screen back from her.
+    //
+    // Forcing "card" here also made the pill's unread state unreachable: the
+    // same batch that set `unread` flipped the view to card, and the effect
+    // that clears it ran before Pill was ever mounted. The glow is what tells
+    // her an answer is waiting; it only has a job if the card can stay shut.
+    case "answer_completed":
+      return mode;
     case "escape":
     case "chevron_closed":
       return "pill";
