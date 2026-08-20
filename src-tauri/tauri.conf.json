@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ableton-copilot",
+  "productName": "Mixing Pal",
   "version": "0.1.0",
-  "identifier": "com.abletoncopilot.app",
+  "identifier": "com.mixingpal.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

@@ -1990,7 +1990,7 @@ mod tests {
     fn scratch_dir() -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
         std::env::temp_dir().join(format!(
-            "ableton-copilot-lib-{}-{}",
+            "mixing-pal-lib-{}-{}",
             std::process::id(),
             N.fetch_add(1, Ordering::SeqCst)
         ))

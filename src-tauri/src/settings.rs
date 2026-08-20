@@ -92,7 +92,7 @@ mod tests {
     fn scratch() -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "ableton-copilot-settings-{}-{}",
+            "mixing-pal-settings-{}-{}",
             std::process::id(),
             N.fetch_add(1, Ordering::SeqCst)
         ));

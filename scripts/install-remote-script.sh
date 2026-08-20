@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 : "${HOME:?HOME must be set and non-empty}"
-DEST="$HOME/Music/Ableton/User Library/Remote Scripts/AbletonCopilot"
-SRC="$(cd "$(dirname "$0")/../remote-script/AbletonCopilot" && pwd)"
+DEST="$HOME/Music/Ableton/User Library/Remote Scripts/MixingPal"
+SRC="$(cd "$(dirname "$0")/../remote-script/MixingPal" && pwd)"
 mkdir -p "$DEST"
 # --delete removes files no longer in SRC, but --exclude keeps rsync from
 # ever touching logs/ (created inside DEST by a running Live session, not
@@ -11,5 +11,5 @@ mkdir -p "$DEST"
 # logging for a running Live session mid-build.
 rsync -a --delete --exclude 'logs/' --exclude '__pycache__/' "$SRC/" "$DEST/"
 echo "Installed to $DEST"
-echo "Restart Live, then choose AbletonCopilot under"
+echo "Restart Live, then choose Mixing Pal under"
 echo "Preferences > Link/Tempo/MIDI > Control Surface."

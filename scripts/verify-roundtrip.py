@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Manual verification: confirm the AbletonCopilot Remote Script answers over OSC.
+"""Manual verification: confirm the MixingPal Remote Script answers over OSC.
 
 Prerequisites (cannot be done by this script):
   1. Restart Ableton Live.
-  2. Preferences > Link/Tempo/MIDI > Control Surface > select "AbletonCopilot".
+  2. Preferences > Link/Tempo/MIDI > Control Surface > select "MixingPal".
   3. Open any Live set.
 
 Usage:
@@ -117,7 +117,7 @@ def main() -> int:
         print(
             "Timed out waiting for a reply on "
             f"{LISTEN_ADDR[0]}:{LISTEN_ADDR[1]}.\n"
-            "Is AbletonCopilot selected as a Control Surface, and was Live "
+            "Is MixingPal selected as a Control Surface, and was Live "
             "restarted after installing the Remote Script?",
             file=sys.stderr,
         )

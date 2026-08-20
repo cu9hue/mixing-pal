@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    ableton_copilot_lib::run()
+    mixing_pal_lib::run()
 }
