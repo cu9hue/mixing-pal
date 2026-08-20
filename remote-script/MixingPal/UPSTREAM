@@ -4,7 +4,7 @@ Vendored: 2026-08-16
 
 The `abletonosc/` and `pythonosc/` directories are unmodified upstream code.
 `manager.py` is also unmodified upstream code, vendored alongside
-`abletonosc/` because `copilot/manager.py`'s `CopilotManager` does
+`abletonosc/` because `mixingpal/manager.py`'s `MixingPalManager` does
 `from ..manager import Manager` and subclasses it; without `manager.py` the
 Remote Script cannot construct its Manager instance inside Live. (The
 brief's copy list omitted `manager.py`; this is the one deviation from it,
@@ -15,16 +15,16 @@ The upstream `client/` directory (a standalone CLI/test client) is not
 vendored: nothing in `abletonosc/`, `manager.py`, or `__init__.py` imports
 it, so it is not needed for the Remote Script to run inside Live.
 
-Our additions live in `copilot/`. Do not edit vendored files in place; add a
-handler in `copilot/` and register it from `copilot/manager.py` instead.
+Our additions live in `mixingpal/`. Do not edit vendored files in place; add a
+handler in `mixingpal/` and register it from `mixingpal/manager.py` instead.
 
 `__init__.py` is NOT verbatim upstream. `manager.py` must stay byte-identical
 to upstream (see above), so it cannot be edited to add master/return-track
-handlers. Instead, `copilot/manager.py` defines `CopilotManager(Manager)`,
+handlers. Instead, `mixingpal/manager.py` defines `MixingPalManager(Manager)`,
 which overrides `init_api()` to call `super().init_api()` and then append
 `MasterHandler`, `ReturnHandler`, `MixerHandler`, `DeviceRangeHandler`, and
 `ViewOverrideHandler` to `self.handlers` (see Task 2 and later). `__init__.py`
-was changed only to import `CopilotManager` from `.copilot.manager` and
+was changed only to import `MixingPalManager` from `.mixingpal.manager` and
 return it from `create_instance()` instead of the upstream `Manager`. The
 `try/except ImportError` wrapper that lets pytest import this package is
 unchanged.
