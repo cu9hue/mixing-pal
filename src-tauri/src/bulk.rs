@@ -14,7 +14,7 @@ pub const TRACK_DATA_ADDRS: [&str; 3] = [
     "/live/track/get/solo",
 ];
 
-/// Addresses `decode_mixer_data` re-emits, in the order `copilot/mixer.py`'s
+/// Addresses `decode_mixer_data` re-emits, in the order `mixingpal/mixer.py`'s
 /// `mixer_data` handler appends `volume, panning, volume_db` per track.
 ///
 /// The dB string roughly triples the reply's per-track cost (a formatted
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn decodes_a_mixer_data_reply_into_volume_panning_and_db_per_track() {
-        // copilot/mixer.py appends volume, panning, and the volume parameter's
+        // mixingpal/mixer.py appends volume, panning, and the volume parameter's
         // formatted dB string per track, in that order. The dB string is what
         // makes a fader legible to a model -- 0.85 is a control position,
         // -3.0 dB is a mixing fact.

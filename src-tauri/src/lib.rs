@@ -1265,7 +1265,7 @@ mod tests {
         let line = py
             .lines()
             .find(|l| l.trim_start().starts_with("WIRE_VERSION"))
-            .expect("copilot/version.py must define WIRE_VERSION");
+            .expect("mixingpal/version.py must define WIRE_VERSION");
         let py_version: u64 = line
             .split('=')
             .nth(1)
@@ -1284,7 +1284,7 @@ mod tests {
 
         assert_eq!(
             py_version, manifest.version,
-            "copilot/version.py's WIRE_VERSION ({py_version}) must match \
+            "mixingpal/version.py's WIRE_VERSION ({py_version}) must match \
              shared/wire-version.json's version ({}) -- update both together",
             manifest.version
         );

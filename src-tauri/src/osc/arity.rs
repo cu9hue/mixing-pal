@@ -43,7 +43,7 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/song/get/signature_denominator"
         | "/live/song/get/beat"
         // The wire-version handshake -- one int, no key. See
-        // shared/wire-version.json and copilot/version.py.
+        // shared/wire-version.json and mixingpal/version.py.
         | "/live/mixingpal/get/version" => KeyArity::None,
 
         "/live/track/get/name"
