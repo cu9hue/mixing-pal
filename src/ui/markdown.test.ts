@@ -211,3 +211,47 @@ describe("parseMarkdown and raw HTML", () => {
     blocks.forEach(walk);
   });
 });
+
+describe("loose lists", () => {
+  // The model routinely puts a blank line between list items. Before this,
+  // the parser only gathered CONSECUTIVE item lines, so each item became its
+  // own single-item list -- and since every <ol> restarts its numbering, the
+  // producer saw "1." against every entry instead of 1, 2, 3.
+  it("keeps a blank-separated ordered list as one list", () => {
+    const blocks = parseMarkdown("1. one\n\n2. two\n\n3. three");
+    expect(blocks).toHaveLength(1);
+    const list = blocks[0] as Extract<BlockNode, { type: "list" }>;
+    expect(list.type).toBe("list");
+    expect(list.ordered).toBe(true);
+    expect(list.items).toHaveLength(3);
+  });
+
+  it("keeps a blank-separated unordered list as one list", () => {
+    const blocks = parseMarkdown("- one\n\n- two");
+    expect(blocks).toHaveLength(1);
+    const list = blocks[0] as Extract<BlockNode, { type: "list" }>;
+    expect(list.ordered).toBe(false);
+    expect(list.items).toHaveLength(2);
+  });
+
+  // A blank line still ends the list when what follows is not another item.
+  it("ends the list when the next block is prose", () => {
+    const blocks = parseMarkdown("1. one\n\n2. two\n\nRoll the pad off at 180 Hz.");
+    expect(blocks.map((b) => b.type)).toEqual(["list", "paragraph"]);
+    expect((blocks[0] as Extract<BlockNode, { type: "list" }>).items).toHaveLength(2);
+  });
+
+  // Switching marker type starts a new list rather than merging.
+  it("does not merge an ordered list into an unordered one", () => {
+    const blocks = parseMarkdown("- one\n\n1. two");
+    expect(blocks.map((b) => b.type)).toEqual(["list", "list"]);
+    expect((blocks[0] as Extract<BlockNode, { type: "list" }>).ordered).toBe(false);
+    expect((blocks[1] as Extract<BlockNode, { type: "list" }>).ordered).toBe(true);
+  });
+
+  // Two blank lines is a deliberate break, not a continuation.
+  it("ends the list on a two-line gap", () => {
+    const blocks = parseMarkdown("1. one\n\n\n1. two");
+    expect(blocks).toHaveLength(2);
+  });
+});
