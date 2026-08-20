@@ -1,7 +1,11 @@
 .card {
   display: flex;
   flex-direction: column;
-  max-height: 100vh;
+  /* Published by App from MODE_GEOMETRY.card.maxHeight so the CSS ceiling
+     and the height App asks the window for are one number. Never 100vh:
+     the viewport would clamp this element before App measures it, and the
+     window could then only shrink. */
+  max-height: var(--card-max-height, 520px);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);

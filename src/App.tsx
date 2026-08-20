@@ -6,7 +6,7 @@ import { emptySet, applyDelta } from "./live/apply";
 import { Card } from "./ui/Card";
 import { Pill } from "./ui/Pill";
 import { pillState } from "./ui/pillState";
-import { MODE_GEOMETRY, ModeEvent, WindowMode, nextMode } from "./ui/windowMode";
+import { CARD_MAX_HEIGHT, MODE_GEOMETRY, ModeEvent, WindowMode, nextMode } from "./ui/windowMode";
 import { STALE_MS } from "./ui/Connection";
 import { unnamedTracks } from "./rules/unnamedTracks";
 import { EMPTY_NUDGE_STATE, dismiss, offer } from "./rules/nudges";
@@ -192,18 +192,50 @@ export default function App() {
     };
   }, [dispatch]);
 
-  // Resize after the DOM has the new content but before the frame paints,
-  // so the window never shows a card at the pill's size or the reverse.
+  // The card's ceiling is one number, owned by MODE_GEOMETRY and published
+  // to CSS here. Card.css used to say 100vh, which clamped the card to the
+  // window before it could be measured -- so the window could only shrink,
+  // and a card reopened from the pill measured 44 and stayed 44.
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty("--card-max-height", `${CARD_MAX_HEIGHT}px`);
+  }, []);
+
+  // Measured after every render, because the content can change without
+  // any state this component owns changing. setState re-renders only when
+  // the number actually moved, which is what keeps the effect below quiet.
   const root = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | null>(null);
   useLayoutEffect(() => {
     const geometry = MODE_GEOMETRY[view];
-    const height =
+    const measured =
       geometry.height ??
       Math.min(root.current?.scrollHeight ?? 0, geometry.maxHeight ?? Infinity);
-    invoke("set_window_mode", { mode: view, width: geometry.width, height: Math.ceil(height) }).catch(
-      (err) => console.error("failed to apply window mode", err),
-    );
+    setHeight(Math.ceil(measured));
   });
+
+  // Resize before the frame paints, so the window never shows a card at
+  // the pill's size or the reverse.
+  //
+  // The dependencies are load-bearing. The 1s staleness tick re-renders
+  // this component for the life of the process; an unconditional apply
+  // called set_window_mode on every one of those ticks, which re-centred
+  // the setup window a second after she dragged it and enumerated her
+  // monitors once a second forever.
+  const centredFor = useRef<WindowMode | null>(null);
+  useLayoutEffect(() => {
+    if (height === null) return;
+    const geometry = MODE_GEOMETRY[view];
+    // Centring is a one-shot on entering a centred mode. After that the
+    // window is hers to put where she likes.
+    const center = geometry.centered && centredFor.current !== view;
+    centredFor.current = view;
+    invoke("set_window_mode", {
+      width: geometry.width,
+      height,
+      alwaysOnTop: geometry.alwaysOnTop,
+      center,
+    }).catch((err) => console.error("failed to apply window mode", err));
+  }, [view, height]);
 
   const trackNames = Object.keys(state.tracks)
     .map(Number)

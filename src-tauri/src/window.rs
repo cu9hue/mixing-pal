@@ -1,15 +1,3 @@
-use serde::Deserialize;
-
-/// Mirrors src/ui/windowMode.ts's WindowMode. serde renames to snake_case
-/// so the TypeScript string union crosses the IPC boundary unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WindowMode {
-    Setup,
-    Pill,
-    Card,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
     pub x: i32,
@@ -66,19 +54,25 @@ pub fn clamp_to_visible(desired: Rect, monitors: &[Rect]) -> (i32, i32) {
 
 use tauri::{LogicalSize, Manager, PhysicalPosition};
 
-/// Applies a mode to the one window.
+/// Applies a window geometry.
 ///
-/// `width` and `height` come from the frontend because only the frontend
-/// knows how tall the card's content is; the geometry table that produced
-/// them lives in src/ui/windowMode.ts. Rust owns the parts the webview
-/// cannot see: always-on-top, centring, and putting the window somewhere
-/// a human can actually reach it.
+/// Every field comes from the frontend, because src/ui/windowMode.ts's
+/// MODE_GEOMETRY is the one owner of what each mode looks like -- only the
+/// frontend knows how tall the card's content is, and deriving
+/// always-on-top and centring here as well gave one fact two owners that
+/// nothing checked against each other. Rust owns only what the webview
+/// cannot see: putting the window somewhere a human can actually reach it.
+///
+/// `center` is a one-shot, sent when the frontend enters a centred mode.
+/// Centring on every call re-centred the setup window a second after she
+/// dragged it, because the frontend re-renders on a 1s staleness tick.
 #[tauri::command]
 pub fn set_window_mode(
     app: tauri::AppHandle,
-    mode: WindowMode,
     width: u32,
     height: u32,
+    always_on_top: bool,
+    center: bool,
 ) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
@@ -89,10 +83,10 @@ pub fn set_window_mode(
         .map_err(|e| e.to_string())?;
 
     window
-        .set_always_on_top(!matches!(mode, WindowMode::Setup))
+        .set_always_on_top(always_on_top)
         .map_err(|e| e.to_string())?;
 
-    if matches!(mode, WindowMode::Setup) {
+    if center {
         window.center().map_err(|e| e.to_string())?;
         return Ok(());
     }

@@ -19,13 +19,24 @@ export interface Geometry {
   centered: boolean;
 }
 
+/**
+ * The card's ceiling, in pixels.
+ *
+ * Exported because CSS needs the same number: `.card` reads it as the
+ * `--card-max-height` custom property that App publishes at startup. It
+ * used to be `100vh` in Card.css, which made the measurement a fixed
+ * point -- the viewport clamped the card before App could measure it, so
+ * the window could only ever shrink, and never grew back out of the pill.
+ */
+export const CARD_MAX_HEIGHT = 520;
+
 export const MODE_GEOMETRY: Record<WindowMode, Geometry> = {
   // Live's preferences cannot be taught in a 320px card, so setup is a
   // real window. Not on top: it is a task she completes, not a companion.
   setup: { width: 600, height: 680, maxHeight: null, alwaysOnTop: false, centered: true },
   // 44 square so the 26px dot has room for its glow.
   pill: { width: 44, height: 44, maxHeight: null, alwaysOnTop: true, centered: false },
-  card: { width: 320, height: null, maxHeight: 520, alwaysOnTop: true, centered: false },
+  card: { width: 320, height: null, maxHeight: CARD_MAX_HEIGHT, alwaysOnTop: true, centered: false },
 };
 
 export type ModeEvent =
