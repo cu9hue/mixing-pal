@@ -51,7 +51,20 @@ def parse_path(raw):
     for part in parts:
         if not part or not part.isascii() or not part.isdigit():
             return None
-        out.append(int(part))
+        # A legal index is at most i32::MAX -- ten digits -- and the Rust
+        # side refuses anything larger, so accepting it here would let the
+        # two ends disagree about what a path is. The length check is not
+        # redundant with the range check below it: the reply has to ECHO
+        # this string, because it is part of the Args(3) key, so a
+        # four-thousand-digit component would put four kilobytes into the
+        # header and push the datagram past the cap -- and past the cap
+        # means sendto raises and the client receives nothing at all.
+        if len(part) > 10:
+            return None
+        value = int(part)
+        if value > 2147483647:
+            return None
+        out.append(value)
     return out
 
 
@@ -125,8 +138,9 @@ def shrink_to_fit(entry, budget):
     """Halve a record's device-name list until it fits.
 
     Bottoms out at no names at all, which still reports the chain's own name
-    and its true device count -- and, because NAME_CAP bounds every string,
-    that floor is guaranteed to fit inside one datagram.
+    and its true device count. The floor is roughly 230 bytes (a NAME_CAP name
+    plus five integers), so a budget below that is violated silently; the only
+    production caller passes MAX_REPLY_BYTES.
     """
     max_names = MAX_DEVICES_PER_CHAIN
     record = chain_record(entry, max_names)
@@ -149,6 +163,9 @@ def build_window(entries, start, span, budget=MAX_REPLY_BYTES):
     A single chain too large to fit alone is cut back rather than dropped, so
     every reply carries at least one record and the client's paging loop
     always makes progress.
+
+    A negative start or span clamps to zero. This is safe because the handler
+    echoes the clamped value, so the reply describes what it actually contains.
     """
     records = []
     used = 0

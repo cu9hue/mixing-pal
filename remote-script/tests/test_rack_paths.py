@@ -64,13 +64,25 @@ class ParsePathTests(unittest.TestCase):
     def test_junk_is_refused_rather_than_coerced(self):
         # int("-1") would succeed and then slice from the END of the list,
         # resolving to a real but different device.
-        for raw in ["", "-1", "0.-1.0", "1.5", "a", "0..1", "0.4.1.0.1.0.1.0.1.0.1"]:
+        for raw in ["", "-1", "0.-1.0", "1x", "+1", " 1", "a", "0..1", "0.4.1.0.1.0.1.0.1.0.1"]:
             self.assertIsNone(rack_paths.parse_path(raw), raw)
 
     def test_non_ascii_digits_are_refused(self):
         # str.isdigit() is true for U+0663 and int() parses it, so the naive
         # check would accept a path this app never generated.
         self.assertIsNone(rack_paths.parse_path("٣"))
+
+    def test_a_component_longer_than_ten_digits_is_refused(self):
+        # A component of 4000 digits puts ~4 KB into the OSC header (the path
+        # is echoed in the reply), so the datagram lands around 13 KB and
+        # Live's sendto raises, leaving the client in silence.
+        self.assertIsNone(rack_paths.parse_path("0." + "0"*4000 + ".0"))
+
+    def test_values_above_i32_max_are_refused(self):
+        # The Rust side refuses anything above i32::MAX, so the two ends
+        # currently disagree if we accept it here.
+        self.assertIsNone(rack_paths.parse_path(str(2**31)))
+        self.assertEqual(rack_paths.parse_path(str(2**31 - 1)), [2147483647])
 
 
 class ChainsOfTests(unittest.TestCase):
@@ -100,7 +112,7 @@ class ChainsOfTests(unittest.TestCase):
         self.assertEqual([(c, n, name, m) for (c, n, name, m, _) in got],
                          [(kick, 36, "Kick", False), (hats, 42, "Hats", True)])
 
-    def test_empty_pads_are_skipped_so_indices_are_dense(self):
+    def test_a_kit_of_entirely_empty_pads_lists_nothing(self):
         rack = FakeDevice("Drum Rack", drum_pads=[FakePad(i, str(i), []) for i in range(128)])
         self.assertEqual(rack_paths.chains_of(rack), [])
 
@@ -179,14 +191,18 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(len(window), 1)
         self.assertEqual(window[0][4], rack_paths.MAX_DEVICES_PER_CHAIN)  # truth kept
         self.assertLess(window[0][5], rack_paths.MAX_DEVICES_PER_CHAIN)   # payload cut
+        self.assertLessEqual(rack_paths.record_bytes(window[0]), 400)
 
     def test_names_are_capped_so_a_record_always_fits(self):
         # Bounds the worst case: with the name list emptied, a record is six
         # fixed fields plus a capped name, far inside one datagram.
         long_name = "x" * 5000
-        entries = [(FakeChain(long_name, []), -1, long_name, False, False)]
+        long_device_name = "y" * (rack_paths.NAME_CAP + 100)
+        entries = [(FakeChain(long_name, [FakeDevice(long_device_name)]), -1, long_name, False, False)]
         (record,) = rack_paths.build_window(entries, 0, 1)
-        self.assertEqual(len(record[0]), rack_paths.NAME_CAP)
+        self.assertEqual(len(record[0]), rack_paths.NAME_CAP)  # chain name capped
+        # record[6] is the first (and only) device name in the tuple
+        self.assertEqual(len(record[6]), rack_paths.NAME_CAP)  # device name capped
 
     def test_a_start_past_the_end_returns_nothing_rather_than_wrapping(self):
         self.assertEqual(rack_paths.build_window(self.entries(3), 10, 8), [])
