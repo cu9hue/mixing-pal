@@ -254,6 +254,63 @@ the app to trigger it).
       chains before commenting on processing, rather than reasoning from
       track names.
 
+## Clip note paging (wire version 4, added 2026-08-21)
+
+Reading a clip used to start by asking Live for the whole thing, whatever
+its density. Past roughly 358 notes that reply exceeds the 9216-byte UDP
+cap, Live's `sendto` raises, and the client hears nothing — so it learned
+the window was too wide only by waiting out a full 2-second timeout, then
+halved and waited again. Against a tick-accurate stand-in for Live a
+2048-note clip cost 15.1 s that way, 14.0 s of it timeouts, and a
+5120-note clip came back half empty. `/live/clip/get/num_notes` lets the
+client size every window in one pass. Only a running Live can confirm the
+count is the one Live actually reports.
+
+- [ ] Reinstall the connector and restart Live. The connector line in
+      Advanced reads `v4`, and no version-mismatch banner appears. (The
+      bump is what tells an old install to update; without the reinstall
+      the banner is the correct behaviour.)
+- [ ] `python3 scripts/verify-roundtrip.py` gets a reply to
+      `/live/clip/get/num_notes 0 0` whose third value equals the number of
+      notes Live shows in that clip.
+- [ ] Ask about a busy MIDI clip — a 32-bar hi-hat or arpeggio pattern,
+      several hundred notes. The answer arrives in well under a second.
+      This is the change; a multi-second wait means the count is not
+      arriving and the client fell back to halve-and-retry.
+- [ ] Ask about clips of very different densities — 100 notes, 1,000,
+      5,000 — and confirm they all take about the SAME time. Every window
+      of a clip goes out in one Live tick, so density should not change
+      the wait. A read that gets slower as the clip gets denser means the
+      windows are going out serially again.
+- [ ] While a dense clip is being read, watch the meters and fader
+      readouts. They must keep moving. A whole clip's windows arrive at
+      Live in one tick, and if that starves the poll traffic behind them
+      it will show here first.
+- [ ] Ask about the densest clip in the set. Every note comes back and the
+      answer does not say the read was partial -- UNLESS that clip holds
+      more than 5,728 notes, which is the hard ceiling (16 windows of 358).
+      Past it a partial read reporting `too_large` is the documented
+      behaviour, not a failure. Check the count in Live before treating a
+      partial answer as a bug.
+- [ ] Ask about an EMPTY clip slot. The answer says there is no clip there
+      and invents nothing, and the meters and fader readouts in the card
+      keep updating smoothly while it happens. A handler that raises breaks
+      out of `osc_server.process()`'s drain loop and stalls everything
+      queued behind it for a tick, which is why the count handler returns
+      None rather than raising.
+- [ ] Ask about a clip whose notes start before beat 0, or whose loop
+      starts partway in. The count covers `[0, clip.length)` and so do the
+      windows, so the two agree -- but confirm the answer's note count
+      matches what Live shows, and does not silently omit a leading
+      pickup.
+- [ ] Ask about a clip whose notes are all crammed into its first bar, with
+      the rest of the clip empty. Time-sized windows assume even density, so
+      this is the case that still falls back to halving — it must still
+      return every note, just more slowly. Measured against the tick-accurate
+      harness: notes packed into the first eighth of a clip take about 6 s
+      and can come back partial, against 240 ms when they are spread evenly.
+      A partial answer here is the documented limit, not a bug.
+
 ## The shell (added 2026-08-19)
 
 - [ ] The window is frameless and transparent: rounded corners, no square

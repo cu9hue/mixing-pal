@@ -68,6 +68,9 @@ pub fn key_arity(addr: &str) -> KeyArity {
 
         "/live/track/get/send"
         | "/live/clip/get/notes"
+        // The note count `get_clip_notes` sizes its windows from. Same key
+        // as the notes themselves -- the reply echoes (track, clip).
+        | "/live/clip/get/num_notes"
         | "/live/clip/get/length"
         // (track, path) in, (track, path, name, num_parameters) back. One
         // address in place of the retired /live/device/get/name and
@@ -76,7 +79,15 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // resolves a path rather than a top-level index.
         | "/live/mixingpal/get/device/identity" => KeyArity::Args(2),
 
-        "/live/device/get/parameter/value_string"
+        // The window ordinal the client stamped on the request, echoed
+        // back. It is what makes two windows of ONE clip different keys, so
+        // a window the caller gave up on cannot come back late and resolve
+        // whichever window is waiting now -- the same protection the ranged
+        // device addresses below get from echoing `start`. Upstream's
+        // `/live/clip/get/notes` cannot offer it: its reply carries only
+        // (track, clip).
+        "/live/clip/get/notes_window"
+        | "/live/device/get/parameter/value_string"
         | "/live/device/get/parameters/name_range"
         | "/live/device/get/parameters/value_string_range"
         // (track, path, start) echoed back, exactly like the ranged
@@ -145,6 +156,8 @@ mod tests {
             ("/live/song/get/beat", KeyArity::None),
             ("/live/mixingpal/get/version", KeyArity::None),
             ("/live/clip/get/notes", KeyArity::Args(2)),
+            ("/live/clip/get/notes_window", KeyArity::Args(3)),
+            ("/live/clip/get/num_notes", KeyArity::Args(2)),
             ("/live/clip/get/length", KeyArity::Args(2)),
             // (track, path) in, (track, path, name, num_parameters) back. One
             // address in place of the retired /live/device/get/name and

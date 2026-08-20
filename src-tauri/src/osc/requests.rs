@@ -244,6 +244,68 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_for_one_note_window_cannot_resolve_another_windows_request() {
+        // The whole reason `/live/clip/get/notes_window` exists. Upstream's
+        // `/live/clip/get/notes` echoes only (track, clip), so every window
+        // of one clip shares a key: a window the caller gave up on can come
+        // back late and resolve whichever window is waiting now. The notes
+        // then fail the consumer's range filter, the window is recorded as
+        // answered-with-nothing, and its real notes are never fetched --
+        // a partial read that reports itself complete.
+        //
+        // Echoing the window ordinal makes the two requests different keys,
+        // so the stale reply matches nothing and dies here, which is where
+        // `/live/device/get/parameters/*_range` has always killed it.
+        let addr = "/live/clip/get/notes_window";
+        let mut t = RequestTable::new();
+        let now = Instant::now();
+
+        // Window 0 goes out and the caller gives up on it.
+        let first = vec![OscType::Int(2), OscType::Int(1), OscType::Int(0)];
+        let id = match t.register(now, addr, &first) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+        t.cancel(addr, &first, id);
+
+        // Window 1 is the one in flight now.
+        let second = vec![OscType::Int(2), OscType::Int(1), OscType::Int(1)];
+        let waiting = match t.register(now, addr, &second) {
+            Registration::New(id) => id,
+            other => panic!("expected New, got {other:?}"),
+        };
+        let mut rx = t.watch(waiting);
+
+        // Live finally answers window 0.
+        let stale = t.resolve(&msg(
+            addr,
+            vec![
+                OscType::Int(2),
+                OscType::Int(1),
+                OscType::Int(0),
+                OscType::Int(60),
+                OscType::Float(0.0),
+                OscType::Float(0.5),
+                OscType::Float(100.0),
+                OscType::Bool(false),
+            ],
+        ));
+
+        assert_eq!(stale.completed, None, "a given-up window's reply must match nothing");
+        assert!(
+            rx.try_recv().is_err(),
+            "window 1 must still be waiting for its OWN reply"
+        );
+
+        // And window 1's own reply still resolves it.
+        let own = t.resolve(&msg(
+            addr,
+            vec![OscType::Int(2), OscType::Int(1), OscType::Int(1)],
+        ));
+        assert_eq!(own.completed, Some(waiting));
+    }
+
+    #[test]
     fn every_inbound_packet_is_an_observation_even_with_no_pending_request() {
         // A subscription update arrives with nothing outstanding. It must still
         // reach the mirror; only the promise resolution is absent.

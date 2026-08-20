@@ -13,7 +13,13 @@ from ..abletonosc.handler import AbletonOSCHandler
 # Version 3 moved every device address from a top-level device index to a
 # dotted path string, so a stale script would answer a path query with a
 # raise and the client would read it as a lost reply.
-WIRE_VERSION = 3
+#
+# Version 4 moved note reads onto /live/clip/get/num_notes and
+# /live/clip/get/notes_window. A stale script knows neither address, so it
+# answers no window at all and get_clip_notes returns nothing after
+# exhausting its retry budget. Clip reads do not degrade here, they stop;
+# reinstalling is the fix, which is what the banner asks for.
+WIRE_VERSION = 4
 
 
 class VersionHandler(AbletonOSCHandler):
