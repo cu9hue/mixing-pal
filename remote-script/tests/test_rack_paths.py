@@ -1,4 +1,4 @@
-"""Unit tests for copilot/rack_paths.py.
+"""Unit tests for mixingpal/rack_paths.py.
 
 The module is loaded by file path rather than imported as `mixingpal.rack_paths`
 because `mixingpal/__init__.py` imports every handler, and those reach
@@ -13,7 +13,7 @@ import os
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_TARGET = os.path.join(_HERE, "..", "AbletonCopilot", "copilot", "rack_paths.py")
+_TARGET = os.path.join(_HERE, "..", "MixingPal", "mixingpal", "rack_paths.py")
 _SPEC = importlib.util.spec_from_file_location("rack_paths", _TARGET)
 rack_paths = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(rack_paths)

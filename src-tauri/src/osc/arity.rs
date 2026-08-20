@@ -74,7 +74,7 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // /live/device/get/num_parameters, so a bracketed parameter read
         // costs two round trips instead of four -- and unlike those two, it
         // resolves a path rather than a top-level index.
-        | "/live/copilot/get/device/identity" => KeyArity::Args(2),
+        | "/live/mixingpal/get/device/identity" => KeyArity::Args(2),
 
         "/live/device/get/parameter/value_string"
         | "/live/device/get/parameters/name_range"
@@ -83,7 +83,7 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // parameter addresses. `span` is deliberately NOT in the key; see
         // the spec's Devices section on why that is safe here and what
         // closes it.
-        | "/live/copilot/get/rack/chains" => KeyArity::Args(3),
+        | "/live/mixingpal/get/rack/chains" => KeyArity::Args(3),
 
         "/live/song/get/track_data"
         | "/live/song/get/track_names"
@@ -151,7 +151,7 @@ mod tests {
             // /live/device/get/num_parameters, so a bracketed parameter read
             // costs two round trips instead of four -- and unlike those two, it
             // resolves a path rather than a top-level index.
-            ("/live/copilot/get/device/identity", KeyArity::Args(2)),
+            ("/live/mixingpal/get/device/identity", KeyArity::Args(2)),
             ("/live/device/get/parameter/value_string", KeyArity::Args(3)),
             ("/live/device/get/parameters/name_range", KeyArity::Args(3)),
             (
@@ -162,7 +162,7 @@ mod tests {
             // parameter addresses. `span` is deliberately NOT in the key; see
             // the spec's Devices section on why that is safe here and what
             // closes it.
-            ("/live/copilot/get/rack/chains", KeyArity::Args(3)),
+            ("/live/mixingpal/get/rack/chains", KeyArity::Args(3)),
             // Keyless: args vary between requests but the reply echoes nothing.
             ("/live/song/get/track_data", KeyArity::Unkeyed),
             ("/live/song/get/track_names", KeyArity::Unkeyed),

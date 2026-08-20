@@ -118,11 +118,11 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     // get_device_chains and get_device_params.
     "/live/track/get/devices/name",
     "/live/track/get/devices/can_have_chains",
-    "/live/copilot/get/device/identity",
+    "/live/mixingpal/get/device/identity",
     "/live/device/get/parameters/name_range",
     "/live/device/get/parameters/value_string_range",
     "/live/mixingpal/get/version",
-    "/live/copilot/get/rack/chains",
+    "/live/mixingpal/get/rack/chains",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -269,10 +269,10 @@ fn handle_inbound(
             | "/live/clip/get/length"
             | "/live/track/get/devices/name"
             | "/live/track/get/devices/can_have_chains"
-            | "/live/copilot/get/device/identity"
+            | "/live/mixingpal/get/device/identity"
             | "/live/device/get/parameters/name_range"
             | "/live/device/get/parameters/value_string_range"
-            | "/live/copilot/get/rack/chains"
+            | "/live/mixingpal/get/rack/chains"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
@@ -1329,7 +1329,7 @@ mod tests {
         // replayed on every reload.
         for addr in [
             "/live/track/get/devices/name",
-            "/live/copilot/get/device/identity",
+            "/live/mixingpal/get/device/identity",
             "/live/device/get/parameters/name_range",
             "/live/device/get/parameters/value_string_range",
         ] {

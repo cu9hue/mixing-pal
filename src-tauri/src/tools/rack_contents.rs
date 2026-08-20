@@ -198,7 +198,7 @@ pub async fn get_rack_contents(
 
         let reply = match q
             .query(
-                "/live/copilot/get/rack/chains",
+                "/live/mixingpal/get/rack/chains",
                 vec![
                     OscType::Int(track),
                     OscType::String(path.wire()),
@@ -487,7 +487,7 @@ mod tests {
         chains: usize,
         is_rack: bool,
         per_window: usize,
-        /// Refuse to answer `/live/copilot/get/rack/chains` at all, which is
+        /// Refuse to answer `/live/mixingpal/get/rack/chains` at all, which is
         /// what "the path names no device" looks like from the client side.
         silent_chains: bool,
         /// Report this many total chains starting with the second window's
@@ -538,8 +538,8 @@ mod tests {
     }
 
     /// The one fake Live stand-in every paging test in this module spawns.
-    /// Answers both `/live/copilot/get/device/identity` and
-    /// `/live/copilot/get/rack/chains`.
+    /// Answers both `/live/mixingpal/get/device/identity` and
+    /// `/live/mixingpal/get/rack/chains`.
     async fn fake_rack(fake: FakeRack) -> (Arc<LiveQuery>, TaskGuard) {
         let live = OscSocket::bind_to(0, 0).await.unwrap();
         let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
@@ -576,7 +576,7 @@ mod tests {
                     _ => continue,
                 };
                 match req.addr.as_str() {
-                    "/live/copilot/get/device/identity" => {
+                    "/live/mixingpal/get/device/identity" => {
                         identity_queries += 1;
                         if fake.silent_after_first_identity && identity_queries > 1 {
                             continue;
@@ -588,7 +588,7 @@ mod tests {
                         let _ = live
                             .send_to(
                                 app_port,
-                                "/live/copilot/get/device/identity",
+                                "/live/mixingpal/get/device/identity",
                                 vec![
                                     OscType::Int(track),
                                     OscType::String(path.clone()),
@@ -598,7 +598,7 @@ mod tests {
                             )
                             .await;
                     }
-                    "/live/copilot/get/rack/chains" => {
+                    "/live/mixingpal/get/rack/chains" => {
                         if fake.silent_chains {
                             continue;
                         }
@@ -616,7 +616,7 @@ mod tests {
                                 OscType::String(path.clone()),
                                 OscType::Int(i(2)),
                             ];
-                            let _ = live.send_to(app_port, "/live/copilot/get/rack/chains", short).await;
+                            let _ = live.send_to(app_port, "/live/mixingpal/get/rack/chains", short).await;
                             continue;
                         }
                         let (start, span) = (i(2) as usize, i(3) as usize);
@@ -644,7 +644,7 @@ mod tests {
                             reply.push(OscType::Int(1));
                             reply.push(OscType::String("Simpler".into()));
                         }
-                        let _ = live.send_to(app_port, "/live/copilot/get/rack/chains", reply).await;
+                        let _ = live.send_to(app_port, "/live/mixingpal/get/rack/chains", reply).await;
                     }
                     _ => {}
                 }

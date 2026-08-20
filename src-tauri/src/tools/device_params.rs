@@ -132,7 +132,7 @@ async fn fetch_window(
 }
 
 /// `(track, path, name, num_parameters)` from
-/// `/live/copilot/get/device/identity`.
+/// `/live/mixingpal/get/device/identity`.
 ///
 /// One address in place of the two upstream ones this replaced, so a
 /// bracketed read costs two round trips rather than four -- and, unlike
@@ -171,7 +171,7 @@ pub(crate) async fn device_identity(
     timeout: Duration,
 ) -> Option<(String, usize)> {
     q.query(
-        "/live/copilot/get/device/identity",
+        "/live/mixingpal/get/device/identity",
         vec![OscType::Int(track), OscType::String(path.wire())],
         timeout,
     )
@@ -428,7 +428,7 @@ mod tests {
                     _ => continue,
                 };
                 match req.addr.as_str() {
-                    "/live/copilot/get/device/identity" => {
+                    "/live/mixingpal/get/device/identity" => {
                         if fake.no_identity_reply {
                             continue;
                         }
@@ -447,7 +447,7 @@ mod tests {
                         let _ = live
                             .send_to(
                                 app_port,
-                                "/live/copilot/get/device/identity",
+                                "/live/mixingpal/get/device/identity",
                                 vec![
                                     OscType::Int(track),
                                     OscType::String(path.clone()),
@@ -763,7 +763,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_bracketed_read_costs_two_identity_round_trips_not_four() {
-        // /live/copilot/get/device/identity replaced /live/device/get/name
+        // /live/mixingpal/get/device/identity replaced /live/device/get/name
         // AND /live/device/get/num_parameters. The bracket reads identity
         // once before the paging loop and once after; anything more means a
         // caller crept back in.
@@ -772,7 +772,7 @@ mod tests {
         let out = get_device_params(&q, 0, &path, FAST).await.unwrap();
         assert_eq!(out.params.len(), 4);
         let c = counts.lock().unwrap();
-        assert_eq!(c["/live/copilot/get/device/identity"], 2);
+        assert_eq!(c["/live/mixingpal/get/device/identity"], 2);
         assert!(!c.contains_key("/live/device/get/name"));
         assert!(!c.contains_key("/live/device/get/num_parameters"));
     }

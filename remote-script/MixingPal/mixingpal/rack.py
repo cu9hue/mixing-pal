@@ -56,6 +56,6 @@ class RackHandler(AbletonOSCHandler):
                     str(device.name)[:NAME_CAP], len(device.parameters))
 
         self.osc_server.add_handler(
-            "/live/copilot/get/rack/chains", rack_chains)
+            "/live/mixingpal/get/rack/chains", rack_chains)
         self.osc_server.add_handler(
-            "/live/copilot/get/device/identity", device_identity)
+            "/live/mixingpal/get/device/identity", device_identity)

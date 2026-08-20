@@ -135,7 +135,7 @@ pub fn mixer_chunks(num_tracks: usize) -> Vec<(usize, usize)> {
 mod tests {
     use super::*;
 
-    /// `copilot/rack_paths.py` fills its own reply window, so it carries a
+    /// `mixingpal/rack_paths.py` fills its own reply window, so it carries a
     /// copy of this module's ceiling. A copy that drifts high makes Live's
     /// `sendto` raise and the client receives NOTHING -- silence, not
     /// truncation, and indistinguishable from a lost reply. Same tripwire
@@ -144,7 +144,7 @@ mod tests {
     fn rack_byte_ceiling_matches_the_budget() {
         let source = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../remote-script/AbletonCopilot/copilot/rack_paths.py"
+            "/../remote-script/MixingPal/mixingpal/rack_paths.py"
         ))
         .expect("rack_paths.py is missing");
         let line = source
@@ -199,7 +199,7 @@ mod tests {
     fn the_rack_listing_header_fits_inside_the_slack() {
         let source = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../remote-script/AbletonCopilot/copilot/rack_paths.py"
+            "/../remote-script/MixingPal/mixingpal/rack_paths.py"
         ))
         .expect("rack_paths.py is missing");
         let max_path_len: usize = source
@@ -214,7 +214,7 @@ mod tests {
         let osc_string = |len: usize| 4 * (len / 4 + 1);
         // Every component ten digits long, joined by dots.
         let worst_path = max_path_len * 10 + (max_path_len - 1);
-        let address = osc_string("/live/copilot/get/rack/chains".len());
+        let address = osc_string("/live/mixingpal/get/rack/chains".len());
         // track, start, total_chains, can_have_chains.
         let ints = 4 * 4;
         // One tag byte per argument, plus the leading comma and its padding.
