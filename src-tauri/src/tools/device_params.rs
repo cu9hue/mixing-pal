@@ -48,11 +48,11 @@ pub struct DeviceParams {
     pub missing_reason: Option<String>,
 }
 
-/// A ranged reply is `(track, device, start, *strings)`.
+/// A ranged reply is `(track, path, start, *strings)`.
 ///
 /// The `expect_start` check is defence in depth, NOT the thing that catches
 /// a mis-attributed reply. These addresses are `KeyArity::Args(3)`, so
-/// `RequestTable::resolve` keys on `(track, device, start)`: a reply echoing
+/// `RequestTable::resolve` keys on `(track, path, start)`: a reply echoing
 /// a different start matches no pending entry and is dropped there, and the
 /// window times out instead. The check costs one integer compare and would
 /// still refuse such a reply if it ever reached this decoder by another
@@ -184,7 +184,7 @@ pub(crate) async fn device_identity(
 /// Fetches one device's parameters, paged.
 ///
 /// Windows are fetched one at a time. They *could* run concurrently -- the
-/// ranged addresses are `KeyArity::Args(3)`, so `(track, device, start)`
+/// ranged addresses are `KeyArity::Args(3)`, so `(track, path, start)`
 /// distinguishes them -- but a device is at most two windows after the cap
 /// and the added failure-handling is not worth one Live tick.
 pub async fn get_device_params(
@@ -225,7 +225,7 @@ pub async fn get_device_params(
             // one datagram. Windows tile as [start, start + span), so the
             // halves neither overlap nor leave a gap. LiveQuery::query has
             // already cancelled the dead table entry, which is what lets
-            // the halved retry -- same (track, device, start) key, only a
+            // the halved retry -- same (track, path, start) key, only a
             // different span -- register fresh instead of joining a
             // request that will never be answered.
             Err(QueryError::NoReply) if span > MIN_WINDOW_PARAMS => {
@@ -511,6 +511,32 @@ mod tests {
         DevicePath::parse(Some(&serde_json::json!([0]))).unwrap()
     }
 
+    #[test]
+    fn decode_identity_refuses_every_reply_it_cannot_vouch_for() {
+        use rosc::OscType::{Int, String as S};
+        let good = vec![Int(0), S("0.4.1".into()), S("Operator".into()), Int(12)];
+        assert_eq!(decode_identity(&good), Some((fence("Operator"), 12)));
+
+        // Truncated before the name, and before the count.
+        assert!(decode_identity(&good[..2]).is_none());
+        assert!(decode_identity(&good[..3]).is_none());
+
+        // A name that is not a string, a count that is not an int.
+        let mut wrong_name = good.clone();
+        wrong_name[2] = Int(7);
+        assert!(decode_identity(&wrong_name).is_none());
+        let mut wrong_count = good.clone();
+        wrong_count[3] = S("12".into());
+        assert!(decode_identity(&wrong_count).is_none());
+
+        // A negative count is NOT "this device has no parameters". Clamping
+        // it to zero would invent that answer out of a reply that never said
+        // it -- and an invented zero would report a real device as empty.
+        let mut negative = good.clone();
+        negative[3] = Int(-1);
+        assert!(decode_identity(&negative).is_none());
+    }
+
     #[tokio::test]
     async fn reads_a_small_device_in_one_window() {
         let (q, counts, _guard) = fake_live(fake(3)).await;
@@ -549,7 +575,7 @@ mod tests {
     #[tokio::test]
     async fn a_timed_out_window_is_retried_at_half_span_and_actually_reaches_the_wire() {
         // The regression test for the cancel-on-timeout defect. The ranged
-        // addresses key on (track, device, start) -- span is NOT in the key
+        // addresses key on (track, path, start) -- span is NOT in the key
         // -- so a halved retry at the same start computes the same key. If
         // LiveQuery did not cancel its dead entry first, the retry would
         // Join it and never be sent.
@@ -608,7 +634,7 @@ mod tests {
     #[tokio::test]
     async fn a_reply_echoing_a_different_start_matches_no_pending_window() {
         // Not decode_strings's expect_start check doing the work: resolve
-        // keys on (track, device, start), so a reply echoing 99 matches no
+        // keys on (track, path, start), so a reply echoing 99 matches no
         // pending entry and is dropped there. The window then times out and,
         // at a span already below the retry floor, the tool reports
         // too_large. Fail-closed either way, but by that mechanism.
@@ -760,6 +786,7 @@ mod tests {
         let path = DevicePath::parse(Some(&serde_json::json!([0, 4, 1]))).unwrap();
         let _ = get_device_params(&q, 3, &path, FAST).await;
         let seen = requests.lock().unwrap();
+        assert!(!seen.is_empty(), "no requests were recorded, so .all() would pass vacuously");
         assert!(seen.iter().all(|args| matches!(
             args.get(1),
             Some(OscType::String(s)) if s == "0.4.1"

@@ -755,9 +755,12 @@ mod tests {
 
     #[tokio::test]
     async fn get_device_params_refuses_a_negative_index() {
+        // A negative path element is refused before it reaches the wire:
+        // Python slices from the END on one, so it would resolve inside
+        // Live to a real but different device rather than naming none.
         let ctx = disconnected_ctx(one_track_mirror());
-        let r = execute(&ctx, "get_device_params", &json!({ "track": 0, "device": -1 })).await;
-        assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"));
+        let result = execute(&ctx, "get_device_params", &json!({ "track": 0, "path": [-1] })).await;
+        assert_eq!(result.missing_reason.as_deref(), Some("bad_arguments"));
     }
 
     #[test]
