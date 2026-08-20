@@ -33,7 +33,7 @@ first-run verification pass on a Mac that has never seen this repo.
 **Out:**
 
 - **Model access.** Stage 1 ships an app that installs cleanly and then cannot
-  answer anything, because `run_model` refuses while `model` or `api_key` is
+  answer anything, because `model_complete` refuses while `model` or `api_key` is
   empty and nothing in setup sets either. For her, that is one manual step you
   perform once. For beta testers it is a real gap, and it closes in subsystem
   B's spec, not this one.

@@ -525,7 +525,7 @@ Date: ___________  macOS version: ___________  Tester: ___________
 - [ ] Open Advanced, set an OpenRouter key and a model, then ask a question
       about the set and get an answer. **Expect to do this by hand.** The
       app installs cleanly and then cannot answer anything until both are
-      set, because `run_model` refuses while either is empty and nothing in
+      set, because `model_complete` refuses while either is empty and nothing in
       setup asks for them. Closing that gap is subsystem B, not this stage.
 - [ ] Quit and relaunch. Setup does **not** reopen.
 ```
