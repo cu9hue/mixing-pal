@@ -43,6 +43,25 @@ Mixer/device-range checks (Task 3) and what to expect from each reply:
          /live/device/get/parameters/value can exceed the macOS 9216-byte
          UDP datagram cap on a large Rack and silently drop the whole
          reply).
+
+Clip paging checks (wire version 4) and what to expect:
+  /live/clip/get/num_notes 0 0
+      -- (track=0, clip=0, <note count>). 2 leading key args. Put a MIDI
+         clip in track 0's first clip slot first; an EMPTY slot answers
+         nothing at all, which is correct and is how "there is no clip
+         here" reaches the client. Compare the count against Live's own
+         note display. This is what lets the client size its note windows
+         in one pass: without it, reading a dense clip meant asking for the
+         whole clip, waiting out a full timeout on a reply Live could not
+         send, and halving until something answered.
+  /live/clip/get/notes_window 0 0 7 0 128 0.0 4.0
+      -- (track=0, clip=0, window=7, *notes) for the first 4 beats. THE 7
+         MUST COME BACK AS 7: it is the client's own window ordinal, echoed
+         unchanged, and it is the only thing that tells two windows of one
+         clip apart. Without it a window the client gave up on can come
+         back late and resolve a different window's request, and that
+         window is then recorded as answered-with-nothing. Re-run with a
+         different ordinal and confirm it echoes that one instead.
 """
 import socket
 import struct
@@ -72,6 +91,8 @@ MIXER_DEVICE_RANGE_REQUESTS = (
     ("/live/track/get/volume_db", (0,)),
     ("/live/track/get/mixer_data", (0, -1)),
     ("/live/device/get/parameters/value_range", (1, 0, 0, 32)),
+    ("/live/clip/get/num_notes", (0, 0)),
+    ("/live/clip/get/notes_window", (0, 0, 7, 0, 128, 0.0, 4.0)),
 )
 
 

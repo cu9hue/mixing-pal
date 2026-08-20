@@ -417,7 +417,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // answer is the failure this catches.
             let before = track_identity(&ctx.coalescer, track);
             let outcome = clip_notes::get_clip_notes(
-                &query,
+                query,
                 track as i32,
                 clip as i32,
                 clip_notes::QUERY_TIMEOUT,

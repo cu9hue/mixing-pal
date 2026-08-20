@@ -1,6 +1,7 @@
 from ..manager import Manager
 from .master import MasterHandler, ReturnHandler
 from .mixer import MixerHandler
+from .clip_notes import ClipNotesHandler
 from .device_range import DeviceRangeHandler
 from .rack import RackHandler
 from .view import ViewOverrideHandler
@@ -18,6 +19,7 @@ class MixingPalManager(Manager):
                 MasterHandler(self),
                 ReturnHandler(self),
                 MixerHandler(self),
+                ClipNotesHandler(self),
                 DeviceRangeHandler(self),
                 RackHandler(self),
                 # Registered after upstream's ViewHandler, so this handler's

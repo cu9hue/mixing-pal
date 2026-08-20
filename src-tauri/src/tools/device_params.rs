@@ -102,12 +102,15 @@ async fn fetch_window(
             OscType::Int(span as i32),
         ]
     };
-    let names = q
-        .query("/live/device/get/parameters/name_range", args(), timeout)
-        .await?;
-    let values = q
-        .query("/live/device/get/parameters/value_string_range", args(), timeout)
-        .await?;
+    // Two different addresses, so two different `PendingKey`s: both can be
+    // in flight at once, and `osc_server.process()` drains the whole socket
+    // per tick, so the pair costs one tick rather than two. On the failure
+    // path their timeouts overlap in one window instead of stacking.
+    let (names, values) = tokio::join!(
+        q.query("/live/device/get/parameters/name_range", args(), timeout),
+        q.query("/live/device/get/parameters/value_string_range", args(), timeout),
+    );
+    let (names, values) = (names?, values?);
 
     let (Some(names), Some(values)) = (
         decode_strings(&names, start, span),

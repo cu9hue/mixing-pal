@@ -9,6 +9,31 @@ mod tools;
 mod trace;
 mod window;
 
+/// The crate's private internals, re-exported for `benches/hot_paths.rs`.
+///
+/// Feature-gated so the app build never compiles it: a benchmark must not be
+/// able to widen the surface the app itself ships. Everything here is
+/// already reachable from the crate's own tests -- this only lets a separate
+/// bench target reach the same functions.
+#[cfg(feature = "bench")]
+pub mod bench_api {
+    pub use crate::bulk::{decode_mixer_data, decode_track_data};
+    pub use crate::deltas::{Coalescer, Delta};
+    pub use crate::osc::arity::key_arity;
+    pub use crate::osc::budget::{mixer_chunks, note_windows, param_string_windows, track_chunks};
+    pub use crate::osc::budget::MAX_DATAGRAM;
+    pub use crate::osc::query::{LiveQuery, QueryError};
+    pub use crate::osc::requests::RequestTable;
+    pub use crate::osc::socket::OscSocket;
+    pub use crate::tools::clip_notes::{decode_notes, get_clip_notes, Note};
+    pub use crate::tools::device_chains::get_device_chains;
+    pub use crate::tools::device_params::get_device_params;
+    pub use crate::tools::path::DevicePath;
+    pub use crate::tools::fence::fence;
+    pub use crate::tools::track_detail::get_track_detail;
+    pub use crate::trace::{Trace, TraceStep};
+}
+
 use bulk::{decode_mixer_data, decode_track_data, MIXER_ADDRS, TRACK_DATA_ADDRS};
 use deltas::{Coalescer, Delta};
 use model::{ChatMessage, Completion};
@@ -245,7 +270,8 @@ fn handle_inbound(
     //   request address forever -- re-sent in full on every webview reload
     //   via snapshot(), and never evicted, since evict_tracks_at_or_beyond
     //   only matches the decoded per-track addresses, not these.
-    // - clip/get/notes and clip/get/length are LiveQuery-only round trips
+    // - clip/get/notes, clip/get/num_notes and clip/get/length are
+    //   LiveQuery-only round trips
     //   (get_clip_notes): the tool call awaiting the reply reads it
     //   straight off the request table's resolve, same as every other
     //   LiveQuery caller. A 450-note reply is ~2,250 JSON values; observing
@@ -266,6 +292,8 @@ fn handle_inbound(
         "/live/song/get/track_data"
             | "/live/track/get/mixer_data"
             | "/live/clip/get/notes"
+            | "/live/clip/get/notes_window"
+            | "/live/clip/get/num_notes"
             | "/live/clip/get/length"
             | "/live/track/get/devices/name"
             | "/live/track/get/devices/can_have_chains"
@@ -1933,6 +1961,33 @@ mod tests {
         );
 
         assert!(coalescer.lock().unwrap().snapshot().is_empty());
+    }
+
+    #[test]
+    fn a_clip_note_count_reply_is_never_retained() {
+        // `/live/clip/get/num_notes` is a LiveQuery-only round trip, like
+        // `/live/clip/get/length` beside it: `get_clip_notes` reads the
+        // answer straight off the request table's resolve. Observing it
+        // would retain one entry per (track, clip) for the rest of the
+        // session, and `evict_tracks_at_or_beyond` is only ever called with
+        // the track and mixer address lists, so nothing would ever clean it
+        // up -- the same leak IMPORTANT 3 caught for clip notes themselves.
+        let (coalescer, table, counts) = inbound_fixture();
+
+        handle_inbound(
+            &OscMessage {
+                addr: "/live/clip/get/num_notes".to_string(),
+                args: vec![OscType::Int(2), OscType::Int(1), OscType::Int(400)],
+            },
+            &coalescer,
+            &table,
+            &counts,
+        );
+
+        assert!(
+            coalescer.lock().unwrap().snapshot().is_empty(),
+            "a note-count reply must resolve its request and reach the mirror never"
+        );
     }
 
     #[test]

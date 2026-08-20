@@ -30,17 +30,43 @@ fn even_split(total: usize, per_chunk: usize) -> Vec<(usize, usize)> {
     out
 }
 
+/// The most notes one `/live/clip/get/notes` reply can carry. Exposed
+/// because the caller bounds the note count it trusts against it -- see
+/// `clip_notes::usable_note_estimate`.
+pub fn max_notes_per_window() -> usize {
+    budget_values() / VALUES_PER_NOTE
+}
+
 pub fn note_windows(clip_length_beats: f32, est_notes: usize) -> Vec<(f32, f32)> {
-    let max_notes = budget_values() / VALUES_PER_NOTE;
+    let max_notes = max_notes_per_window();
     if est_notes <= max_notes || clip_length_beats <= 0.0 {
         return vec![(0.0, clip_length_beats.max(0.0))];
     }
     // Split by time, not by note index — the query form is time-ranged.
     let parts = est_notes.div_ceil(max_notes);
     let span = clip_length_beats / parts as f32;
-    (0..parts)
-        .map(|i| (i as f32 * span, span))
-        .collect()
+    // Boundaries first, spans as their differences -- NOT a constant span
+    // repeated. The consumer keeps a note when
+    // `start >= window_start && start < window_start + span`, so window i's
+    // computed end has to be bit-identical to window i+1's start; with one
+    // shared span, `i as f32 * span` rounds and the two disagree by a few
+    // ULPs, which is a crack a note can fall into and a silently short read.
+    //
+    // Differencing adjacent boundaries is exact here rather than merely
+    // close: consecutive boundaries are always within a factor of two of
+    // each other, so Sterbenz's lemma makes the f32 subtraction exact, and
+    // an exact f32 span added to an exact f32 start reproduces the next
+    // boundary exactly in f64.
+    //
+    // The last boundary is the clip length itself, not `parts as f32 *
+    // span`, which overshoots (128.0 comes back as 128.00000381469727 at
+    // three windows). Overshooting asks Live for notes past the end of the
+    // clip; undershooting would drop the ones in the final fraction of a
+    // beat.
+    let bounds: Vec<f32> = (0..=parts)
+        .map(|i| if i == parts { clip_length_beats } else { i as f32 * span })
+        .collect();
+    bounds.windows(2).map(|b| (b[0], b[1] - b[0])).collect()
 }
 
 pub fn param_windows(num_params: usize) -> Vec<(usize, usize)> {
@@ -249,6 +275,50 @@ mod tests {
         }
         let (last_start, last_span) = *w.last().unwrap();
         assert!((last_start + last_span - 64.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn note_windows_tile_with_no_gap_at_the_exact_boundary_the_consumer_compares_on() {
+        // `get_clip_notes` keeps a returned note only when
+        // `start >= window_start && start < window_start + span`, both in
+        // f64. So window i's computed END must be BIT-IDENTICAL to window
+        // i+1's start, or a note landing between them belongs to no window
+        // and is silently dropped from an otherwise complete-looking read.
+        //
+        // The existing tiling test allows 1e-3 of slack, which was harmless
+        // while the only windows in production came from halving (exact
+        // binary fractions). Sizing windows from a note count produces spans
+        // like 128/3, where `i as f32 * span` rounds and the slack becomes a
+        // real crack.
+        //
+        // The tail matters for the same reason: the last window must end
+        // exactly at the clip length, or notes in the final fraction of a
+        // beat are never requested at all.
+        for parts in 2..40usize {
+            let length = 128.0_f32;
+            // est_notes chosen to force exactly `parts` windows.
+            let est = (budget_values() / VALUES_PER_NOTE) * (parts - 1) + 1;
+            let w = note_windows(length, est);
+            assert_eq!(w.len(), parts, "expected {parts} windows for {est} notes");
+
+            for pair in w.windows(2) {
+                let (start_a, span_a) = pair[0];
+                let (start_b, _) = pair[1];
+                assert_eq!(
+                    start_a as f64 + span_a as f64,
+                    start_b as f64,
+                    "gap or overlap between windows at {start_a} (+{span_a}) and {start_b}, \
+                     with {parts} windows"
+                );
+            }
+
+            let (last_start, last_span) = *w.last().unwrap();
+            assert_eq!(
+                last_start as f64 + last_span as f64,
+                length as f64,
+                "the last window must reach the end of the clip, with {parts} windows"
+            );
+        }
     }
 
     #[test]
