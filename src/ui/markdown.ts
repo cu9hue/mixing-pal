@@ -36,6 +36,47 @@ const UNORDERED_RE = /^[-*] /;
 const ORDERED_RE = /^(\d+)\. (.*)$/;
 
 /**
+ * Gathers one list's items, starting at `start`.
+ *
+ * A list ends at the first line that is neither another item of the same kind
+ * nor a single blank line separating two such items. That blank-line
+ * tolerance is the whole point: the model routinely writes "loose" lists with
+ * a blank line between entries, and gathering only CONSECUTIVE item lines
+ * turned each entry into its own single-item list. Because every <ol> restarts
+ * its numbering, the producer then saw "1." against every row instead of
+ * 1, 2, 3.
+ *
+ * Two blank lines still end the list -- that is a deliberate break, not a
+ * separator -- and so does a change of marker, since `matches` is fixed to the
+ * kind the list started with.
+ */
+function collectListItems(
+  lines: string[],
+  start: number,
+  matches: (line: string) => boolean,
+  content: (line: string) => string,
+): { items: InlineNode[][]; next: number } {
+  const items: InlineNode[][] = [];
+  let i = start;
+  while (i < lines.length) {
+    if (matches(lines[i])) {
+      items.push(parseInline(content(lines[i])));
+      i++;
+      continue;
+    }
+    // Only step over a blank line when another item of the same kind follows
+    // it immediately; otherwise the blank belongs to whatever comes next.
+    if (lines[i].trim() === "" && i + 1 < lines.length && matches(lines[i + 1])) {
+      i++;
+      continue;
+    }
+    break;
+  }
+  return { items, next: i };
+}
+
+
+/**
  * Parses a chat message body into a block AST. Never throws: any input this
  * cannot make sense of degrades to a plain-text paragraph.
  */
@@ -90,22 +131,21 @@ function parseBlocks(markdown: string): BlockNode[] {
       }
 
       if (UNORDERED_RE.test(line)) {
-        const items: InlineNode[][] = [];
-        while (i < lines.length && UNORDERED_RE.test(lines[i])) {
-          items.push(parseInline(lines[i].slice(2)));
-          i++;
-        }
-        blocks.push({ type: "list", ordered: false, items });
+        const list = collectListItems(lines, i, (l) => UNORDERED_RE.test(l), (l) => l.slice(2));
+        blocks.push({ type: "list", ordered: false, items: list.items });
+        i = list.next;
         continue;
       }
 
       if (ORDERED_RE.test(line)) {
-        const items: InlineNode[][] = [];
-        while (i < lines.length && ORDERED_RE.test(lines[i])) {
-          items.push(parseInline(ORDERED_RE.exec(lines[i])![2]));
-          i++;
-        }
-        blocks.push({ type: "list", ordered: true, items });
+        const list = collectListItems(
+          lines,
+          i,
+          (l) => ORDERED_RE.test(l),
+          (l) => ORDERED_RE.exec(l)![2],
+        );
+        blocks.push({ type: "list", ordered: true, items: list.items });
+        i = list.next;
         continue;
       }
     }

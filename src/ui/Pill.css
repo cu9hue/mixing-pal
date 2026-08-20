@@ -1,0 +1,74 @@
+/*
+ * Three of the four states are a 26px dot in a 44px window. Only the
+ * failure state has words -- a broken connection is the one thing Live
+ * will never tell her.
+ */
+.pill {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pill__body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-card);
+  width: 26px;
+  height: 26px;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pill__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--text-faint);
+}
+
+.pill--unread .pill__body {
+  border-color: rgba(242, 181, 68, 0.35);
+  box-shadow: var(--shadow-card), 0 0 14px rgba(242, 181, 68, 0.18);
+}
+
+.pill--unread .pill__dot {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(242, 181, 68, 0.9);
+}
+
+.pill--thinking .pill__dot {
+  background: var(--text-muted);
+  animation: breathe 2s ease-in-out infinite;
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  .pill--thinking .pill__dot {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+.pill--disconnected .pill__body {
+  width: auto;
+  height: auto;
+  padding: 5px 12px;
+  border-color: rgba(224, 108, 92, 0.35);
+}
+
+.pill--disconnected .pill__dot {
+  background: var(--error);
+}
+
+.pill__label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}

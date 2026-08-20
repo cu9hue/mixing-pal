@@ -1,0 +1,72 @@
+.wics {
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.wics__summary {
+  padding: 10px 15px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.wics__summary::-webkit-details-marker {
+  display: none;
+}
+
+.wics__panel {
+  padding: 0 15px 13px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* Advanced brings its own padding and surface. */
+.wics__panel--advanced {
+  padding: 0;
+  max-height: 320px;
+}
+
+/* Quiet on purpose: nothing in Advanced is part of anyone's day. */
+.wics__advanced {
+  margin-top: 12px;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.wics__line {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.wics__table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 12px ui-monospace, monospace;
+  color: var(--text-secondary);
+}
+
+.wics__table th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--text-faint);
+  padding-bottom: 4px;
+}
+
+.wics__table td {
+  padding-right: 10px;
+  white-space: nowrap;
+}
+
+.wics__row--selected td {
+  color: var(--text);
+}

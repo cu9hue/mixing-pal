@@ -1,0 +1,72 @@
+.advanced {
+  padding: 15px;
+  background: var(--surface-raised);
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.advanced__field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.advanced__label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.advanced__input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+}
+
+.advanced__input:focus {
+  border-color: var(--border-strong);
+}
+
+.advanced__value {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.advanced__note {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  margin-bottom: 14px;
+}
+
+.advanced__button {
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.advanced__error {
+  background: rgba(224, 108, 92, 0.1);
+  border: 1px solid rgba(224, 108, 92, 0.28);
+  border-radius: var(--radius-control);
+  padding: 10px 12px;
+  margin-top: 10px;
+  white-space: pre-wrap;
+  font-size: 12px;
+}

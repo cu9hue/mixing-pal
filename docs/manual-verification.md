@@ -213,6 +213,14 @@ the app to trigger it).
       report that the set changed under it, not merge two clips' notes. (This
       is the end-to-end half of the topology guard; the unit tests cover the
       pieces, this covers the wiring.)
+- [ ] Confirm Live 12's default track names against `DEFAULT_NAME` in
+      `src/rules/unnamedTracks.ts`. Create a fresh set, add six MIDI tracks
+      and six audio tracks without renaming any, and read the names Live
+      gives them off the track headers. The regex matches a bare `MIDI`/
+      `Audio` and a numbered `1 MIDI`/`2-Audio`, case-insensitively. If Live
+      produces a shape it does not match, the nudge never fires and the
+      failure is silent — the rule simply stays quiet forever. Fix the regex
+      and its test together.
 
 ## Plan 3 — device chains and device parameters
 
@@ -241,3 +249,82 @@ the app to trigger it).
 - [ ] Ask "anything sticking out in my mix?" and confirm the model fetches
       chains before commenting on processing, rather than reasoning from
       track names.
+
+## The shell (added 2026-08-19)
+
+- [ ] The window is frameless and transparent: rounded corners, no square
+      grey system shadow behind the pill. If the pill is a black square,
+      `macOSPrivateApi` is not set in `tauri.conf.json`.
+- [ ] Dragging the card header moves the window. There is no titlebar, so
+      if this fails the window cannot be moved at all.
+- [ ] Drag the card to a second display, quit, unplug the display, reopen.
+      The card must appear on the remaining screen — `clamp_to_visible`
+      exists for exactly this, and the failure mode is an invisible window
+      with no titlebar to drag back.
+- [ ] Escape collapses to the pill; clicking the pill reopens the card.
+- [ ] With text typed in the input, clicking into Live leaves the card
+      open. With the input empty, it collapses.
+- [ ] Ask something that makes the model read a track. The progress line
+      names the track, never a function name or JSON.
+- [ ] Quit Live. The banner appears, and the collapsed pill grows to read
+      "not connected". The setup window must NOT reappear: disconnection is
+      a card state, not a first-run state.
+- [ ] **It never steals focus.** Record-arm a MIDI clip in Live, leave Live
+      focused, and trigger a nudge (open a set with at least ten tracks,
+      six of them still named MIDI or Audio). The card appears on top, and
+      every keystroke still reaches Live. `focus: false` in
+      `tauri.conf.json` is what makes this true; a card that takes the
+      keyboard mid-take is worse than no app at all.
+- [ ] Count the uses of the accent colour in one view. At most two.
+
+## First run (added 2026-08-19)
+
+Run from a genuinely clean state — delete
+`~/Music/Ableton/User Library/Remote Scripts/AbletonCopilot` and clear
+the webview's localStorage first. A rerun on an already-set-up machine
+proves nothing about the flow this exists to test.
+
+Date: ___________  Live version: ___________  Tester: ___________
+
+- [ ] Setup opens centred and is not always-on-top. It can be dragged.
+- [ ] Install puts the connector in the User Library. Verify by listing
+      the Remote Scripts directory, not by trusting the success screen.
+- [ ] Opening Live advances the step with no button pressed.
+- [ ] **Process detection works.** In the installed connector directory, run
+      `/bin/ps -Axco command | grep -x Live` while Ableton is running. It must
+      match exactly, returning `Live` once. If the process name differs, the
+      fix is to update the exact-match string in `src-tauri/src/install.rs`'s
+      `live_is_running()` function, not to loosen the match to a
+      substring (which would false-positive on `liveactivitiesd` and
+      `PhotosReliveWidget`).
+- [ ] The step-3 screenshot matches this Live version's preferences pane.
+      If it does not, re-capture `public/control-surface.png` — this is the
+      step that decides whether a stranger completes setup.
+- [ ] Selecting the Control Surface advances to Connected on its own.
+- [ ] The connected screen names real tracks from the open set, and shows
+      the "I read your settings … I can't hear your audio" paragraph.
+- [ ] Finishing shrinks straight into the card, with no flash of the wrong
+      window size.
+- [ ] Relaunching goes straight to the card. Setup does not reappear.
+- [ ] Deleting the connector folder and relaunching reopens setup at the
+      install step.
+- [ ] Reinstalling over an existing install preserves `logs/` and its
+      contents. A running Live session writes there and an earlier
+      installer deleted it on every reinstall.
+- [ ] A non-default User Library: move it, relaunch, confirm the install
+      step reports that it could not find the library and accepts a pasted
+      path.
+
+## The setup window (added 2026-08-19)
+
+- [ ] `public/control-surface.png` matches the Live version being shipped
+      against. Re-capture it whenever Live's preferences layout changes —
+      a stale screenshot of this one pane is the single most likely cause
+      of a failed first run.
+
+      The file committed with this task is a placeholder: a flat,
+      striped colour block, not a screenshot. It must be replaced with a
+      real screenshot of Live's Preferences → Link, Tempo & MIDI pane
+      before release, or the setup flow ships showing a fake image on the
+      one screen where a producer is meant to compare what is in front of
+      her to what is on screen.

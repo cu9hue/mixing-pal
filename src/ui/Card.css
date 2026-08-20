@@ -1,0 +1,237 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  /* Published by App from MODE_GEOMETRY.card.maxHeight so the CSS ceiling
+     and the height App asks the window for are one number. Never 100vh:
+     the viewport would clamp this element before App measures it, and the
+     window could then only shrink. */
+  max-height: var(--card-max-height, 520px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+/* The card stays mounted while she is looking at the pill or at setup, so
+   the conversation and its history survive the collapse. display:none also
+   keeps it out of the scrollHeight that drives the window height. */
+.card-slot--hidden {
+  display: none;
+}
+
+.card__header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--border);
+}
+
+.card__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  flex: none;
+}
+
+.card__dot--ok {
+  background: var(--ok);
+  box-shadow: 0 0 7px rgba(94, 214, 160, 0.55);
+}
+
+.card__dot--error {
+  background: var(--error);
+}
+
+/* The goal is dim because she wrote it -- it needs to be visible, not read. */
+.card__goal,
+.card__goal-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: left;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.card__goal-input {
+  color: var(--text-secondary);
+  cursor: text;
+  outline: none;
+}
+
+.card__chevron,
+.card__dismiss {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 12px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.card__noticed {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--border);
+}
+
+.card__noticed-rule {
+  width: 2px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.75;
+  flex: none;
+}
+
+.card__noticed-body {
+  flex: 1;
+}
+
+.card__noticed-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.card__label {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+
+.card__body {
+  padding: 15px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.card__question {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+/* The largest and lightest text in the app. Everything the app measured is
+   dimmer and smaller than this -- that contrast is how she can tell what
+   was read from what was generated. */
+.card__answer {
+  font-size: 14px;
+  line-height: 1.68;
+  color: var(--text);
+}
+
+.card__paragraph {
+  margin: 0 0 10px;
+}
+
+.card__paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.card__subhead {
+  font-weight: 600;
+  opacity: 0.85;
+  margin: 0 0 6px;
+}
+
+.card__list {
+  margin: 2px 0 10px;
+  padding-left: 20px;
+}
+
+.card__code,
+.card__code-block {
+  font: 12px ui-monospace, monospace;
+  background: var(--surface-overlay);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.card__code-block {
+  display: block;
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.card__fence {
+  background: var(--surface-overlay);
+  border-radius: 5px;
+  padding: 1px 6px;
+  color: var(--text-muted);
+}
+
+.card__progress {
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+/* Only the "Thinking…" form breathes. The tool line names a real track and
+   changes on its own as tools come and go, so it needs no sign of life. */
+.card__progress--thinking {
+  animation: breathe 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card__progress--thinking {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+.card__error {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  background: rgba(224, 108, 92, 0.1);
+  border: 1px solid rgba(224, 108, 92, 0.28);
+  border-radius: var(--radius-control);
+  padding: 10px 12px;
+}
+
+.card__footer {
+  padding: 12px 15px;
+  border-top: 1px solid var(--border);
+}
+
+.card__input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  outline: none;
+}
+
+.card__input::placeholder {
+  color: var(--text-faint);
+}
+
+.card__input:focus {
+  border-color: var(--border-strong);
+}
+
+.card__disclaimer {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  margin-top: 8px;
+}

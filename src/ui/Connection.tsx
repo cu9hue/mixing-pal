@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import wireVersion from "../../shared/wire-version.json";
+import { SetupStep } from "../setup/step";
+import "./Connection.css";
 
 // Mirrors src-tauri/src/lib.rs's ConnectionStatus. A one-shot fetch is
 // enough: the bind attempt happens once, at startup, before the window
@@ -101,9 +103,13 @@ export function selectBanner(params: {
 export function Connection({
   lastSeen,
   scriptVersion,
+  onShowSetup,
 }: {
   lastSeen: number | null;
   scriptVersion: number | null;
+  /** Opens the setup window on a named screen. Each banner asks for the
+      screen that fixes the thing it is complaining about. */
+  onShowSetup: (step: SetupStep) => void;
 }) {
   // This component only re-renders when SetView's state changes, which
   // happens when a delta arrives. But staleness is exactly the absence of
@@ -155,34 +161,60 @@ export function Connection({
       return null;
     case "bind_failed":
       return (
-        <div style={{ background: "#7a2020", color: "white", padding: "6px 10px" }}>
-          Can't reach Live: port {banner.port} is already in use by another
-          process (a leftover script, or a second copy of this app). Close it
-          and restart AbletonCopilot. ({banner.error})
+        <div className="banner banner--error">
+          <div className="banner__label">
+            <span className="banner__dot" />
+            Port in use
+          </div>
+          Something else is already using port {banner.port} — usually a leftover
+          script, or a second copy of Mixing Pal. Close it and open Mixing Pal again.
+          <div className="banner__detail">{banner.error}</div>
         </div>
       );
     case "not_connected":
       return (
-        <div style={{ background: "#7a2020", color: "white", padding: "6px 10px" }}>
-          Not connected to Live. Open a set and choose <b>AbletonCopilot</b> under
-          Preferences → Link/Tempo/MIDI → Control Surface.
+        <div className="banner banner--error">
+          <div className="banner__label">
+            <span className="banner__dot" />
+            Not connected
+          </div>
+          Open a set in Live, and check that <b>Mixing Pal</b> is selected under
+          Preferences → Link, Tempo &amp; MIDI.
+          <button className="banner__action" onClick={() => onShowSetup("control_surface")}>
+            Show me where →
+          </button>
         </div>
       );
     case "version_mismatch":
       return (
-        <div style={{ background: "#7a5a20", color: "white", padding: "6px 10px" }}>
-          Remote Script version mismatch: this app expects wire version{" "}
-          {banner.required}, but the installed script reports version{" "}
-          {banner.actual}. Reinstall the Remote Script and restart Live.
+        <div className="banner banner--warn">
+          <div className="banner__label">
+            <span className="banner__dot" />
+            Connector out of date
+          </div>
+          Mixing Pal updated, but the part inside Live didn't. Reinstall it and
+          restart Live.
+          <div className="banner__detail">
+            expects v{banner.required}, found v{banner.actual}
+          </div>
+          <button className="banner__action" onClick={() => onShowSetup("install")}>
+            Reinstall the connector →
+          </button>
         </div>
       );
     case "stale_script":
       return (
-        <div style={{ background: "#7a5a20", color: "white", padding: "6px 10px" }}>
-          Receiving data from Live, but the Remote Script isn't reporting a
-          version -- usually a sign it's out of date, and some data (faders,
-          pan, dB readings) may be silently missing. Reinstall the Remote
-          Script and restart Live.
+        <div className="banner banner--warn">
+          <div className="banner__label">
+            <span className="banner__dot" />
+            Connector out of date
+          </div>
+          Live is sending data, but the connector isn't reporting its version —
+          usually a sign it's out of date, and some readings (faders, pan, dB) may
+          be missing. Reinstall it and restart Live.
+          <button className="banner__action" onClick={() => onShowSetup("install")}>
+            Reinstall the connector →
+          </button>
         </div>
       );
   }

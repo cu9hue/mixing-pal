@@ -1,0 +1,92 @@
+/*
+ * The one place colour, radius, and type scale live.
+ *
+ * Direction is "Composed": the card is its own object sitting above Live,
+ * not a panel that lost its window. That means a surface deeper than
+ * Live's grey, one warm accent used sparingly, and soft depth.
+ *
+ * Every value here is from docs/superpowers/specs/2026-08-19-product-ui-design.md.
+ * Change the spec first.
+ */
+:root {
+  --surface: #151619;
+  --surface-raised: #1b1d21;
+  --surface-sunken: #101113;
+  /* A faint white wash for things that sit ON a surface rather than beside
+     it: inline chips, code. Deliberately not --border, which happens to
+     share this value today but means something else and may be retuned. */
+  --surface-overlay: rgba(255, 255, 255, 0.07);
+
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.12);
+
+  /* Four steps, brightest to faintest. The model's prose is the brightest
+     thing in the app; everything the app measured is dimmer than it. */
+  --text: #e8e9ec;
+  --text-secondary: #c3c7cd;
+  --text-muted: #8b9099;
+  --text-faint: #666c74;
+
+  /* At most twice in any one view. A third use is decoration. */
+  --accent: #f2b544;
+  --ok: #5ed6a0;
+  --error: #e06c5c;
+
+  /* Banner label tints: a muted, desaturated form of the status colour, so
+     the label reads as a category rather than competing with the sentence
+     under it. Deliberately not --error/--accent themselves, which are used
+     at full strength for dots and rules. */
+  --error-label: #c78a80;
+  --warn-label: #d3b078;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --radius-pill: 999px;
+  --shadow-card: 0 10px 34px rgba(0, 0, 0, 0.6);
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+/*
+ * The window is created transparent so the pill's glow is not drawn on a
+ * black square. That means nothing paints a background unless it says so --
+ * html and body must stay transparent, and each mode's root element paints
+ * its own.
+ */
+html,
+body {
+  margin: 0;
+  background: transparent;
+  font-family: var(--font);
+  color: var(--text);
+  /* A frameless window has no titlebar to grab and no text worth selecting.
+     Dragging that selects text instead of moving the window feels broken. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The one exception: the model's answer is worth copying out. */
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+#root {
+  height: 100vh;
+}
+
+/*
+ * One shared breathe. Opacity only, never position or size: the pill and the
+ * card both sit in someone's peripheral vision for hours, and anything that
+ * moves there is an irritant. Each consumer keeps its own
+ * prefers-reduced-motion guard next to the rule that uses this.
+ */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
