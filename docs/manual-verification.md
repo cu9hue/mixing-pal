@@ -340,3 +340,47 @@ Date: ___________  Live version: ___________  Tester: ___________
       before release, or the setup flow ships showing a fake image on the
       one screen where a producer is meant to compare what is in front of
       her to what is on screen.
+
+## Stage 1 distribution — a clean Mac (added 2026-08-20)
+
+This is the test the `.dmg` exists for, and it cannot be run on the build
+machine. That machine has the repo, so `connector_source`'s
+`CARGO_MANIFEST_DIR` fallback succeeds even when the bundle is empty — the
+one failure this whole stage exists to prevent is the one failure the build
+machine cannot show you.
+
+A fresh macOS user account is a real clean room and costs nothing. Live sits
+in `/Applications` and every account can run it, while
+`~/Music/Ableton/User Library` is per-account, so a new account starts with
+no connector, no settings, and no repository.
+
+Date: ___________  macOS version: ___________  Tester: ___________
+
+- [ ] Create a new account in System Settings → Users & Groups, log into it,
+      and copy the `.dmg` across over USB or the local network — **not**
+      AirDrop, and not a browser download. Both of those set
+      `com.apple.quarantine`, and macOS blocks a quarantined unsigned app.
+      Stage 2 removes that difference; until then, the delivery route is
+      part of what is being tested.
+- [ ] Open the `.dmg`. It shows the app beside an Applications folder. Drag
+      it across.
+- [ ] Launch Mixing Pal from `/Applications`. It opens with no warning of
+      any kind.
+- [ ] Setup opens on the install step. Work through it. Afterwards
+      `~/Music/Ableton/User Library/Remote Scripts/MixingPal` exists **in
+      this account**. If it does not, the bundle shipped without its
+      connector.
+- [ ] **Write down whether macOS asked permission for anything**, and what
+      it named. Stage 2 depends on the answer: permission grants are keyed
+      to an app's code signature, and an unsigned build gets a new signature
+      every time it is built, so any grant needed here is a grant that
+      every future update would silently lose.
+- [ ] Start Live. Add MixingPal under Preferences → Link, Tempo & MIDI →
+      Control Surface. Deltas arrive and setup advances to the connected
+      step.
+- [ ] Open Advanced, set an OpenRouter key and a model, then ask a question
+      about the set and get an answer. **Expect to do this by hand.** The
+      app installs cleanly and then cannot answer anything until both are
+      set, because `run_model` refuses while either is empty and nothing in
+      setup asks for them. Closing that gap is subsystem B, not this stage.
+- [ ] Quit and relaunch. Setup does **not** reopen.
