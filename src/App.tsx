@@ -175,9 +175,19 @@ export default function App() {
   }, [state]);
 
   const nudge = nudges.current;
+  // A nudge never opens the card: it is unprompted, and taking the screen
+  // from someone mid-take is the most intrusive thing this app could do. It
+  // announces itself with the pill's glow instead, which means it MUST set
+  // unread -- without this a nudge arriving while the card is shut is
+  // completely silent until she happens to open it.
+  //
+  // viewRef rather than a `view` dependency: this must fire when a nudge
+  // arrives, not every time the view changes while one is still on screen.
+  const viewRef = useRef(view);
+  viewRef.current = view;
   useEffect(() => {
-    if (nudge !== null) dispatch({ type: "nudge_arrived" });
-  }, [nudge, dispatch]);
+    if (nudge !== null && viewRef.current !== "card") setUnread(true);
+  }, [nudge]);
 
   // Nothing is unread while she is looking at it. Without this the first
   // answer left `unread` true forever, and the blur rule -- which requires
@@ -295,9 +305,9 @@ export default function App() {
           onDismissNudge={(id) => setNudges((n) => dismiss(n, id))}
           onTurnRunningChange={setTurnRunning}
           onAnswer={() => {
-            // Only unread if she was not looking at it arrive.
+            // Unread only if she was not watching it arrive. The card is not
+            // reopened either way -- see nextMode's pill_clicked comment.
             if (view !== "card") setUnread(true);
-            dispatch({ type: "answer_completed" });
           }}
           onCollapse={() => dispatch({ type: "chevron_closed" })}
           onInputEmptyChange={setInputEmpty}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { nextMode, geometryApply, MODE_GEOMETRY, ModeContext } from "./windowMode";
+import { nextMode, geometryApply, MODE_GEOMETRY, ModeContext, ModeEvent } from "./windowMode";
 
 const QUIET: ModeContext = { inputEmpty: true, turnRunning: false, unread: false };
 
@@ -8,20 +8,26 @@ describe("nextMode", () => {
     expect(nextMode("pill", { type: "pill_clicked" }, QUIET)).toBe("card");
   });
 
-  it("opens the card when a nudge arrives", () => {
-    expect(nextMode("pill", { type: "nudge_arrived" }, QUIET)).toBe("card");
-  });
 
-  // Deliberately NOT "card". Forcing the card open here made the pill's
-  // unread state unreachable -- the same batch that set `unread` flipped the
-  // view to card, and the effect that clears it ran before Pill ever
-  // rendered. It also reopened a window over Live that she had just closed.
-  it("leaves a collapsed card collapsed when an answer completes", () => {
-    expect(nextMode("pill", { type: "answer_completed" }, QUIET)).toBe("pill");
-  });
 
-  it("leaves an open card open when an answer completes", () => {
-    expect(nextMode("card", { type: "answer_completed" }, QUIET)).toBe("card");
+  // The card opens on exactly one thing: her clicking the pill. Two events
+  // used to open it on the app's own initiative -- a completed answer and an
+  // arriving nudge -- and both were removed. An answer she is watching needs
+  // no transition, one that lands after she pressed Escape must not reopen a
+  // window over Live, and a nudge is unprompted, which makes taking the
+  // screen for it the most intrusive thing this app could do. The pill's
+  // unread glow carries both instead.
+  it("opens the card on nothing but her own click", () => {
+    const events: ModeEvent[] = [
+      { type: "escape" },
+      { type: "chevron_closed" },
+      { type: "blur" },
+      { type: "setup_finished" },
+    ];
+    for (const event of events) {
+      expect(nextMode("pill", event, QUIET)).toBe("pill");
+    }
+    expect(nextMode("pill", { type: "pill_clicked" }, QUIET)).toBe("card");
   });
 
   it("collapses to the pill on escape", () => {
@@ -53,7 +59,6 @@ describe("nextMode", () => {
   });
 
   it("setup keeps the window until it finishes, whatever else happens", () => {
-    expect(nextMode("setup", { type: "nudge_arrived" }, QUIET)).toBe("setup");
     expect(nextMode("setup", { type: "pill_clicked" }, QUIET)).toBe("setup");
     expect(nextMode("setup", { type: "escape" }, QUIET)).toBe("setup");
   });

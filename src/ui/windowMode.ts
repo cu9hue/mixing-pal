@@ -91,8 +91,6 @@ export function geometryApply(
 
 export type ModeEvent =
   | { type: "pill_clicked" }
-  | { type: "nudge_arrived" }
-  | { type: "answer_completed" }
   | { type: "escape" }
   | { type: "chevron_closed" }
   | { type: "blur" }
@@ -122,20 +120,15 @@ export function nextMode(mode: WindowMode, event: ModeEvent, ctx: ModeContext): 
     // an event, so a stray finish signal changes nothing.
     case "setup_finished":
       return mode;
+    // The only event that opens the card. There were two others -- a
+    // completed answer and an arriving nudge -- and both are gone. An answer
+    // she is watching needs no transition; one that lands after she pressed
+    // Escape must not reopen a window over Live; and a nudge is unprompted,
+    // which makes taking the screen for it the most intrusive thing this app
+    // can do. The pill's unread glow carries both instead, and it only has a
+    // job if the card can stay shut.
     case "pill_clicked":
-    case "nudge_arrived":
       return "card";
-    // Not "card". An answer she is already watching needs no transition, and
-    // one that lands after she has deliberately collapsed the card must not
-    // reopen a window over Live -- she closed it on purpose, and the spec is
-    // explicit that this app never takes the screen back from her.
-    //
-    // Forcing "card" here also made the pill's unread state unreachable: the
-    // same batch that set `unread` flipped the view to card, and the effect
-    // that clears it ran before Pill was ever mounted. The glow is what tells
-    // her an answer is waiting; it only has a job if the card can stay shut.
-    case "answer_completed":
-      return mode;
     case "escape":
     case "chevron_closed":
       return "pill";
