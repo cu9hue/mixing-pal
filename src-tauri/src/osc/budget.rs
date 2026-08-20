@@ -157,6 +157,46 @@ mod tests {
         );
     }
 
+    /// The rack listing's reply header has to fit inside `HEADER_SLACK`, or a
+    /// full window overflows the datagram and Live sends nothing at all.
+    ///
+    /// `rack_paths.build_window` budgets only the RECORDS, against
+    /// `MAX_REPLY_BYTES`. This asserts the rest of the message fits in what is
+    /// left over. The path is the part that can grow, and the worst case is
+    /// computable ONLY because `parse_path` caps a component at ten digits --
+    /// before that cap existed, this header had no upper bound at all.
+    #[test]
+    fn the_rack_listing_header_fits_inside_the_slack() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../remote-script/AbletonCopilot/copilot/rack_paths.py"
+        ))
+        .expect("rack_paths.py is missing");
+        let max_path_len: usize = source
+            .lines()
+            .find_map(|l| l.strip_prefix("MAX_PATH_LEN = "))
+            .expect("MAX_PATH_LEN is not declared on its own line")
+            .trim()
+            .parse()
+            .unwrap();
+
+        // An OSC string is padded to a multiple of 4 with at least one NUL.
+        let osc_string = |len: usize| 4 * (len / 4 + 1);
+        // Every component ten digits long, joined by dots.
+        let worst_path = max_path_len * 10 + (max_path_len - 1);
+        let address = osc_string("/live/copilot/get/rack/chains".len());
+        // track, start, total_chains, can_have_chains.
+        let ints = 4 * 4;
+        // One tag byte per argument, plus the leading comma and its padding.
+        let tags = 5 + 1 + 3;
+        let header = address + osc_string(worst_path) + ints + tags;
+
+        assert!(
+            header <= HEADER_SLACK,
+            "worst-case rack header is {header} bytes, past HEADER_SLACK ({HEADER_SLACK})"
+        );
+    }
+
     #[test]
     fn a_small_clip_needs_one_window() {
         let w = note_windows(16.0, 40);

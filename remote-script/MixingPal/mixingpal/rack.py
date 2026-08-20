@@ -1,6 +1,6 @@
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
-from .rack_paths import build_window, chains_of, parse_path, resolve
+from .rack_paths import NAME_CAP, build_window, chains_of, parse_path, resolve
 
 
 class RackHandler(AbletonOSCHandler):
@@ -36,7 +36,7 @@ class RackHandler(AbletonOSCHandler):
             if device is None:
                 return None
             track_index = int(params[0])
-            start, span = max(0, int(params[2])), int(params[3])
+            start, span = max(0, int(params[2])), max(0, int(params[3]))
             entries = chains_of(device)
             records = build_window(entries, start, span)
             flat = [field for record in records for field in record]
@@ -53,7 +53,7 @@ class RackHandler(AbletonOSCHandler):
             if device is None:
                 return None
             return (int(params[0]), raw_path,
-                    str(device.name), len(device.parameters))
+                    str(device.name)[:NAME_CAP], len(device.parameters))
 
         self.osc_server.add_handler(
             "/live/copilot/get/rack/chains", rack_chains)
