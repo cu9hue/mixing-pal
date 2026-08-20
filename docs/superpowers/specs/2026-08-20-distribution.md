@@ -124,9 +124,14 @@ repo does not add handling for what cannot happen.
 `--target universal-apple-darwin` so one artifact runs on Apple Silicon and
 Intel.
 
-Set `bundle.macOS.minimumSystemVersion` explicitly. Tauri's default is `10.13`,
-which is older than anything that matters here and older than Live 12 supports.
-`10.15` is the proposed floor — see Open questions.
+Set `bundle.macOS.minimumSystemVersion` to `"11.0"`. Tauri's default is
+`10.13`, which is older than anything that matters here. `11.0` is Live 12's own
+floor, read from `/Applications/Ableton Live 12 Suite.app/Contents/Info.plist`,
+which declares `LSMinimumSystemVersion = 11`. Matching it excludes nobody: this
+app is useless without Live, so anything Live cannot run on does not matter.
+
+Live 12 also ships universal (`x86_64 arm64`), which is the shape this app should
+take for the same reason.
 
 ### The DMG
 
@@ -328,10 +333,7 @@ Plan 1 has no dependency on plan 2. Plan 2 cannot go first.
 
 ## Open questions
 
-1. **`minimumSystemVersion`.** `10.15` is proposed as matching Live 12's floor.
-   Confirm against Ableton's actual system requirements before setting it;
-   raising it later is a one-line change, lowering it after release is not.
-2. **R2 account and domain.** Stage 3 needs a Cloudflare account and,
+1. **R2 account and domain.** Stage 3 needs a Cloudflare account and,
    preferably, a domain to serve artifacts from. Neither exists yet.
-3. **Whether `~/Music/Ableton` raises a privacy prompt.** Answered by stage 1's
+2. **Whether `~/Music/Ableton` raises a privacy prompt.** Answered by stage 1's
    clean-account run, at no extra cost.
