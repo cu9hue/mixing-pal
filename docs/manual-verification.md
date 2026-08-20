@@ -102,6 +102,10 @@ Date: ___________  Live version: ___________  Tester: ___________
   previous (unresolved) build actually produced. `expire()` now only
   matters as a backstop for a request that never gets a reply at all (see
   the datagram-overflow note below), not as the primary way a slot frees.
+- If you hit the Gatekeeper block described in
+  `docs/opening-an-unsigned-build.md`, screenshot each step and add the
+  images to that page. It was written from the documented behaviour of
+  macOS, not from a build anyone had actually been refused.
 - The poll loop fetches `/live/song/get/num_tracks` and
   `/live/song/get/num_scenes` on every `TrackState` tick and skips the
   chunked `track_data` poll until both are known. Expect a short delay (a
