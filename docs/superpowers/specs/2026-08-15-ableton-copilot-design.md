@@ -398,14 +398,14 @@ the model rather than hidden from it.
 | --- | --- | --- |
 | `get_track_detail(track)` | **Mirror** | Name, fader (normalised and dB), pan, mute, solo for one track |
 | `get_clip_notes(track, clip)` | **Live query** | Raw note list, paged |
-| `get_device_chains()` | Live query | Every track's device class list, all tracks in one round trip |
-| `get_device_params(track, device)` | Live query | Device name, parameter names and formatted values, paged |
+| `get_device_chains()` | Live query | Every track's device names and rack flags, all tracks in one round trip |
+| `get_rack_contents(track, path)` | Live query | One rack's chains: names, contents, pad notes, mute and solo, paged |
+| `get_device_params(track, path)` | Live query | Device name, parameter names and formatted values, paged |
 | `get_arrangement()` | Live query | Every arrangement clip with start and length |
 
 `get_track_detail` carries no device names. Nothing polls them, so the mirror
-cannot hold them, and fetching them would need `num_devices` plus one
-`/live/device/get/name` per device — a live query, which would break the tool's
-one defining property (it costs no OSC traffic). Device names arrive with
+cannot hold them, and fetching them would need a live query per device, which
+would break the tool's one defining property (it costs no OSC traffic). Device names arrive with
 `get_device_params`, which already needs that traffic.
 
 The dB string is what makes the fader legible to a model: `0.85` is a
@@ -417,9 +417,9 @@ poll covers all three and the app never issues a per-track dB query.
 **The first cut ships the top two only** — `get_track_detail` and
 `get_clip_notes`. They are deliberately asymmetric: one proves the mirror-read
 path and costs nothing, the other proves the awaitable request path end to end.
-`get_device_chains`, `get_device_params`, and `get_arrangement` follow once
-that loop is trustworthy; each needs its own decode path, and device
-parameters need paging.
+`get_device_chains`, `get_device_params`, `get_rack_contents` and
+`get_arrangement` follow once that loop is trustworthy; each needs its own
+decode path, and device parameters, rack contents and arrangement need paging.
 
 `get_track_detail` costs no OSC traffic. Polling already refreshes track state
 every 2 seconds, so the mirror is the authoritative local copy and a round trip
@@ -442,7 +442,11 @@ context block, and nothing about devices is polled.
 | Tool | Cost | Returns |
 | --- | --- | --- |
 | `get_device_chains()` | One round trip, every track in parallel | Each track's device names, fenced |
-| `get_device_params(track, device)` | Paged round trips | Device name, parameter names, formatted values |
+| `get_device_params(track, path)` | Paged round trips | Device name, parameter names, formatted values |
+
+*(This tool shipped as `get_device_params(track, device)`; **Racks** replaced
+the device index with a path. Everything below holds unchanged for a
+single-element path.)*
 
 **Why query instead of poll.** The chain map is tool-gated, so polling it
 would pay standing OSC traffic for data nobody is asking for. Querying it
@@ -575,7 +579,9 @@ wrong answer in production.**
   direction. The claim rests entirely on `parameters[0]` being `Device On`;
   a device whose first parameter is something else would falsify it, so
   `docs/manual-verification.md` checks it against a running Live.
-- **Devices inside Racks are not listed.** `track.devices` is top-level only,
+- **Devices inside Racks are not listed.** *Superseded 2026-08-20 by
+  **Racks**, which opens them; the reasoning below is why it mattered.*
+  `track.devices` is top-level only,
   so an Instrument Rack, Audio Effect Rack or Drum Rack appears as one device
   and everything inside it is invisible; `get_device_params` on a Rack
   returns its macros, not its contents. Racks are ubiquitous in electronic
@@ -600,7 +606,198 @@ wrong answer in production.**
 
 **No Remote Script work.** `copilot/device_range.py` shipped in wire version
 2 and is installed. The wire version does not change, and neither a
-reinstall nor a Live restart is required.
+reinstall nor a Live restart is required. (**Racks** does change it, to 3,
+and does require both.)
+
+### Racks
+
+*Added 2026-08-20. Supersedes the "Devices inside Racks are not listed" limit
+in **Devices**.*
+
+A Drum Rack is one device to `track.devices` and an entire mix to the producer.
+The chain map renders a loaded kit as «Drum Rack» and stops there, so a model
+asked about the drums answers that nothing is compressing them while the
+compressor sits on the kick pad. Racks are ubiquitous in electronic production,
+which makes this the largest remaining gap between what the app sees and what
+the producer is working on. This section opens them.
+
+**One path, and the same path everywhere.** A device is addressed by a track
+and a path that alternates device and chain indices, always of odd length:
+
+| Path | Resolves to |
+| --- | --- |
+| `[0]` | `track.devices[0]` |
+| `[0, 4, 1]` | that device's chain 4, device 1 |
+| `[0, 4, 0, 1, 0]` | one rack deeper again |
+
+On the wire the path travels as a single dotted string, `"0.4.0.1.0"`. That is
+the load-bearing decision and it is forced by `arity.rs`. A path sent as a
+variable-length run of ints would make each address's key arity a function of
+the request, and `arity.rs` is a literal exhaustive match precisely so that no
+arity is ever computed — a computed arity is the guessed arity the module
+exists to rule out. One string argument keeps the ranged addresses at a
+constant `Args(3)`, and `RequestTable`'s `key_of` already encodes
+`OscType::String` with an `s` prefix, so single-flight keying, cancellation and
+mis-attributed-reply rejection all work unchanged. The dotted form is also
+legible in the trace pane, where an int run would be four anonymous columns.
+
+The client validates the path before anything reaches the wire: odd length,
+between 1 and 9 elements, no negative index. Nine caps the walk at four racks
+deep — past a drum pad holding an Instrument Rack holding layered chains — and
+it is a guard rather than a product limit. Path resolution runs inside Live's
+callback, on the thread that also has to service audio, so an unbounded walk
+driven by a malformed path is not a cost this app gets to impose.
+
+**Listing and resolving go through one function, so they cannot disagree.**
+The correctness problem in this whole section is that chain index 4 must mean
+the same chain when the model reads a listing and when it later sends that
+index back in a path. A Drum Rack makes this easy to get wrong: its pad note
+lives on `DrumPad`, not on `Chain`, so the obvious implementation lists from
+`device.drum_pads` and resolves through `device.chains`, pairing the two by
+position. That pairing is an assumption about an ordering the LOM does not
+promise, and when it is wrong it is wrong silently and in the worst possible
+way — every pad labelled with its neighbour's note, in an answer that looks
+complete.
+
+So both sides call one helper:
+
+```python
+def chains_of(device):
+    if getattr(device, "can_have_drum_pads", False):
+        return [(pad.chains[0], pad.note, pad.name, pad.mute, pad.solo)
+                for pad in device.drum_pads if len(pad.chains) > 0]
+    return [(c, -1, c.name, c.mute, c.solo)
+            for c in getattr(device, "chains", [])]
+```
+
+A Drum Rack enumerates through its pads, so the note arrives already attached
+to its own chain and there is no ordering claim left to be wrong about. Every
+other rack enumerates through `chains` and reports `-1` for the note. A device
+that is not a rack yields an empty list rather than raising, because `getattr`
+supplies the default. Resolution indexes this same list, so agreement is
+structural rather than tested.
+
+**Remote Script changes, and wire version 3.**
+
+- **New** `copilot/rack.py`: `chains_of`, `resolve`, and the handler for
+  `/live/copilot/get/rack/chains`.
+- **New** `/live/copilot/get/device/identity`, replying
+  `(track, path, name, num_parameters)` at `Args(2)`. It replaces the two
+  upstream calls the parameter read's identity bracket makes today, so a
+  bracketed read drops from four round trips to two.
+- **Modified** `copilot/device_range.py`: argument 1 becomes the path string
+  instead of a device index, resolved through `rack.resolve`. The three
+  addresses and their `Args(3)` keying do not move.
+- **Retired**: `/live/device/get/name`, `/live/device/get/num_parameters`, and
+  `/live/device/get/parameters/value_range`, which the design has never used.
+
+`WIRE_VERSION` becomes 3. Unlike the device work, this one does require a
+script reinstall and a Live restart; the mismatch banner already names both
+numbers and says so.
+
+**The rack listing reply.** `/live/copilot/get/rack/chains` takes
+`(track, path, start, span)` and replies
+`(track, path, start, total_chains, can_have_chains, *records)`, keyed
+`Args(3)` on the echoed `(track, path, start)` exactly as the parameter
+windows are. Each record is `name, note, mute, solo, total_devices` followed by
+that many device names, so the record announces its own length and the decoder
+walks the stream. A stream that runs short mid-record produces no value at all,
+the same fail-closed rule the parameter decoder follows.
+
+`can_have_chains` rides in the reply so that two different answers stay
+different. A device with no chains because it is an EQ and a Rack with nothing
+loaded in it both list zero chains, and only the first is a model error. "This
+rack is empty" is a real observation about a set; reporting it as "not a rack"
+would be the same category of mistake as reporting an empty device chain as
+missing data.
+
+**The handler owns the window, not the client.** Every other windowed query in
+this design sizes its window client-side, because parameters are uniform enough
+to budget: 64 bytes each, 140 to a datagram. Chains are not. A record for a
+chain holding four devices is roughly 340 bytes; one holding thirty-two is
+about 2100. A client-side window sized for the first case sends twenty-three of
+the second, serialises to some 48 KB, and `sendto` raises inside Live — which
+delivers nothing at all, indistinguishable from silence. Only the sender knows
+the sizes, so the sender decides: the handler appends records until its running
+byte estimate approaches `MAX_DATAGRAM - HEADER_SLACK`, then stops early and
+returns fewer records than the span asked for. A single chain too large to fit
+alone has its device names truncated until it does, with `total_devices` still
+reporting the truth, so every reply makes progress and the paging loop cannot
+stall. The client pages against `total_chains` rather than against how many
+records it asked for.
+
+That byte ceiling is duplicated across the language boundary, so a Rust test
+reads the constant out of `rack.py` and asserts it equals
+`MAX_DATAGRAM - HEADER_SLACK`, the way `wire_version_matches_the_shared_manifest`
+already pins `version.py`.
+
+**Tool surface.**
+
+| Tool | Change |
+| --- | --- |
+| `get_device_chains()` | Each device gains a `rack` flag, from upstream's `/live/track/get/devices/can_have_chains`. Output otherwise unchanged. |
+| `get_rack_contents(track, path)` | New. One rack's chains: name, the devices inside, the pad note on drum chains, and `muted` or `soloed` only when set. |
+| `get_device_params(track, path)` | `device: integer` becomes `path: array`. |
+
+The rack flag costs a second `Args(1)` request per track. Both requests for all
+tracks are in flight together and `osc_server.py:154` drains its socket until it
+blocks, so 2N requests still resolve inside one Live tick and the chain map
+stays a one-tick call. `MAX_FANOUT_TRACKS` continues to bound the count, now
+bounding twice as many tasks.
+
+Mute and solo are reported only when set. A rack where nothing is muted costs
+nothing to say so, and a muted chain is silent — a names-only listing renders
+it identically to a working one, which is the same failure as listing a
+bypassed EQ as if it were shaping the bass. Chain volume and pan are not
+carried: they would cost two formatted values on every chain of every listing
+to answer a question the producer has not yet been observed to ask.
+
+`get_rack_contents` caps at **64 chains** with an explicit truncation marker.
+A Drum Rack has 128 pads and a fully loaded one is legal, but a working kit
+runs eight to twenty-four; as with the 256-parameter cap this is a prompt-token
+decision, not a datagram one, so it lives with the tool rather than in the byte
+budget.
+
+**Why the int-addressed endpoints are retired rather than kept alongside.**
+Keeping `get_device_params(track, device)` next to a path form would give the
+model two ways to name one device, and the choice between them would carry no
+meaning. Models resolve that kind of ambiguity badly and inconsistently, and
+every test that pins tool behaviour would need writing twice. `path: [2]` says
+"top-level device 2" without ceremony. The migration is contained: those
+addresses have exactly one caller, `tools/device_params.rs`, plus their lines
+in `arity.rs` and `lib.rs`'s resolve-only list.
+
+**Failure stays the shape it already is.** A path with an index that does not
+exist raises inside AbletonOSC and sends nothing, byte-identical to a lost
+reply — the error `get_device_params` already documents, now reachable one
+level deeper, and with the same words. `get_rack_contents` brackets its paging
+with the identity re-check the parameter read uses, extended with
+`total_chains`, so a pad deleted mid-page drops the read instead of merging two
+windows into one plausible answer. Chain names, pad names and device names are
+all producer-controlled text and are fenced on the way out of the wire, like
+every other set-derived string.
+
+Nothing here is polled and nothing enters the standing context block. The rack
+flag is part of a tool result, not part of the digest.
+
+**Known limits, recorded so the next plan does not rediscover them from a wrong
+answer in production.**
+
+- **The pad note rests on LOM behaviour this repo cannot test.** `chains_of`
+  assumes `can_have_drum_pads`, `drum_pads`, `pad.note` and `pad.chains` behave
+  as documented. No test here can exercise them — there is no Live in CI — so
+  `docs/manual-verification.md` checks the note against a real Drum Rack,
+  alongside the still-open `Device On` check.
+- **Depth stops at four racks.** A fifth level is refused with a reason rather
+  than silently truncated. No known production layout reaches it.
+- **Return and master devices are still not covered.** Racks on a return are
+  now expandable in principle and unreachable in practice, because
+  `get_device_chains` still iterates `song.tracks` only.
+- **Chain-level mixing is not reported.** Per-chain volume, pan and sends exist
+  in the LOM and are deliberately absent here.
+- **Two identical devices still defeat the identity re-check**, unchanged: the
+  consolidated identity address returns the same name and parameter count the
+  two separate addresses did.
 
 ### The awaitable request path
 
