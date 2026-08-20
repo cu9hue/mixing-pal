@@ -6,7 +6,7 @@ import { emptySet, applyDelta } from "./live/apply";
 import { Card } from "./ui/Card";
 import { Pill } from "./ui/Pill";
 import { pillState } from "./ui/pillState";
-import { CARD_MAX_HEIGHT, MODE_GEOMETRY, ModeEvent, WindowMode, nextMode } from "./ui/windowMode";
+import { CARD_MAX_HEIGHT, MODE_GEOMETRY, ModeEvent, WindowMode, nextMode, geometryApply, Measured } from "./ui/windowMode";
 import { STALE_MS } from "./ui/Connection";
 import { unnamedTracks } from "./rules/unnamedTracks";
 import { EMPTY_NUDGE_STATE, dismiss, offer } from "./rules/nudges";
@@ -211,13 +211,19 @@ export default function App() {
   // any state this component owns changing. setState re-renders only when
   // the number actually moved, which is what keeps the effect below quiet.
   const root = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState<number | null>(null);
+  const [measured, setMeasured] = useState<Measured | null>(null);
   useLayoutEffect(() => {
     const geometry = MODE_GEOMETRY[view];
-    const measured =
+    const height = Math.ceil(
       geometry.height ??
-      Math.min(root.current?.scrollHeight ?? 0, geometry.maxHeight ?? Infinity);
-    setHeight(Math.ceil(measured));
+        Math.min(root.current?.scrollHeight ?? 0, geometry.maxHeight ?? Infinity),
+    );
+    // The height travels with the mode it was measured for, so the effect
+    // below can tell a fresh measurement from the outgoing mode's. Returning
+    // the same object when nothing moved is what keeps this from looping.
+    setMeasured((prev) =>
+      prev !== null && prev.view === view && prev.height === height ? prev : { view, height },
+    );
   });
 
   // Resize before the frame paints, so the window never shows a card at
@@ -230,19 +236,16 @@ export default function App() {
   // monitors once a second forever.
   const centredFor = useRef<WindowMode | null>(null);
   useLayoutEffect(() => {
-    if (height === null) return;
-    const geometry = MODE_GEOMETRY[view];
-    // Centring is a one-shot on entering a centred mode. After that the
-    // window is hers to put where she likes.
-    const center = geometry.centered && centredFor.current !== view;
+    // Returns null while `measured` still describes the mode we just left --
+    // applying it there resized the incoming window to the outgoing
+    // content, one visibly wrong frame per transition. See geometryApply.
+    const apply = geometryApply(view, measured, centredFor.current);
+    if (apply === null) return;
     centredFor.current = view;
-    invoke("set_window_mode", {
-      width: geometry.width,
-      height,
-      alwaysOnTop: geometry.alwaysOnTop,
-      center,
-    }).catch((err) => console.error("failed to apply window mode", err));
-  }, [view, height]);
+    invoke("set_window_mode", apply).catch((err) =>
+      console.error("failed to apply window mode", err),
+    );
+  }, [view, measured]);
 
   const trackNames = Object.keys(state.tracks)
     .map(Number)

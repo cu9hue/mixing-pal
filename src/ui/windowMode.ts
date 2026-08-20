@@ -39,6 +39,56 @@ export const MODE_GEOMETRY: Record<WindowMode, Geometry> = {
   card: { width: 320, height: null, maxHeight: CARD_MAX_HEIGHT, alwaysOnTop: true, centered: false },
 };
 
+/** A height, and the mode it was measured for. The pairing is the point. */
+export interface Measured {
+  view: WindowMode;
+  height: number;
+}
+
+/**
+ * A type alias, not an interface, on purpose: Tauri's `invoke` takes a
+ * `Record<string, unknown>`, and TypeScript grants an implicit index
+ * signature to aliases but never to interfaces. As an interface this cannot
+ * be passed to `invoke` without spreading it into a fresh literal, which is
+ * exactly the kind of shapeless copy that lets a field go missing.
+ */
+export type GeometryApply = {
+  width: number;
+  height: number;
+  alwaysOnTop: boolean;
+  center: boolean;
+};
+
+/**
+ * What to send to `set_window_mode`, or null when nothing should be sent yet.
+ *
+ * Measuring and applying happen in two different effects, and on a mode
+ * change the applying one runs first -- with a height measured for the mode
+ * we just left. Applying it sized the incoming window to the outgoing
+ * content: setup→card sent {320, 680} and only then {320, 400}, so every
+ * transition pushed one visibly wrong frame through a native resize the
+ * compositor does not batch. Pairing the height with the mode it was
+ * measured for turns that into a check this function can make.
+ *
+ * `centredFor` is the mode the window was last centred in. Centring is a
+ * one-shot on entry: re-centring on every apply put the setup window back a
+ * second after she dragged it.
+ */
+export function geometryApply(
+  view: WindowMode,
+  measured: Measured | null,
+  centredFor: WindowMode | null,
+): GeometryApply | null {
+  if (measured === null || measured.view !== view) return null;
+  const geometry = MODE_GEOMETRY[view];
+  return {
+    width: geometry.width,
+    height: measured.height,
+    alwaysOnTop: geometry.alwaysOnTop,
+    center: geometry.centered && centredFor !== view,
+  };
+}
+
 export type ModeEvent =
   | { type: "pill_clicked" }
   | { type: "nudge_arrived" }
