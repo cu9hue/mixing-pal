@@ -183,6 +183,11 @@ pub fn live_is_running() -> bool {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    /// HOME is process-global, so the tests that move it must not run at
+    /// the same time as each other.
+    static ENV: Mutex<()> = Mutex::new(());
 
     /// A unique scratch directory per test, without pulling in a temp-file
     /// crate. Same pattern as settings.rs.
@@ -306,12 +311,56 @@ mod tests {
         let result = sync_dir(&root.join("nope"), &root.join("dest"), EXCLUDE);
         assert!(result.is_err());
         // Not just "it errored" -- it must not have created the destination
-        // on the way out. connector_status() decides "installed" from
-        // is_dir() on this exact path, so a stray empty directory left by a
-        // failed install reads as a successful one.
+        // on the way out. A stray empty directory under Remote Scripts is
+        // an entry Live offers in its Control Surface dropdown that loads
+        // and does nothing.
         assert!(
             !root.join("dest").exists(),
             "a failed install must not leave a directory connector_status() would call installed"
         );
+    }
+
+    #[test]
+    fn a_missing_user_library_is_reported_rather_than_created() {
+        // The spec's own words: creating the directory ourselves would
+        // install into somewhere Live never reads, and she would be left
+        // selecting a Control Surface entry that is not there. The install
+        // command turns this None into the pick-a-folder error.
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let home = scratch();
+        let previous = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+
+        let found = default_user_library();
+
+        match previous {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert!(found.is_none(), "a User Library that is not there must not be invented");
+        assert!(
+            !home.join("Music").join("Ableton").join("User Library").exists(),
+            "looking for the User Library must not create it"
+        );
+    }
+
+    #[test]
+    fn the_user_library_is_found_at_the_path_live_uses() {
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let home = scratch();
+        let library = home.join("Music").join("Ableton").join("User Library");
+        std::fs::create_dir_all(&library).unwrap();
+        let previous = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+
+        let found = default_user_library();
+
+        match previous {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert_eq!(found, Some(library));
     }
 }
