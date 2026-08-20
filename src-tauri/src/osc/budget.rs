@@ -135,6 +135,28 @@ pub fn mixer_chunks(num_tracks: usize) -> Vec<(usize, usize)> {
 mod tests {
     use super::*;
 
+    /// `copilot/rack_paths.py` fills its own reply window, so it carries a
+    /// copy of this module's ceiling. A copy that drifts high makes Live's
+    /// `sendto` raise and the client receives NOTHING -- silence, not
+    /// truncation, and indistinguishable from a lost reply. Same tripwire
+    /// pattern as `wire_version_matches_the_shared_manifest`.
+    #[test]
+    fn rack_byte_ceiling_matches_the_budget() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../remote-script/AbletonCopilot/copilot/rack_paths.py"
+        ))
+        .expect("rack_paths.py is missing");
+        let line = source
+            .lines()
+            .find_map(|l| l.strip_prefix("MAX_REPLY_BYTES = "))
+            .expect("MAX_REPLY_BYTES is not declared on its own line");
+        assert_eq!(
+            line.trim().parse::<usize>().unwrap(),
+            MAX_DATAGRAM - HEADER_SLACK
+        );
+    }
+
     #[test]
     fn a_small_clip_needs_one_window() {
         let w = note_windows(16.0, 40);
