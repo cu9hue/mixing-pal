@@ -5,7 +5,7 @@ Automated fixtures cannot catch listener lifecycle bugs, UDP loss, or
 Live UI-thread stalls.
 
 Status: **PENDING-USER**. Every item below requires a running Ableton Live
-instance with the AbletonCopilot Control Surface selected in
+instance with the Mixing Pal Control Surface selected in
 Preferences > Link/Tempo/MIDI, which is GUI-only and cannot be driven by an
 agent. Nothing in this list has been executed against real Live; this file
 records what to run and what "pass" means, not a completed run.
@@ -32,7 +32,7 @@ Date: ___________  Live version: ___________  Tester: ___________
       command, without waiting for the next change to trigger a delta.
 - [ ] Add, delete, and reorder tracks. Confirm no `start_listen` was ever
       sent to an indexed address (check Live's log at
-      `~/Music/Ableton/User Library/Remote Scripts/AbletonCopilot/logs`).
+      `~/Music/Ableton/User Library/Remote Scripts/MixingPal/logs`).
       Also confirm no state lands under the wrong track: rename a few
       tracks to something distinctive (e.g. their own index), reorder them,
       and check each row still shows the name/fader/mute/solo for the track
@@ -125,7 +125,7 @@ Date: ___________  Live version: ___________  Tester: ___________
   counts.
 - `/live/view/get/selected_track`, `/live/view/get/selected_clip`, and
   `/live/view/get/selected_device` were all fixed at the remote-script
-  level (`remote-script/AbletonCopilot/copilot/view.py`) to return -1 for
+  level (`remote-script/MixingPal/mixingpal/view.py`) to return -1 for
   the track index instead of raising when the selected track is Master or
   a Return track — confirm Live's log shows no `ValueError: ... is not in
   list` tracebacks from any of these three addresses during normal use
@@ -277,10 +277,22 @@ the app to trigger it).
       keyboard mid-take is worse than no app at all.
 - [ ] Count the uses of the accent colour in one view. At most two.
 
+## After the rename to Mixing Pal — once, per machine
+
+- [ ] Delete the old connector:
+      `rm -rf "$HOME/Music/Ableton/User Library/Remote Scripts/AbletonCopilot"`.
+      The rename does not remove it, so until you do, Live lists **two**
+      Control Surface entries. Selecting the old one leaves the app showing
+      the stale-script banner — correct, but it does not tell you the fix is
+      to delete a folder. Nothing automates this on purpose: silently
+      deleting a directory out of someone's Ableton library is not ours to do.
+- [ ] After deleting it, confirm Live's Control Surface list offers
+      **MixingPal** and nothing resembling AbletonCopilot.
+
 ## First run (added 2026-08-19)
 
 Run from a genuinely clean state — delete
-`~/Music/Ableton/User Library/Remote Scripts/AbletonCopilot` and clear
+`~/Music/Ableton/User Library/Remote Scripts/MixingPal` and clear
 the webview's localStorage first. A rerun on an already-set-up machine
 proves nothing about the flow this exists to test.
 

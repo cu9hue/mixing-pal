@@ -456,7 +456,11 @@ what it cannot hear, plainly, before she ever asks a question:
 Get that right and the name costs nothing. Leave it out and every first session
 opens with a small disappointment, which is the most expensive kind.
 
-### The rename
+### The rename — done 2026-08-20
+
+Carried out in four commits: the Remote Script folder and its inner package,
+the OSC address, the identifiers, then these docs. The table below is kept as
+a record of what the rename had to touch.
 
 The name is not one string. The Remote Script's **folder name is the entry that
 appears in Live's Control Surface dropdown**, so this touches:
