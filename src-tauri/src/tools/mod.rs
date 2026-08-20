@@ -309,6 +309,43 @@ fn chains_moved(
     after_count != Some(before_count) || before.iter().zip(after).any(|(b, a)| topology_moved(b, a))
 }
 
+/// Assembles `get_device_chains`'s `missing_reason` from the three things
+/// that can go partly wrong: a set larger than the fan-out cap, tracks that
+/// did not answer at all, and tracks whose device names arrived without
+/// their rack marks.
+///
+/// All three can hold at once, so they are joined rather than one
+/// overwriting another. Extracted from the `execute` arm so it can be tested
+/// without a connected fake -- inline, the rack-mark case had no test at all.
+fn chain_map_reasons(
+    num_tracks: i64,
+    read_tracks: i64,
+    missing: &[i32],
+    flags_missing: &[i32],
+) -> Option<String> {
+    // The truncated tail is named as a count, not pushed into `missing` as
+    // thousands of indices: `missing` means "asked, no usable answer", and
+    // these were never asked.
+    let mut reasons: Vec<String> = Vec::new();
+    if num_tracks > read_tracks {
+        reasons.push(format!(
+            "truncated_to_first_{read_tracks}_tracks: the set has {num_tracks}"
+        ));
+    }
+    if !missing.is_empty() {
+        let names: Vec<String> = missing.iter().map(|t| t.to_string()).collect();
+        reasons.push(format!("no_reply_for_tracks: {}", names.join(", ")));
+    }
+    if !flags_missing.is_empty() {
+        let names: Vec<String> = flags_missing.iter().map(|t| t.to_string()).collect();
+        reasons.push(format!(
+            "rack_marks_unavailable_for_tracks: {} (their devices are listed, but which are Racks is unknown)",
+            names.join(", ")
+        ));
+    }
+    (!reasons.is_empty()).then(|| reasons.join("; "))
+}
+
 pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult {
     match name {
         "get_track_detail" => {
@@ -423,30 +460,8 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 return ToolResult::missing("topology_changed");
             }
 
-            // Both conditions can hold at once, so they are joined rather
-            // than one overwriting the other. The truncated tail is named as
-            // a count, not pushed into `map.missing` as thousands of
-            // indices: `missing` means "asked, no usable answer", and these
-            // were never asked.
-            let mut reasons: Vec<String> = Vec::new();
-            if num_tracks > read_tracks {
-                reasons.push(format!(
-                    "truncated_to_first_{read_tracks}_tracks: the set has {num_tracks}"
-                ));
-            }
-            if !map.missing.is_empty() {
-                let names: Vec<String> = map.missing.iter().map(|t| t.to_string()).collect();
-                reasons.push(format!("no_reply_for_tracks: {}", names.join(", ")));
-            }
-            if !map.flags_missing.is_empty() {
-                let names: Vec<String> =
-                    map.flags_missing.iter().map(|t| t.to_string()).collect();
-                reasons.push(format!(
-                    "rack_marks_unavailable_for_tracks: {} (their devices are listed, but which are Racks is unknown)",
-                    names.join(", ")
-                ));
-            }
-            let missing_reason = (!reasons.is_empty()).then(|| reasons.join("; "));
+            let missing_reason =
+                chain_map_reasons(num_tracks, read_tracks, &map.missing, &map.flags_missing);
             ToolResult::live(
                 json!({ "tracks": map.tracks, "missing": map.missing }),
                 missing_reason,
@@ -539,10 +554,10 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 Err(QueryError::NoReply) => ToolResult::missing(
                     "no_reply: the track or the path may not exist, or Live did not answer",
                 ),
-                // QueryError derives Debug, not Display -- {e:?} instead of
-                // {e} here, unlike the {e} used above for a Transport(String)
-                // whose payload is already a String.
-                Err(e) => ToolResult::missing(&format!("transport_error: {e:?}")),
+                Err(QueryError::Busy) => ToolResult::missing("busy"),
+                Err(QueryError::Transport(e)) => {
+                    ToolResult::missing(&format!("transport_error: {e}"))
+                }
             }
         }
         _ => ToolResult::missing("unknown_tool"),
@@ -1015,6 +1030,47 @@ mod tests {
         let kick = Some(serde_json::json!("Kick"));
         let names = vec![bass, kick];
         assert!(!chains_moved(2, Some(2), &names, &names));
+    }
+
+    #[test]
+    fn chain_map_reasons_is_none_on_a_clean_read() {
+        assert_eq!(chain_map_reasons(4, 4, &[], &[]), None);
+    }
+
+    #[test]
+    fn chain_map_reasons_names_a_truncated_fan_out_alone() {
+        let reason = chain_map_reasons(600, 512, &[], &[]).unwrap();
+        assert_eq!(reason, "truncated_to_first_512_tracks: the set has 600");
+    }
+
+    #[test]
+    fn chain_map_reasons_names_tracks_that_did_not_answer_at_all_alone() {
+        let reason = chain_map_reasons(4, 4, &[1, 3], &[]).unwrap();
+        assert_eq!(reason, "no_reply_for_tracks: 1, 3");
+    }
+
+    #[test]
+    fn chain_map_reasons_names_tracks_missing_only_their_rack_marks_alone() {
+        // The devices ARE listed for these tracks; only which of them are
+        // Racks is unknown. A reader who took this as "these tracks failed"
+        // would discard a chain map that is present and correct.
+        let reason = chain_map_reasons(4, 4, &[], &[2]).unwrap();
+        assert_eq!(
+            reason,
+            "rack_marks_unavailable_for_tracks: 2 (their devices are listed, but which are Racks is unknown)"
+        );
+    }
+
+    #[test]
+    fn chain_map_reasons_joins_all_three_when_all_three_hold() {
+        // All three can hold at once, and none may overwrite another.
+        let reason = chain_map_reasons(600, 512, &[1], &[2]).unwrap();
+        assert_eq!(
+            reason,
+            "truncated_to_first_512_tracks: the set has 600; \
+no_reply_for_tracks: 1; \
+rack_marks_unavailable_for_tracks: 2 (their devices are listed, but which are Racks is unknown)"
+        );
     }
 
     #[tokio::test]
