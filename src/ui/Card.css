@@ -13,6 +13,13 @@
   overflow: hidden;
 }
 
+/* The card stays mounted while she is looking at the pill or at setup, so
+   the conversation and its history survive the collapse. display:none also
+   keeps it out of the scrollHeight that drives the window height. */
+.card-slot--hidden {
+  display: none;
+}
+
 .card__header {
   display: flex;
   align-items: center;

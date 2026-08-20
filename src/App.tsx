@@ -179,6 +179,13 @@ export default function App() {
     if (nudge !== null) dispatch({ type: "nudge_arrived" });
   }, [nudge, dispatch]);
 
+  // Nothing is unread while she is looking at it. Without this the first
+  // answer left `unread` true forever, and the blur rule -- which requires
+  // !unread -- never collapsed the card again.
+  useEffect(() => {
+    if (view === "card") setUnread(false);
+  }, [view]);
+
   useEffect(() => {
     const onBlur = () => dispatch({ type: "blur" });
     const onKey = (e: KeyboardEvent) => {
@@ -244,7 +251,7 @@ export default function App() {
 
   return (
     <div ref={root}>
-      {view === "setup" ? (
+      {view === "setup" && (
         <Setup
           step={step}
           folder={folder}
@@ -266,7 +273,12 @@ export default function App() {
           onFinished={finishSetup}
           onExit={forcedStep !== null ? () => setForcedStep(null) : undefined}
         />
-      ) : view === "card" ? (
+      )}
+      {/* Mounted whether or not it is showing. The conversation lives in
+          here, and the spec's "previous turns are not on screen; the model
+          still receives full history" only holds if collapsing to the pill
+          does not throw the history away with the component. */}
+      <div className={view === "card" ? undefined : "card-slot--hidden"}>
         <Card
           state={state}
           lastSeen={lastSeen}
@@ -280,14 +292,16 @@ export default function App() {
           onDismissNudge={(id) => setNudges((n) => dismiss(n, id))}
           onTurnRunningChange={setTurnRunning}
           onAnswer={() => {
-            setUnread(true);
+            // Only unread if she was not looking at it arrive.
+            if (view !== "card") setUnread(true);
             dispatch({ type: "answer_completed" });
           }}
           onCollapse={() => dispatch({ type: "chevron_closed" })}
           onInputEmptyChange={setInputEmpty}
           onShowSetup={setForcedStep}
         />
-      ) : (
+      </div>
+      {view === "pill" && (
         <Pill
           state={pillState({ connected, unread, turnRunning })}
           onClick={() => {

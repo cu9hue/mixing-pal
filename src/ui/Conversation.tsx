@@ -121,7 +121,7 @@ export function Conversation({
       ...history,
       { role: "user", content: `${buildContext(state, goal)}\n\n---\n\n${asked}` },
     ];
-    setHistory([...history, { role: "user", content: asked }]);
+    setHistory((h) => [...h, { role: "user", content: asked }]);
 
     try {
       const out = await runTurn(tauriProvider, tauriTools, turn, (name, args) =>
