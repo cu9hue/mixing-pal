@@ -309,6 +309,30 @@ fn chains_moved(
     after_count != Some(before_count) || before.iter().zip(after).any(|(b, a)| topology_moved(b, a))
 }
 
+/// Renders `get_rack_contents`'s payload.
+///
+/// `total_chains` and `is_rack` are omitted entirely when no window ever
+/// decoded, rather than serialised as `null`: an explicit null still invites
+/// the model to read something into the field, and `is_rack` is the field the
+/// tool description makes load-bearing ("the result says which"). A
+/// fabricated `false` there sends the model away from a Rack it should have
+/// opened.
+///
+/// Extracted from the `execute` arm so the omission can be tested at all --
+/// `RackContents` is never serialised as a struct, so its `skip_serializing_if`
+/// attributes are belt-and-braces and this `if let` is the mechanism that
+/// actually runs. Same reason `chain_map_reasons` below was extracted.
+fn rack_payload(r: &rack_contents::RackContents) -> serde_json::Value {
+    let mut payload = json!({ "chains": r.chains, "truncated": r.truncated });
+    if let Some(total) = r.total_chains {
+        payload["total_chains"] = json!(total);
+    }
+    if let Some(is_rack) = r.is_rack {
+        payload["is_rack"] = json!(is_rack);
+    }
+    payload
+}
+
 /// Assembles `get_device_chains`'s `missing_reason` from the three things
 /// that can go partly wrong: a set larger than the fan-out cap, tracks that
 /// did not answer at all, and tracks whose device names arrived without
@@ -539,17 +563,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
 
             match outcome {
                 Ok(r) => {
-                    // `null` still invites the model to read something into
-                    // an absent field, so total_chains/is_rack are omitted
-                    // entirely rather than serialised as null when no window
-                    // ever decoded -- see RackContents's doc comments.
-                    let mut payload = json!({ "chains": r.chains, "truncated": r.truncated });
-                    if let Some(total) = r.total_chains {
-                        payload["total_chains"] = json!(total);
-                    }
-                    if let Some(is_rack) = r.is_rack {
-                        payload["is_rack"] = json!(is_rack);
-                    }
+                    let payload = rack_payload(&r);
                     ToolResult::live(payload, r.missing_reason)
                 }
                 // Byte-identical to a lost reply, so the wording names both
@@ -1035,6 +1049,43 @@ mod tests {
         let kick = Some(serde_json::json!("Kick"));
         let names = vec![bass, kick];
         assert!(!chains_moved(2, Some(2), &names, &names));
+    }
+
+    #[test]
+    fn rack_payload_omits_what_was_never_observed_rather_than_nulling_it() {
+        // A window-0 decode failure observes NOTHING about the device's
+        // structure. An explicit `"is_rack": null` still invites the model to
+        // read something into the field, and the tool description tells it
+        // this field distinguishes "not a Rack" from "an empty Rack" -- so the
+        // key has to be absent, not present-and-empty.
+        let unobserved = rack_contents::RackContents {
+            chains: vec![],
+            total_chains: None,
+            is_rack: None,
+            truncated: false,
+            missing_reason: Some("malformed_reply".to_string()),
+        };
+        let payload = rack_payload(&unobserved);
+        assert!(payload.get("is_rack").is_none(), "is_rack must be absent, not null");
+        assert!(payload.get("total_chains").is_none());
+        assert_eq!(payload["chains"], json!([]));
+    }
+
+    #[test]
+    fn rack_payload_carries_an_empty_rack_as_a_real_observation() {
+        // The mirror image, and the reason the two must stay distinguishable:
+        // "this Rack has nothing loaded in it" is a real thing to know about a
+        // set, and it is reported with the fields present.
+        let empty_rack = rack_contents::RackContents {
+            chains: vec![],
+            total_chains: Some(0),
+            is_rack: Some(true),
+            truncated: false,
+            missing_reason: None,
+        };
+        let payload = rack_payload(&empty_rack);
+        assert_eq!(payload["is_rack"], json!(true));
+        assert_eq!(payload["total_chains"], json!(0));
     }
 
     #[test]
