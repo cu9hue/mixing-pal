@@ -114,12 +114,21 @@ mod tests {
 
     #[test]
     fn a_negative_or_fractional_index_is_refused() {
-        // Python slices from the end on a negative index, so a negative
+        // Python slices from the END on a negative index, so a negative
         // would silently resolve to a real but different device.
         assert!(parse(json!([-1])).is_none());
         assert!(parse(json!([0, -1, 0])).is_none());
         assert!(parse(json!([1.5])).is_none());
+        // Both of these are the SAME case: json! routes an f64 through
+        // Number::from_f64, which refuses a non-finite value, so an infinity
+        // arrives here as Value::Null rather than as a number. `element`
+        // rejects it at as_i64/as_f64, and its `is_finite` guard is never
+        // reached -- a Value cannot carry an infinity through serde_json's
+        // public API. The guard stays anyway, mirroring `int_arg`; this
+        // comment is here so the next reader does not mistake the assertion
+        // for evidence that it runs.
         assert!(parse(json!([f64::INFINITY])).is_none());
+        assert!(parse(json!([null])).is_none());
     }
 
     #[test]
