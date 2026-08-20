@@ -56,6 +56,20 @@ mod tests {
             folder(),
             folder()
         );
+
+        // The inner package name is hardcoded in install.rs's
+        // connector_status(), which decides "installed" from
+        // <folder>/copilot/version.py. Renaming the inner directory
+        // without that string would make installed report false forever
+        // while the installer keeps reporting success -- a failure nobody
+        // sees until they run the real thing against real Live.
+        let version = src.join("copilot").join("version.py");
+        assert!(
+            version.is_file(),
+            "connector_status() reads <folder>/copilot/version.py, but {} is not there -- \
+             rename the inner package and that path together",
+            version.display()
+        );
     }
 
     #[test]

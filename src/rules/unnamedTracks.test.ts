@@ -88,6 +88,36 @@ describe("unnamedTracks", () => {
     expect(unnamedTracks(state)).toBeNull();
   });
 
+  // Both boundaries, from the spec's Testing section. An off-by-one here
+  // makes the one rule that ships either fire on a sketch or stay silent
+  // on the set it was written for.
+  it("fires at exactly the boundary: ten tracks, six of them default", () => {
+    const state = setOf([
+      ...NAMED.slice(0, 4),
+      "1 MIDI", "2 MIDI", "3 MIDI", "4 Audio", "5 Audio", "6 Audio",
+    ]);
+    expect(Object.keys(state.tracks)).toHaveLength(MIN_TRACKS);
+    expect(unnamedTracks(state)?.text).toBe("Six tracks are still named MIDI or Audio.");
+  });
+
+  it("stays quiet one track below the set-size boundary", () => {
+    const state = setOf([
+      ...NAMED.slice(0, 3),
+      "1 MIDI", "2 MIDI", "3 MIDI", "4 Audio", "5 Audio", "6 Audio",
+    ]);
+    expect(Object.keys(state.tracks)).toHaveLength(MIN_TRACKS - 1);
+    expect(unnamedTracks(state)).toBeNull();
+  });
+
+  it("stays quiet one default below the count boundary", () => {
+    const state = setOf([
+      ...NAMED,
+      "1 MIDI", "2 MIDI", "3 MIDI", "4 Audio", "5 Audio",
+    ]);
+    expect(Object.keys(state.tracks)).toHaveLength(MIN_TRACKS);
+    expect(unnamedTracks(state)).toBeNull();
+  });
+
   it("exposes its thresholds so the copy and the test cannot drift", () => {
     expect(MIN_UNNAMED).toBe(6);
     expect(MIN_TRACKS).toBe(10);
