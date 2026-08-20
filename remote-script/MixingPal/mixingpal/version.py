@@ -9,7 +9,11 @@ from ..abletonosc.handler import AbletonOSCHandler
 # shapes like mixer_data's argument count. Pinned against
 # shared/wire-version.json by a Rust test -- see src-tauri's
 # wire_version_matches_the_shared_manifest.
-WIRE_VERSION = 2
+#
+# Version 3 moved every device address from a top-level device index to a
+# dotted path string, so a stale script would answer a path query with a
+# raise and the client would read it as a lost reply.
+WIRE_VERSION = 3
 
 
 class VersionHandler(AbletonOSCHandler):

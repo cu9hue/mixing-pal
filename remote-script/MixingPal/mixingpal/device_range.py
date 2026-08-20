@@ -1,55 +1,59 @@
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
+from .rack_paths import parse_path, resolve
 
 
 class DeviceRangeHandler(AbletonOSCHandler):
     """Upstream returns every parameter in one datagram. An Instrument Rack can
     exceed 1000 parameters, which blows past the 9216-byte macOS UDP cap and
     makes sendto raise, so the client receives nothing at all. This mirrors the
-    ranged form that clip note queries already have."""
+    ranged form that clip note queries already have.
+
+    Since wire version 3 the device is named by a dotted path rather than a
+    top-level index, so these addresses reach inside Racks. The reply echoes
+    the path string in the position the device index used to occupy, which
+    leaves the keying at KeyArity::Args(3) -- see src-tauri/src/osc/arity.rs.
+    """
 
     def __init__(self, manager):
         super().__init__(manager)
         self.class_identifier = "device_range"
 
     def init_api(self):
-        def params_for(track_index, device_index):
-            return self.song.tracks[track_index].devices[device_index].parameters
+        def window_for(params):
+            """(track_index, raw_path, start, window) or None.
 
-        def window_for(track_index, device_index, start, span):
-            # Clamp before slicing: Python treats a negative stop as "from
-            # the end," not "empty," so a negative span (or start) would
-            # otherwise return far more than the caller asked for and blow
-            # past the datagram cap this ranged form exists to avoid.
-            start = max(0, start)
-            span = max(0, span)
-            all_params = params_for(track_index, device_index)
-            return start, list(all_params)[start:start + span]
+            Clamp before slicing: Python treats a negative stop as "from the
+            end," not "empty," so a negative span (or start) would otherwise
+            return far more than the caller asked for and blow past the
+            datagram cap this ranged form exists to avoid.
+            """
+            track_index = int(params[0])
+            raw_path = str(params[1])
+            start, span = max(0, int(params[2])), max(0, int(params[3]))
+            path = parse_path(raw_path)
+            if path is None:
+                return None
+            device = resolve(self.song.tracks[track_index], path)
+            window = list(device.parameters)[start:start + span]
+            return track_index, raw_path, start, window
 
-        def value_range(params: Tuple[Any]):
-            track_index, device_index = int(params[0]), int(params[1])
-            start, span = int(params[2]), int(params[3])
-            start, window = window_for(track_index, device_index, start, span)
-            values = [p.value for p in window]
-            return (track_index, device_index, start, *values)
-
-        def name_range(params: Tuple[Any]):
-            track_index, device_index = int(params[0]), int(params[1])
-            start, span = int(params[2]), int(params[3])
-            start, window = window_for(track_index, device_index, start, span)
-            names = [p.name for p in window]
-            return (track_index, device_index, start, *names)
-
-        def value_string_range(params: Tuple[Any]):
-            track_index, device_index = int(params[0]), int(params[1])
-            start, span = int(params[2]), int(params[3])
-            start, window = window_for(track_index, device_index, start, span)
-            strings = [p.str_for_value(p.value) for p in window]
-            return (track_index, device_index, start, *strings)
+        def ranged(project):
+            def handler(params: Tuple[Any]):
+                got = window_for(params)
+                if got is None:
+                    return None
+                track_index, raw_path, start, window = got
+                return (track_index, raw_path, start,
+                        *[project(p) for p in window])
+            return handler
 
         self.osc_server.add_handler(
-            "/live/device/get/parameters/value_range", value_range)
+            "/live/device/get/parameters/value_range",
+            ranged(lambda p: p.value))
         self.osc_server.add_handler(
-            "/live/device/get/parameters/name_range", name_range)
+            "/live/device/get/parameters/name_range",
+            ranged(lambda p: p.name))
         self.osc_server.add_handler(
-            "/live/device/get/parameters/value_string_range", value_string_range)
+            "/live/device/get/parameters/value_string_range",
+            ranged(lambda p: p.str_for_value(p.value)))

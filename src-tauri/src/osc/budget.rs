@@ -135,6 +135,98 @@ pub fn mixer_chunks(num_tracks: usize) -> Vec<(usize, usize)> {
 mod tests {
     use super::*;
 
+    /// `mixingpal/rack_paths.py` fills its own reply window, so it carries a
+    /// copy of this module's ceiling. A copy that drifts high makes Live's
+    /// `sendto` raise and the client receives NOTHING -- silence, not
+    /// truncation, and indistinguishable from a lost reply. Same tripwire
+    /// pattern as `wire_version_matches_the_shared_manifest`.
+    #[test]
+    fn rack_byte_ceiling_matches_the_budget() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../remote-script/MixingPal/mixingpal/rack_paths.py"
+        ))
+        .expect("rack_paths.py is missing");
+        let line = source
+            .lines()
+            .find_map(|l| l.strip_prefix("MAX_REPLY_BYTES = "))
+            .expect("MAX_REPLY_BYTES is not declared on its own line");
+        assert_eq!(
+            line.trim().parse::<usize>().unwrap(),
+            MAX_DATAGRAM - HEADER_SLACK
+        );
+    }
+
+    /// `src-tauri/src/tools/path.rs` and `rack_paths.py` each declare
+    /// `MAX_PATH_LEN`, and the Python side is the one that decides whether a
+    /// path the Rust side already accepted actually resolves. If Python's
+    /// drifts LOWER than Rust's, the client happily sends a path Python then
+    /// refuses; the handler raises inside Live and sends nothing, and the
+    /// client reports `no_reply: the track or the path may not exist` --
+    /// silent and permanent for any path past the drifted value, and
+    /// indistinguishable from a bad path. `the_rack_listing_header_fits_...`
+    /// above only bounds this value from ABOVE (a header computed from a
+    /// smaller MAX_PATH_LEN still fits inside HEADER_SLACK), so it passes for
+    /// any Python value <= 17 and would not have caught a drift to 5. This
+    /// asserts equality, the way `rack_byte_ceiling_matches_the_budget` pins
+    /// `MAX_REPLY_BYTES`.
+    #[test]
+    fn path_len_ceiling_matches_the_client_side() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../remote-script/MixingPal/mixingpal/rack_paths.py"
+        ))
+        .expect("rack_paths.py is missing");
+        let line = source
+            .lines()
+            .find_map(|l| l.strip_prefix("MAX_PATH_LEN = "))
+            .expect("MAX_PATH_LEN is not declared on its own line");
+        assert_eq!(
+            line.trim().parse::<usize>().unwrap(),
+            crate::tools::path::MAX_PATH_LEN
+        );
+    }
+
+    /// The rack listing's reply header has to fit inside `HEADER_SLACK`, or a
+    /// full window overflows the datagram and Live sends nothing at all.
+    ///
+    /// `rack_paths.build_window` budgets only the RECORDS, against
+    /// `MAX_REPLY_BYTES`. This asserts the rest of the message fits in what is
+    /// left over. The path is the part that can grow, and the worst case is
+    /// computable ONLY because `parse_path` caps a component at ten digits --
+    /// before that cap existed, this header had no upper bound at all.
+    #[test]
+    fn the_rack_listing_header_fits_inside_the_slack() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../remote-script/MixingPal/mixingpal/rack_paths.py"
+        ))
+        .expect("rack_paths.py is missing");
+        let max_path_len: usize = source
+            .lines()
+            .find_map(|l| l.strip_prefix("MAX_PATH_LEN = "))
+            .expect("MAX_PATH_LEN is not declared on its own line")
+            .trim()
+            .parse()
+            .unwrap();
+
+        // An OSC string is padded to a multiple of 4 with at least one NUL.
+        let osc_string = |len: usize| 4 * (len / 4 + 1);
+        // Every component ten digits long, joined by dots.
+        let worst_path = max_path_len * 10 + (max_path_len - 1);
+        let address = osc_string("/live/mixingpal/get/rack/chains".len());
+        // track, start, total_chains, can_have_chains.
+        let ints = 4 * 4;
+        // One tag byte per argument, plus the leading comma and its padding.
+        let tags = 5 + 1 + 3;
+        let header = address + osc_string(worst_path) + ints + tags;
+
+        assert!(
+            header <= HEADER_SLACK,
+            "worst-case rack header is {header} bytes, past HEADER_SLACK ({HEADER_SLACK})"
+        );
+    }
+
     #[test]
     fn a_small_clip_needs_one_window() {
         let w = note_windows(16.0, 40);

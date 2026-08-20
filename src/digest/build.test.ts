@@ -88,5 +88,6 @@ describe("buildContext", () => {
     expect(out).toContain("get_clip_notes");
     expect(out).toContain("get_device_chains");
     expect(out).toContain("get_device_params");
+    expect(out).toContain("get_rack_contents");
   });
 });

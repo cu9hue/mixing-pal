@@ -58,6 +58,10 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // Reply is (track_index, *device_names) -- the track index alone is
         // the key, so every track's chain can be in flight at once.
         | "/live/track/get/devices/name"
+        // Reply is (track_index, *flags), one per device in chain order --
+        // the track index alone is the key, so every track's flags can be
+        // in flight at once, alongside its names.
+        | "/live/track/get/devices/can_have_chains"
         | "/live/return/get/volume"
         | "/live/return/get/panning"
         | "/live/return/get/name" => KeyArity::Args(1),
@@ -65,13 +69,21 @@ pub fn key_arity(addr: &str) -> KeyArity {
         "/live/track/get/send"
         | "/live/clip/get/notes"
         | "/live/clip/get/length"
-        | "/live/device/get/name"
-        | "/live/device/get/num_parameters" => KeyArity::Args(2),
+        // (track, path) in, (track, path, name, num_parameters) back. One
+        // address in place of the retired /live/device/get/name and
+        // /live/device/get/num_parameters, so a bracketed parameter read
+        // costs two round trips instead of four -- and unlike those two, it
+        // resolves a path rather than a top-level index.
+        | "/live/mixingpal/get/device/identity" => KeyArity::Args(2),
 
         "/live/device/get/parameter/value_string"
-        | "/live/device/get/parameters/value_range"
         | "/live/device/get/parameters/name_range"
-        | "/live/device/get/parameters/value_string_range" => KeyArity::Args(3),
+        | "/live/device/get/parameters/value_string_range"
+        // (track, path, start) echoed back, exactly like the ranged
+        // parameter addresses. `span` is deliberately NOT in the key; see
+        // the spec's Devices section on why that is safe here and what
+        // closes it.
+        | "/live/mixingpal/get/rack/chains" => KeyArity::Args(3),
 
         "/live/song/get/track_data"
         | "/live/song/get/track_names"
@@ -114,6 +126,11 @@ mod tests {
             ("/live/track/get/clips/name", KeyArity::Args(1)),
             ("/live/track/get/arrangement_clips/name", KeyArity::Args(1)),
             ("/live/track/get/devices/name", KeyArity::Args(1)),
+            // Racks. The rack listing echoes (track, path, start), exactly
+            // as the ranged parameter addresses do -- the path travels as
+            // ONE string argument, which is what keeps this a constant
+            // rather than a function of the request.
+            ("/live/track/get/devices/can_have_chains", KeyArity::Args(1)),
             ("/live/track/get/send", KeyArity::Args(2)),
             ("/live/return/get/volume", KeyArity::Args(1)),
             ("/live/return/get/panning", KeyArity::Args(1)),
@@ -129,15 +146,23 @@ mod tests {
             ("/live/mixingpal/get/version", KeyArity::None),
             ("/live/clip/get/notes", KeyArity::Args(2)),
             ("/live/clip/get/length", KeyArity::Args(2)),
-            ("/live/device/get/name", KeyArity::Args(2)),
-            ("/live/device/get/num_parameters", KeyArity::Args(2)),
+            // (track, path) in, (track, path, name, num_parameters) back. One
+            // address in place of the retired /live/device/get/name and
+            // /live/device/get/num_parameters, so a bracketed parameter read
+            // costs two round trips instead of four -- and unlike those two, it
+            // resolves a path rather than a top-level index.
+            ("/live/mixingpal/get/device/identity", KeyArity::Args(2)),
             ("/live/device/get/parameter/value_string", KeyArity::Args(3)),
-            ("/live/device/get/parameters/value_range", KeyArity::Args(3)),
             ("/live/device/get/parameters/name_range", KeyArity::Args(3)),
             (
                 "/live/device/get/parameters/value_string_range",
                 KeyArity::Args(3),
             ),
+            // (track, path, start) echoed back, exactly like the ranged
+            // parameter addresses. `span` is deliberately NOT in the key; see
+            // the spec's Devices section on why that is safe here and what
+            // closes it.
+            ("/live/mixingpal/get/rack/chains", KeyArity::Args(3)),
             // Keyless: args vary between requests but the reply echoes nothing.
             ("/live/song/get/track_data", KeyArity::Unkeyed),
             ("/live/song/get/track_names", KeyArity::Unkeyed),

@@ -34,6 +34,13 @@ processing from its name. For any question about devices, plugins, EQ, \
 compression, or a track's chain, call get_device_chains first - it covers \
 the whole set in one round trip - and then get_device_params on the few \
 devices that matter. A track name is not evidence about what is on it.
+- A Rack is one device in the chain map, marked [rack], and what is inside \
+it is invisible until you ask. Drum Racks are where this matters most: the \
+kit is one device and every sound in it is a chain underneath. If a question \
+is about drums, or about a track whose chain map shows a [rack], call \
+get_rack_contents before answering. Saying there is no compression on the \
+drums because the chain map shows one device is the mistake this tool exists \
+to prevent.
 - Every tool result carries fresh, fresh_as_of, and missing_reason. A result \
 with a missing_reason and no value is data you do NOT have. Say so; never fill \
 the gap with a plausible value. A result that carries BOTH a value and a \
@@ -332,6 +339,33 @@ mod tests {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+    /// The `[rack]` marker exists as unlinked literals in three places:
+    /// `device_chains::RACK_SUFFIX` itself, the two tool descriptions in
+    /// `tool_schema`, and this file's `SYSTEM_PROMPT`. Nothing else ties them
+    /// together, so a rename of the marker in one place would silently leave
+    /// the model's own instructions describing a tag its tools no longer
+    /// emit. Anchoring on the constant, not a second hardcoded literal, is
+    /// what makes this catch that drift instead of merely restating it.
+    #[test]
+    fn the_rack_marker_appears_in_both_tool_descriptions_and_the_system_prompt() {
+        let marker = crate::tools::device_chains::RACK_SUFFIX;
+        let schema = tool_schema();
+        let description_of = |name: &str| {
+            schema
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["function"]["name"] == name)
+                .unwrap()["function"]["description"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert!(description_of("get_device_chains").contains(marker));
+        assert!(description_of("get_rack_contents").contains(marker));
+        assert!(SYSTEM_PROMPT.contains(marker));
+    }
+
     fn settings_for(server: &MockServer) -> Settings {
         Settings {
             base_url: server.uri(),
@@ -614,6 +648,7 @@ mod tests {
         // what closes that loop.
         assert!(SYSTEM_PROMPT.contains("get_device_chains"));
         assert!(SYSTEM_PROMPT.contains("get_device_params"));
+        assert!(SYSTEM_PROMPT.contains("get_rack_contents"));
     }
 
     #[test]

@@ -2,6 +2,7 @@ from ..manager import Manager
 from .master import MasterHandler, ReturnHandler
 from .mixer import MixerHandler
 from .device_range import DeviceRangeHandler
+from .rack import RackHandler
 from .view import ViewOverrideHandler
 from .version import VersionHandler
 
@@ -18,6 +19,7 @@ class MixingPalManager(Manager):
                 ReturnHandler(self),
                 MixerHandler(self),
                 DeviceRangeHandler(self),
+                RackHandler(self),
                 # Registered after upstream's ViewHandler, so this handler's
                 # None-safe get_selected_device wins the address.
                 ViewOverrideHandler(self),

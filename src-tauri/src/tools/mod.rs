@@ -2,10 +2,13 @@ pub mod clip_notes;
 pub mod device_chains;
 pub mod device_params;
 pub mod fence;
+pub mod path;
+pub mod rack_contents;
 pub mod track_detail;
 
 use crate::deltas::Coalescer;
 use crate::osc::query::{LiveQuery, QueryError};
+use crate::tools::path::DevicePath;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -119,7 +122,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_chains",
-                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device and the devices inside it are not listed. Whether a device is switched on or bypassed is not reported. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
+                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device, marked [rack]; call get_rack_contents on it to see what is inside. Whether a device is switched on or bypassed is not reported. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -131,14 +134,37 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_params",
-                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. The device's on/off switch is itself a parameter, conventionally the first one and named Device On, so a device listed in the chain may be switched off and this is how to find out. On a Rack this returns the Rack's own macros, not the devices inside it. A device with more than 256 parameters is truncated and the result says so.",
+                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. The device's on/off switch is itself a parameter, conventionally the first one and named Device On, so a device listed in the chain may be switched off and this is how to find out. On a Rack this returns the Rack's own macros; for the devices inside it use get_rack_contents and then pass a longer path here. A device with more than 256 parameters is truncated and the result says so.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "track": { "type": "integer", "description": "Zero-based track index." },
-                        "device": { "type": "integer", "description": "Zero-based device index within that track's chain, as returned by get_device_chains." }
+                        "path": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "description": "Zero-based indices from the track to the device, alternating device and chain: [2] is top-level device 2; [2, 0, 1] is device 1 in chain 0 of the rack at device 2. Always an odd number of entries, at most 9. Device indices come from get_device_chains, chain indices from get_rack_contents."
+                        }
                     },
-                    "required": ["track", "device"]
+                    "required": ["track", "path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_rack_contents",
+                "description": "What is inside one Rack: each chain in order, the devices on it, and for a Drum Rack the MIDI note of its pad. Chains that are muted or soloed are marked; nothing is said about the others. Queried from Live at call time and fetched in pages. Use this when get_device_chains marks a device [rack]. An empty result means either that the device is not a Rack, or that it is an empty one, and the result says which. A rack with more than 64 chains is truncated and the result says so; a chain with more than 32 devices lists only the first 32 names, and its total_devices may exceed the number of names listed. Chain indices from here go into the path of get_device_params to read a device inside the rack, or back into get_rack_contents for a rack nested inside a chain.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "track": { "type": "integer", "description": "Zero-based track index." },
+                        "path": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "description": "Zero-based indices from the track to the device, alternating device and chain: [2] is top-level device 2; [2, 0, 1] is device 1 in chain 0 of the rack at device 2. Always an odd number of entries, at most 9. Device indices come from get_device_chains, chain indices from get_rack_contents."
+                        }
+                    },
+                    "required": ["track", "path"]
                 }
             }
         }
@@ -160,6 +186,17 @@ fn int_arg(args: &serde_json::Value, name: &str) -> Option<i64> {
     }
     let f = value.as_f64()?;
     (f.is_finite() && f.fract() == 0.0).then_some(f as i64)
+}
+
+/// The `(track, path)` pair both path-addressed tools take.
+///
+/// A refusal here never reaches the wire, which is the point: an even-length
+/// or negative path would resolve inside Live's callback to a device nobody
+/// asked about, and a negative index would resolve there rather than fail,
+/// because Python slices from the end.
+fn track_and_path(args: &serde_json::Value) -> Option<(i64, DevicePath)> {
+    let track = int_arg(args, "track").filter(|t| *t >= 0)?;
+    Some((track, DevicePath::parse(args.get("path"))?))
 }
 
 /// One track's mirrored name, used as its identity across a paged query.
@@ -270,6 +307,67 @@ fn chains_moved(
     after: &[Option<serde_json::Value>],
 ) -> bool {
     after_count != Some(before_count) || before.iter().zip(after).any(|(b, a)| topology_moved(b, a))
+}
+
+/// Renders `get_rack_contents`'s payload.
+///
+/// `total_chains` and `is_rack` are omitted entirely when no window ever
+/// decoded, rather than serialised as `null`: an explicit null still invites
+/// the model to read something into the field, and `is_rack` is the field the
+/// tool description makes load-bearing ("the result says which"). A
+/// fabricated `false` there sends the model away from a Rack it should have
+/// opened.
+///
+/// Extracted from the `execute` arm so the omission can be tested at all --
+/// `RackContents` is never serialised as a struct, so its `skip_serializing_if`
+/// attributes are belt-and-braces and this `if let` is the mechanism that
+/// actually runs. Same reason `chain_map_reasons` below was extracted.
+fn rack_payload(r: &rack_contents::RackContents) -> serde_json::Value {
+    let mut payload = json!({ "chains": r.chains, "truncated": r.truncated });
+    if let Some(total) = r.total_chains {
+        payload["total_chains"] = json!(total);
+    }
+    if let Some(is_rack) = r.is_rack {
+        payload["is_rack"] = json!(is_rack);
+    }
+    payload
+}
+
+/// Assembles `get_device_chains`'s `missing_reason` from the three things
+/// that can go partly wrong: a set larger than the fan-out cap, tracks that
+/// did not answer at all, and tracks whose device names arrived without
+/// their rack marks.
+///
+/// All three can hold at once, so they are joined rather than one
+/// overwriting another. Extracted from the `execute` arm so it can be tested
+/// without a connected fake -- inline, the rack-mark case had no test at all.
+fn chain_map_reasons(
+    num_tracks: i64,
+    read_tracks: i64,
+    missing: &[i32],
+    flags_missing: &[i32],
+) -> Option<String> {
+    // The truncated tail is named as a count, not pushed into `missing` as
+    // thousands of indices: `missing` means "asked, no usable answer", and
+    // these were never asked.
+    let mut reasons: Vec<String> = Vec::new();
+    if num_tracks > read_tracks {
+        reasons.push(format!(
+            "truncated_to_first_{read_tracks}_tracks: the set has {num_tracks}"
+        ));
+    }
+    if !missing.is_empty() {
+        let names: Vec<String> = missing.iter().map(|t| t.to_string()).collect();
+        reasons.push(format!("no_reply_for_tracks: {}", names.join(", ")));
+    }
+    if !flags_missing.is_empty() {
+        let names: Vec<String> = flags_missing.iter().map(|t| t.to_string()).collect();
+        reasons.push(format!(
+            "rack_marks_unavailable_for_tracks: {} (their devices are listed, but which are Racks is unknown)",
+            names.join(", ")
+        ));
+    }
+    (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
 pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult {
@@ -386,32 +484,15 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 return ToolResult::missing("topology_changed");
             }
 
-            // Both conditions can hold at once, so they are joined rather
-            // than one overwriting the other. The truncated tail is named as
-            // a count, not pushed into `map.missing` as thousands of
-            // indices: `missing` means "asked, no usable answer", and these
-            // were never asked.
-            let mut reasons: Vec<String> = Vec::new();
-            if num_tracks > read_tracks {
-                reasons.push(format!(
-                    "truncated_to_first_{read_tracks}_tracks: the set has {num_tracks}"
-                ));
-            }
-            if !map.missing.is_empty() {
-                let names: Vec<String> = map.missing.iter().map(|t| t.to_string()).collect();
-                reasons.push(format!("no_reply_for_tracks: {}", names.join(", ")));
-            }
-            let missing_reason = (!reasons.is_empty()).then(|| reasons.join("; "));
+            let missing_reason =
+                chain_map_reasons(num_tracks, read_tracks, &map.missing, &map.flags_missing);
             ToolResult::live(
                 json!({ "tracks": map.tracks, "missing": map.missing }),
                 missing_reason,
             )
         }
         "get_device_params" => {
-            let (Some(track), Some(device)) = (
-                int_arg(args, "track").filter(|t| *t >= 0),
-                int_arg(args, "device").filter(|d| *d >= 0),
-            ) else {
+            let Some((track, path)) = track_and_path(args) else {
                 return ToolResult::missing("bad_arguments");
             };
             let query = match ctx.query.lock() {
@@ -429,7 +510,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             let outcome = device_params::get_device_params(
                 &query,
                 track as i32,
-                device as i32,
+                &path,
                 device_params::QUERY_TIMEOUT,
             )
             .await;
@@ -448,7 +529,49 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                     d.missing_reason,
                 ),
                 Err(QueryError::NoReply) => ToolResult::missing(
-                    "no_reply: the track or device index may not exist, or Live did not answer",
+                    "no_reply: the track or the path may not exist, or Live did not answer",
+                ),
+                Err(QueryError::Busy) => ToolResult::missing("busy"),
+                Err(QueryError::Transport(e)) => {
+                    ToolResult::missing(&format!("transport_error: {e}"))
+                }
+            }
+        }
+        "get_rack_contents" => {
+            let Some((track, path)) = track_and_path(args) else {
+                return ToolResult::missing("bad_arguments");
+            };
+            let query = match ctx.query.lock() {
+                Ok(q) => q.clone(),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            let Some(query) = query else {
+                return ToolResult::missing("not_connected");
+            };
+
+            // Same bracket as get_device_params: this read pages over
+            // several seconds and the producer is, by definition, working in
+            // Live while asking. get_rack_contents brackets the DEVICE
+            // itself; this one catches the TRACK moving underneath it.
+            let before = track_identity(&ctx.coalescer, track);
+            let outcome =
+                rack_contents::get_rack_contents(&query, track as i32, &path, rack_contents::QUERY_TIMEOUT)
+                    .await;
+            if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
+                return ToolResult::missing("topology_changed");
+            }
+
+            match outcome {
+                Ok(r) => {
+                    let payload = rack_payload(&r);
+                    ToolResult::live(payload, r.missing_reason)
+                }
+                // Byte-identical to a lost reply, so the wording names both
+                // causes rather than picking one. The model gets its indices
+                // from get_device_chains and get_rack_contents, so a bad
+                // path is a model error rather than a normal path.
+                Err(QueryError::NoReply) => ToolResult::missing(
+                    "no_reply: the track or the path may not exist, or Live did not answer",
                 ),
                 Err(QueryError::Busy) => ToolResult::missing("busy"),
                 Err(QueryError::Transport(e)) => {
@@ -534,19 +657,6 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_offers_both_device_tools() {
-        let schema = tool_schema();
-        let names: Vec<&str> = schema
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|t| t["function"]["name"].as_str())
-            .collect();
-        assert!(names.contains(&"get_device_chains"));
-        assert!(names.contains(&"get_device_params"));
-    }
-
-    #[test]
     fn get_device_chains_takes_no_arguments() {
         // It reads the whole set; making the model supply a track index would
         // defeat the one round trip that justifies the design.
@@ -614,31 +724,65 @@ mod tests {
     }
 
     #[test]
-    fn neither_device_tool_claims_to_see_inside_a_rack() {
-        // `track.devices` is top-level only, so an Instrument, Audio Effect
-        // or Drum Rack is one entry with everything inside it invisible.
-        // Racks are ubiquitous, and a model seeing only «Drum Rack» will
-        // tell the producer there is no compression on their drums while the
-        // compressor sits inside it.
-        assert!(description_of("get_device_chains")
-            .contains("A Rack is listed as one device and the devices inside it are not listed"));
-        assert!(description_of("get_device_params")
-            .contains("On a Rack this returns the Rack's own macros, not the devices inside it"));
+    fn every_description_that_mentions_a_rack_now_points_at_the_way_in() {
+        // The replaced version of this test asserted that both tools said
+        // racks were opaque. They no longer are, and a description that
+        // still said so would talk the model out of a tool it has.
+        assert!(description_of("get_device_chains").contains("get_rack_contents"));
+        assert!(description_of("get_device_params").contains("get_rack_contents"));
     }
 
     #[test]
-    fn get_device_params_requires_both_indices() {
+    fn the_rack_tool_says_what_an_empty_result_means() {
+        // Zero chains has two causes and only one is a model error, so the
+        // description has to name both -- "this rack is empty" is a real
+        // observation about a set.
+        let d = description_of("get_rack_contents");
+        assert!(d.contains("not a Rack"));
+        assert!(d.contains("empty"));
+    }
+
+    #[test]
+    fn both_path_tools_require_a_path_and_no_device_index() {
+        for name in ["get_device_params", "get_rack_contents"] {
+            let schema = tool_schema();
+            let tool = schema
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["function"]["name"] == name)
+                .unwrap()
+                .clone();
+            let required = tool["function"]["parameters"]["required"].as_array().unwrap();
+            assert!(required.iter().any(|r| r == "track"), "{name}");
+            assert!(required.iter().any(|r| r == "path"), "{name}");
+            // Two ways to name one device is an ambiguity a model resolves
+            // badly and inconsistently.
+            assert!(tool["function"]["parameters"]["properties"]["device"].is_null(), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_schema_offers_all_three_device_tools() {
         let schema = tool_schema();
-        let tool = schema
+        let names: Vec<&str> = schema
             .as_array()
             .unwrap()
             .iter()
-            .find(|t| t["function"]["name"] == "get_device_params")
-            .unwrap()
-            .clone();
-        let required = tool["function"]["parameters"]["required"].as_array().unwrap();
-        assert!(required.iter().any(|r| r == "track"));
-        assert!(required.iter().any(|r| r == "device"));
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        for expected in ["get_device_chains", "get_device_params", "get_rack_contents"] {
+            assert!(names.contains(&expected), "{expected}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_malformed_path_is_refused_before_it_reaches_the_wire() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        for path in [json!([]), json!([0, 1]), json!([-1]), json!("0.1")] {
+            let r = execute(&ctx, "get_rack_contents", &json!({ "track": 0, "path": path })).await;
+            assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"), "{path}");
+        }
     }
 
     #[tokio::test]
@@ -753,13 +897,16 @@ mod tests {
 
     #[tokio::test]
     async fn get_device_params_refuses_a_negative_index() {
+        // A negative path element is refused before it reaches the wire:
+        // Python slices from the END on one, so it would resolve inside
+        // Live to a real but different device rather than naming none.
         let ctx = disconnected_ctx(one_track_mirror());
-        let r = execute(&ctx, "get_device_params", &json!({ "track": 0, "device": -1 })).await;
-        assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"));
+        let result = execute(&ctx, "get_device_params", &json!({ "track": 0, "path": [-1] })).await;
+        assert_eq!(result.missing_reason.as_deref(), Some("bad_arguments"));
     }
 
     #[test]
-    fn the_schema_lists_exactly_the_four_tools_the_model_may_call() {
+    fn the_schema_lists_exactly_the_five_tools_the_model_may_call() {
         let schema = tool_schema();
         let names: Vec<&str> = schema
             .as_array()
@@ -773,7 +920,8 @@ mod tests {
                 "get_track_detail",
                 "get_clip_notes",
                 "get_device_chains",
-                "get_device_params"
+                "get_device_params",
+                "get_rack_contents"
             ]
         );
         // Every entry must be a well-formed OpenAI function tool, or a
@@ -901,6 +1049,84 @@ mod tests {
         let kick = Some(serde_json::json!("Kick"));
         let names = vec![bass, kick];
         assert!(!chains_moved(2, Some(2), &names, &names));
+    }
+
+    #[test]
+    fn rack_payload_omits_what_was_never_observed_rather_than_nulling_it() {
+        // A window-0 decode failure observes NOTHING about the device's
+        // structure. An explicit `"is_rack": null` still invites the model to
+        // read something into the field, and the tool description tells it
+        // this field distinguishes "not a Rack" from "an empty Rack" -- so the
+        // key has to be absent, not present-and-empty.
+        let unobserved = rack_contents::RackContents {
+            chains: vec![],
+            total_chains: None,
+            is_rack: None,
+            truncated: false,
+            missing_reason: Some("malformed_reply".to_string()),
+        };
+        let payload = rack_payload(&unobserved);
+        assert!(payload.get("is_rack").is_none(), "is_rack must be absent, not null");
+        assert!(payload.get("total_chains").is_none());
+        assert_eq!(payload["chains"], json!([]));
+    }
+
+    #[test]
+    fn rack_payload_carries_an_empty_rack_as_a_real_observation() {
+        // The mirror image, and the reason the two must stay distinguishable:
+        // "this Rack has nothing loaded in it" is a real thing to know about a
+        // set, and it is reported with the fields present.
+        let empty_rack = rack_contents::RackContents {
+            chains: vec![],
+            total_chains: Some(0),
+            is_rack: Some(true),
+            truncated: false,
+            missing_reason: None,
+        };
+        let payload = rack_payload(&empty_rack);
+        assert_eq!(payload["is_rack"], json!(true));
+        assert_eq!(payload["total_chains"], json!(0));
+    }
+
+    #[test]
+    fn chain_map_reasons_is_none_on_a_clean_read() {
+        assert_eq!(chain_map_reasons(4, 4, &[], &[]), None);
+    }
+
+    #[test]
+    fn chain_map_reasons_names_a_truncated_fan_out_alone() {
+        let reason = chain_map_reasons(600, 512, &[], &[]).unwrap();
+        assert_eq!(reason, "truncated_to_first_512_tracks: the set has 600");
+    }
+
+    #[test]
+    fn chain_map_reasons_names_tracks_that_did_not_answer_at_all_alone() {
+        let reason = chain_map_reasons(4, 4, &[1, 3], &[]).unwrap();
+        assert_eq!(reason, "no_reply_for_tracks: 1, 3");
+    }
+
+    #[test]
+    fn chain_map_reasons_names_tracks_missing_only_their_rack_marks_alone() {
+        // The devices ARE listed for these tracks; only which of them are
+        // Racks is unknown. A reader who took this as "these tracks failed"
+        // would discard a chain map that is present and correct.
+        let reason = chain_map_reasons(4, 4, &[], &[2]).unwrap();
+        assert_eq!(
+            reason,
+            "rack_marks_unavailable_for_tracks: 2 (their devices are listed, but which are Racks is unknown)"
+        );
+    }
+
+    #[test]
+    fn chain_map_reasons_joins_all_three_when_all_three_hold() {
+        // All three can hold at once, and none may overwrite another.
+        let reason = chain_map_reasons(600, 512, &[1], &[2]).unwrap();
+        assert_eq!(
+            reason,
+            "truncated_to_first_512_tracks: the set has 600; \
+no_reply_for_tracks: 1; \
+rack_marks_unavailable_for_tracks: 2 (their devices are listed, but which are Racks is unknown)"
+        );
     }
 
     #[tokio::test]
