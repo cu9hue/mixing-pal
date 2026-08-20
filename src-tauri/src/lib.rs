@@ -85,7 +85,7 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
     // PollKind::Meters, observed raw.
     "/live/master/get/output_meter_level",
     // PollKind::ScriptVersion, observed raw -- the wire-version handshake.
-    "/live/copilot/get/version",
+    "/live/mixingpal/get/version",
 ];
 
 /// Every literal address the poll loop sends on the wire, outside of
@@ -121,7 +121,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/device/get/num_parameters",
     "/live/device/get/parameters/name_range",
     "/live/device/get/parameters/value_string_range",
-    "/live/copilot/get/version",
+    "/live/mixingpal/get/version",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -1002,7 +1002,7 @@ async fn poll_kind(
                 table,
                 poll_socket,
                 now,
-                "/live/copilot/get/version",
+                "/live/mixingpal/get/version",
                 vec![],
             )
             .await;

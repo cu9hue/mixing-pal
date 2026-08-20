@@ -21,7 +21,7 @@ export const SONG_FIELDS: Record<string, keyof SetState> = {
   "/live/song/get/scale_name": "scaleName",
   "/live/song/get/root_note": "rootNote",
   "/live/view/get/selected_track": "selectedTrack",
-  "/live/copilot/get/version": "scriptVersion",
+  "/live/mixingpal/get/version": "scriptVersion",
 };
 
 export const TRACK_FIELDS: Record<string, keyof TrackState> = {

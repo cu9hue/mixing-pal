@@ -14,7 +14,7 @@ export type ConnectionStatus =
 
 // How long traffic must be flowing with no version reply before the
 // stale-script banner shows. There is a window right after connecting where
-// deltas are already arriving but the first /live/copilot/get/version poll
+// deltas are already arriving but the first /live/mixingpal/get/version poll
 // (every 5s, see PollKind::ScriptVersion) hasn't answered yet; without this
 // grace period that window would render a confidently wrong "your script is
 // out of date" diagnosis on every normal startup -- the same false-positive
@@ -85,7 +85,7 @@ export function selectBanner(params: {
   // No version reply yet, but other traffic (faders, track state, ...) is
   // arriving -- this is the incident the handshake exists to catch: a
   // Remote Script old enough that it never registered the
-  // /live/copilot/get/version handler at all, so decode_bulk's arity
+  // /live/mixingpal/get/version handler at all, so decode_bulk's arity
   // mismatch silently drops every fader/pan/dB reading. Gated on
   // VERSION_GRACE_MS so the ordinary "first poll hasn't landed yet" window
   // right after connecting never triggers this.

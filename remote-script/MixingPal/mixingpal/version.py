@@ -19,11 +19,11 @@ class VersionHandler(AbletonOSCHandler):
 
     def __init__(self, manager):
         super().__init__(manager)
-        self.class_identifier = "copilot"
+        self.class_identifier = "mixingpal"
 
     def init_api(self):
         def version_get(params: Tuple[Any] = ()):
             return (WIRE_VERSION,)
 
         self.osc_server.add_handler(
-            "/live/copilot/get/version", version_get)
+            "/live/mixingpal/get/version", version_get)
