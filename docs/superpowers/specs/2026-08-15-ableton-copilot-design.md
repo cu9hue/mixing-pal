@@ -511,7 +511,7 @@ decision, not a datagram one, so it lives with the tool and not in the byte
 budget.
 
 **`span` is not in the key.** The ranged addresses key on `Args(3)` —
-`(track, device, start)` — so unlike `/live/clip/get/notes`, each window is
+`(track, path, start)` — so unlike `/live/clip/get/notes`, each window is
 independently addressable and a stalled window cannot poison its neighbours.
 But two different spans at the same start still collide. A window that times
 out and is retried with a halved span would join the dead entry and never
@@ -549,7 +549,7 @@ first 512 tracks as the whole set.
 makes AbletonOSC raise inside Live and send nothing, which is byte-identical
 to a lost reply. There is no client-side fix, so the tool says so, in the
 exact words the code sends:
-`"no_reply: the track or device index may not exist, or Live did not answer"`.
+`"no_reply: the track or the path may not exist, or Live did not answer"`.
 The model gets its indices from `get_device_chains()`, so this is a model
 error rather than a normal path.
 
@@ -570,7 +570,7 @@ wrong answer in production.**
   if it were shaping the bass. The parameter read is the opposite case: in the
   Live Object Model `Device.parameters[0]` is the device's on/off switch,
   named `Device On`, for built-in devices, plugins and Racks alike, and
-  `copilot/device_range.py` slices `device.parameters` and returns `p.name`
+  `mixingpal/device_range.py` slices `device.parameters` and returns `p.name`
   and `p.str_for_value(p.value)` verbatim — so parameter 0 arrives as
   «Device On» / «Off» and the bypass state is right there in the answer.
   `get_device_params`'s description says that, rather than repeating the chain
@@ -587,7 +587,8 @@ wrong answer in production.**
   returns its macros, not its contents. Racks are ubiquitous in electronic
   production, and a model seeing only «Drum Rack» will tell the producer
   there is no compression on their drums while the compressor sits inside it.
-  Both tool descriptions say so, for the same reason as the bullet above.
+  Both tool descriptions said so, at the time, for the same reason as the
+  bullet above — they now say the opposite, and point at the way in.
 - **Two identical devices still defeat the parameter read's identity
   re-check.** `get_device_params` re-reads the device's name *and*
   `num_parameters` after its paging loop and refuses the read if either
@@ -604,7 +605,7 @@ wrong answer in production.**
   now-out-of-range index answers nothing and "no reply" is byte-identical to
   a lost datagram.
 
-**No Remote Script work.** `copilot/device_range.py` shipped in wire version
+**No Remote Script work.** `mixingpal/device_range.py` shipped in wire version
 2 and is installed. The wire version does not change, and neither a
 reinstall nor a Live restart is required. (**Racks** does change it, to 3,
 and does require both.)
@@ -679,23 +680,29 @@ structural rather than tested.
 
 **Remote Script changes, and wire version 3.**
 
-- **New** `copilot/rack.py`: `chains_of`, `resolve`, and the handler for
-  `/live/copilot/get/rack/chains`.
-- **New** `/live/copilot/get/device/identity`, replying
+- **New** `mixingpal/rack_paths.py`: `chains_of`, `resolve`, and the rest of
+  the logic that can be wrong, deliberately free of Live imports so it is
+  testable outside Live; `mixingpal/rack.py` holds the handler for
+  `/live/mixingpal/get/rack/chains` and calls into it.
+- **New** `/live/mixingpal/get/device/identity`, replying
   `(track, path, name, num_parameters)` at `Args(2)`. It replaces the two
   upstream calls the parameter read's identity bracket makes today, so a
   bracketed read drops from four round trips to two.
-- **Modified** `copilot/device_range.py`: argument 1 becomes the path string
-  instead of a device index, resolved through `rack.resolve`. The three
+- **Modified** `mixingpal/device_range.py`: argument 1 becomes the path string
+  instead of a device index, resolved through `rack_paths.resolve`. The three
   addresses and their `Args(3)` keying do not move.
-- **Retired**: `/live/device/get/name`, `/live/device/get/num_parameters`, and
+- **Retired from the client and from `arity.rs`**: `/live/device/get/name`,
+  `/live/device/get/num_parameters`, and
   `/live/device/get/parameters/value_range`, which the design has never used.
+  The `value_range` handler itself stays registered in `device_range.py` --
+  dropping it costs three lines inside `ranged` for no benefit, since it is a
+  shipped wire address with no client left to call it.
 
 `WIRE_VERSION` becomes 3. Unlike the device work, this one does require a
 script reinstall and a Live restart; the mismatch banner already names both
 numbers and says so.
 
-**The rack listing reply.** `/live/copilot/get/rack/chains` takes
+**The rack listing reply.** `/live/mixingpal/get/rack/chains` takes
 `(track, path, start, span)` and replies
 `(track, path, start, total_chains, can_have_chains, *records)`, keyed
 `Args(3)` on the echoed `(track, path, start)` exactly as the parameter
@@ -739,7 +746,7 @@ already pins `version.py`.
 
 | Tool | Change |
 | --- | --- |
-| `get_device_chains()` | Each device gains a `rack` flag, from upstream's `/live/track/get/devices/can_have_chains`. Output otherwise unchanged. |
+| `get_device_chains()` | A Rack's name gains a ` [rack]` suffix, from upstream's `/live/track/get/devices/can_have_chains`. Output otherwise unchanged. |
 | `get_rack_contents(track, path)` | New. One rack's chains: name, the devices inside, the pad note on drum chains, and `muted` or `soloed` only when set. |
 | `get_device_params(track, path)` | `device: integer` becomes `path: array`. |
 
@@ -761,6 +768,12 @@ A Drum Rack has 128 pads and a fully loaded one is legal, but a working kit
 runs eight to twenty-four; as with the 256-parameter cap this is a prompt-token
 decision, not a datagram one, so it lives with the tool rather than in the byte
 budget.
+
+Each chain also caps at **32 device names** (`MAX_DEVICES_PER_CHAIN` in
+`rack_paths.py`). A chain with more reports its true `total_devices` and a
+shorter `devices` list; unlike the 64-chain cap, nothing marks this at the
+top level — the model has to notice `total_devices` exceeding the count of
+names listed for that one chain. The tool description says so.
 
 **Why the int-addressed endpoints are retired rather than kept alongside.**
 Keeping `get_device_params(track, device)` next to a path form would give the

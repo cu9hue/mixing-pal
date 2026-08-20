@@ -1,7 +1,7 @@
 """Unit tests for copilot/rack_paths.py.
 
-The module is loaded by file path rather than imported as `copilot.rack_paths`
-because `copilot/__init__.py` imports every handler, and those reach
+The module is loaded by file path rather than imported as `mixingpal.rack_paths`
+because `mixingpal/__init__.py` imports every handler, and those reach
 `ableton.v2.control_surface`, which exists only inside Live. Loading the one
 file directly is what keeps this logic testable at all.
 
@@ -206,6 +206,14 @@ class WindowTests(unittest.TestCase):
 
     def test_a_start_past_the_end_returns_nothing_rather_than_wrapping(self):
         self.assertEqual(rack_paths.build_window(self.entries(3), 10, 8), [])
+
+    def test_a_negative_start_and_span_clamp_to_zero_rather_than_wrapping(self):
+        # Unexercised by every other test here: an un-clamped negative span
+        # makes the stop bound negative too, and Python reads a negative
+        # slice bound as "from the end" rather than as "before the start" --
+        # silently returning real records instead of none, the same shape of
+        # bug as the sibling task's negative-span slicing defect.
+        self.assertEqual(rack_paths.build_window(self.entries(3), -1, -1), [])
 
 
 if __name__ == "__main__":

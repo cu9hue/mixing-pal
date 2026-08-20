@@ -153,7 +153,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_rack_contents",
-                "description": "What is inside one Rack: each chain in order, the devices on it, and for a Drum Rack the MIDI note of its pad. Chains that are muted or soloed are marked; nothing is said about the others. Queried from Live at call time and fetched in pages. Use this when get_device_chains marks a device [rack]. An empty result means either that the device is not a Rack, or that it is an empty one, and the result says which. Chain indices from here go into the path of get_device_params to read a device inside the rack, or back into get_rack_contents for a rack nested inside a chain.",
+                "description": "What is inside one Rack: each chain in order, the devices on it, and for a Drum Rack the MIDI note of its pad. Chains that are muted or soloed are marked; nothing is said about the others. Queried from Live at call time and fetched in pages. Use this when get_device_chains marks a device [rack]. An empty result means either that the device is not a Rack, or that it is an empty one, and the result says which. A rack with more than 64 chains is truncated and the result says so; a chain with more than 32 devices lists only the first 32 names, and its total_devices may exceed the number of names listed. Chain indices from here go into the path of get_device_params to read a device inside the rack, or back into get_rack_contents for a rack nested inside a chain.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -505,7 +505,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                     d.missing_reason,
                 ),
                 Err(QueryError::NoReply) => ToolResult::missing(
-                    "no_reply: the track or device index may not exist, or Live did not answer",
+                    "no_reply: the track or the path may not exist, or Live did not answer",
                 ),
                 Err(QueryError::Busy) => ToolResult::missing("busy"),
                 Err(QueryError::Transport(e)) => {
@@ -538,15 +538,20 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             }
 
             match outcome {
-                Ok(r) => ToolResult::live(
-                    json!({
-                        "chains": r.chains,
-                        "total_chains": r.total_chains,
-                        "is_rack": r.is_rack,
-                        "truncated": r.truncated,
-                    }),
-                    r.missing_reason,
-                ),
+                Ok(r) => {
+                    // `null` still invites the model to read something into
+                    // an absent field, so total_chains/is_rack are omitted
+                    // entirely rather than serialised as null when no window
+                    // ever decoded -- see RackContents's doc comments.
+                    let mut payload = json!({ "chains": r.chains, "truncated": r.truncated });
+                    if let Some(total) = r.total_chains {
+                        payload["total_chains"] = json!(total);
+                    }
+                    if let Some(is_rack) = r.is_rack {
+                        payload["is_rack"] = json!(is_rack);
+                    }
+                    ToolResult::live(payload, r.missing_reason)
+                }
                 // Byte-identical to a lost reply, so the wording names both
                 // causes rather than picking one. The model gets its indices
                 // from get_device_chains and get_rack_contents, so a bad

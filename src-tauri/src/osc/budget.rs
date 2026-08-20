@@ -157,6 +157,36 @@ mod tests {
         );
     }
 
+    /// `src-tauri/src/tools/path.rs` and `rack_paths.py` each declare
+    /// `MAX_PATH_LEN`, and the Python side is the one that decides whether a
+    /// path the Rust side already accepted actually resolves. If Python's
+    /// drifts LOWER than Rust's, the client happily sends a path Python then
+    /// refuses; the handler raises inside Live and sends nothing, and the
+    /// client reports `no_reply: the track or the path may not exist` --
+    /// silent and permanent for any path past the drifted value, and
+    /// indistinguishable from a bad path. `the_rack_listing_header_fits_...`
+    /// above only bounds this value from ABOVE (a header computed from a
+    /// smaller MAX_PATH_LEN still fits inside HEADER_SLACK), so it passes for
+    /// any Python value <= 17 and would not have caught a drift to 5. This
+    /// asserts equality, the way `rack_byte_ceiling_matches_the_budget` pins
+    /// `MAX_REPLY_BYTES`.
+    #[test]
+    fn path_len_ceiling_matches_the_client_side() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../remote-script/MixingPal/mixingpal/rack_paths.py"
+        ))
+        .expect("rack_paths.py is missing");
+        let line = source
+            .lines()
+            .find_map(|l| l.strip_prefix("MAX_PATH_LEN = "))
+            .expect("MAX_PATH_LEN is not declared on its own line");
+        assert_eq!(
+            line.trim().parse::<usize>().unwrap(),
+            crate::tools::path::MAX_PATH_LEN
+        );
+    }
+
     /// The rack listing's reply header has to fit inside `HEADER_SLACK`, or a
     /// full window overflows the datagram and Live sends nothing at all.
     ///

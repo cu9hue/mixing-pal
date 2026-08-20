@@ -51,11 +51,18 @@ pub struct RackChain {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RackContents {
     pub chains: Vec<RackChain>,
-    /// Every chain the rack has, even when `chains` holds fewer.
-    pub total_chains: usize,
-    /// Whether the addressed device is a Rack at all. An EQ and an empty
-    /// Rack both list zero chains, and only the first is a model error.
-    pub is_rack: bool,
+    /// Every chain the rack has, even when `chains` holds fewer. `None` when
+    /// no window decoded — a fabricated `0` reads as "this rack is empty".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_chains: Option<usize>,
+    /// Whether the addressed device is a Rack at all — `None` when no window
+    /// decoded, so nothing was ever observed about it. An EQ and an empty
+    /// Rack both list zero chains and only the first is a model error, which
+    /// is exactly why this must never be *guessed*: the tool description
+    /// tells the model this field says which, so a fabricated `false` sends
+    /// it away from a Rack it should have opened.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_rack: Option<bool>,
     pub truncated: bool,
     pub missing_reason: Option<String>,
 }
@@ -164,8 +171,8 @@ pub async fn get_rack_contents(
     };
 
     let mut chains: Vec<RackChain> = Vec::new();
-    let mut total_chains = 0usize;
-    let mut is_rack = false;
+    let mut total_chains: Option<usize> = None;
+    let mut is_rack: Option<bool> = None;
     let mut missing_reason: Option<String> = None;
     let mut windows = 0usize;
     let mut start = 0usize;
@@ -221,10 +228,10 @@ pub async fn get_rack_contents(
         };
 
         if first {
-            total_chains = reply_total;
-            is_rack = reply_is_rack;
+            total_chains = Some(reply_total);
+            is_rack = Some(reply_is_rack);
             first = false;
-        } else if reply_total != total_chains {
+        } else if total_chains != Some(reply_total) {
             chains.clear();
             cleared = true;
             missing_reason = Some("topology_changed".to_string());
@@ -239,7 +246,7 @@ pub async fn get_rack_contents(
         }
         start += window.len();
         chains.extend(window);
-        if start >= total_chains {
+        if total_chains.is_some_and(|t| start >= t) {
             break;
         }
     }
@@ -271,7 +278,7 @@ pub async fn get_rack_contents(
     // flag set wherever the clear happens keeps the two facts from
     // disagreeing -- which they did when each clear site had to remember to
     // say so itself.
-    let truncated = !cleared && total_chains > chains.len();
+    let truncated = !cleared && total_chains.is_some_and(|t| t > chains.len());
 
     Ok(RackContents {
         chains,
@@ -659,7 +666,7 @@ mod tests {
         let (q, _guard) = fake_rack(FakeRack { chains: 50, per_window: 8, ..Default::default() }).await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
         let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
-        assert_eq!(out.total_chains, 50);
+        assert_eq!(out.total_chains, Some(50));
         assert_eq!(out.chains.len(), 50);
         assert_eq!(out.chains[49].index, 49);
         assert!(!out.truncated);
@@ -672,7 +679,7 @@ mod tests {
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
         let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
         assert_eq!(out.chains.len(), MAX_CHAINS);
-        assert_eq!(out.total_chains, 128);
+        assert_eq!(out.total_chains, Some(128));
         assert!(out.truncated);
     }
 
@@ -682,7 +689,7 @@ mod tests {
         let (q, _guard) = fake_rack(FakeRack { chains: 0, is_rack: true, ..Default::default() }).await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
         let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
-        assert!(out.is_rack);
+        assert_eq!(out.is_rack, Some(true));
         assert!(out.chains.is_empty());
         assert_eq!(out.missing_reason, None);
     }
@@ -780,6 +787,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_malformed_first_window_leaves_is_rack_and_total_chains_unobserved() {
+        // Window 0 refusing to decode is the case the mid-page test above
+        // does not cover: `first` is never cleared, so a naive initial value
+        // of `false`/`0` would come back as if it had been observed. Nothing
+        // was ever read about this device, and the result must say so by
+        // omission rather than by a fabricated "not a Rack, no chains".
+        let (q, _guard) = fake_rack(FakeRack {
+            chains: 40,
+            per_window: 8,
+            malformed_from_window: Some(0),
+            ..Default::default()
+        })
+        .await;
+        let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
+        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        assert_eq!(out.is_rack, None);
+        assert_eq!(out.total_chains, None);
+        assert!(out.chains.is_empty());
+        assert_eq!(out.missing_reason.as_deref(), Some("malformed_reply"));
+    }
+
+    #[tokio::test]
     async fn a_kit_that_needs_every_window_reports_windows_exhausted_not_too_large() {
         // Reachable on an ordinary rack: one record per window and
         // MAX_CHAINS chains to fill needs more round trips than MAX_WINDOWS
@@ -788,7 +817,7 @@ mod tests {
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
         let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
         assert_eq!(out.chains.len(), MAX_WINDOWS, "one chain per window, MAX_WINDOWS windows spent");
-        assert!(out.chains.len() < out.total_chains);
+        assert!(out.total_chains.is_some_and(|t| out.chains.len() < t));
         assert_eq!(out.missing_reason.as_deref(), Some("windows_exhausted"));
     }
 }

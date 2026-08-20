@@ -39,7 +39,7 @@ impl DevicePath {
         Some(DevicePath(out))
     }
 
-    /// The dotted form `copilot/rack_paths.py::parse_path` reads back.
+    /// The dotted form `mixingpal/rack_paths.py::parse_path` reads back.
     pub fn wire(&self) -> String {
         self.0
             .iter()

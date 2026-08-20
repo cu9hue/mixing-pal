@@ -64,7 +64,11 @@ fn decode_chain(reply: &[OscType]) -> Option<TrackChain> {
 /// model is expected to make routinely and every device on every track pays
 /// for its shape. `[{ "name": "...", "rack": true }]` triples the tokens of
 /// the whole-set answer to carry a flag that is false for most devices.
-const RACK_SUFFIX: &str = " [rack]";
+/// `pub(crate)` so `model.rs`'s test can assert the two tool descriptions and
+/// `SYSTEM_PROMPT` all use this exact marker text, rather than each carrying
+/// its own unlinked `" [rack]"` literal that could drift from this one
+/// silently.
+pub(crate) const RACK_SUFFIX: &str = " [rack]";
 
 /// `/live/track/get/devices/can_have_chains` replies `(track, *flags)`.
 ///
