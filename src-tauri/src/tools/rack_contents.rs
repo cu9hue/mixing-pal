@@ -35,8 +35,11 @@ pub struct RackChain {
     /// The MIDI note of a drum pad. `None` for every other kind of rack,
     /// where the wire carries -1 — rendering that as a note would put a pad
     /// number on an Audio Effect Rack chain.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<i32>,
+    #[serde(skip_serializing_if = "is_false")]
     pub muted: bool,
+    #[serde(skip_serializing_if = "is_false")]
     pub soloed: bool,
     /// Fenced device names, in chain order.
     pub devices: Vec<String>,
@@ -55,6 +58,15 @@ pub struct RackContents {
     pub is_rack: bool,
     pub truncated: bool,
     pub missing_reason: Option<String>,
+}
+
+/// A chain that is neither muted nor soloed says nothing about it, and a
+/// chain that is not a drum pad has no note. Emitting `false` and `null` on
+/// every chain would spend roughly seven hundred characters of a
+/// twenty-four-pad kit's listing asserting the absence of anything
+/// interesting.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn int_at(reply: &[OscType], i: usize) -> Option<i32> {
@@ -414,6 +426,41 @@ mod tests {
         };
         assert!(!inner.contains('«') && !inner.contains('»'));
         assert!(!chains[0].devices[0].contains('\n'));
+    }
+
+    #[test]
+    fn a_plain_chain_serializes_with_no_muted_soloed_or_note_key() {
+        // An unset flag and an absent note say nothing about a chain. Every
+        // one of the other 23 pads in a kit paying for `"muted":false,
+        // "soloed":false,"note":null` is the cost this test guards against.
+        let plain = RackChain {
+            index: 0,
+            name: "Snare".to_string(),
+            note: None,
+            muted: false,
+            soloed: false,
+            devices: vec![],
+            total_devices: 0,
+        };
+        let v = serde_json::to_value(&plain).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("muted"), "{v}");
+        assert!(!obj.contains_key("soloed"), "{v}");
+        assert!(!obj.contains_key("note"), "{v}");
+
+        let interesting = RackChain {
+            index: 1,
+            name: "Kick".to_string(),
+            note: Some(36),
+            muted: true,
+            soloed: true,
+            devices: vec![],
+            total_devices: 0,
+        };
+        let v = serde_json::to_value(&interesting).unwrap();
+        assert_eq!(v["muted"], true);
+        assert_eq!(v["soloed"], true);
+        assert_eq!(v["note"], 36);
     }
 
     use crate::osc::requests::RequestTable;

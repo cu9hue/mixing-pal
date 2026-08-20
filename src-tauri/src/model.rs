@@ -34,6 +34,13 @@ processing from its name. For any question about devices, plugins, EQ, \
 compression, or a track's chain, call get_device_chains first - it covers \
 the whole set in one round trip - and then get_device_params on the few \
 devices that matter. A track name is not evidence about what is on it.
+- A Rack is one device in the chain map, marked [rack], and what is inside \
+it is invisible until you ask. Drum Racks are where this matters most: the \
+kit is one device and every sound in it is a chain underneath. If a question \
+is about drums, or about a track whose chain map shows a [rack], call \
+get_rack_contents before answering. Saying there is no compression on the \
+drums because the chain map shows one device is the mistake this tool exists \
+to prevent.
 - Every tool result carries fresh, fresh_as_of, and missing_reason. A result \
 with a missing_reason and no value is data you do NOT have. Say so; never fill \
 the gap with a plausible value. A result that carries BOTH a value and a \
@@ -614,6 +621,7 @@ mod tests {
         // what closes that loop.
         assert!(SYSTEM_PROMPT.contains("get_device_chains"));
         assert!(SYSTEM_PROMPT.contains("get_device_params"));
+        assert!(SYSTEM_PROMPT.contains("get_rack_contents"));
     }
 
     #[test]

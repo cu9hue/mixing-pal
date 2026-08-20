@@ -396,3 +396,16 @@ Date: ___________  macOS version: ___________  Tester: ___________
       set, because `model_complete` refuses while either is empty and nothing in
       setup asks for them. Closing that gap is subsystem B, not this stage.
 - [ ] Quit and relaunch. Setup does **not** reopen.
+## Racks
+
+- [ ] `get_device_chains` marks a Drum Rack `[rack]` and does not mark an EQ Eight.
+- [ ] `/live/track/get/devices/can_have_chains` arrives as OSC `T`/`F`, not as ints — confirm in the trace pane which arm of `decode_flags` is doing the work.
+- [ ] `get_rack_contents` on a Drum Rack lists one chain per **filled** pad, and no chains for empty pads.
+- [ ] The pad note is the pad's own note. Put a sound on C1 only, and confirm the single chain reports note 36 — not 0, and not another pad's note. This is the claim `chains_of` is built to protect and the one no test here can reach.
+- [ ] Renaming a pad in Live changes the chain name in the next call.
+- [ ] Muting one pad marks that chain and no other.
+- [ ] `get_rack_contents` on an Audio Effect Rack lists its chains with no note.
+- [ ] `get_rack_contents` on an EQ Eight returns `is_rack: false`, not an error.
+- [ ] `get_device_params` with a path into a drum pad returns that device's parameters, and parameter 0 is `Device On` there too (the still-open Plan 3 check, one level deeper).
+- [ ] A rack inside a drum pad expands through a five-element path.
+- [ ] Deleting the rack mid-read reports `device_identity_unverified`, not a partial listing.
