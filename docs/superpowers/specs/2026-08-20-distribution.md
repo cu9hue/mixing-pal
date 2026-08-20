@@ -138,9 +138,12 @@ take for the same reason.
 - `bundle.targets` becomes the explicit `["app", "dmg"]`. On macOS `"all"`
   already means these two, so this changes nothing today and stops stage 3's
   updater artifacts from arriving as a surprise.
-- `bundle.category` becomes `"public.app-category.music"`.
-- `bundle.macOS.dmg` sets `appPosition` and `applicationFolderPosition` so the
-  drag target is unmissable. No custom background art in this stage.
+- `bundle.category` becomes `"Music"` — Tauri's `AppCategory` enum name, which
+  it maps to the `public.app-category.music` UTI in `Info.plist`. Writing the
+  UTI directly is rejected by the config schema.
+- No `bundle.macOS.dmg` block. Tauri already defaults to a 660×400 volume
+  window with the app at (180,170) and the Applications folder at (480,170),
+  which is the standard layout. Setting them restates defaults.
 
 ### Delivery, and the Gatekeeper problem
 
