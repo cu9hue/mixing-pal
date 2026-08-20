@@ -7,6 +7,7 @@ pub mod track_detail;
 
 use crate::deltas::Coalescer;
 use crate::osc::query::{LiveQuery, QueryError};
+use crate::tools::path::DevicePath;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -409,10 +410,10 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             )
         }
         "get_device_params" => {
-            let (Some(track), Some(device)) = (
-                int_arg(args, "track").filter(|t| *t >= 0),
-                int_arg(args, "device").filter(|d| *d >= 0),
-            ) else {
+            let Some(track) = int_arg(args, "track").filter(|t| *t >= 0) else {
+                return ToolResult::missing("bad_arguments");
+            };
+            let Some(path) = DevicePath::parse(args.get("path")) else {
                 return ToolResult::missing("bad_arguments");
             };
             let query = match ctx.query.lock() {
@@ -430,7 +431,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             let outcome = device_params::get_device_params(
                 &query,
                 track as i32,
-                device as i32,
+                &path,
                 device_params::QUERY_TIMEOUT,
             )
             .await;

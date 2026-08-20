@@ -69,17 +69,14 @@ pub fn key_arity(addr: &str) -> KeyArity {
         "/live/track/get/send"
         | "/live/clip/get/notes"
         | "/live/clip/get/length"
-        | "/live/device/get/name"
-        | "/live/device/get/num_parameters"
         // (track, path) in, (track, path, name, num_parameters) back. One
-        // address in place of /live/device/get/name and
+        // address in place of the retired /live/device/get/name and
         // /live/device/get/num_parameters, so a bracketed parameter read
         // costs two round trips instead of four -- and unlike those two, it
         // resolves a path rather than a top-level index.
         | "/live/copilot/get/device/identity" => KeyArity::Args(2),
 
         "/live/device/get/parameter/value_string"
-        | "/live/device/get/parameters/value_range"
         | "/live/device/get/parameters/name_range"
         | "/live/device/get/parameters/value_string_range"
         // (track, path, start) echoed back, exactly like the ranged
@@ -149,16 +146,13 @@ mod tests {
             ("/live/mixingpal/get/version", KeyArity::None),
             ("/live/clip/get/notes", KeyArity::Args(2)),
             ("/live/clip/get/length", KeyArity::Args(2)),
-            ("/live/device/get/name", KeyArity::Args(2)),
-            ("/live/device/get/num_parameters", KeyArity::Args(2)),
             // (track, path) in, (track, path, name, num_parameters) back. One
-            // address in place of /live/device/get/name and
+            // address in place of the retired /live/device/get/name and
             // /live/device/get/num_parameters, so a bracketed parameter read
             // costs two round trips instead of four -- and unlike those two, it
             // resolves a path rather than a top-level index.
             ("/live/copilot/get/device/identity", KeyArity::Args(2)),
             ("/live/device/get/parameter/value_string", KeyArity::Args(3)),
-            ("/live/device/get/parameters/value_range", KeyArity::Args(3)),
             ("/live/device/get/parameters/name_range", KeyArity::Args(3)),
             (
                 "/live/device/get/parameters/value_string_range",

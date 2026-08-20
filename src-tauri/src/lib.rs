@@ -117,8 +117,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/clip/get/length",
     // get_device_chains and get_device_params.
     "/live/track/get/devices/name",
-    "/live/device/get/name",
-    "/live/device/get/num_parameters",
+    "/live/copilot/get/device/identity",
     "/live/device/get/parameters/name_range",
     "/live/device/get/parameters/value_string_range",
     "/live/mixingpal/get/version",
@@ -253,13 +252,13 @@ fn handle_inbound(
     //   reload -- and unlike track_data/mixer_data it never evicts, since
     //   evict_tracks_at_or_beyond is only called with the track/mixer
     //   address lists. IMPORTANT 3, 2026-08-16 whole-branch review.
-    // - the five device addresses are the same case again, for
-    //   get_device_chains and get_device_params. The spec's Devices section
-    //   says "no mirror storage for chains" outright, and a parameter page
-    //   is keyed on (track, device, start), so one call on a 300-parameter
-    //   device would leave four-plus retained entries holding up to 512
-    //   strings for the rest of the session -- never evicted, for the same
-    //   reason clip notes never were.
+    // - the device addresses are the same case again, for
+    //   get_device_chains, get_device_params and get_rack_contents. The
+    //   spec says "no mirror storage for chains" outright, and a parameter
+    //   page is keyed on (track, path, start), so one call on a
+    //   300-parameter device would leave four-plus retained entries holding
+    //   up to 512 strings for the rest of the session -- never evicted, for
+    //   the same reason clip notes never were.
     let is_resolve_only = matches!(
         msg.addr.as_str(),
         "/live/song/get/track_data"
@@ -267,8 +266,7 @@ fn handle_inbound(
             | "/live/clip/get/notes"
             | "/live/clip/get/length"
             | "/live/track/get/devices/name"
-            | "/live/device/get/name"
-            | "/live/device/get/num_parameters"
+            | "/live/copilot/get/device/identity"
             | "/live/device/get/parameters/name_range"
             | "/live/device/get/parameters/value_string_range"
     );
@@ -1320,15 +1318,14 @@ mod tests {
 
     #[test]
     fn a_device_reply_never_enters_the_coalescer() {
-        // The twin of the clip-notes case above, for Plan 3's five device
-        // addresses. Each one resolves a LiveQuery caller directly; nothing
-        // in apply.ts reads any of them, and a parameter page keyed on
-        // (track, device, start) would otherwise be retained for the whole
-        // session and replayed on every reload.
+        // The twin of the clip-notes case above, for the device addresses.
+        // Each one resolves a LiveQuery caller directly; nothing in apply.ts
+        // reads any of them, and a parameter page keyed on (track, path,
+        // start) would otherwise be retained for the whole session and
+        // replayed on every reload.
         for addr in [
             "/live/track/get/devices/name",
-            "/live/device/get/name",
-            "/live/device/get/num_parameters",
+            "/live/copilot/get/device/identity",
             "/live/device/get/parameters/name_range",
             "/live/device/get/parameters/value_string_range",
         ] {
