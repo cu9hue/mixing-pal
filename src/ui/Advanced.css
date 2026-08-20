@@ -36,6 +36,13 @@
   border-color: var(--border-strong);
 }
 
+.advanced__value {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
 .advanced__note {
   font-size: 11px;
   line-height: 1.5;

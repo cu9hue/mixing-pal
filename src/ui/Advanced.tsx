@@ -2,11 +2,18 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./Advanced.css";
 import { Trace } from "./Trace";
+import wireVersion from "../../shared/wire-version.json";
+import { version as appVersion } from "../../package.json";
 
 interface SettingsView {
   base_url: string;
   model: string;
   has_key: boolean;
+}
+
+interface ConnectorView {
+  folder: string;
+  installed: boolean;
 }
 
 /**
@@ -16,15 +23,41 @@ interface SettingsView {
  * they are a pressure valve for a technical minority and for the day the
  * proxy is down -- not a step anybody is asked to complete.
  */
-export function Advanced({ onClose }: { onClose: () => void }) {
+export function Advanced({
+  scriptVersion,
+  onClose,
+}: {
+  scriptVersion: number | null;
+  onClose: () => void;
+}) {
   const [view, setView] = useState<SettingsView | null>(null);
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [connector, setConnector] = useState<ConnectorView | null>(null);
+  const [connectorNote, setConnectorNote] = useState<string | null>(null);
+  const [reinstalling, setReinstalling] = useState(false);
 
   useEffect(() => {
     invoke<SettingsView>("get_settings").then(setView).catch(() => setView(null));
+    invoke<ConnectorView>("connector_status").then(setConnector).catch(() => setConnector(null));
   }, []);
+
+  async function reinstall() {
+    setReinstalling(true);
+    setConnectorNote(null);
+    try {
+      await invoke("install_connector", { userLibrary: null });
+      // Live reads Remote Scripts once, at startup, so the copy alone
+      // changes nothing she can see.
+      setConnectorNote("Reinstalled. Quit Live and open it again.");
+      invoke<ConnectorView>("connector_status").then(setConnector).catch(() => {});
+    } catch (e) {
+      setConnectorNote(String(e));
+    } finally {
+      setReinstalling(false);
+    }
+  }
 
   if (view === null) return null;
 
@@ -95,6 +128,25 @@ export function Advanced({ onClose }: { onClose: () => void }) {
       </button>
 
       {error !== null && <div className="advanced__error">{error}</div>}
+
+      <div className="advanced__field">
+        <span className="advanced__label">Connector</span>
+        <div className="advanced__value">
+          {connector === null
+            ? "—"
+            : connector.installed
+              ? `${connector.folder}, v${scriptVersion ?? "not reporting"}`
+              : `${connector.folder}, not installed`}
+          {" · this app expects v"}
+          {wireVersion.version}
+        </div>
+        <button className="advanced__button" onClick={reinstall} disabled={reinstalling}>
+          {reinstalling ? "Reinstalling…" : "Reinstall"}
+        </button>
+        {connectorNote !== null && <div className="advanced__note">{connectorNote}</div>}
+      </div>
+
+      <div className="advanced__note">Mixing Pal v{appVersion}</div>
 
       <Trace />
     </div>
