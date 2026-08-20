@@ -80,4 +80,43 @@ mod tests {
         assert!(!folder().contains('\\'), "folder must not contain a path separator");
         assert!(!folder().is_empty());
     }
+
+    /// The bundle must carry the connector, to the exact directory
+    /// `connector_source` looks in.
+    ///
+    /// `connector_source` joins `folder()` onto `resource_dir()`, which is
+    /// `Contents/Resources` inside a macOS `.app`. If `bundle.resources` is
+    /// missing, or maps to a different destination, the built app has no
+    /// connector and falls through to the `CARGO_MANIFEST_DIR` branch -- a
+    /// path baked in at compile time, pointing at the build machine. That
+    /// branch succeeds on the build machine and nowhere else, so this
+    /// failure is invisible in exactly the place it gets introduced.
+    #[test]
+    fn the_bundle_ships_the_connector_where_connector_source_looks_for_it() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json must be valid JSON");
+
+        let resources = conf
+            .get("bundle")
+            .and_then(|bundle| bundle.get("resources"))
+            .and_then(|resources| resources.as_object())
+            .expect(
+                "tauri.conf.json needs a bundle.resources map -- without it the connector \
+                 is not in the .app at all, and first run fails on every machine but the \
+                 one that built it",
+            );
+
+        let from = format!("../remote-script/{}/", folder());
+        let to = format!("{}/", folder());
+
+        assert_eq!(
+            resources.get(&from).and_then(|dest| dest.as_str()),
+            Some(to.as_str()),
+            "bundle.resources must map {:?} to {:?}, because connector_source() joins \
+             connector::folder() onto resource_dir(). Renaming the connector without \
+             updating this map ships an app that cannot find its own connector.",
+            from,
+            to
+        );
+    }
 }
