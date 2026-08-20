@@ -699,9 +699,13 @@ numbers and says so.
 `(track, path, start, span)` and replies
 `(track, path, start, total_chains, can_have_chains, *records)`, keyed
 `Args(3)` on the echoed `(track, path, start)` exactly as the parameter
-windows are. Each record is `name, note, mute, solo, total_devices` followed by
-that many device names, so the record announces its own length and the decoder
-walks the stream. A stream that runs short mid-record produces no value at all,
+windows are. Each record is `name, note, mute, solo, total_devices, reported_devices`
+followed by exactly `reported_devices` names, so the record announces its own
+length and the decoder walks the stream. The count of names carried is a
+separate field from the chain's true device count, and it has to be: the moment
+the handler cuts a record back to fit a datagram, a stream that claimed
+`total_devices` names while carrying fewer would be undecodable from that byte
+onward. `total_devices` still reports the truth. A stream that runs short mid-record produces no value at all,
 the same fail-closed rule the parameter decoder follows.
 
 `can_have_chains` rides in the reply so that two different answers stay
@@ -727,7 +731,7 @@ stall. The client pages against `total_chains` rather than against how many
 records it asked for.
 
 That byte ceiling is duplicated across the language boundary, so a Rust test
-reads the constant out of `rack.py` and asserts it equals
+reads the constant out of `rack_paths.py` and asserts it equals
 `MAX_DATAGRAM - HEADER_SLACK`, the way `wire_version_matches_the_shared_manifest`
 already pins `version.py`.
 
