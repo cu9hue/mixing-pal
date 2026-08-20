@@ -239,7 +239,14 @@ the app to trigger it).
 - [ ] Ask something that makes the model read a track. The progress line
       names the track, never a function name or JSON.
 - [ ] Quit Live. The banner appears, and the collapsed pill grows to read
-      "not connected".
+      "not connected". The setup window must NOT reappear: disconnection is
+      a card state, not a first-run state.
+- [ ] **It never steals focus.** Record-arm a MIDI clip in Live, leave Live
+      focused, and trigger a nudge (open a set with at least ten tracks,
+      six of them still named MIDI or Audio). The card appears on top, and
+      every keystroke still reaches Live. `focus: false` in
+      `tauri.conf.json` is what makes this true; a card that takes the
+      keyboard mid-take is worse than no app at all.
 - [ ] Count the uses of the accent colour in one view. At most two.
 
 ## First run (added 2026-08-19)
@@ -259,7 +266,7 @@ Date: ___________  Live version: ___________  Tester: ___________
       `/bin/ps -Axco command | grep -x Live` while Ableton is running. It must
       match exactly, returning `Live` once. If the process name differs, the
       fix is to update the exact-match string in `src-tauri/src/install.rs`'s
-      `live_is_running()` function (line 177), not to loosen the match to a
+      `live_is_running()` function, not to loosen the match to a
       substring (which would false-positive on `liveactivitiesd` and
       `PhotosReliveWidget`).
 - [ ] The step-3 screenshot matches this Live version's preferences pane.
