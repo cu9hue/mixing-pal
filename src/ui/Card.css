@@ -180,6 +180,19 @@
   color: var(--text-faint);
 }
 
+/* Only the "Thinking…" form breathes. The tool line names a real track and
+   changes on its own as tools come and go, so it needs no sign of life. */
+.card__progress--thinking {
+  animation: breathe 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card__progress--thinking {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 .card__error {
   font-size: 13px;
   line-height: 1.55;

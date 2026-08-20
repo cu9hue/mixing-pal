@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SetState } from "../live/model";
-import { ChatMessage, runTurn } from "../agent/loop";
+import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
 import { buildContext } from "../digest/build";
 import { BlockNode, InlineNode, parseMarkdown } from "./markdown";
 import { progressLabel } from "./progressLabel";
+import { waitingLabel } from "./waitingLabel";
 
 function renderInline(nodes: InlineNode[]): ReactNode {
   return nodes.map((n, i) => {
@@ -103,6 +104,18 @@ export function Conversation({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // When the current turn started, and a clock to re-read it against. The
+  // elapsed figure only appears once a turn is slow, but nothing else
+  // re-renders this component while it waits -- without the interval the
+  // label would freeze at whatever it said when the turn began.
+  const startedAt = useRef(0);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  useEffect(() => {
+    if (!busy) return;
+    const id = setInterval(() => setElapsedMs(Date.now() - startedAt.current), 1000);
+    return () => clearInterval(id);
+  }, [busy]);
+
   async function send() {
     const asked = input.trim();
     if (asked === "" || busy) return;
@@ -111,6 +124,8 @@ export function Conversation({
     setError(null);
     setAnswer(null);
     setQuestion(asked);
+    startedAt.current = Date.now();
+    setElapsedMs(0);
     setBusy(true);
     onTurnRunningChange(true);
 
@@ -124,7 +139,22 @@ export function Conversation({
     setHistory((h) => [...h, { role: "user", content: asked }]);
 
     try {
-      const out = await runTurn(tauriProvider, tauriTools, turn, (name, args) =>
+      // runTurn reports a tool BEFORE it runs and has no "finished" signal,
+      // so the last tool's line used to linger over the whole final stretch
+      // while the model wrote prose -- the card claiming to read a track it
+      // had stopped reading. Clearing it here, rather than widening
+      // runTurn's callback, keeps agent/loop.ts and its tests untouched.
+      const tracked: ToolRunner = {
+        run: async (name, args) => {
+          try {
+            return await tauriTools.run(name, args);
+          } finally {
+            setProgress(null);
+          }
+        },
+      };
+
+      const out = await runTurn(tauriProvider, tracked, turn, (name, args) =>
         setProgress(progressLabel(name, args, state)),
       );
       setHistory((h) => [...h, { role: "assistant", content: out.text }]);
@@ -140,6 +170,8 @@ export function Conversation({
     }
   }
 
+  const waiting = waitingLabel({ busy, toolProgress: progress, elapsedMs });
+
   return (
     <>
       <div className="card__body">
@@ -147,7 +179,13 @@ export function Conversation({
         {answer !== null && (
           <div className="card__answer selectable">{renderBlocks(parseMarkdown(answer))}</div>
         )}
-        {progress !== null && <div className="card__progress">{progress}</div>}
+        {waiting !== null && (
+          <div
+            className={`card__progress${progress === null ? " card__progress--thinking" : ""}`}
+          >
+            {waiting}
+          </div>
+        )}
         {error !== null && <div className="card__error selectable">{error}</div>}
       </div>
       <div className="card__footer">

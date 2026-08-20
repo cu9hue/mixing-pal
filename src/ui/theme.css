@@ -74,3 +74,19 @@ body {
 #root {
   height: 100vh;
 }
+
+/*
+ * One shared breathe. Opacity only, never position or size: the pill and the
+ * card both sit in someone's peripheral vision for hours, and anything that
+ * moves there is an irritant. Each consumer keeps its own
+ * prefers-reduced-motion guard next to the rule that uses this.
+ */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}

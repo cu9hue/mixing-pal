@@ -45,20 +45,9 @@
 
 .pill--thinking .pill__dot {
   background: var(--text-muted);
-  animation: pill-breathe 2s ease-in-out infinite;
+  animation: breathe 2s ease-in-out infinite;
 }
 
-/* Opacity only. Anything that moves in the corner of someone's eye for
-   hours is an irritant, and this pill can be on screen all evening. */
-@keyframes pill-breathe {
-  0%,
-  100% {
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 1;
-  }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .pill--thinking .pill__dot {
