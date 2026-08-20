@@ -129,6 +129,24 @@ pub fn set_window_mode(
 mod tests {
     use super::*;
 
+    /// The window is created with `decorations: false`, so the ONLY way to
+    /// move it is `data-tauri-drag-region`, which calls the core window
+    /// plugin's `start_dragging` command. That command is NOT in
+    /// `core:window`'s default permission set -- the default grants read-only
+    /// getters and `internal-toggle-maximize` and nothing else. Without the
+    /// explicit grant the drag is denied by the ACL and the window cannot be
+    /// moved at all, with no titlebar to fall back on. This shipped once;
+    /// the producer reported "I can't really move the window around".
+    #[test]
+    fn the_capability_grants_start_dragging() {
+        let capability = include_str!("../capabilities/default.json");
+        assert!(
+            capability.contains("core:window:allow-start-dragging"),
+            "capabilities/default.json must grant core:window:allow-start-dragging, \
+             or a frameless window cannot be dragged"
+        );
+    }
+
     const LAPTOP: Rect = Rect { x: 0, y: 0, width: 1440, height: 900 };
     // A second display placed to the right, as macOS reports it.
     const EXTERNAL: Rect = Rect { x: 1440, y: 0, width: 2560, height: 1440 };
