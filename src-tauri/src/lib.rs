@@ -1261,7 +1261,7 @@ mod tests {
         // could disagree about what "version 2" even means, which defeats
         // the whole handshake -- exactly the class of silent drift that let
         // the mixer_data 2-vs-3-argument incident ship undetected.
-        let py = include_str!("../../remote-script/AbletonCopilot/copilot/version.py");
+        let py = include_str!("../../remote-script/MixingPal/mixingpal/version.py");
         let line = py
             .lines()
             .find(|l| l.trim_start().starts_with("WIRE_VERSION"))

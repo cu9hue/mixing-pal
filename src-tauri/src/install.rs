@@ -91,7 +91,7 @@ pub fn connector_status() -> ConnectorStatus {
         .map(|l| {
             l.join("Remote Scripts")
                 .join(&folder)
-                .join("copilot")
+                .join("mixingpal")
                 .join("version.py")
                 .is_file()
         })
@@ -215,13 +215,13 @@ mod tests {
         let src = root.join("src");
         let dest = root.join("dest");
         write(&src.join("__init__.py"), "a");
-        write(&src.join("copilot/version.py"), "WIRE_VERSION = 2");
+        write(&src.join("mixingpal/version.py"), "WIRE_VERSION = 2");
 
         sync_dir(&src, &dest, EXCLUDE).unwrap();
 
         assert_eq!(std::fs::read_to_string(dest.join("__init__.py")).unwrap(), "a");
         assert_eq!(
-            std::fs::read_to_string(dest.join("copilot/version.py")).unwrap(),
+            std::fs::read_to_string(dest.join("mixingpal/version.py")).unwrap(),
             "WIRE_VERSION = 2"
         );
     }

@@ -28,7 +28,7 @@ class ViewOverrideHandler(AbletonOSCHandler):
 
     Registers over the same addresses (osc_server.add_handler keys on the
     literal string and the manager appends our handlers after upstream's,
-    so the last registration for an address wins -- see CopilotManager)
+    so the last registration for an address wins -- see MixingPalManager)
     with versions that report track index -1 instead of crashing when the
     selected track is Master or a Return track."""
 

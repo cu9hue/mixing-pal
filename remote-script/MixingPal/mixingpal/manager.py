@@ -6,7 +6,7 @@ from .view import ViewOverrideHandler
 from .version import VersionHandler
 
 
-class CopilotManager(Manager):
+class MixingPalManager(Manager):
     """Extends upstream's handler list without editing vendored code.
     clear_api() walks self.handlers, so appending here keeps teardown correct."""
 
