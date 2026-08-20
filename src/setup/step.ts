@@ -12,9 +12,12 @@ export type SetupStep =
  *
  * `connectedAcknowledged` is the one piece of session state: the connected
  * screen is something she reads and moves past, and nothing observable
- * records that she has. It resets on relaunch, which is correct -- a
- * finished setup never reaches that step again because `goalAnswered` and
- * `hasAccount` are already true.
+ * records that she has. It resets on relaunch, and on its own that would
+ * put a machine set up months ago back on the connected screen -- the gate
+ * order asks about it before `hasAccount` and `goalAnswered`, so those
+ * being true does not save her. What saves her is `needsSetup` below:
+ * whether setup opens at all is a separate question from which step it
+ * shows once it is open.
  */
 export interface SetupFacts {
   connectorInstalled: boolean;
@@ -52,4 +55,36 @@ export function currentStep(facts: SetupFacts): SetupStep {
   if (!facts.hasAccount) return "account";
   if (!facts.goalAnswered) return "goal";
   return "done";
+}
+
+/** Everything the decision to open setup at all depends on. */
+export interface SetupNeed {
+  /** null while connector_status has not answered yet. */
+  connectorInstalled: boolean | null;
+  connectorCurrent: boolean;
+  /** The persisted flag from setupDone.ts. */
+  setupDone: boolean;
+}
+
+/**
+ * Whether to show the setup window.
+ *
+ * Deliberately narrower than `currentStep`. Setup used to open whenever
+ * `currentStep` was not "done", which conflated "first run is incomplete"
+ * with "we are not hearing from Live right now" -- so quitting Live, or
+ * five seconds of lost traffic, threw the 600x680 setup window on top of
+ * her work and re-centred it, and every launch reopened setup because
+ * `connectedAcknowledged` starts false. It also made the `not_connected`
+ * banner and the pill's disconnected state unreachable: the staleness that
+ * should show them forced setup mode instead.
+ *
+ * Disconnection is a card-level state, not a first-run state. Only three
+ * things reopen setup: the connector is missing, the connector is too old
+ * to talk to this app, or she never finished setup.
+ */
+export function needsSetup(need: SetupNeed): boolean {
+  // Guessing "not installed" before connector_status answers would flash
+  // the setup window at someone whose setup has been done for months.
+  if (need.connectorInstalled === null) return false;
+  return !need.connectorInstalled || !need.connectorCurrent || !need.setupDone;
 }

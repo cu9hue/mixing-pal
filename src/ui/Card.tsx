@@ -1,6 +1,7 @@
 import "./Card.css";
 import { SetState } from "../live/model";
 import { Nudge } from "../rules/nudges";
+import { SetupStep } from "../setup/step";
 import { Header } from "./Header";
 import { Noticed } from "./Noticed";
 import { Conversation } from "./Conversation";
@@ -32,7 +33,7 @@ export function Card({
   onAnswer: () => void;
   onCollapse: () => void;
   onInputEmptyChange: (empty: boolean) => void;
-  onShowSetup: () => void;
+  onShowSetup: (step: SetupStep) => void;
 }) {
   return (
     <div className="card">

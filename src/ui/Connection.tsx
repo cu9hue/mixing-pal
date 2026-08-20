@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import wireVersion from "../../shared/wire-version.json";
+import { SetupStep } from "../setup/step";
 import "./Connection.css";
 
 // Mirrors src-tauri/src/lib.rs's ConnectionStatus. A one-shot fetch is
@@ -106,7 +107,9 @@ export function Connection({
 }: {
   lastSeen: number | null;
   scriptVersion: number | null;
-  onShowSetup: () => void;
+  /** Opens the setup window on a named screen. Each banner asks for the
+      screen that fixes the thing it is complaining about. */
+  onShowSetup: (step: SetupStep) => void;
 }) {
   // This component only re-renders when SetView's state changes, which
   // happens when a delta arrives. But staleness is exactly the absence of
@@ -177,7 +180,7 @@ export function Connection({
           </div>
           Open a set in Live, and check that <b>Mixing Pal</b> is selected under
           Preferences → Link, Tempo &amp; MIDI.
-          <button className="banner__action" onClick={onShowSetup}>
+          <button className="banner__action" onClick={() => onShowSetup("control_surface")}>
             Show me where →
           </button>
         </div>
@@ -194,7 +197,7 @@ export function Connection({
           <div className="banner__detail">
             expects v{banner.required}, found v{banner.actual}
           </div>
-          <button className="banner__action" onClick={onShowSetup}>
+          <button className="banner__action" onClick={() => onShowSetup("install")}>
             Reinstall the connector →
           </button>
         </div>
@@ -209,7 +212,7 @@ export function Connection({
           Live is sending data, but the connector isn't reporting its version —
           usually a sign it's out of date, and some readings (faders, pan, dB) may
           be missing. Reinstall it and restart Live.
-          <button className="banner__action" onClick={onShowSetup}>
+          <button className="banner__action" onClick={() => onShowSetup("install")}>
             Reinstall the connector →
           </button>
         </div>

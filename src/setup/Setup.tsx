@@ -1,5 +1,5 @@
 import "./Setup.css";
-import { SetupFacts, SetupStep, currentStep } from "./step";
+import { SetupStep } from "./step";
 import {
   AccountScreen,
   ConnectedScreen,
@@ -21,7 +21,7 @@ const TICK: Record<SetupStep, number> = {
 };
 
 export function Setup({
-  facts,
+  step,
   folder,
   trackCount,
   trackNames,
@@ -30,8 +30,9 @@ export function Setup({
   onFactsChanged,
   onAcknowledgeConnected,
   onFinished,
+  onExit,
 }: {
-  facts: SetupFacts;
+  step: SetupStep;
   folder: string;
   trackCount: number;
   trackNames: string[];
@@ -40,8 +41,10 @@ export function Setup({
   onFactsChanged: () => void;
   onAcknowledgeConnected: () => void;
   onFinished: () => void;
+  /** Present only when she opened setup from a banner rather than because
+      first run is unfinished. Then this is her way back to the card. */
+  onExit?: () => void;
 }) {
-  const step = currentStep(facts);
   const here = TICK[step];
 
   return (
@@ -56,8 +59,8 @@ export function Setup({
           />
         ))}
       </div>
-      {/* "done" is deliberately absent: App only mounts Setup while
-          setupNeeded is true, so this component never sees that step. */}
+      {/* "done" is deliberately absent: App finishes setup rather than
+          rendering it, so this component never sees that step. */}
       <div className="setup__main">
         {step === "install" && <InstallScreen folder={folder} onInstalled={onFactsChanged} />}
         {step === "open_live" && <OpenLiveScreen />}
@@ -74,7 +77,13 @@ export function Setup({
           <GoalScreen goal={goal} onGoalChange={onGoalChange} onFinish={onFinished} />
         )}
       </div>
-      <div className="setup__footer" />
+      {onExit !== undefined && (
+        <div className="setup__footer">
+          <button className="setup__secondary" onClick={onExit}>
+            Back to Mixing Pal
+          </button>
+        </div>
+      )}
     </div>
   );
 }

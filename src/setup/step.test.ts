@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { currentStep, SetupFacts } from "./step";
+import { currentStep, needsSetup, SetupFacts } from "./step";
 
 const DONE: SetupFacts = {
   connectorInstalled: true,
@@ -57,8 +57,16 @@ describe("currentStep", () => {
     ).toBe("connected");
   });
 
-  it("shows the connected screen until she moves past it", () => {
+  // This is the right step to show *while setup is open*, and it used to be
+  // read as a reason to open setup at all: `connectedAcknowledged` starts
+  // false on every launch, so a machine set up months ago reopened the
+  // setup window every time. Whether setup opens is needsSetup's question,
+  // not this one -- see the regressions below.
+  it("shows the connected screen while setup is open and she has not moved past it", () => {
     expect(currentStep({ ...DONE, connectedAcknowledged: false })).toBe("connected");
+    expect(
+      needsSetup({ connectorInstalled: true, connectorCurrent: true, setupDone: true }),
+    ).toBe(false);
   });
 
   it("asks for an account after she has seen it work", () => {
@@ -100,5 +108,50 @@ describe("currentStep", () => {
 
   it("asks for an account before asking what she is making", () => {
     expect(currentStep({ ...DONE, hasAccount: false, goalAnswered: false })).toBe("account");
+  });
+});
+
+describe("needsSetup", () => {
+  const READY = { connectorInstalled: true, connectorCurrent: true, setupDone: true };
+
+  it("stays out of the way once setup is finished", () => {
+    expect(needsSetup(READY)).toBe(false);
+  });
+
+  it("opens on a clean machine", () => {
+    expect(needsSetup({ ...READY, connectorInstalled: false, setupDone: false })).toBe(true);
+  });
+
+  it("opens when she has never finished setup", () => {
+    expect(needsSetup({ ...READY, setupDone: false })).toBe(true);
+  });
+
+  it("opens when the connector is too old to talk to this app", () => {
+    expect(needsSetup({ ...READY, connectorCurrent: false })).toBe(true);
+  });
+
+  it("opens when the connector was uninstalled after setup finished", () => {
+    expect(needsSetup({ ...READY, connectorInstalled: false })).toBe(true);
+  });
+
+  it("waits for connector_status rather than guessing", () => {
+    // Guessing "not installed" would flash the setup window at someone
+    // whose setup has been done for months.
+    expect(needsSetup({ ...READY, connectorInstalled: null, setupDone: false })).toBe(false);
+  });
+
+  // The two regressions this function exists for. Both used to reopen the
+  // 600x680 setup window on top of her work.
+  it("does not reopen setup just because the connected screen was never acknowledged", () => {
+    // connectedAcknowledged resets on every launch; it is not an input here.
+    expect(needsSetup(READY)).toBe(false);
+  });
+
+  it("does not reopen setup when Live goes quiet", () => {
+    // Quitting Live, or five seconds of lost traffic, is a card-level
+    // state: the not_connected banner and the pill's disconnected state.
+    // deltasArriving is not an input here either.
+    expect(needsSetup(READY)).toBe(false);
+    expect(currentStep({ ...DONE, deltasArriving: false })).toBe("control_surface");
   });
 });

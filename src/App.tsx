@@ -12,7 +12,8 @@ import { unnamedTracks } from "./rules/unnamedTracks";
 import { EMPTY_NUDGE_STATE, dismiss, offer } from "./rules/nudges";
 import wireVersion from "../shared/wire-version.json";
 import { Setup } from "./setup/Setup";
-import { SetupFacts, currentStep } from "./setup/step";
+import { SetupFacts, SetupStep, currentStep, needsSetup } from "./setup/step";
+import { loadSetupDone, saveSetupDone } from "./setup/setupDone";
 import { loadGoal, saveGoal } from "./ui/goal";
 
 export default function App() {
@@ -79,6 +80,11 @@ export default function App() {
   const [liveRunning, setLiveRunning] = useState(false);
   const [connectedAcknowledged, setConnectedAcknowledged] = useState(false);
   const [goalAnswered, setGoalAnswered] = useState(() => loadGoal().trim() !== "");
+  const [setupDone, setSetupDone] = useState(loadSetupDone);
+  // Set only when she asks for a setup screen from a banner. The window
+  // then opens on that screen whatever the derivation thinks, and clearing
+  // it is the only way out -- so every path that sets it has one.
+  const [forcedStep, setForcedStep] = useState<SetupStep | null>(null);
 
   const refreshConnector = useCallback(() => {
     invoke<{ folder: string; installed: boolean }>("connector_status")
@@ -91,26 +97,15 @@ export default function App() {
 
   useEffect(refreshConnector, [refreshConnector]);
 
-  // Polled only while setup is on screen. Once she is past it there is
-  // nothing to decide, and a process scan every two seconds forever is a
-  // cost with no buyer.
-  useEffect(() => {
-    if (mode !== "setup") return;
-    const poll = () => {
-      invoke<boolean>("live_is_running").then(setLiveRunning).catch(() => setLiveRunning(false));
-      refreshConnector();
-    };
-    poll();
-    const id = setInterval(poll, 2000);
-    return () => clearInterval(id);
-  }, [mode, refreshConnector]);
+  // A version mismatch means the app updated and the part inside Live did
+  // not, and reinstalling is the fix -- the same fix as a missing
+  // connector, so it is the same step.
+  const connectorCurrent =
+    state.scriptVersion === null || state.scriptVersion === wireVersion.version;
 
   const facts: SetupFacts = {
     connectorInstalled: connectorInstalled ?? true,
-    // A version mismatch means the app updated and the part inside Live
-    // did not, and reinstalling is the fix -- the same fix as a missing
-    // connector, so it is the same step.
-    connectorCurrent: state.scriptVersion === null || state.scriptVersion === wireVersion.version,
+    connectorCurrent,
     liveRunning,
     deltasArriving: connected,
     connectedAcknowledged,
@@ -118,15 +113,60 @@ export default function App() {
     goalAnswered,
   };
 
-  // connector_status has not answered yet on the very first render.
-  // Guessing "not installed" would flash the setup window at someone whose
-  // setup has been finished for months.
-  const setupNeeded = connectorInstalled !== null && currentStep(facts) !== "done";
+  const setupNeeded = needsSetup({ connectorInstalled, connectorCurrent, setupDone });
+  const setupOpen = setupNeeded || forcedStep !== null;
+  const step = forcedStep ?? currentStep(facts);
+
+  // What is actually on screen. `mode` is the state machine's answer and
+  // setup is not one of its events, so the two are reconciled here rather
+  // than by a render guard that can fail both ways -- which is how a
+  // forced setup used to leave the app rendering a pill into a 44px window
+  // with no way out.
+  const view: WindowMode = setupOpen ? "setup" : mode === "setup" ? "card" : mode;
+
+  const finishSetup = useCallback(() => {
+    setGoalAnswered(true);
+    // Persisted, unlike the step. See setupDone.ts: this is a fact about
+    // the world, not a cursor, and Skip leaves nothing else behind.
+    setSetupDone(true);
+    saveSetupDone(true);
+    setForcedStep(null);
+    dispatch({ type: "setup_finished" });
+  }, [dispatch]);
 
   useEffect(() => {
-    if (setupNeeded) setMode("setup");
+    if (setupOpen) setMode("setup");
     else dispatch({ type: "setup_finished" });
-  }, [setupNeeded, dispatch]);
+  }, [setupOpen, dispatch]);
+
+  // Setup has no "done" screen. Someone upgrading into this build carries
+  // a goal but no setupDone flag, so she can satisfy the last step by
+  // acknowledging the connected screen and leave nothing to show. Record
+  // the flag and hand over to the card rather than render an empty window.
+  useEffect(() => {
+    if (setupNeeded && forcedStep === null && step === "done") finishSetup();
+  }, [setupNeeded, forcedStep, step, finishSetup]);
+
+  // Polled only while setup is on screen. Once she is past it there is
+  // nothing to decide, and a process scan every two seconds forever is a
+  // cost with no buyer.
+  useEffect(() => {
+    if (!setupOpen) return;
+    const poll = () => {
+      invoke<boolean>("live_is_running").then(setLiveRunning).catch(() => setLiveRunning(false));
+      refreshConnector();
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => clearInterval(id);
+  }, [setupOpen, refreshConnector]);
+
+  // She opened the Control Surface step from the "not connected" banner.
+  // Traffic arriving is exactly the thing she went there to fix, so the
+  // screen has done its job and the card comes back on its own.
+  useEffect(() => {
+    if (forcedStep === "control_surface" && connected) setForcedStep(null);
+  }, [forcedStep, connected]);
 
   // Rules run against every state change; `offer` is what stops a true
   // observation reappearing every two seconds.
@@ -156,11 +196,11 @@ export default function App() {
   // so the window never shows a card at the pill's size or the reverse.
   const root = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    const geometry = MODE_GEOMETRY[mode];
+    const geometry = MODE_GEOMETRY[view];
     const height =
       geometry.height ??
       Math.min(root.current?.scrollHeight ?? 0, geometry.maxHeight ?? Infinity);
-    invoke("set_window_mode", { mode, width: geometry.width, height: Math.ceil(height) }).catch(
+    invoke("set_window_mode", { mode: view, width: geometry.width, height: Math.ceil(height) }).catch(
       (err) => console.error("failed to apply window mode", err),
     );
   });
@@ -172,9 +212,9 @@ export default function App() {
 
   return (
     <div ref={root}>
-      {mode === "setup" && setupNeeded ? (
+      {view === "setup" ? (
         <Setup
-          facts={facts}
+          step={step}
           folder={folder}
           trackCount={trackNames.length}
           trackNames={trackNames}
@@ -183,14 +223,18 @@ export default function App() {
             setGoal(v);
             saveGoal(v);
           }}
-          onFactsChanged={refreshConnector}
-          onAcknowledgeConnected={() => setConnectedAcknowledged(true)}
-          onFinished={() => {
-            setGoalAnswered(true);
-            dispatch({ type: "setup_finished" });
+          onFactsChanged={() => {
+            refreshConnector();
+            // She came here from a banner to reinstall. The install is
+            // done, so the force is spent -- otherwise this screen would
+            // be the only thing she could ever see again.
+            setForcedStep(null);
           }}
+          onAcknowledgeConnected={() => setConnectedAcknowledged(true)}
+          onFinished={finishSetup}
+          onExit={forcedStep !== null ? () => setForcedStep(null) : undefined}
         />
-      ) : mode === "card" ? (
+      ) : view === "card" ? (
         <Card
           state={state}
           lastSeen={lastSeen}
@@ -209,7 +253,7 @@ export default function App() {
           }}
           onCollapse={() => dispatch({ type: "chevron_closed" })}
           onInputEmptyChange={setInputEmpty}
-          onShowSetup={() => setMode("setup")}
+          onShowSetup={setForcedStep}
         />
       ) : (
         <Pill
