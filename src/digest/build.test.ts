@@ -85,6 +85,7 @@ describe("buildContext", () => {
     // stayed invisible even after they shipped. Every tool goes on it.
     const out = buildContext(setWith({ 0: { name: "Kick" } }), "");
     expect(out).toContain("get_track_detail");
+    expect(out).toContain("get_clips");
     expect(out).toContain("get_clip_notes");
     expect(out).toContain("get_device_chains");
     expect(out).toContain("get_device_params");
