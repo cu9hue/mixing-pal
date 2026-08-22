@@ -16,7 +16,9 @@ producer's set through a small set of read-only tools. You cannot hear it.
 
 What you may talk about:
 - Musical and arrangement feedback: harmony, structure, repetition, where the \
-arrangement is thin.
+arrangement is thin. You cannot hear the set, but you CAN read the MIDI notes \
+in a session clip: get_clips says which clips exist and which tracks are MIDI, \
+get_clip_notes reads one clip's notes. An audio clip has no notes to read.
 - Mixing, from SETTINGS ONLY: device chains, fader and pan values, filter and \
 compressor settings, routing, gain structure. You have no audio. Never claim \
 anything about how the set sounds - masking, loudness, tone, timbre, or \
@@ -41,6 +43,23 @@ is about drums, or about a track whose chain map shows a [rack], call \
 get_rack_contents before answering. Saying there is no compression on the \
 drums because the chain map shows one device is the mistake this tool exists \
 to prevent.
+- The context block says NOTHING about clips either. For any question about \
+notes, melody, harmony, chords, or rhythm, call get_clips first - it covers \
+the whole set in one round trip - and then get_clip_notes on the few clips \
+that matter. A track name is not evidence about what it plays. Slot indices \
+have gaps, so use the ones get_clips reports rather than counting from zero. \
+An audio track's clips are listed too; they have no notes, which is not the \
+same as a MIDI clip that is empty.
+- For pan, an exact fader value, or one track's full mixer state, call \
+get_track_detail. The context block's line per track is a summary, and it is \
+a mirror read that may be a couple of seconds old.
+- Refer to tracks and clips by the producer's names. Indices are how you call \
+tools; the producer sees names in Live and has to translate every index you \
+print.
+- Your answer is rendered as plain paragraphs, headings, bold, italic, code \
+spans, code blocks, and simple bulleted or numbered lists. Tables and links \
+are NOT rendered - they reach the producer as literal punctuation. Do not \
+use them.
 - Every tool result carries fresh, fresh_as_of, and missing_reason. A result \
 with a missing_reason and no value is data you do NOT have. Say so; never fill \
 the gap with a plausible value. A result that carries BOTH a value and a \
@@ -660,5 +679,73 @@ mod tests {
         // value-plus-missing_reason a real state, not a contradiction.
         assert!(SYSTEM_PROMPT.contains("A result with a missing_reason and no value"));
         assert!(SYSTEM_PROMPT.contains("BOTH a value and a missing_reason is a partial read"));
+    }
+
+    /// Every `get_*` identifier in a blob of text. No regex crate in this
+    /// project, and none needed: tool names are ASCII words starting at
+    /// "get_" and ending at the first character that cannot be in an
+    /// identifier.
+    fn tool_names_in(text: &str) -> std::collections::BTreeSet<String> {
+        let bytes = text.as_bytes();
+        let mut found = std::collections::BTreeSet::new();
+        let mut i = 0;
+        while let Some(rel) = text[i..].find("get_") {
+            let start = i + rel;
+            let mut end = start;
+            while end < bytes.len()
+                && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
+            {
+                end += 1;
+            }
+            found.insert(text[start..end].to_string());
+            i = end;
+        }
+        found
+    }
+
+    fn schema_tool_names() -> std::collections::BTreeSet<String> {
+        tool_schema()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+            .collect()
+    }
+
+    #[test]
+    fn every_tool_named_in_the_system_prompt_exists_in_the_schema() {
+        // A prompt that names a tool the schema does not offer teaches the
+        // model to make a call that can only come back as an error.
+        let schema = schema_tool_names();
+        for name in tool_names_in(SYSTEM_PROMPT) {
+            assert!(schema.contains(&name), "the prompt names {name}, the schema does not offer it");
+        }
+    }
+
+    #[test]
+    fn every_tool_in_the_schema_is_named_in_the_system_prompt() {
+        // The other direction, and the one that was broken: get_clip_notes
+        // and get_track_detail shipped in the schema while the prompt talked
+        // only about devices. A tool the prompt never mentions is a tool the
+        // model reaches for only by accident.
+        let mentioned = tool_names_in(SYSTEM_PROMPT);
+        for name in schema_tool_names() {
+            assert!(mentioned.contains(&name), "the schema offers {name}, the prompt never names it");
+        }
+    }
+
+    #[test]
+    fn the_prompt_says_midi_notes_are_readable_and_audio_is_not() {
+        // "You cannot hear it" beside a prompt that never mentions notes
+        // reads as "you have no note data at all".
+        assert!(SYSTEM_PROMPT.contains("MIDI notes"));
+        assert!(SYSTEM_PROMPT.contains("cannot hear"));
+    }
+
+    #[test]
+    fn the_prompt_rules_out_the_markup_the_chat_pane_cannot_render() {
+        // src/ui/markdown.ts parses a subset. A table renders as literal
+        // pipes in the producer's chat pane.
+        assert!(SYSTEM_PROMPT.contains("Tables and links"));
     }
 }
