@@ -108,7 +108,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clip_notes",
-                "description": "Every MIDI note in one session-view clip, as pitch, start, duration, velocity, mute. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so.",
+                "description": "Every MIDI note in one session-view clip, as pitch, start, duration, velocity, mute. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -116,6 +116,18 @@ pub fn tool_schema() -> serde_json::Value {
                         "clip": { "type": "integer", "description": "Zero-based clip slot index within that track." }
                     },
                     "required": ["track", "clip"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_clips",
+                "description": "Every session-view clip in the set: for each track, the slot index and name of each clip it holds, and whether the track is MIDI. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which clips exist and what their slot indices are, then use get_clip_notes to read one. Slot indices are the real ones and have gaps, because a producer's session grid does. A track with an empty list genuinely has no clips in its session slots. Arrangement-view clips are not covered. A track whose midi field is absent had its clips read but its kind unknown. Tracks that did not answer are listed separately under missing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
                 }
             }
         },
@@ -371,6 +383,39 @@ fn chain_map_reasons(
     (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
+/// Assembles `get_clips`'s `missing_reason` from the three things that can go
+/// partly wrong: a set larger than the fan-out cap, tracks that did not answer
+/// at all, and tracks whose clips arrived without their MIDI flag.
+///
+/// All three can hold at once, so they are joined rather than one overwriting
+/// another. Extracted from the `execute` arm for the same reason
+/// `chain_map_reasons` was: inline, the flag case would have no test.
+fn clip_map_reasons(
+    num_tracks: i64,
+    read_tracks: i64,
+    missing: &[i32],
+    midi_missing: &[i32],
+) -> Option<String> {
+    let mut reasons: Vec<String> = Vec::new();
+    if num_tracks > read_tracks {
+        reasons.push(format!(
+            "truncated_to_first_{read_tracks}_tracks: the set has {num_tracks}"
+        ));
+    }
+    if !missing.is_empty() {
+        let names: Vec<String> = missing.iter().map(|t| t.to_string()).collect();
+        reasons.push(format!("no_reply_for_tracks: {}", names.join(", ")));
+    }
+    if !midi_missing.is_empty() {
+        let names: Vec<String> = midi_missing.iter().map(|t| t.to_string()).collect();
+        reasons.push(format!(
+            "midi_flag_unavailable_for_tracks: {} (their clips are listed, but whether the track is MIDI is unknown)",
+            names.join(", ")
+        ));
+    }
+    (!reasons.is_empty()).then(|| reasons.join("; "))
+}
+
 pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult {
     match name {
         "get_track_detail" => {
@@ -439,6 +484,45 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                     ToolResult::missing(&format!("transport_error: {e}"))
                 }
             }
+        }
+        "get_clips" => {
+            // Without a count there is nothing to iterate. Querying 0..0
+            // would return an empty map, which reads as "the set has no
+            // clips" -- an invented answer, not a missing one.
+            let Some(num_tracks) = track_count(&ctx.coalescer).filter(|n| *n >= 0) else {
+                return ToolResult::missing("not_in_mirror");
+            };
+            let read_tracks = num_tracks.min(MAX_FANOUT_TRACKS);
+            let query = match ctx.query.lock() {
+                Ok(q) => q.clone(),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            let Some(query) = query else {
+                return ToolResult::missing("not_connected");
+            };
+
+            // Same bracket as the chain map, and `chains_moved` is reused
+            // rather than copied: the hazard is identical -- a same-count
+            // reorder would leave these track indices naming another
+            // track's clips, and the answer would go back looking whole.
+            let before: Vec<Option<serde_json::Value>> =
+                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+
+            let map = clips::get_clips(query, read_tracks as i32, clips::QUERY_TIMEOUT).await;
+
+            let after_count = track_count(&ctx.coalescer);
+            let after: Vec<Option<serde_json::Value>> =
+                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            if chains_moved(num_tracks, after_count, &before, &after) {
+                return ToolResult::missing("topology_changed");
+            }
+
+            let missing_reason =
+                clip_map_reasons(num_tracks, read_tracks, &map.missing, &map.midi_missing);
+            ToolResult::live(
+                json!({ "tracks": map.tracks, "missing": map.missing }),
+                missing_reason,
+            )
         }
         "get_device_chains" => {
             // Without a count there is nothing to iterate. Querying 0..0
@@ -907,7 +991,7 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_lists_exactly_the_five_tools_the_model_may_call() {
+    fn the_schema_lists_exactly_the_six_tools_the_model_may_call() {
         let schema = tool_schema();
         let names: Vec<&str> = schema
             .as_array()
@@ -920,6 +1004,7 @@ mod tests {
             vec![
                 "get_track_detail",
                 "get_clip_notes",
+                "get_clips",
                 "get_device_chains",
                 "get_device_params",
                 "get_rack_contents"
@@ -1139,5 +1224,50 @@ rack_marks_unavailable_for_tracks: 2 (their devices are listed, but which are Ra
             let result = execute(&ctx, "get_track_detail", &args).await;
             assert_eq!(result.missing_reason.as_deref(), Some("bad_arguments"));
         }
+    }
+
+    #[test]
+    fn the_schema_offers_get_clips_with_no_arguments() {
+        // A whole-set read, like get_device_chains: an argument would invite
+        // the model to guess a track index it has no reason to know.
+        let tool = tool_schema()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["function"]["name"] == "get_clips")
+            .cloned()
+            .expect("get_clips is in the schema");
+        assert_eq!(tool["function"]["parameters"]["required"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_clip_tools_point_at_each_other() {
+        // Same contract as get_device_chains <-> get_rack_contents: the
+        // description is where the model learns the call order.
+        assert!(description_of("get_clips").contains("get_clip_notes"));
+        assert!(description_of("get_clip_notes").contains("get_clips"));
+    }
+
+    #[test]
+    fn clip_map_reasons_names_every_partial_read_at_once() {
+        // All three can hold together, so one must not overwrite another.
+        let reason = clip_map_reasons(600, 512, &[3], &[7]).unwrap();
+        assert!(reason.contains("truncated_to_first_512_tracks"));
+        assert!(reason.contains("no_reply_for_tracks: 3"));
+        assert!(reason.contains("midi_flag_unavailable_for_tracks: 7"));
+    }
+
+    #[test]
+    fn a_clean_clip_read_has_no_reason_at_all() {
+        assert_eq!(clip_map_reasons(4, 4, &[], &[]), None);
+    }
+
+    #[tokio::test]
+    async fn get_clips_without_a_track_count_says_so() {
+        // Querying 0..0 would return an empty map, which reads as "the set
+        // has no clips" -- an invented answer, not a missing one.
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_clips", &json!({})).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("not_in_mirror"));
     }
 }
