@@ -55,6 +55,10 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/track/get/output_meter_level"
         | "/live/track/get/clips/name"
         | "/live/track/get/arrangement_clips/name"
+        // Reply is (track_index, is_midi) -- the track index alone is the
+        // key, so every track's flag can be in flight at once, alongside
+        // its clip names.
+        | "/live/track/get/has_midi_input"
         // Reply is (track_index, *device_names) -- the track index alone is
         // the key, so every track's chain can be in flight at once.
         | "/live/track/get/devices/name"
@@ -136,6 +140,7 @@ mod tests {
             ("/live/track/get/output_meter_level", KeyArity::Args(1)),
             ("/live/track/get/clips/name", KeyArity::Args(1)),
             ("/live/track/get/arrangement_clips/name", KeyArity::Args(1)),
+            ("/live/track/get/has_midi_input", KeyArity::Args(1)),
             ("/live/track/get/devices/name", KeyArity::Args(1)),
             // Racks. The rack listing echoes (track, path, start), exactly
             // as the ranged parameter addresses do -- the path travels as

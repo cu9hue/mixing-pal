@@ -1,4 +1,5 @@
 pub mod clip_notes;
+pub mod clips;
 pub mod device_chains;
 pub mod device_params;
 pub mod fence;
