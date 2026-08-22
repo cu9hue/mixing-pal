@@ -302,10 +302,28 @@ pub const PROBE_QUOTE_LEN: usize = 300;
 pub struct ProbeFailure {
     pub model: String,
     pub returned: String,
+    /// The provider refused the request outright -- a non-2xx status, or a
+    /// body this client could not read. Distinguished from "answered without
+    /// calling the tool" because the remedy is different: a rejected request
+    /// is usually the endpoint disagreeing about message shape, and telling
+    /// the producer to change models would send them after the wrong thing.
+    pub rejected: bool,
 }
 
 impl std::fmt::Display for ProbeFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.rejected {
+            return write!(
+                f,
+                "{} rejected the request. It said: {}\n\nThis app sends its \
+                 instructions as a system message before the conversation and \
+                 a short reminder as a system message after it. An endpoint \
+                 that only accepts a system message in first position will \
+                 refuse every request. Check the base URL, or choose a \
+                 provider that accepts both.",
+                self.model, self.returned
+            );
+        }
         write!(
             f,
             "{} did not make a tool call. It answered with: {}\n\nThis app needs \
@@ -329,10 +347,24 @@ impl std::fmt::Display for ProbeFailure {
 pub async fn probe(client: &reqwest::Client, s: &Settings) -> Result<(), ProbeFailure> {
     let body = serde_json::json!({
         "model": s.model,
-        "messages": [{
-            "role": "user",
-            "content": "Call the ping tool with value 1. Reply only with the tool call."
-        }],
+        "messages": [
+            // The same role skeleton build_body sends -- system, the turn,
+            // system -- with trivial content of its own. Content parity is
+            // not the point and would fail the probe for the wrong reason,
+            // exactly as sending a real tool schema would; see PROBE_TOOL.
+            {
+                "role": "system",
+                "content": "You are being checked for tool-calling support."
+            },
+            {
+                "role": "user",
+                "content": "Call the ping tool with value 1. Reply only with the tool call."
+            },
+            {
+                "role": "system",
+                "content": "Reply only with the tool call."
+            }
+        ],
         "tools": [{
             "type": "function",
             "function": {
@@ -351,11 +383,17 @@ pub async fn probe(client: &reqwest::Client, s: &Settings) -> Result<(), ProbeFa
     let quote = |text: String| ProbeFailure {
         model: s.model.clone(),
         returned: text.chars().take(PROBE_QUOTE_LEN).collect(),
+        rejected: false,
+    };
+    let reject = |text: String| ProbeFailure {
+        model: s.model.clone(),
+        returned: text.chars().take(PROBE_QUOTE_LEN).collect(),
+        rejected: true,
     };
 
-    let raw = post_chat(client, s, body).await.map_err(&quote)?;
+    let raw = post_chat(client, s, body).await.map_err(&reject)?;
     let parsed: ChatResponse = serde_json::from_value(raw)
-        .map_err(|e| quote(format!("an unreadable response ({e})")))?;
+        .map_err(|e| reject(format!("an unreadable response ({e})")))?;
     let Some(message) = parsed.choices.into_iter().next().map(|c| c.message) else {
         return Err(quote("no choices at all".to_string()));
     };
@@ -807,5 +845,82 @@ mod tests {
         // src/ui/markdown.ts parses a subset. A table renders as literal
         // pipes in the producer's chat pane.
         assert!(SYSTEM_PROMPT.contains("Tables and links"));
+    }
+
+    #[tokio::test]
+    async fn the_probe_sends_the_same_role_skeleton_as_a_real_turn() {
+        // Otherwise "the probe proves the endpoint accepts our shape" is a
+        // comment rather than a fact, and the producer discovers a rejected
+        // trailing system role three answers into a session.
+        let server = MockServer::start().await;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let captured = seen.clone();
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(move |req: &Request| {
+                let body: serde_json::Value = req.body_json().unwrap();
+                *captured.lock().unwrap() = body["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|m| m["role"].as_str().unwrap().to_string())
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{ "message": { "tool_calls": [{
+                        "id": "1",
+                        "type": "function",
+                        "function": { "name": PROBE_TOOL, "arguments": "{\"value\":1}" }
+                    }] } }]
+                }))
+            })
+            .mount(&server)
+            .await;
+
+        let s = Settings { base_url: server.uri(), model: "m".into(), api_key: "k".into() };
+        probe(&reqwest::Client::new(), &s).await.unwrap();
+
+        let roles = seen.lock().unwrap().clone();
+        assert_eq!(roles.first().map(String::as_str), Some("system"));
+        assert_eq!(roles.last().map(String::as_str), Some("system"));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_request_is_not_reported_as_a_missing_tool_call() {
+        // After probe parity, "your endpoint refuses a trailing system role"
+        // is the expected 400. Telling the producer their model cannot call
+        // tools would send them off replacing a model that works fine.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_string(
+                "{\"error\":{\"message\":\"only the first message may have role system\"}}",
+            ))
+            .mount(&server)
+            .await;
+
+        let s = Settings { base_url: server.uri(), model: "m".into(), api_key: "k".into() };
+        let failure = probe(&reqwest::Client::new(), &s).await.unwrap_err();
+        assert!(failure.rejected);
+        let shown = failure.to_string();
+        assert!(shown.contains("rejected"), "{shown}");
+        assert!(!shown.contains("did not make a tool call"), "{shown}");
+        assert!(shown.contains("only the first message may have role system"), "{shown}");
+    }
+
+    #[tokio::test]
+    async fn a_model_that_answers_in_prose_is_still_reported_as_no_tool_call() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{ "message": { "content": "I would call ping(1)." } }]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = Settings { base_url: server.uri(), model: "m".into(), api_key: "k".into() };
+        let failure = probe(&reqwest::Client::new(), &s).await.unwrap_err();
+        assert!(!failure.rejected);
+        assert!(failure.to_string().contains("did not make a tool call"));
     }
 }
