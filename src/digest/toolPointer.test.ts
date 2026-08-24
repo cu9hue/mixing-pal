@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildContext } from "./build";
 import { SetState } from "../live/model";
+import modRs from "../../src-tauri/src/tools/mod.rs?raw";
 
 // A source-reading tripwire, not a unit test. The tool schema lives in Rust
 // and the sentence that points at it lives here, with no type-level relation
@@ -9,8 +9,7 @@ import { SetState } from "../live/model";
 // loss: the model never learns the tool exists unless it reads the schema
 // closely, and the digest actively tells it what the alternatives are.
 function schemaToolNames(): string[] {
-  const source = readFileSync("src-tauri/src/tools/mod.rs", "utf8");
-  const names = [...source.matchAll(/"name":\s*"(get_[a-z_]+)"/g)].map((m) => m[1]);
+  const names = [...modRs.matchAll(/"name":\s*"(get_[a-z_]+)"/g)].map((m) => m[1]);
   return [...new Set(names)];
 }
 

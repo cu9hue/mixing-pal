@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildContext } from "./build";
 import { SetState, TrackState } from "../live/model";
+import fixture from "../../shared/eval-set.json";
+import expectedContext from "../../shared/eval-context.txt?raw";
 
 // The fixture is the eval suite's set, and Rust builds its fake Live from
 // the same file. Rust cannot call buildContext, so the rendered digest is
@@ -25,8 +26,7 @@ export function fixtureState(fixture: any): SetState {
 
 describe("the eval fixture", () => {
   it("renders to the checked-in context block", () => {
-    const fixture = JSON.parse(readFileSync("shared/eval-set.json", "utf8"));
-    const expected = readFileSync("shared/eval-context.txt", "utf8").replace(/\n$/, "");
+    const expected = expectedContext.replace(/\n$/, "");
     expect(buildContext(fixtureState(fixture), fixture.goal)).toBe(expected);
   });
 });
