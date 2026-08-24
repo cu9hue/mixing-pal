@@ -467,6 +467,14 @@ Date: ___________  macOS version: ___________  Tester: ___________
 - [ ] A rack inside a drum pad expands through a five-element path.
 - [ ] Deleting the rack mid-read reports `device_identity_unverified`, not a partial listing.
 
+## Clips
+
+- [ ] `/live/track/get/has_midi_input` arrives as OSC `T`/`F`, not as ints — confirm in the trace pane which arm of `decode_midi_flag` is doing the work.
+- [ ] `/live/track/get/clips/name` sends `N` (Nil) for an empty slot and `""` for an unnamed clip — confirm both. Collapsing them would send `get_clip_notes` to an empty slot.
+- [ ] A session grid with a gap reports the real slot indices, not renumbered ones, and `get_clip_notes` on a reported index returns that clip's notes.
+- [ ] A group track, and a set with return tracks, do not corrupt the index mapping.
+- [ ] An audio track is reported `midi: false` and still lists its clips.
+
 ## Model evals
 
 Status: **PENDING-USER**. `src-tauri/tests/evals.rs` is written and compiles
@@ -480,9 +488,26 @@ completed run.
 Run before each release, against the provider the release is tested with:
 
 ```bash
-cd src-tauri && MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... \
-  MIXINGPAL_EVAL_KEY=... cargo test --features evals --test evals -- --test-threads=1
+cd src-tauri && MIXINGPAL_EVAL_BASE_URL=https://openrouter.ai/api/v1 \
+  MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
+  cargo test --features evals --test evals -- --test-threads=1
 ```
+
+`MIXINGPAL_EVAL_BASE_URL` takes the API root, matching `settings.rs`'s
+`DEFAULT_BASE_URL` above -- `post_chat` appends `/chat/completions` itself.
+Pasting a full completions endpoint (`.../v1/chat/completions`) instead of the
+root gives a confusing 404, not an auth error.
+
+This costs money: 5 scenarios, up to `MAX_ROUND_TRIPS` (6) round trips each,
+so roughly 30 completions in the worst case, each carrying the full
+six-tool schema. Budget accordingly before running against a paid provider.
+
+A panic reading `the provider answered` (not a test failure -- a panic,
+aborting the run) means the endpoint refused the request outright: a bad key,
+an unknown model name, or a base URL that does not point at a
+chat-completions-compatible API. It does not mean the model misbehaved; check
+the panic message for the provider's own error text before suspecting a
+prompt or assertion problem.
 
 Assertions are on which tools the model called, not on its wording. A red
 scenario is a finding: read the answer in the failure message before deciding
