@@ -35,7 +35,7 @@ impl OscSocket {
         Ok(Self { socket, remote_port })
     }
 
-    #[cfg(any(test, feature = "bench"))]
+    #[cfg(any(test, feature = "bench", feature = "evals"))]
     pub fn local_port(&self) -> u16 {
         self.socket.local_addr().map(|a| a.port()).unwrap_or(0)
     }

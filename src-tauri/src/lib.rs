@@ -34,6 +34,22 @@ pub mod bench_api {
     pub use crate::trace::{Trace, TraceStep};
 }
 
+/// The crate's private internals, re-exported for `tests/evals.rs`.
+///
+/// Feature-gated for the same reason `bench_api` is: an eval must not widen
+/// the surface the app ships. The `evals` feature also gates the test target
+/// itself, so a plain `cargo test` cannot reach a provider by accident.
+#[cfg(feature = "evals")]
+pub mod eval_api {
+    pub use crate::deltas::{Coalescer, Delta};
+    pub use crate::model::{complete, ChatMessage, Completion, ToolCall, REMINDER, SYSTEM_PROMPT};
+    pub use crate::osc::query::LiveQuery;
+    pub use crate::osc::requests::RequestTable;
+    pub use crate::osc::socket::OscSocket;
+    pub use crate::settings::Settings;
+    pub use crate::tools::{execute, ToolContext, ToolResult};
+}
+
 use bulk::{decode_mixer_data, decode_track_data, MIXER_ADDRS, TRACK_DATA_ADDRS};
 use deltas::{Coalescer, Delta};
 use model::{ChatMessage, Completion};

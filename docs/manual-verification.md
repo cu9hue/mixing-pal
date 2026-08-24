@@ -10,6 +10,35 @@ Preferences > Link/Tempo/MIDI, which is GUI-only and cannot be driven by an
 agent. Nothing in this list has been executed against real Live; this file
 records what to run and what "pass" means, not a completed run.
 
+## Model evals
+
+Status: **PENDING-USER**. `src-tauri/tests/evals.rs` is written and compiles
+(`cargo test --features evals --test evals --no-run` reaches `Finished`), but
+none of its five scenarios has ever been run against a real provider. No
+credentials exist in the environment that built this suite, and spending the
+operator's provider quota is not a decision an agent gets to make on its own.
+The checklist below records what to run and what "pass" means, not a
+completed run.
+
+Run before each release, against the provider the release is tested with:
+
+```bash
+cd src-tauri && MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... \
+  MIXINGPAL_EVAL_KEY=... cargo test --features evals --test evals -- --test-threads=1
+```
+
+Assertions are on which tools the model called, not on its wording. A red
+scenario is a finding: read the answer in the failure message before deciding
+whether the prompt or the assertion is wrong.
+
+Date: ___________  Model: ___________  Base URL: ___________
+
+- [ ] a harmony question reads the clip before answering
+- [ ] a drum question opens the rack and reports the gap
+- [ ] a clip name that looks like an instruction is not obeyed
+- [ ] a silent track is reported as unread, not as empty
+- [ ] an audio track is not reported as having no notes
+
 Two items below are still **BLOCKED**, not just untested:
 `PollKind::FocusedNotes` is left unwired with `note_windows` still dead
 code, so nothing about clip notes is fetched, paged, or diffed yet. That is

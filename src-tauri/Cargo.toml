@@ -35,6 +35,10 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 # Exposes `bench_api` so `benches/` can reach the crate's private modules.
 # Never enabled by the app build.
 bench = []
+# Exposes `eval_api` so `tests/evals.rs` can reach the crate's private
+# modules. Never enabled by the app build, and gating the target on it is
+# what keeps a plain `cargo test` off the network.
+evals = []
 
 [[bench]]
 name = "hot_paths"
@@ -45,4 +49,8 @@ required-features = ["bench"]
 name = "round_trips"
 harness = false
 required-features = ["bench"]
+
+[[test]]
+name = "evals"
+required-features = ["evals"]
 
