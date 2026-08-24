@@ -302,11 +302,11 @@ pub const PROBE_QUOTE_LEN: usize = 300;
 pub struct ProbeFailure {
     pub model: String,
     pub returned: String,
-    /// The provider refused the request outright -- a non-2xx status, or a
-    /// body this client could not read. Distinguished from "answered without
-    /// calling the tool" because the remedy is different: a rejected request
-    /// is usually the endpoint disagreeing about message shape, and telling
-    /// the producer to change models would send them after the wrong thing.
+    /// The provider refused the request outright -- a non-2xx status.
+    /// Distinguished from "answered without calling the tool" because the
+    /// remedy is different: a rejected request is usually the endpoint
+    /// disagreeing about message shape, and telling the producer to change
+    /// models would send them after the wrong thing.
     pub rejected: bool,
 }
 
@@ -326,7 +326,7 @@ impl std::fmt::Display for ProbeFailure {
         }
         write!(
             f,
-            "{} did not make a tool call. It answered with: {}\n\nThis app needs \
+            "{} did not make a tool call. It returned: {}\n\nThis app needs \
              working tool calls -- it gives the model a deliberately small \
              summary and expects it to fetch the rest. A model that cannot \
              call tools answers confidently about data it never read. Choose \
@@ -392,8 +392,13 @@ pub async fn probe(client: &reqwest::Client, s: &Settings) -> Result<(), ProbeFa
     };
 
     let raw = post_chat(client, s, body).await.map_err(&reject)?;
+    // A 200 whose body this client can't decode as ChatResponse is not a
+    // rejection: the endpoint accepted the request and answered; `choices`
+    // itself is #[serde(default)], so this is reached only when something
+    // nested (e.g. `message`) doesn't match the shape this client expects.
+    // That's an endpoint-dialect mismatch, not the endpoint refusing us.
     let parsed: ChatResponse = serde_json::from_value(raw)
-        .map_err(|e| reject(format!("an unreadable response ({e})")))?;
+        .map_err(|e| quote(format!("a reply this app could not read ({e})")))?;
     let Some(message) = parsed.choices.into_iter().next().map(|c| c.message) else {
         return Err(quote("no choices at all".to_string()));
     };
@@ -922,5 +927,30 @@ mod tests {
         let failure = probe(&reqwest::Client::new(), &s).await.unwrap_err();
         assert!(!failure.rejected);
         assert!(failure.to_string().contains("did not make a tool call"));
+    }
+
+    #[tokio::test]
+    async fn a_200_with_a_body_this_client_cannot_parse_is_not_reported_as_a_rejection() {
+        // ChatResponse's `choices` is #[serde(default)], so a body that
+        // omits it entirely already lands on the "no choices" path. This
+        // one is reachable only when something nested doesn't match the
+        // shape this client expects -- here, `message` is a number instead
+        // of an object. The endpoint accepted the request and answered with
+        // a 200; the client just can't decode it. That is not a rejection,
+        // and the message must not claim the endpoint refused anything.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{ "message": 7 }]
+            })))
+            .mount(&server)
+            .await;
+
+        let s = Settings { base_url: server.uri(), model: "m".into(), api_key: "k".into() };
+        let failure = probe(&reqwest::Client::new(), &s).await.unwrap_err();
+        assert!(!failure.rejected);
+        let shown = failure.to_string();
+        assert!(!shown.contains("rejected the request"), "{shown}");
     }
 }
