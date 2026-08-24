@@ -8,9 +8,15 @@ import expectedContext from "../../shared/eval-context.txt?raw";
 // the same file. Rust cannot call buildContext, so the rendered digest is
 // checked in beside it and pinned here -- the same two-language pinning
 // shared/wire-version.json already uses.
-export function fixtureState(fixture: any): SetState {
+interface EvalFixture {
+  goal: string;
+  song: Omit<SetState, "tracks">;
+  tracks: Array<{ name: string; mute: boolean; solo: boolean; volumeDb: string }>;
+}
+
+function fixtureState(fixture: EvalFixture): SetState {
   const tracks: Record<number, TrackState> = {};
-  fixture.tracks.forEach((t: any, i: number) => {
+  fixture.tracks.forEach((t, i) => {
     tracks[i] = {
       name: t.name,
       mute: t.mute,

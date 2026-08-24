@@ -42,8 +42,9 @@ export interface ToolRunner {
 
 /**
  * A model that keeps calling tools and never answers would otherwise spend
- * the producer's credit until they notice. Six is enough for the two tools
- * this cut ships plus a couple of follow-ups.
+ * the producer's credit until they notice. There are six tools now, and the
+ * prompt routinely chains a whole-set call into a couple of narrower ones --
+ * six round trips is still believed enough to cover that plus a follow-up.
  */
 export const MAX_ROUND_TRIPS = 6;
 

@@ -255,17 +255,16 @@ fn topology_moved(before: &Option<serde_json::Value>, after: &Option<serde_json:
     }
 }
 
-/// Bounds the whole-set device-chain fan-out.
+/// Bounds the whole-set fan-out of both `get_device_chains` and `get_clips`.
 ///
-/// `get_device_chains` is the only concurrency in this codebase sized by a
-/// mirrored value: it spawns one task per track and samples one mirrored
-/// name per track at each end of the fetch, all off a count the mirror
-/// handed over. A corrupt or absurd count must not become that many tasks
-/// or that many samples, so the count is clamped to this ONCE, on the
-/// `i64`, before the fan-out, the identity brackets, or the `as i32`
-/// narrowing consume it. Clamping later leaves each unclamped consumer
-/// holding the raw count, and `as i32` alone WRAPS: `2^32 + 5` narrows to
-/// 5.
+/// The two are the only concurrency in this codebase sized by a mirrored
+/// value: each spawns per-track tasks and samples one mirrored name per
+/// track at each end of the fetch, all off a count the mirror handed over. A
+/// corrupt or absurd count must not become that many tasks or that many
+/// samples, so the count is clamped to this ONCE, on the `i64`, before the
+/// fan-out, the identity brackets, or the `as i32` narrowing consume it.
+/// Clamping later leaves each unclamped consumer holding the raw count, and
+/// `as i32` alone WRAPS: `2^32 + 5` narrows to 5.
 ///
 /// A real set is nowhere near this, and it is not unreachable either: only
 /// Live Intro (16 tracks) and Lite (8) cap the count -- Standard and Suite
@@ -273,12 +272,14 @@ fn topology_moved(before: &Option<serde_json::Value>, after: &Option<serde_json:
 /// instead of presenting the first `MAX_FANOUT_TRACKS` tracks as the set.
 const MAX_FANOUT_TRACKS: i64 = 512;
 
-/// Whether the device-chain read's bracket caught a topology change.
+/// Whether a whole-set read's bracket -- `get_device_chains`'s or
+/// `get_clips`'s -- caught a topology change.
 ///
 /// A count comparison alone catches an add or a delete but misses a
-/// same-count REORDER: the indices in the returned `TrackChain` list would
-/// then silently name the wrong tracks' devices, and the result would go
-/// back as a fresh, fully-formed answer with nothing marking it wrong. So
+/// same-count REORDER: the indices in the returned `TrackChain` (or
+/// `TrackClips`) list would then silently name the wrong tracks' devices
+/// (or clips), and the result would go back as a fresh, fully-formed answer
+/// with nothing marking it wrong. So
 /// this compares every sampled index's mirrored name too, via the same
 /// `topology_moved` rule `get_clip_notes` and `get_device_params` use for
 /// one track -- an index the mirror never held abstains rather than
@@ -1250,11 +1251,14 @@ rack_marks_unavailable_for_tracks: 2 (their devices are listed, but which are Ra
 
     #[test]
     fn clip_map_reasons_names_every_partial_read_at_once() {
-        // All three can hold together, so one must not overwrite another.
+        // All three can hold together, and none may overwrite another.
         let reason = clip_map_reasons(600, 512, &[3], &[7]).unwrap();
-        assert!(reason.contains("truncated_to_first_512_tracks"));
-        assert!(reason.contains("no_reply_for_tracks: 3"));
-        assert!(reason.contains("midi_flag_unavailable_for_tracks: 7"));
+        assert_eq!(
+            reason,
+            "truncated_to_first_512_tracks: the set has 600; \
+no_reply_for_tracks: 3; \
+midi_flag_unavailable_for_tracks: 7 (their clips are listed, but whether the track is MIDI is unknown)"
+        );
     }
 
     #[test]
