@@ -474,6 +474,13 @@ Date: ___________  macOS version: ___________  Tester: ___________
 - [ ] A session grid with a gap reports the real slot indices, not renumbered ones, and `get_clip_notes` on a reported index returns that clip's notes.
 - [ ] A group track, and a set with return tracks, do not corrupt the index mapping.
 - [ ] An audio track is reported `midi: false` and still lists its clips.
+- [ ] On an audio clip, `get_clip_notes` gets a `length` reply but no
+      `num_notes` and no `notes_window` reply -- confirm in the trace pane. The
+      eval fake in `src-tauri/tests/evals.rs` assumes exactly this asymmetry and
+      nothing in the repo can verify it, because `get_notes_extended` is Live's
+      binary API. If an audio clip answers all three instead, the fake is wrong
+      and `an_audio_track_is_not_reported_as_having_no_notes` is testing a case
+      production never produces.
 
 ## Model evals
 

@@ -88,12 +88,20 @@ fn slot_is_filled(track: &Value, slot: Option<i32>) -> bool {
 /// True when the fixture marks this track as MIDI.
 ///
 /// `num_notes` and `notes_window` (`mixingpal/clip_notes.py`) both call
-/// `clip.get_notes_extended`, which is MIDI-only and raises for an audio
-/// clip -- unlike `length`, a filled slot alone is not enough to answer
-/// either of these; the track must be MIDI too. An empty slot makes `clip`
-/// `None` inside the handler regardless of kind, which also raises and
-/// answers nothing, so both gates still apply together on these two
-/// addresses.
+/// `clip.get_notes_extended`. ASSUMED, NOT VERIFIED: that method is
+/// MIDI-only and raises for an audio clip, so unlike `length` a filled slot
+/// alone is not enough to answer either address -- the track must be MIDI
+/// too. The claim comes from reading the connector, not from a run against
+/// Live, and `get_notes_extended` is Live's binary API, so nothing in this
+/// repo can settle it. The Clips checklist in `docs/manual-verification.md`
+/// is where it gets confirmed. If an audio clip does answer these
+/// addresses, this gate is wrong and
+/// `an_audio_track_is_not_reported_as_having_no_notes` rehearses a case
+/// production never produces.
+///
+/// An empty slot makes `clip` `None` inside the handler regardless of kind,
+/// which also raises and answers nothing, so both gates still apply
+/// together on these two addresses.
 fn clip_is_midi(track: &Value) -> bool {
     track["midi"].as_bool() == Some(true)
 }
