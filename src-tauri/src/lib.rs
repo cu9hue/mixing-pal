@@ -157,6 +157,8 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/clip/get/notes",
     "/live/clip/get/length",
     // get_device_chains and get_device_params.
+    "/live/track/get/clips/name",
+    "/live/track/get/has_midi_input",
     "/live/track/get/devices/name",
     "/live/track/get/devices/can_have_chains",
     "/live/mixingpal/get/device/identity",
@@ -296,6 +298,11 @@ fn handle_inbound(
     //   reload -- and unlike track_data/mixer_data it never evicts, since
     //   evict_tracks_at_or_beyond is only called with the track/mixer
     //   address lists. IMPORTANT 3, 2026-08-16 whole-branch review.
+    // - clips/name and has_midi_input are get_clips's two reads. Smaller
+    //   than a clip's notes, but the same case: keyed per track, so a
+    //   whole-set call retains one entry per track holding that track's clip
+    //   names, streams them to a webview that has no mapping for either
+    //   address, and replays them on every reload.
     // - the device addresses are the same case again, for
     //   get_device_chains, get_device_params and get_rack_contents. The
     //   spec says "no mirror storage for chains" outright, and a parameter
@@ -311,6 +318,8 @@ fn handle_inbound(
             | "/live/clip/get/notes_window"
             | "/live/clip/get/num_notes"
             | "/live/clip/get/length"
+            | "/live/track/get/clips/name"
+            | "/live/track/get/has_midi_input"
             | "/live/track/get/devices/name"
             | "/live/track/get/devices/can_have_chains"
             | "/live/mixingpal/get/device/identity"
@@ -1291,6 +1300,53 @@ mod tests {
             assert!(
                 osc::socket::is_read_only_address(addr),
                 "{addr} would be refused by send_to's read-only guard"
+            );
+        }
+    }
+
+    /// Every address a TOOL sends and the frontend cannot use. A reply on
+    /// one of these is consumed by the awaiting `LiveQuery` caller and must
+    /// never reach the coalescer: it is keyed per track or per page, so it
+    /// is retained for the session, streamed to the webview in a
+    /// `live://deltas` batch that `applyDelta` has no mapping for, replayed
+    /// on every reload via `snapshot()`, and never evicted, because
+    /// `evict_tracks_at_or_beyond` only matches the track and mixer address
+    /// lists.
+    ///
+    /// `get_clips` shipped without its two addresses here and in
+    /// `POLL_LOOP_SENT_ADDRESSES`, through eight task reviews and a
+    /// whole-branch review. A new tool address belongs in this list in the
+    /// same commit that first sends it.
+    const TOOL_ONLY_REPLY_ADDRESSES: &[&str] = &[
+        "/live/clip/get/notes_window",
+        "/live/clip/get/num_notes",
+        "/live/clip/get/length",
+        "/live/track/get/clips/name",
+        "/live/track/get/has_midi_input",
+        "/live/track/get/devices/name",
+        "/live/track/get/devices/can_have_chains",
+        "/live/mixingpal/get/device/identity",
+        "/live/device/get/parameters/name_range",
+        "/live/device/get/parameters/value_string_range",
+        "/live/mixingpal/get/rack/chains",
+    ];
+
+    #[test]
+    fn a_tool_reply_never_lands_in_the_mirror() {
+        // Behavioural, not a list comparison: each address goes through the
+        // real receive path and the mirror must still be empty afterwards.
+        for addr in TOOL_ONLY_REPLY_ADDRESSES {
+            let coalescer = Mutex::new(Coalescer::new());
+            let table = Mutex::new(RequestTable::new());
+            let counts = Mutex::new(TrackCounts::default());
+            let msg = rosc::OscMessage {
+                addr: (*addr).to_string(),
+                args: vec![OscType::Int(0), OscType::String("x".into())],
+            };
+            handle_inbound(&msg, &coalescer, &table, &counts);
+            assert!(
+                coalescer.lock().unwrap().snapshot().is_empty(),
+                "{addr} was retained in the mirror; add it to is_resolve_only"
             );
         }
     }
