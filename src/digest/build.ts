@@ -65,6 +65,7 @@ export function buildContext(state: SetState, goal: string): string {
       "and which tracks are MIDI use get_clips; for the notes in a clip " +
       "use get_clip_notes; for what devices are on each track use " +
       "get_device_chains; for what is inside a Rack use get_rack_contents; " +
+      "for what plays where on the timeline use get_arrangement; " +
       "for one device's parameter values use get_device_params.",
   );
   return lines.join("\n");

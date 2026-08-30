@@ -135,6 +135,18 @@ pub fn tool_schema() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "get_arrangement",
+                "description": "Every track's arrangement timeline: for each clip, its index, name, start time in beats, and length in beats. Queried from Live at call time; one round trip per track covers the set, so calling it is cheap. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. A track with an empty list genuinely has nothing on the timeline, which is normal early in a writing session. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "get_device_chains",
                 "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device, marked [rack]; call get_rack_contents on it to see what is inside. Whether a device is switched on or bypassed is not reported. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
                 "parameters": {
@@ -418,6 +430,40 @@ fn clip_map_reasons(
     (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
+/// Assembles `get_arrangement`'s `missing_reason` from the three things that
+/// can go partly wrong: a set larger than the fan-out cap, tracks that did not
+/// answer, and tracks whose timeline was longer than the paging budget.
+///
+/// All three can hold at once, so they are joined rather than one overwriting
+/// another. Extracted from the `execute` arm for the same reason
+/// `chain_map_reasons` and `clip_map_reasons` were: inline, the truncation
+/// case would have no test.
+fn arrangement_reasons(
+    num_tracks: i64,
+    read_tracks: i64,
+    missing: &[i32],
+    truncated: &[i32],
+) -> Option<String> {
+    let mut reasons: Vec<String> = Vec::new();
+    if num_tracks > read_tracks {
+        reasons.push(format!(
+            "truncated_to_first_{read_tracks}_tracks: the set has {num_tracks}"
+        ));
+    }
+    if !missing.is_empty() {
+        let names: Vec<String> = missing.iter().map(|t| t.to_string()).collect();
+        reasons.push(format!("no_reply_for_tracks: {}", names.join(", ")));
+    }
+    if !truncated.is_empty() {
+        let names: Vec<String> = truncated.iter().map(|t| t.to_string()).collect();
+        reasons.push(format!(
+            "timeline_truncated_for_tracks: {} (the clips listed are real, but the timeline continues past them)",
+            names.join(", ")
+        ));
+    }
+    (!reasons.is_empty()).then(|| reasons.join("; "))
+}
+
 pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult {
     match name {
         "get_track_detail" => {
@@ -521,6 +567,51 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
 
             let missing_reason =
                 clip_map_reasons(num_tracks, read_tracks, &map.missing, &map.midi_missing);
+            ToolResult::live(
+                json!({ "tracks": map.tracks, "missing": map.missing }),
+                missing_reason,
+            )
+        }
+        "get_arrangement" => {
+            // Without a count there is nothing to iterate. Querying 0..0
+            // would return an empty map, which reads as "the set has no
+            // arrangement" -- an invented answer, not a missing one.
+            let Some(num_tracks) = track_count(&ctx.coalescer).filter(|n| *n >= 0) else {
+                return ToolResult::missing("not_in_mirror");
+            };
+            let read_tracks = num_tracks.min(MAX_FANOUT_TRACKS);
+            let query = match ctx.query.lock() {
+                Ok(q) => q.clone(),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            let Some(query) = query else {
+                return ToolResult::missing("not_connected");
+            };
+
+            // Same bracket as the chain map and the clip map: a same-count
+            // reorder would leave these track indices naming another track's
+            // timeline, and the answer would go back looking whole.
+            let before: Vec<Option<serde_json::Value>> =
+                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+
+            let map = arrangement::get_arrangement(
+                query,
+                read_tracks as i32,
+                arrangement::QUERY_TIMEOUT,
+            )
+            .await;
+
+            let after_count = track_count(&ctx.coalescer);
+            let after: Vec<Option<serde_json::Value>> =
+                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            if chains_moved(num_tracks, after_count, &before, &after) {
+                return ToolResult::missing("topology_changed");
+            }
+
+            let truncated: Vec<i32> =
+                map.tracks.iter().filter(|t| t.truncated).map(|t| t.track).collect();
+            let missing_reason =
+                arrangement_reasons(num_tracks, read_tracks, &map.missing, &truncated);
             ToolResult::live(
                 json!({ "tracks": map.tracks, "missing": map.missing }),
                 missing_reason,
@@ -982,6 +1073,38 @@ mod tests {
         assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"));
     }
 
+    #[test]
+    fn the_schema_offers_get_arrangement_with_no_arguments() {
+        let tool = tool_schema()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["function"]["name"] == "get_arrangement")
+            .cloned()
+            .expect("get_arrangement is in the schema");
+        assert_eq!(tool["function"]["parameters"]["required"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn arrangement_reasons_names_every_partial_read_at_once() {
+        let reason = arrangement_reasons(600, 512, &[3], &[7]).unwrap();
+        assert!(reason.contains("truncated_to_first_512_tracks"));
+        assert!(reason.contains("no_reply_for_tracks: 3"));
+        assert!(reason.contains("timeline_truncated_for_tracks: 7"));
+    }
+
+    #[test]
+    fn a_clean_arrangement_read_has_no_reason_at_all() {
+        assert_eq!(arrangement_reasons(4, 4, &[], &[]), None);
+    }
+
+    #[tokio::test]
+    async fn get_arrangement_without_a_track_count_says_so() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_arrangement", &json!({})).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("not_in_mirror"));
+    }
+
     #[tokio::test]
     async fn get_device_params_refuses_a_negative_index() {
         // A negative path element is refused before it reaches the wire:
@@ -993,7 +1116,8 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_lists_exactly_the_six_tools_the_model_may_call() {
+    fn the_schema_lists_exactly_the_seven_tools_the_model_may_call() {
+        // Renamed from six. get_arrangement is the seventh.
         let schema = tool_schema();
         let names: Vec<&str> = schema
             .as_array()
@@ -1007,6 +1131,7 @@ mod tests {
                 "get_track_detail",
                 "get_clip_notes",
                 "get_clips",
+                "get_arrangement",
                 "get_device_chains",
                 "get_device_params",
                 "get_rack_contents"

@@ -52,6 +52,12 @@ that matter. A track name is not evidence about what it plays. Slot indices \
 have gaps, so use the ones get_clips reports rather than counting from zero. \
 An audio track's clips are listed too; they have no notes, which is not the \
 same as a MIDI clip that is empty.
+- The SECTIONS line names the producer's locators and where they are, and \
+that is all the context block says about the timeline. For what actually \
+plays where - which tracks are in a section, where the arrangement thins \
+out, what drops at the drop - call get_arrangement. Arrangement clip \
+indices and session slot indices are different numbers: an index from \
+get_arrangement is never a slot for get_clip_notes.
 - For pan, an exact fader value, or one track's full mixer state, call \
 get_track_detail. The context block's line per track is a summary, and it is \
 a mirror read that may be a couple of seconds old.
