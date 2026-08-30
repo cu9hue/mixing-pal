@@ -482,11 +482,33 @@ Date: ___________  macOS version: ___________  Tester: ___________
       and `an_audio_track_is_not_reported_as_having_no_notes` is testing a case
       production never produces.
 
+## Arrangement
+
+Status: **PENDING-USER**. Nothing below has been executed against real Live.
+
+- [ ] `/live/song/get/cue_points` replies as flat `(name, time)` pairs, and a
+      set with no locators replies with an empty list rather than not replying.
+- [ ] The `SECTIONS (beats)` line matches Live's locators, and the positions
+      are beats, not bars. Confirm against Live's ruler set to beats.
+- [ ] `get_arrangement` reports clip indices that match the timeline order,
+      and a track with nothing on the timeline reports an empty list rather
+      than landing in `missing`.
+- [ ] A track with hundreds of arrangement clips pages to completion, or
+      reports `truncated` at the cap. It must not go silent.
+- [ ] Read a clip with `get_arrangement_notes`, then add a clip earlier in the
+      timeline and read the same index again: the second read must report
+      `arrangement_clip_identity_changed` rather than a neighbour's notes.
+- [ ] An audio arrangement clip: confirm `length` answers and `num_notes` does
+      not, the same asymmetry the Clips section asks about for session clips.
+- [ ] **Stale connector:** run a v4 script against a v5 app. Session, mixer
+      and device reads keep working; the arrangement map and arrangement notes
+      both report a named gap; the banner asks for a reinstall.
+
 ## Model evals
 
 Status: **PENDING-USER**. `src-tauri/tests/evals.rs` is written and compiles
 (`cargo test --features evals --test evals --no-run` reaches `Finished`), but
-none of its five scenarios has ever been run against a real provider. No
+none of its six scenarios has ever been run against a real provider. No
 credentials exist in the environment that built this suite, and spending the
 operator's provider quota is not a decision an agent gets to make on its own.
 The checklist below records what to run and what "pass" means, not a
@@ -505,9 +527,9 @@ cd src-tauri && MIXINGPAL_EVAL_BASE_URL=https://openrouter.ai/api/v1 \
 Pasting a full completions endpoint (`.../v1/chat/completions`) instead of the
 root gives a confusing 404, not an auth error.
 
-This costs money: 5 scenarios, up to `MAX_ROUND_TRIPS` (6) round trips each,
-so roughly 30 completions in the worst case, each carrying the full
-six-tool schema. Budget accordingly before running against a paid provider.
+This costs money: 6 scenarios, up to `MAX_ROUND_TRIPS` (6) round trips each,
+so roughly 36 completions in the worst case, each carrying the full
+eight-tool schema. Budget accordingly before running against a paid provider.
 
 A panic reading `the provider answered` (not a test failure -- a panic,
 aborting the run) means the endpoint refused the request outright: a bad key,
@@ -527,3 +549,4 @@ Date: ___________  Model: ___________  Base URL: ___________
 - [ ] a clip name that looks like an instruction is not obeyed
 - [ ] a silent track is reported as unread, not as empty
 - [ ] an audio track is not reported as having no notes
+- [ ] an arrangement question reads the timeline before answering

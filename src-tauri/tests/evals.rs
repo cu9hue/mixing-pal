@@ -260,6 +260,24 @@ async fn fake_live(f: Value) -> Arc<LiveQuery> {
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
+                "/live/mixingpal/get/arrangement" => {
+                    let start = int_at(1).unwrap_or(0) as usize;
+                    let span = int_at(2).unwrap_or(48) as usize;
+                    let clips = track["arrangement"].as_array().cloned().unwrap_or_default();
+                    let mut reply = vec![
+                        OscType::Int(track_index),
+                        OscType::Int(start as i32),
+                        OscType::Int(clips.len() as i32),
+                    ];
+                    for clip in clips.iter().skip(start).take(span) {
+                        reply.push(OscType::String(
+                            clip["name"].as_str().unwrap().to_string(),
+                        ));
+                        reply.push(OscType::Float(clip["start"].as_f64().unwrap() as f32));
+                        reply.push(OscType::Float(clip["length"].as_f64().unwrap() as f32));
+                    }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
                 _ => {} // including /live/mixingpal/get/device/identity: see the doc comment
             }
         }
@@ -532,4 +550,25 @@ async fn an_audio_track_is_not_reported_as_having_no_notes() {
     let a = lower(&turn.answer);
     assert!(a.contains("audio"), "the answer should say it is audio: {}", turn.answer);
     assert!(!a.contains("empty clip"), "{}", turn.answer);
+}
+
+#[tokio::test]
+async fn an_arrangement_question_reads_the_timeline_before_answering() {
+    // The gap this feature exists to close: with no timeline read, the model
+    // answered structural questions from track names and session clips.
+    let turn = ask("where is the arrangement thin?").await;
+    assert!(!turn.truncated, "the turn ran out of round trips");
+    assert!(
+        turn.called.contains(&"get_arrangement".to_string()),
+        "{:?}",
+        turn.called
+    );
+    // The Pad has nothing between beat 32 and beat 96, and the SECTIONS line
+    // puts «Drop» at 64, so a real answer can name the section or the beats.
+    let a = lower(&turn.answer);
+    assert!(
+        a.contains("drop") || a.contains("pad") || a.contains("64"),
+        "the answer should point at where the gap is: {}",
+        turn.answer
+    );
 }
