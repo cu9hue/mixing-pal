@@ -64,13 +64,25 @@ Clip paging checks (wire version 4) and what to expect:
          different ordinal and confirm it echoes that one instead.
 
 Arrangement checks (wire version 5) and what to expect:
-  /live/song/get/cue_points
-      -- a FLAT, KEYLESS list of (name, time) pairs, one per locator, in the
-         order Live reports them. No leading key args. A set with no
-         locators replies with an empty list, not silence -- that is how
-         "there are no sections" reaches the client, distinct from a script
-         too old to answer at all. Compare the order and the times against
-         Live's locator list with the ruler set to beats.
+  /live/mixingpal/get/cue_points
+      -- the true locator COUNT, then a flat, keyless list of (name, time)
+         pairs. No leading key args. A set with no locators replies with a
+         bare 0, not silence -- that is how "there are no sections" reaches
+         the client, distinct from a script too old to answer at all.
+         Compare the count and the times against Live's locator list with
+         the ruler set to beats. Ours rather than upstream's
+         /live/song/get/cue_points, which caps nothing: past the datagram
+         ceiling Live's sendto raises and the client receives NOTHING, which
+         is indistinguishable from a set with no locators. On a set with few
+         locators the count equals the number of pairs; the two only differ
+         once the reply is cut.
+  /live/mixingpal/get/arrangement/identity 0 0
+      -- (track=0, index=0, name, start_time, length) for ONE clip. 2
+         leading key args. This is the bracket get_arrangement_notes opens
+         and closes around a note read. It is a separate address from the
+         map on purpose: the map is keyed on (track, start), so an identity
+         read phrased as a span-1 page collides with a map page starting at
+         the same index.
   /live/mixingpal/get/arrangement 0 0 8
       -- (track=0, start=0, total=<clip count>, *(name, start_time, length))
          for up to 8 clips. 2 leading key args (track, start); `total` is
@@ -123,8 +135,9 @@ MIXER_DEVICE_RANGE_REQUESTS = (
     ("/live/device/get/parameters/value_range", (1, 0, 0, 32)),
     ("/live/clip/get/num_notes", (0, 0)),
     ("/live/clip/get/notes_window", (0, 0, 7, 0, 128, 0.0, 4.0)),
-    ("/live/song/get/cue_points", ()),
+    ("/live/mixingpal/get/cue_points", ()),
     ("/live/mixingpal/get/arrangement", (0, 0, 8)),
+    ("/live/mixingpal/get/arrangement/identity", (0, 0)),
     ("/live/arrangement_clip/get/length", (0, 0)),
     ("/live/arrangement_clip/get/num_notes", (0, 0)),
     ("/live/arrangement_clip/get/notes_window", (0, 0, 7, 0, 128, 0.0, 4.0)),

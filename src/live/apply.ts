@@ -10,6 +10,7 @@ export function emptySet(): SetState {
     tracks: {},
     scriptVersion: null,
     cuePoints: [],
+    cuePointsTotal: null,
   };
 }
 
@@ -48,9 +49,16 @@ export const TRACK_FIELDS: Record<string, keyof TrackState> = {
 export const NUM_TRACKS_ADDR = "/live/song/get/num_tracks";
 
 // Handled directly rather than through SONG_FIELDS for the same reason
-// NUM_TRACKS_ADDR is: the reply is a flat (name, time, name, time, ...)
-// list, not a single value to copy into one field.
-export const CUE_POINTS_ADDR = "/live/song/get/cue_points";
+// NUM_TRACKS_ADDR is: the reply is a locator count followed by a flat
+// (name, time, name, time, ...) list, not a single value to copy into one
+// field.
+//
+// Ours, not upstream's /live/song/get/cue_points: that handler caps nothing,
+// so a set with enough locators overfills the datagram, Live's sendto
+// raises, and the client receives nothing at all -- every five seconds,
+// forever, and indistinguishable from a set with no locators. See
+// mixingpal/arrangement_replies.py's cue_points_reply.
+export const CUE_POINTS_ADDR = "/live/mixingpal/get/cue_points";
 
 export function applyDelta(state: SetState, delta: Delta): SetState {
   if (delta.addr === NUM_TRACKS_ADDR) {
@@ -66,17 +74,23 @@ export function applyDelta(state: SetState, delta: Delta): SetState {
   }
 
   if (delta.addr === CUE_POINTS_ADDR) {
-    // An odd-length reply is a half-decoded locator list, which would
-    // misplace every section after the bad entry. Keep what we had.
-    if (delta.args.length % 2 !== 0) return state;
+    // The true locator count leads, then the pairs the datagram had room
+    // for. Without the count, a cut reply would read as the whole set of
+    // sections; with it, buildContext can say the SECTIONS line is a subset.
+    const total = delta.args[0];
+    if (typeof total !== "number") return state;
+    const pairs = delta.args.slice(1);
+    // A ragged tail is a half-decoded locator list, which would misplace
+    // every section after the bad entry. Keep what we had.
+    if (pairs.length % 2 !== 0) return state;
     const cuePoints: CuePoint[] = [];
-    for (let i = 0; i < delta.args.length; i += 2) {
-      const name = delta.args[i];
-      const time = delta.args[i + 1];
+    for (let i = 0; i < pairs.length; i += 2) {
+      const name = pairs[i];
+      const time = pairs[i + 1];
       if (typeof name !== "string" || typeof time !== "number") return state;
       cuePoints.push({ name, time });
     }
-    return { ...state, cuePoints };
+    return { ...state, cuePoints, cuePointsTotal: total };
   }
 
   const songField = SONG_FIELDS[delta.addr];

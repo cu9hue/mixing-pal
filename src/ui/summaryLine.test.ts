@@ -10,6 +10,7 @@ const BASE: SetState = {
   selectedTrack: null,
   scriptVersion: 2,
   cuePoints: [],
+  cuePointsTotal: null,
   tracks: {},
 };
 

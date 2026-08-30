@@ -10,7 +10,8 @@
     "cuePoints": [
       { "name": "Intro", "time": 0 },
       { "name": "Drop", "time": 64 }
-    ]
+    ],
+    "cuePointsTotal": 2
   },
   "tracks": [
     {

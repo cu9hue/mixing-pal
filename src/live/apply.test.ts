@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { emptySet, applyDelta } from "./apply";
+import { emptySet, applyDelta, CUE_POINTS_ADDR } from "./apply";
 
 describe("applyDelta", () => {
   it("stores song properties that carry no index", () => {
@@ -103,23 +103,52 @@ describe("applyDelta", () => {
     });
   });
 
-  it("maps a cue point reply into pairs", () => {
+  it("maps a cue point reply into pairs behind its total", () => {
     const state = applyDelta(emptySet(), {
-      addr: "/live/song/get/cue_points",
-      args: ["Intro", 0, "Drop", 64],
+      addr: CUE_POINTS_ADDR,
+      args: [2, "Intro", 0, "Drop", 64],
     });
     expect(state.cuePoints).toEqual([
       { name: "Intro", time: 0 },
       { name: "Drop", time: 64 },
     ]);
+    expect(state.cuePointsTotal).toBe(2);
+  });
+
+  it("keeps the true total when the reply carried only a prefix", () => {
+    // The connector cuts the reply to one datagram. Without the total, the
+    // digest would present the prefix as the whole arrangement.
+    const state = applyDelta(emptySet(), {
+      addr: CUE_POINTS_ADDR,
+      args: [400, "Intro", 0],
+    });
+    expect(state.cuePoints).toEqual([{ name: "Intro", time: 0 }]);
+    expect(state.cuePointsTotal).toBe(400);
+  });
+
+  it("reports a set with no locators as empty rather than unknown", () => {
+    const state = applyDelta(emptySet(), { addr: CUE_POINTS_ADDR, args: [0] });
+    expect(state.cuePoints).toEqual([]);
+    expect(state.cuePointsTotal).toBe(0);
   });
 
   it("ignores a ragged cue point reply rather than half-applying it", () => {
     // A trailing name with no time would misplace every section after it.
     const before = { ...emptySet(), cuePoints: [{ name: "Intro", time: 0 }] };
     const after = applyDelta(before, {
-      addr: "/live/song/get/cue_points",
-      args: ["Intro", 0, "Drop"],
+      addr: CUE_POINTS_ADDR,
+      args: [2, "Intro", 0, "Drop"],
+    });
+    expect(after.cuePoints).toEqual(before.cuePoints);
+  });
+
+  it("ignores a reply whose leading total is missing", () => {
+    // Reading the old shape -- pairs with no total -- would take "Intro" for
+    // a count and shift every locator by one field.
+    const before = { ...emptySet(), cuePoints: [{ name: "Intro", time: 0 }] };
+    const after = applyDelta(before, {
+      addr: CUE_POINTS_ADDR,
+      args: ["Intro", 0, "Drop", 64],
     });
     expect(after.cuePoints).toEqual(before.cuePoints);
   });

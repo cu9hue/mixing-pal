@@ -130,7 +130,7 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
     // PollKind::CuePoints, observed raw. Unlike every other polled address
     // above, this one is mirrored on purpose (NOT in is_resolve_only): the
     // digest reads the producer's locators from SetState on every turn.
-    "/live/song/get/cue_points",
+    "/live/mixingpal/get/cue_points",
 ];
 
 /// Every literal address the poll loop sends on the wire, outside of
@@ -173,8 +173,9 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/mixingpal/get/arrangement",
     "/live/arrangement_clip/get/length",
     "/live/arrangement_clip/get/num_notes",
+    "/live/mixingpal/get/arrangement/identity",
     "/live/arrangement_clip/get/notes_window",
-    "/live/song/get/cue_points",
+    "/live/mixingpal/get/cue_points",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -322,10 +323,10 @@ fn handle_inbound(
     // - arrangement is get_arrangement's paged read of one track's timeline,
     //   keyed on (track, start): the same case as the parameter page, one
     //   retained entry per page rather than per track.
-    // - the arrangement_clip addresses are get_arrangement_notes's reads,
-    //   keyed on (track, index) or (track, index, window) -- the same case
-    //   as clip/get/notes and friends, for a clip on the timeline instead
-    //   of in a session slot.
+    // - the arrangement/identity and arrangement_clip addresses are
+    //   get_arrangement_notes's reads, keyed on (track, index) or (track,
+    //   index, window) -- the same case as clip/get/notes and friends, for
+    //   a clip on the timeline instead of in a session slot.
     let is_resolve_only = matches!(
         msg.addr.as_str(),
         "/live/song/get/track_data"
@@ -343,6 +344,7 @@ fn handle_inbound(
             | "/live/device/get/parameters/value_string_range"
             | "/live/mixingpal/get/rack/chains"
             | "/live/mixingpal/get/arrangement"
+            | "/live/mixingpal/get/arrangement/identity"
             | "/live/arrangement_clip/get/length"
             | "/live/arrangement_clip/get/num_notes"
             | "/live/arrangement_clip/get/notes_window"
@@ -1083,7 +1085,8 @@ async fn poll_kind(
             .await;
         }
         PollKind::CuePoints => {
-            register_and_send(table, poll_socket, now, "/live/song/get/cue_points", vec![]).await;
+            register_and_send(table, poll_socket, now, "/live/mixingpal/get/cue_points", vec![])
+                .await;
         }
     }
 }
@@ -1353,6 +1356,7 @@ mod tests {
         "/live/device/get/parameters/value_string_range",
         "/live/mixingpal/get/rack/chains",
         "/live/mixingpal/get/arrangement",
+        "/live/mixingpal/get/arrangement/identity",
         "/live/arrangement_clip/get/length",
         "/live/arrangement_clip/get/num_notes",
         "/live/arrangement_clip/get/notes_window",

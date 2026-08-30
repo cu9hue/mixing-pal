@@ -23,6 +23,11 @@ export interface SetState {
   tracks: Record<number, TrackState>;
   scriptVersion: number | null;
   cuePoints: CuePoint[];
+  /// How many locators the set really has. The connector cuts the reply to
+  /// one datagram, so a set with hundreds of them sends a prefix; without
+  /// the true count the digest would present that prefix as the whole
+  /// structure. Null until a reply arrives.
+  cuePointsTotal: number | null;
 }
 
 export interface Delta {

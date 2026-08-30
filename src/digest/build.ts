@@ -36,10 +36,25 @@ export function buildContext(state: SetState, goal: string): string {
   );
 
   if (state.cuePoints.length > 0) {
-    const sections = state.cuePoints
+    // Sorted by time rather than left in reply order. Live appears to hand
+    // its locators over in timeline order, but nothing in this repo verifies
+    // that, and an out-of-order SECTIONS line would mislead the model about
+    // the structure of the set while looking perfectly well-formed. It is
+    // rendered into every prompt, so it does not depend on an unverified
+    // upstream guarantee.
+    const sections = [...state.cuePoints]
+      .sort((a, b) => a.time - b.time)
       .map((c) => `${fence(c.name)} ${c.time}`)
       .join(", ");
-    lines.push(`SECTIONS (beats)  ${sections}`);
+    // The connector cuts the locator reply to one datagram and sends the
+    // true count beside it. Saying nothing here would present a prefix as
+    // the whole arrangement.
+    const total = state.cuePointsTotal;
+    const cut =
+      total !== null && total > state.cuePoints.length
+        ? ` (first ${state.cuePoints.length} of ${total}; the rest did not fit one reply)`
+        : "";
+    lines.push(`SECTIONS (beats)  ${sections}${cut}`);
   }
 
   const trimmedGoal = goal.trim();

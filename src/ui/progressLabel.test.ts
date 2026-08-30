@@ -11,6 +11,7 @@ const STATE: SetState = {
   selectedTrack: 1,
   scriptVersion: 2,
   cuePoints: [],
+  cuePointsTotal: null,
   tracks: {
     0: { ...emptyTrack(), name: "Kick" },
     1: { ...emptyTrack(), name: "Pad Wide" },

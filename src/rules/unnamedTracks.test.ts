@@ -15,6 +15,7 @@ function setOf(names: Array<string | null>): SetState {
     selectedTrack: null,
     scriptVersion: 2,
     cuePoints: [],
+    cuePointsTotal: null,
     tracks,
   };
 }

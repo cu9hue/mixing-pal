@@ -113,4 +113,38 @@ describe("buildContext", () => {
     const out = buildContext({ ...emptySet(), cuePoints: [] }, "");
     expect(out).not.toContain("SECTIONS");
   });
+
+  it("prints the sections in time order whatever order they arrived in", () => {
+    // Live appears to answer in timeline order, but nothing here verifies
+    // that, and this line goes into every prompt. An out-of-order SECTIONS
+    // line misleads the model about the structure while looking well-formed.
+    const state = { ...emptySet(), cuePoints: [
+      { name: "Drop", time: 64 },
+      { name: "Intro", time: 0 },
+      { name: "Break", time: 32 },
+    ] };
+    const out = buildContext(state, "");
+    expect(out).toContain("SECTIONS (beats)  «Intro» 0, «Break» 32, «Drop» 64");
+  });
+
+  it("says so when the locator reply carried only a prefix", () => {
+    // The connector cuts the reply to one datagram. Silently printing the
+    // prefix would present part of the arrangement as all of it.
+    const state = {
+      ...emptySet(),
+      cuePoints: [{ name: "Intro", time: 0 }],
+      cuePointsTotal: 400,
+    };
+    const out = buildContext(state, "");
+    expect(out).toContain("first 1 of 400");
+  });
+
+  it("says nothing extra when every locator arrived", () => {
+    const state = {
+      ...emptySet(),
+      cuePoints: [{ name: "Intro", time: 0 }],
+      cuePointsTotal: 1,
+    };
+    expect(buildContext(state, "")).toContain("SECTIONS (beats)  «Intro» 0\n");
+  });
 });

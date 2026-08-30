@@ -45,12 +45,12 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // The wire-version handshake -- one int, no key. See
         // shared/wire-version.json and mixingpal/version.py.
         | "/live/mixingpal/get/version"
-        // Cannot be subscribed: upstream registers this as a plain handler
-        // rather than through its property list, so there is no
-        // start_listen for it. Reply is a flat (name, time, name, time,
-        // ...) list, not a keyed value -- but it is still one reply to one
-        // request, so the request itself is keyless.
-        | "/live/song/get/cue_points" => KeyArity::None,
+        // Cannot be subscribed: our handler is a plain one, like upstream's,
+        // so there is no start_listen for it. Reply is a total followed by a
+        // flat (name, time, name, time, ...) list, not a keyed value -- but
+        // it is still one reply to one request, so the request itself is
+        // keyless.
+        | "/live/mixingpal/get/cue_points" => KeyArity::None,
 
         "/live/track/get/name"
         | "/live/track/get/mute"
@@ -96,6 +96,13 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // it would never match the reply's third value and no read would
         // ever resolve.
         | "/live/mixingpal/get/arrangement"
+        // (track, index) in, (track, index, name, start_time, length) back.
+        // Its own address rather than a span-1 page of the map, which is
+        // keyed on (track, start): at index == start the two collide, the
+        // identity read joins the page and takes its reply, and a page that
+        // asked for 48 records is answered with one. Same reason
+        // /live/mixingpal/get/device/identity exists.
+        | "/live/mixingpal/get/arrangement/identity"
         // Same shape as the session clip's length and count -- (track,
         // index) in, echoed straight back with the value appended.
         | "/live/arrangement_clip/get/length"
@@ -182,7 +189,7 @@ mod tests {
             ("/live/song/get/signature_denominator", KeyArity::None),
             ("/live/song/get/beat", KeyArity::None),
             ("/live/mixingpal/get/version", KeyArity::None),
-            ("/live/song/get/cue_points", KeyArity::None),
+            ("/live/mixingpal/get/cue_points", KeyArity::None),
             ("/live/clip/get/notes", KeyArity::Args(2)),
             ("/live/clip/get/notes_window", KeyArity::Args(3)),
             ("/live/clip/get/num_notes", KeyArity::Args(2)),
@@ -197,6 +204,10 @@ mod tests {
             // -- `span` cannot be in the key, because the reply's third
             // value is the real total, not an echo of it.
             ("/live/mixingpal/get/arrangement", KeyArity::Args(2)),
+            // (track, index) in, (track, index, name, start_time, length)
+            // back. A distinct address from the map, so an identity read
+            // cannot join a map page and take its reply.
+            ("/live/mixingpal/get/arrangement/identity", KeyArity::Args(2)),
             ("/live/arrangement_clip/get/length", KeyArity::Args(2)),
             ("/live/arrangement_clip/get/num_notes", KeyArity::Args(2)),
             ("/live/arrangement_clip/get/notes_window", KeyArity::Args(3)),

@@ -22,6 +22,7 @@ const EMPTY: SetState = {
   tracks: {},
   scriptVersion: 4,
   cuePoints: [],
+  cuePointsTotal: null,
 };
 
 describe("the digest's tool pointer", () => {

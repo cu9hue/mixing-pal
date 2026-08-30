@@ -487,16 +487,22 @@ Date: ___________  macOS version: ___________  Tester: ___________
 
 Status: **PENDING-USER**. Nothing below has been executed against real Live.
 
-- [ ] `/live/song/get/cue_points` replies as flat `(name, time)` pairs, and a
-      set with no locators replies with an empty list rather than not
-      replying. `Trace.tsx` never shows a raw OSC reply, so check this with
-      `python3 scripts/verify-roundtrip.py`'s `/live/song/get/cue_points`
-      probe.
-- [ ] The `SECTIONS (beats)` line matches Live's locators, in timeline order,
-      and the positions are beats, not bars. Confirm against Live's ruler set
-      to beats. `buildContext` prints `state.cuePoints` in reply order with no
-      sort, so an out-of-order SECTIONS line would mislead the model about
-      structure while looking well-formed.
+- [ ] `/live/mixingpal/get/cue_points` replies as a locator count followed by
+      flat `(name, time)` pairs, and a set with no locators replies with a
+      bare `0` rather than not replying. `Trace.tsx` never shows a raw OSC
+      reply, so check this with `python3 scripts/verify-roundtrip.py`'s
+      `/live/mixingpal/get/cue_points` probe. On a normal set the count and
+      the number of pairs agree; they differ only once the reply is cut to
+      one datagram.
+- [ ] The `SECTIONS (beats)` line matches Live's locators, and the positions
+      are beats, not bars. Confirm against Live's ruler set to beats.
+      `buildContext` sorts by time, so this also confirms the times
+      themselves rather than the order they arrived in.
+- [ ] `/live/mixingpal/get/arrangement/identity 0 0` answers `(track, index,
+      name, start_time, length)` for the clip at that index, and answers
+      nothing for an index past the end. This is the bracket
+      `get_arrangement_notes` opens and closes around a note read; a script
+      that does not answer it makes every arrangement-note read a named gap.
 - [ ] `get_arrangement` reports clip indices that match the timeline order,
       and a track with nothing on the timeline reports an empty list rather
       than landing in `missing`.
