@@ -267,9 +267,10 @@ client size every window in one pass. Only a running Live can confirm the
 count is the one Live actually reports.
 
 - [ ] Reinstall the connector and restart Live. The connector line in
-      Advanced reads `v4`, and no version-mismatch banner appears. (The
-      bump is what tells an old install to update; without the reinstall
-      the banner is the correct behaviour.)
+      Advanced matches the version in `shared/wire-version.json`, and no
+      version-mismatch banner appears. (The bump is what tells an old
+      install to update; without the reinstall the banner is the correct
+      behaviour.)
 - [ ] `python3 scripts/verify-roundtrip.py` gets a reply to
       `/live/clip/get/num_notes 0 0` whose third value equals the number of
       notes Live shows in that clip.
@@ -487,9 +488,15 @@ Date: ___________  macOS version: ___________  Tester: ___________
 Status: **PENDING-USER**. Nothing below has been executed against real Live.
 
 - [ ] `/live/song/get/cue_points` replies as flat `(name, time)` pairs, and a
-      set with no locators replies with an empty list rather than not replying.
-- [ ] The `SECTIONS (beats)` line matches Live's locators, and the positions
-      are beats, not bars. Confirm against Live's ruler set to beats.
+      set with no locators replies with an empty list rather than not
+      replying. `Trace.tsx` never shows a raw OSC reply, so check this with
+      `python3 scripts/verify-roundtrip.py`'s `/live/song/get/cue_points`
+      probe.
+- [ ] The `SECTIONS (beats)` line matches Live's locators, in timeline order,
+      and the positions are beats, not bars. Confirm against Live's ruler set
+      to beats. `buildContext` prints `state.cuePoints` in reply order with no
+      sort, so an out-of-order SECTIONS line would mislead the model about
+      structure while looking well-formed.
 - [ ] `get_arrangement` reports clip indices that match the timeline order,
       and a track with nothing on the timeline reports an empty list rather
       than landing in `missing`.
@@ -500,9 +507,23 @@ Status: **PENDING-USER**. Nothing below has been executed against real Live.
       `arrangement_clip_identity_changed` rather than a neighbour's notes.
 - [ ] An audio arrangement clip: confirm `length` answers and `num_notes` does
       not, the same asymmetry the Clips section asks about for session clips.
-- [ ] **Stale connector:** run a v4 script against a v5 app. Session, mixer
-      and device reads keep working; the arrangement map and arrangement notes
-      both report a named gap; the banner asks for a reinstall.
+      Use `python3 scripts/verify-roundtrip.py`'s
+      `/live/arrangement_clip/get/length` and `/num_notes` probes to see the
+      raw replies -- `Trace.tsx` never shows an OSC delta.
+- [ ] **A left-trimmed clip:** read a clip with `get_arrangement_notes` on a
+      MIDI clip you trimmed from the left, and confirm every note comes back.
+      The connector reads notes over `get_notes_extended(0, 128, 0.0,
+      clip.length)` -- clip time from zero -- but in the Live Object Model
+      `length` is a duration and notes live in `[start_marker, end_marker]`.
+      A clip whose start marker was trimmed off zero is common on the
+      timeline and rare in session slots, so the arrangement is where this
+      finally bites. This is pre-existing behaviour, not a defect this
+      branch introduced -- this item is a probe, not a claim.
+- [ ] **Stale connector:** run the pre-arrangement (wire v4) script against
+      an app matching the version in `shared/wire-version.json`. Session,
+      mixer and device reads keep working; the arrangement map and
+      arrangement notes both report a named gap; the banner asks for a
+      reinstall.
 
 ## Model evals
 

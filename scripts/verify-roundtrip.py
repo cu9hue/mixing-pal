@@ -62,6 +62,36 @@ Clip paging checks (wire version 4) and what to expect:
          back late and resolve a different window's request, and that
          window is then recorded as answered-with-nothing. Re-run with a
          different ordinal and confirm it echoes that one instead.
+
+Arrangement checks (wire version 5) and what to expect:
+  /live/song/get/cue_points
+      -- a FLAT, KEYLESS list of (name, time) pairs, one per locator, in the
+         order Live reports them. No leading key args. A set with no
+         locators replies with an empty list, not silence -- that is how
+         "there are no sections" reaches the client, distinct from a script
+         too old to answer at all. Compare the order and the times against
+         Live's locator list with the ruler set to beats.
+  /live/mixingpal/get/arrangement 0 0 8
+      -- (track=0, start=0, total=<clip count>, *(name, start_time, length))
+         for up to 8 clips. 2 leading key args (track, start); `total` is
+         the track's real clip count, independent of how many triples came
+         back in this page. Put a few clips on track 0's timeline first; an
+         empty timeline still answers, with `total` 0 and no triples. This
+         is the paged form get_arrangement uses to read a whole track.
+  /live/arrangement_clip/get/length 0 0
+      -- (track=0, clip=0, length). 2 leading key args. Put an arrangement
+         clip at index 0 on track 0 first. This is the same address family
+         and reply shape as the session-clip form, just a different clip
+         object.
+  /live/arrangement_clip/get/num_notes 0 0
+      -- (track=0, clip=0, <note count>). 2 leading key args, MIDI clips
+         only -- an audio clip answers `length` but not this, the same
+         asymmetry the session-clip probes above exercise. Compare the
+         count against Live's own note display.
+  /live/arrangement_clip/get/notes_window 0 0 7 0 128 0.0 4.0
+      -- (track=0, clip=0, window=7, *notes) for the first 4 beats. Same
+         window-ordinal contract as /live/clip/get/notes_window above: the
+         7 MUST come back as 7.
 """
 import socket
 import struct
@@ -93,6 +123,11 @@ MIXER_DEVICE_RANGE_REQUESTS = (
     ("/live/device/get/parameters/value_range", (1, 0, 0, 32)),
     ("/live/clip/get/num_notes", (0, 0)),
     ("/live/clip/get/notes_window", (0, 0, 7, 0, 128, 0.0, 4.0)),
+    ("/live/song/get/cue_points", ()),
+    ("/live/mixingpal/get/arrangement", (0, 0, 8)),
+    ("/live/arrangement_clip/get/length", (0, 0)),
+    ("/live/arrangement_clip/get/num_notes", (0, 0)),
+    ("/live/arrangement_clip/get/notes_window", (0, 0, 7, 0, 128, 0.0, 4.0)),
 )
 
 
