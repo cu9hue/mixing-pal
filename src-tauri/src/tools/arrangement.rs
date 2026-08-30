@@ -56,6 +56,13 @@ pub struct TrackArrangement {
     pub clips: Vec<ArrangementClip>,
     /// The read stopped before the track's real clip count was reached.
     pub truncated: bool,
+    /// Two pages of this track reported different clip counts, so the
+    /// timeline moved while it was being read. The clips listed are real
+    /// records Live sent, but an insertion earlier in the timeline shifts
+    /// every index after it, so a name here may sit beside another clip's
+    /// position. Distinct from `truncated`: that read is short but
+    /// consistent, this one may be neither.
+    pub changed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -65,6 +72,12 @@ pub struct ArrangementMap {
     /// list reads as "those tracks are empty", which is the wrong answer
     /// rather than a missing one.
     pub missing: Vec<i32>,
+    /// Tracks whose `changed` flag is set, gathered here so `execute` can
+    /// name them in `missing_reason` the way it names `missing`. "The
+    /// timeline moved under the read" and "the track never answered" are
+    /// different things to tell a model, which is why this is not folded
+    /// into `missing`.
+    pub changed: Vec<i32>,
 }
 
 /// `(track, start, total, *(name, start_time, length))`.
@@ -108,13 +121,18 @@ fn decode_page(reply: &[OscType], expect_start: usize) -> Option<(usize, usize, 
 
 /// One track's whole timeline, paged.
 ///
-/// `None` means the track did not answer at all, which is also how "there is
-/// no track at that index" arrives: the handler returns None and sends
-/// nothing, byte-identical to a lost datagram.
+/// `None` means the track did not answer its FIRST page, which is also how
+/// "there is no track at that index" arrives: the handler returns None and
+/// sends nothing, byte-identical to a lost datagram. A page that fails after
+/// that keeps the clips already collected and marks the track `truncated`:
+/// they are real records Live sent, and filing the whole track under
+/// `missing` would throw away a partial read the model can still use.
 pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<TrackArrangement> {
     let mut clips: Vec<ArrangementClip> = Vec::new();
     let mut windows = 0usize;
     let mut truncated = false;
+    let mut changed = false;
+    let mut first_total: Option<usize> = None;
 
     loop {
         if windows >= MAX_WINDOWS {
@@ -123,7 +141,7 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
         }
         windows += 1;
 
-        let reply = q
+        let page = q
             .query(
                 "/live/mixingpal/get/arrangement",
                 vec![
@@ -134,9 +152,41 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
                 timeout,
             )
             .await
-            .ok()?;
+            .ok()
+            .as_deref()
+            .and_then(|reply| decode_page(reply, clips.len()));
 
-        let (_, total, page) = decode_page(&reply, clips.len())?;
+        let Some((_, total, page)) = page else {
+            if windows == 1 {
+                return None;
+            }
+            truncated = true;
+            break;
+        };
+
+        // Every page re-reads the track's clip count, and nothing else
+        // compares them. A clip inserted mid-read shifts every index after
+        // it, so without this the result reports one clip twice under two
+        // indices, never reports the new one, and carries no signal at all.
+        // Stop on the disagreement: the clips already collected are real,
+        // but the pages they came from describe two different timelines.
+        match first_total {
+            None => first_total = Some(total),
+            Some(first) if first != total => {
+                changed = true;
+                // The read stops here, so say whether it also stopped
+                // SHORT. `changed` alone would leave `truncated: false`
+                // beside a list that never reached the end, which reads as
+                // "this is the whole timeline". Computed rather than
+                // assumed: a total that shrank can already be covered by
+                // what arrived, and claiming a gap nobody observed is the
+                // same class of error as filling one in.
+                truncated = clips.len() < total;
+                break;
+            }
+            Some(_) => {}
+        }
+
         let empty_page = page.is_empty();
         clips.extend(page);
 
@@ -152,7 +202,7 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
         }
     }
 
-    Some(TrackArrangement { track, clips, truncated })
+    Some(TrackArrangement { track, clips, truncated, changed })
 }
 
 /// Every track's timeline, all tracks concurrently.
@@ -176,13 +226,19 @@ pub async fn get_arrangement(q: Arc<LiveQuery>, num_tracks: i32, timeout: Durati
 
     let mut tracks = Vec::new();
     let mut missing = Vec::new();
+    let mut changed = Vec::new();
     for (index, handle) in handles.into_iter().enumerate() {
         match handle.await {
-            Ok(Some(entry)) => tracks.push(entry),
+            Ok(Some(entry)) => {
+                if entry.changed {
+                    changed.push(entry.track);
+                }
+                tracks.push(entry);
+            }
             _ => missing.push(index as i32),
         }
     }
-    ArrangementMap { tracks, missing }
+    ArrangementMap { tracks, missing, changed }
 }
 
 #[derive(Debug)]
@@ -193,31 +249,54 @@ pub enum ArrangementNotesError {
     IdentityChanged,
 }
 
+/// `(track, index, name, start_time, length)` from
+/// `/live/mixingpal/get/arrangement/identity`.
+///
+/// The echoed `(track, index)` is not re-checked: the address is
+/// `KeyArity::Args(2)`, so the request table already refuses a reply that
+/// echoes anything else. Same as `device_params::decode_identity`, which
+/// this is modelled on.
+fn decode_identity(reply: &[OscType]) -> Option<(Option<String>, f64, f64)> {
+    let name = match reply.get(2)? {
+        OscType::String(s) if s.is_empty() => None,
+        OscType::String(s) => Some(fence(s)),
+        _ => return None,
+    };
+    Some((name, clip_notes::as_f64(reply.get(3)?)?, clip_notes::as_f64(reply.get(4)?)?))
+}
+
 /// One arrangement clip's identity: what makes "index 3" a particular clip
+/// rather than a position.
 ///
 /// On an unnamed timeline -- the normal case, see `ArrangementClip::name` --
 /// this degenerates to `(start, length)`, and that is still the half that
 /// matters: an insertion earlier in the timeline shifts `start` and leaves
 /// any name alone. The name is the weaker discriminator here, not the
 /// stronger one, which is why both tests pin `start` as well.
-/// rather than a position.
+///
+/// Its OWN address rather than a span-1 page of the map. The map is keyed on
+/// `(track, start)`, so an identity read at index N and a map page starting
+/// at N produce the same key: the second registrant JOINS the first and
+/// takes its reply, and a page that asked for 48 records is answered with
+/// one -- it then advances by one and burns MAX_WINDOWS into a false
+/// `truncated`. Today's UI calls tools one at a time, but nothing in the
+/// Rust side serialises them. A distinct address cannot collide, and it
+/// reads one clip instead of rescanning a track.
 async fn identity_of(
     q: &LiveQuery,
     track: i32,
     index: i32,
     timeout: Duration,
 ) -> Option<(Option<String>, f64, f64)> {
-    let reply = q
-        .query(
-            "/live/mixingpal/get/arrangement",
-            vec![OscType::Int(track), OscType::Int(index), OscType::Int(1)],
-            timeout,
-        )
-        .await
-        .ok()?;
-    let (_, _, clips) = decode_page(&reply, index as usize)?;
-    let clip = clips.first()?;
-    Some((clip.name.clone(), clip.start, clip.length))
+    q.query(
+        "/live/mixingpal/get/arrangement/identity",
+        vec![OscType::Int(track), OscType::Int(index)],
+        timeout,
+    )
+    .await
+    .ok()
+    .as_deref()
+    .and_then(decode_identity)
 }
 
 /// `get_arrangement_notes`'s successful payload: the notes, plus the clip's
@@ -410,6 +489,14 @@ mod tests {
         silent: Vec<i32>,
         page: usize,
         hold_until_all_arrive: Option<usize>,
+        /// Answers at most this many page requests and then goes silent, so
+        /// a LATER page fails while earlier ones already landed. Counted
+        /// across every track, so the tests using it read one track.
+        answer_at_most: Option<usize>,
+        /// The clip count reported on every page after the first. A
+        /// producer inserting a clip mid-read is what makes the pages
+        /// disagree in Live.
+        total_after_first: Option<i32>,
     }
 
     async fn fake_live(fake: FakeLive) -> Arc<LiveQuery> {
@@ -433,6 +520,7 @@ mod tests {
         tokio::spawn(async move {
             let page = if fake.page == 0 { REQUEST_SPAN } else { fake.page };
             let mut held: Vec<Vec<OscType>> = Vec::new();
+            let mut answered = 0usize;
             loop {
                 let req = match live.recv().await {
                     Ok(r) => r,
@@ -448,12 +536,20 @@ mod tests {
                 if fake.silent.contains(&track) {
                     continue; // the reply Live could not send
                 }
+                answered += 1;
+                if fake.answer_at_most.is_some_and(|n| answered > n) {
+                    continue; // the page that never came back
+                }
                 let empty: Vec<(String, f32, f32)> = Vec::new();
                 let timeline = fake.timelines.get(track as usize).unwrap_or(&empty);
+                let total = match fake.total_after_first {
+                    Some(t) if answered > 1 => t,
+                    _ => timeline.len() as i32,
+                };
                 let mut reply = vec![
                     OscType::Int(track),
                     OscType::Int(start as i32),
-                    OscType::Int(timeline.len() as i32),
+                    OscType::Int(total),
                 ];
                 for (name, at, len) in timeline.iter().skip(start).take(page) {
                     reply.push(OscType::String(name.clone()));
@@ -522,7 +618,7 @@ mod tests {
                     Err(_) => continue,
                 };
                 match req.addr.as_str() {
-                    "/live/mixingpal/get/arrangement" => {
+                    "/live/mixingpal/get/arrangement/identity" => {
                         seen_identity += 1;
                         let (name, start) = if seen_identity == 1 { first } else { second };
                         let _ = live
@@ -530,9 +626,8 @@ mod tests {
                                 app_port,
                                 &req.addr,
                                 vec![
-                                    OscType::Int(0),
-                                    OscType::Int(0),
-                                    OscType::Int(1),
+                                    req.args[0].clone(),
+                                    req.args[1].clone(),
                                     OscType::String(name.into()),
                                     OscType::Float(start),
                                     OscType::Float(8.0),
@@ -649,6 +744,131 @@ mod tests {
         assert!(map.tracks[0].truncated);
         assert_eq!(map.tracks[0].clips.len(), MAX_WINDOWS);
         assert!(map.missing.is_empty(), "a truncated read is not a missing one");
+    }
+
+    #[tokio::test]
+    async fn a_page_lost_after_the_first_keeps_what_already_arrived() {
+        // `.ok()?` on a later page threw the whole track away, so a read
+        // that got three clips back filed the track under `missing` -- which
+        // says "asked, no usable answer" about three real clips.
+        let long: Vec<(&str, f32, f32)> = (0..10).map(|_| ("Clip", 0.0, 4.0)).collect();
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&long)],
+            page: 3,
+            answer_at_most: Some(1),
+            ..Default::default()
+        })
+        .await;
+        let map = get_arrangement(q, 1, Duration::from_millis(300)).await;
+        assert!(map.missing.is_empty(), "a partial read is not a missing one");
+        assert_eq!(map.tracks[0].clips.len(), 3);
+        assert!(map.tracks[0].truncated);
+        assert!(!map.tracks[0].changed, "nothing said the timeline moved");
+    }
+
+    #[tokio::test]
+    async fn a_track_whose_first_page_is_lost_is_still_missing() {
+        // The other half of the rule above: with nothing collected there is
+        // no partial read to keep, and no reply at all is also how "there is
+        // no track at that index" arrives.
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&[("Beat", 0.0, 8.0)])],
+            answer_at_most: Some(0),
+            ..Default::default()
+        })
+        .await;
+        let map = get_arrangement(q, 1, Duration::from_millis(300)).await;
+        assert_eq!(map.missing, vec![0]);
+        assert!(map.tracks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pages_that_disagree_on_the_total_report_the_track_as_changed() {
+        // Insert a clip mid-read and the pages describe two timelines: the
+        // result would report one clip twice under two indices, never
+        // report the new one, and carry no signal at all.
+        let long: Vec<(&str, f32, f32)> = (0..10).map(|_| ("Clip", 0.0, 4.0)).collect();
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&long)],
+            page: 3,
+            total_after_first: Some(11),
+            ..Default::default()
+        })
+        .await;
+        let map = get_arrangement(q, 1, QUERY_TIMEOUT).await;
+        assert_eq!(map.changed, vec![0]);
+        assert!(map.tracks[0].changed);
+        // The clips already collected are real records Live sent, so they
+        // stay -- the reason string is what says they may be inconsistent.
+        assert_eq!(map.tracks[0].clips.len(), 3);
+        // And the read stopped three clips into eleven, so it is short as
+        // well as suspect. `truncated: false` here would read as "this is
+        // the whole timeline".
+        assert!(map.tracks[0].truncated);
+        assert!(map.missing.is_empty(), "a changed timeline is not a missing one");
+    }
+
+    #[tokio::test]
+    async fn a_stable_timeline_is_never_reported_as_changed() {
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&[("Beat", 0.0, 8.0)])],
+            ..Default::default()
+        })
+        .await;
+        let map = get_arrangement(q, 1, QUERY_TIMEOUT).await;
+        assert!(map.changed.is_empty());
+        assert!(!map.tracks[0].changed);
+    }
+
+    #[test]
+    fn decode_identity_refuses_every_reply_it_cannot_vouch_for() {
+        use rosc::OscType::{Float, Int, String as S};
+        let good = vec![Int(0), Int(2), S("Verse".into()), Float(32.0), Float(8.0)];
+        assert_eq!(
+            decode_identity(&good),
+            Some((Some(fence("Verse")), 32.0, 8.0))
+        );
+
+        // Unnamed is the normal case on the timeline, and it must not
+        // become the `«»` an empty fence would produce.
+        let mut unnamed = good.clone();
+        unnamed[2] = S("".into());
+        assert_eq!(decode_identity(&unnamed), Some((None, 32.0, 8.0)));
+
+        // Truncated before the name, the start, and the length.
+        assert!(decode_identity(&good[..2]).is_none());
+        assert!(decode_identity(&good[..3]).is_none());
+        assert!(decode_identity(&good[..4]).is_none());
+
+        // A name that is not a string, a position that is not a number.
+        // Guessing either would invent the identity the bracket compares.
+        let mut wrong_name = good.clone();
+        wrong_name[2] = Int(7);
+        assert!(decode_identity(&wrong_name).is_none());
+        let mut wrong_start = good.clone();
+        wrong_start[3] = S("32".into());
+        assert!(decode_identity(&wrong_start).is_none());
+    }
+
+    #[tokio::test]
+    async fn the_identity_read_uses_its_own_address_not_a_span_one_page() {
+        // The map is keyed on (track, start), so an identity read phrased as
+        // a span-1 page of index N joins a map page starting at N and takes
+        // its reply. `fake_live` answers ONLY the map address, so a read
+        // that still used it would find a willing answer here; the assert
+        // is that this one times out instead.
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&[("Verse", 32.0, 8.0)])],
+            ..Default::default()
+        })
+        .await;
+        let err = get_arrangement_notes(q, 0, 0, Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ArrangementNotesError::Query(QueryError::NoReply)
+        ));
     }
 
     #[tokio::test]

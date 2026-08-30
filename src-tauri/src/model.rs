@@ -58,7 +58,9 @@ plays where - which tracks are in a section, where the arrangement thins \
 out, what drops at the drop - call get_arrangement, and then \
 get_arrangement_notes on the few clips that matter. Arrangement clip \
 indices and session slot indices are different numbers: an index from \
-get_arrangement is never a slot for get_clip_notes.
+get_arrangement is never a slot for get_clip_notes. A note's start is \
+measured from the start of its clip, so its position on the timeline is the \
+clip's start plus the note's.
 - For pan, an exact fader value, or one track's full mixer state, call \
 get_track_detail. The context block's line per track is a summary, and it is \
 a mirror read that may be a couple of seconds old.

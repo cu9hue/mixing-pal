@@ -148,7 +148,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "Every MIDI note in one arrangement-view clip, as pitch, start, duration, velocity, mute. Queried from Live at call time and fetched in pages. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip has no notes to read.",
+                "description": "Every MIDI note in one arrangement-view clip, as pitch, start, duration, velocity, mute. Queried from Live at call time and fetched in pages. Each note's start is measured from the START OF THE CLIP, not from the start of the song, while the result's own start field is the clip's position on the timeline: a note's position on the timeline, and against the SECTIONS line, is result.start + note.start. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip has no notes to read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -446,11 +446,12 @@ fn clip_map_reasons(
     (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
-/// Assembles `get_arrangement`'s `missing_reason` from the three things that
+/// Assembles `get_arrangement`'s `missing_reason` from the four things that
 /// can go partly wrong: a set larger than the fan-out cap, tracks that did not
-/// answer, and tracks whose timeline was longer than the paging budget.
+/// answer, tracks whose timeline was longer than the paging budget, and tracks
+/// whose timeline moved between two pages of the same read.
 ///
-/// All three can hold at once, so they are joined rather than one overwriting
+/// All four can hold at once, so they are joined rather than one overwriting
 /// another. Extracted from the `execute` arm for the same reason
 /// `chain_map_reasons` and `clip_map_reasons` were: inline, the truncation
 /// case would have no test.
@@ -459,6 +460,7 @@ fn arrangement_reasons(
     read_tracks: i64,
     missing: &[i32],
     truncated: &[i32],
+    changed: &[i32],
 ) -> Option<String> {
     let mut reasons: Vec<String> = Vec::new();
     if num_tracks > read_tracks {
@@ -474,6 +476,17 @@ fn arrangement_reasons(
         let names: Vec<String> = truncated.iter().map(|t| t.to_string()).collect();
         reasons.push(format!(
             "timeline_truncated_for_tracks: {} (the clips listed are real, but the timeline continues past them)",
+            names.join(", ")
+        ));
+    }
+    // Deliberately not folded into `missing`. "The timeline moved under the
+    // read" and "the track never answered" are different things to tell a
+    // model: the first hands it real clips it should not fully trust, the
+    // second hands it nothing at all.
+    if !changed.is_empty() {
+        let names: Vec<String> = changed.iter().map(|t| t.to_string()).collect();
+        reasons.push(format!(
+            "timeline_changed_during_read_for_tracks: {} (the clips listed may pair a name with another clip's position)",
             names.join(", ")
         ));
     }
@@ -626,21 +639,19 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
 
             let truncated: Vec<i32> =
                 map.tracks.iter().filter(|t| t.truncated).map(|t| t.track).collect();
-            let missing_reason =
-                arrangement_reasons(num_tracks, read_tracks, &map.missing, &truncated);
+            let missing_reason = arrangement_reasons(
+                num_tracks,
+                read_tracks,
+                &map.missing,
+                &truncated,
+                &map.changed,
+            );
             ToolResult::live(
                 json!({ "tracks": map.tracks, "missing": map.missing }),
                 missing_reason,
             )
         }
         "get_arrangement_notes" => {
-            // No track_identity/topology_moved bracket here, unlike
-            // get_clip_notes: arrangement::get_arrangement_notes already
-            // brackets the read with its own identity check on the clip
-            // itself, which is finer-grained than a track-name sample and
-            // catches a track-level shift too, whenever it changes this
-            // clip's (name, start, length) at this index. A second, coarser
-            // bracket here would be redundant.
             let (Some(track), Some(index)) = (
                 int_arg(args, "track").filter(|t| *t >= 0),
                 int_arg(args, "index").filter(|i| *i >= 0),
@@ -655,14 +666,28 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 return ToolResult::missing("not_connected");
             };
 
-            match arrangement::get_arrangement_notes(
+            // Both halves of the standard bracket, exactly as get_clip_notes
+            // and get_rack_contents do it. get_arrangement_notes brackets
+            // the CLIP; this one catches the TRACK moving underneath it.
+            // The clip check does not subsume it: delete a track before
+            // track 5 while this read is in flight, and if the clip now at
+            // (5, 2) shares its (name, start, length) -- plausible on
+            // duplicated parallel tracks, and more so now that unnamed clips
+            // are the normal case -- the clip bracket passes and another
+            // track's notes come back under this track's name.
+            let before = track_identity(&ctx.coalescer, track);
+            let outcome = arrangement::get_arrangement_notes(
                 query,
                 track as i32,
                 index as i32,
                 arrangement::QUERY_TIMEOUT,
             )
-            .await
-            {
+            .await;
+            if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
+                return ToolResult::missing("topology_changed");
+            }
+
+            match outcome {
                 Ok(result) => ToolResult::live(
                     json!({
                         "notes": result.notes.notes,
@@ -1156,15 +1181,29 @@ mod tests {
 
     #[test]
     fn arrangement_reasons_names_every_partial_read_at_once() {
-        let reason = arrangement_reasons(600, 512, &[3], &[7]).unwrap();
+        let reason = arrangement_reasons(600, 512, &[3], &[7], &[9]).unwrap();
         assert!(reason.contains("truncated_to_first_512_tracks"));
         assert!(reason.contains("no_reply_for_tracks: 3"));
         assert!(reason.contains("timeline_truncated_for_tracks: 7"));
+        assert!(reason.contains("timeline_changed_during_read_for_tracks: 9"));
+    }
+
+    #[test]
+    fn arrangement_reasons_keeps_a_moved_timeline_apart_from_a_silent_track() {
+        // Two different things to tell a model: one track handed over real
+        // clips that may be mis-paired, the other handed over nothing.
+        let reason = arrangement_reasons(4, 4, &[], &[], &[2]).unwrap();
+        assert_eq!(
+            reason,
+            "timeline_changed_during_read_for_tracks: 2 (the clips listed may pair a name \
+             with another clip's position)"
+        );
+        assert!(!reason.contains("no_reply_for_tracks"));
     }
 
     #[test]
     fn a_clean_arrangement_read_has_no_reason_at_all() {
-        assert_eq!(arrangement_reasons(4, 4, &[], &[]), None);
+        assert_eq!(arrangement_reasons(4, 4, &[], &[], &[]), None);
     }
 
     #[tokio::test]
@@ -1172,6 +1211,150 @@ mod tests {
         let ctx = disconnected_ctx(one_track_mirror());
         let r = execute(&ctx, "get_arrangement", &json!({})).await;
         assert_eq!(r.missing_reason.as_deref(), Some("not_in_mirror"));
+    }
+
+    #[tokio::test]
+    async fn get_arrangement_notes_refuses_arguments_it_cannot_use() {
+        // A negative index is not "the first clip". Python slices from the
+        // END on one, so it would resolve inside Live to a real but
+        // different clip -- the same reason get_device_params refuses a
+        // negative path element before it reaches the wire.
+        let ctx = disconnected_ctx(one_track_mirror());
+        for args in [
+            json!({}),
+            json!({ "track": 0 }),
+            json!({ "index": 0 }),
+            json!({ "track": -1, "index": 0 }),
+            json!({ "track": 0, "index": -1 }),
+        ] {
+            let r = execute(&ctx, "get_arrangement_notes", &args).await;
+            assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"), "{args}");
+            assert_eq!(r.value, serde_json::Value::Null, "{args}");
+        }
+    }
+
+    #[tokio::test]
+    async fn get_arrangement_notes_before_the_socket_binds_says_so() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_arrangement_notes", &json!({ "track": 0, "index": 0 })).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("not_connected"));
+    }
+
+    #[tokio::test]
+    async fn a_clip_that_never_identifies_itself_is_a_named_gap() {
+        // `answering_ctx`'s Live echoes the track index and nothing else, so
+        // the identity read decodes nothing -- byte-identical to the silence
+        // an out-of-range index produces. The tool must name the gap rather
+        // than return an empty note list, which would read as "this clip has
+        // no notes in it".
+        let ctx = answering_ctx(one_track_mirror()).await;
+        let r = execute(&ctx, "get_arrangement_notes", &json!({ "track": 0, "index": 0 })).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("no_reply"));
+        assert_eq!(r.value, serde_json::Value::Null);
+    }
+
+    /// A `ToolContext` whose Live answers `get_arrangement_notes`: the clip
+    /// at (0, 0) starts at `first` on the first identity read and at
+    /// `second` afterwards, and it holds one note.
+    ///
+    /// `arrangement.rs` owns the wire behaviour of the bracket; this fake
+    /// exists so the STRING the arm maps that outcome to can be pinned.
+    /// `docs/manual-verification.md` and the tool description both quote
+    /// `arrangement_clip_identity_changed` verbatim.
+    async fn moving_clip_ctx(first: f32, second: f32) -> ToolContext {
+        use crate::osc::requests::RequestTable;
+        use crate::osc::socket::OscSocket;
+
+        let live = OscSocket::bind_to(0, 0).await.unwrap();
+        let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
+        let app_port = app.local_port();
+        let table = Arc::new(Mutex::new(RequestTable::new()));
+
+        let recv_socket = app.clone();
+        let recv_table = table.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Ok(msg) = recv_socket.recv().await {
+                    if let Ok(mut t) = recv_table.lock() {
+                        t.resolve(&msg);
+                    }
+                }
+            }
+        });
+
+        tokio::spawn(async move {
+            let mut seen_identity = 0;
+            loop {
+                let Ok(req) = live.recv().await else { continue };
+                let reply = match req.addr.as_str() {
+                    "/live/mixingpal/get/arrangement/identity" => {
+                        seen_identity += 1;
+                        let start = if seen_identity == 1 { first } else { second };
+                        vec![
+                            req.args[0].clone(),
+                            req.args[1].clone(),
+                            rosc::OscType::String("Verse".into()),
+                            rosc::OscType::Float(start),
+                            rosc::OscType::Float(8.0),
+                        ]
+                    }
+                    "/live/arrangement_clip/get/length" => vec![
+                        req.args[0].clone(),
+                        req.args[1].clone(),
+                        rosc::OscType::Float(8.0),
+                    ],
+                    "/live/arrangement_clip/get/num_notes" => vec![
+                        req.args[0].clone(),
+                        req.args[1].clone(),
+                        rosc::OscType::Int(1),
+                    ],
+                    "/live/arrangement_clip/get/notes_window" => vec![
+                        req.args[0].clone(),
+                        req.args[1].clone(),
+                        req.args[2].clone(),
+                        rosc::OscType::Int(60),
+                        rosc::OscType::Float(0.0),
+                        rosc::OscType::Float(0.5),
+                        rosc::OscType::Float(100.0),
+                        rosc::OscType::Bool(false),
+                    ],
+                    _ => continue,
+                };
+                let _ = live.send_to(app_port, &req.addr, reply).await;
+            }
+        });
+
+        ToolContext {
+            coalescer: Arc::new(Mutex::new(one_track_mirror())),
+            query: Arc::new(Mutex::new(Some(Arc::new(LiveQuery::new(app, table))))),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_clip_that_moved_mid_read_reports_the_literal_the_docs_quote() {
+        let ctx = moving_clip_ctx(32.0, 28.0).await;
+        let r = execute(&ctx, "get_arrangement_notes", &json!({ "track": 0, "index": 0 })).await;
+        assert_eq!(
+            r.missing_reason.as_deref(),
+            Some("arrangement_clip_identity_changed")
+        );
+        // A named gap, not a plausible answer: returning the notes with a
+        // warning beside them invites the model to use them anyway.
+        assert_eq!(r.value, serde_json::Value::Null);
+        assert!(!r.fresh);
+    }
+
+    #[tokio::test]
+    async fn a_clip_that_stayed_put_returns_its_notes_and_its_own_start() {
+        // The success path through the arm, and the field the schema now
+        // tells the model to add to each note's start.
+        let ctx = moving_clip_ctx(32.0, 32.0).await;
+        let r = execute(&ctx, "get_arrangement_notes", &json!({ "track": 0, "index": 0 })).await;
+        assert_eq!(r.missing_reason, None);
+        assert_eq!(r.value["count"], json!(1));
+        assert_eq!(r.value["name"], json!("«Verse»"));
+        assert_eq!(r.value["start"], json!(32.0));
+        assert_eq!(r.value["notes"][0]["start"], json!(0.0));
     }
 
     #[tokio::test]

@@ -290,6 +290,29 @@ async fn fake_live(f: Value) -> Arc<LiveQuery> {
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
+                "/live/mixingpal/get/arrangement/identity" => {
+                    // The bracket `get_arrangement_notes` opens and closes
+                    // around the note read. Its own address, not a span-1
+                    // page of the map: the map is keyed on (track, start),
+                    // so at index == start the two requests collide.
+                    if !arrangement_clip_exists(&track, int_at(1)) {
+                        continue; // an unreadable clip gets silence, like real Live
+                    }
+                    let clip = &track["arrangement"][int_at(1).unwrap() as usize];
+                    let _ = live
+                        .send_to(
+                            app_port,
+                            &req.addr,
+                            vec![
+                                req.args[0].clone(),
+                                req.args[1].clone(),
+                                OscType::String(clip["name"].as_str().unwrap().to_string()),
+                                OscType::Float(clip["start"].as_f64().unwrap() as f32),
+                                OscType::Float(clip["length"].as_f64().unwrap() as f32),
+                            ],
+                        )
+                        .await;
+                }
                 "/live/arrangement_clip/get/length" => {
                     if !arrangement_clip_exists(&track, int_at(1)) {
                         continue; // an unreadable clip gets silence, like real Live
