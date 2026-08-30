@@ -26,8 +26,14 @@ pub struct ArrangementClip {
     /// `get_arrangement_notes` takes. Not a bar number and not a slot.
     pub index: i32,
     pub name: String,
-    pub start: f32,
-    pub length: f32,
+    /// f64, not f32: `json!` widens an f32 by casting its raw bits, which
+    /// keeps the f32 rounding error (an off-grid clip start would reach the
+    /// model as `31.999998092651367`, in the same turn the SECTIONS line
+    /// prints `32`). Decoded through `clip_notes::as_f64`'s shortest-decimal
+    /// round-trip for the same reason `deltas::to_json` and `clip_notes`
+    /// itself do.
+    pub start: f64,
+    pub length: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -78,16 +84,11 @@ fn decode_page(reply: &[OscType], expect_start: usize) -> Option<(usize, usize, 
             OscType::String(s) => fence(s),
             _ => return None,
         };
-        let number = |arg: &OscType| match arg {
-            OscType::Float(v) => Some(*v),
-            OscType::Int(v) => Some(*v as f32),
-            _ => None,
-        };
         clips.push(ArrangementClip {
             index: (start + offset) as i32,
             name,
-            start: number(&triple[1])?,
-            length: number(&triple[2])?,
+            start: clip_notes::as_f64(&triple[1])?,
+            length: clip_notes::as_f64(&triple[2])?,
         });
     }
     Some((start, total, clips))
@@ -187,7 +188,7 @@ async fn identity_of(
     track: i32,
     index: i32,
     timeout: Duration,
-) -> Option<(String, f32, f32)> {
+) -> Option<(String, f64, f64)> {
     let reply = q
         .query(
             "/live/mixingpal/get/arrangement",
@@ -199,6 +200,20 @@ async fn identity_of(
     let (_, _, clips) = decode_page(&reply, index as usize)?;
     let clip = clips.first()?;
     Some((clip.name.clone(), clip.start, clip.length))
+}
+
+/// `get_arrangement_notes`'s successful payload: the notes, plus the clip's
+/// own name and start.
+///
+/// The spec calls this "no longer the guard" -- the identity bracket is what
+/// rejects a moved clip -- but echoing it back is still useful context for
+/// the model, especially when it calls this tool without having called
+/// `get_arrangement` first, which the schema permits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrangementClipNotes {
+    pub name: String,
+    pub start: f64,
+    pub notes: ClipNotes,
 }
 
 /// Notes in one arrangement clip, bracketed by an identity check.
@@ -215,7 +230,7 @@ pub async fn get_arrangement_notes(
     track: i32,
     index: i32,
     timeout: Duration,
-) -> Result<ClipNotes, ArrangementNotesError> {
+) -> Result<ArrangementClipNotes, ArrangementNotesError> {
     let before = identity_of(&q, track, index, timeout)
         .await
         .ok_or(ArrangementNotesError::Query(QueryError::NoReply))?;
@@ -231,7 +246,8 @@ pub async fn get_arrangement_notes(
     if before != after {
         return Err(ArrangementNotesError::IdentityChanged);
     }
-    Ok(notes)
+    let (name, start, _length) = before;
+    Ok(ArrangementClipNotes { name, start, notes })
 }
 
 #[cfg(test)]
@@ -280,6 +296,35 @@ mod tests {
             OscType::Int(1),
             OscType::String("Verse".into()),
             OscType::Float(32.0),
+        ];
+        assert!(decode_page(&reply, 0).is_none());
+    }
+
+    #[test]
+    fn decode_page_fails_closed_on_a_non_string_name() {
+        // Guessing a name from a non-string field would invent a clip label.
+        let reply = vec![
+            OscType::Int(0),
+            OscType::Int(0),
+            OscType::Int(1),
+            OscType::Int(7),
+            OscType::Float(32.0),
+            OscType::Float(64.0),
+        ];
+        assert!(decode_page(&reply, 0).is_none());
+    }
+
+    #[test]
+    fn decode_page_fails_closed_on_a_non_numeric_start() {
+        // Guessing a position from a non-numeric field would invent where
+        // the clip sits on the timeline.
+        let reply = vec![
+            OscType::Int(0),
+            OscType::Int(0),
+            OscType::Int(1),
+            OscType::String("Verse".into()),
+            OscType::String("not a number".into()),
+            OscType::Float(64.0),
         ];
         assert!(decode_page(&reply, 0).is_none());
     }
@@ -575,5 +620,29 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ArrangementNotesError::IdentityChanged));
+    }
+
+    #[tokio::test]
+    async fn a_stable_clip_returns_its_notes() {
+        // Neither existing test above ever exercises the success path:
+        // both assert the bracket REJECTS, and `fake_live_with_moving_clip`
+        // changes its answer after the first identity read by design. A
+        // clip that answers the SAME (name, start) both times -- nothing
+        // moved it -- is what most reads look like, and this is the only
+        // test that pins the bracket letting one through.
+        let q = fake_live_with_moving_clip(("Verse", 32.0), ("Verse", 32.0)).await;
+        let result = get_arrangement_notes(q, 0, 0, Duration::from_millis(300)).await.unwrap();
+        assert_eq!(result.name, "«Verse»");
+        assert_eq!(result.start, 32.0);
+        assert_eq!(
+            result.notes.notes,
+            vec![clip_notes::Note {
+                pitch: 60,
+                start: 0.0,
+                duration: 0.5,
+                velocity: 100.0,
+                mute: false,
+            }]
+        );
     }
 }

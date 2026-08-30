@@ -166,7 +166,11 @@ fn as_i32(v: &OscType) -> Option<i32> {
 /// Widens through f32's shortest-decimal Display for the same reason
 /// `deltas::to_json` does: a raw bit-cast keeps f32's rounding error, so
 /// 0.5_f32 would arrive as 0.5 but 100.1_f32 as 100.09999847412109.
-fn as_f64(v: &OscType) -> Option<f64> {
+///
+/// `pub(crate)` so `arrangement::decode_page` shares this exact round-trip
+/// for `ArrangementClip.start`/`.length` instead of a second implementation
+/// that could drift.
+pub(crate) fn as_f64(v: &OscType) -> Option<f64> {
     match v {
         OscType::Float(f) => f.to_string().parse::<f64>().ok(),
         OscType::Double(d) => Some(*d),

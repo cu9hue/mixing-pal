@@ -283,9 +283,10 @@ fn topology_moved(before: &Option<serde_json::Value>, after: &Option<serde_json:
     }
 }
 
-/// Bounds the whole-set fan-out of both `get_device_chains` and `get_clips`.
+/// Bounds the whole-set fan-out of `get_device_chains`, `get_clips`, and
+/// `get_arrangement`.
 ///
-/// The two are the only concurrency in this codebase sized by a mirrored
+/// The three are the only concurrency in this codebase sized by a mirrored
 /// value: each spawns per-track tasks and samples one mirrored name per
 /// track at each end of the fetch, all off a count the mirror handed over. A
 /// corrupt or absurd count must not become that many tasks or that many
@@ -300,8 +301,8 @@ fn topology_moved(before: &Option<serde_json::Value>, after: &Option<serde_json:
 /// instead of presenting the first `MAX_FANOUT_TRACKS` tracks as the set.
 const MAX_FANOUT_TRACKS: i64 = 512;
 
-/// Whether a whole-set read's bracket -- `get_device_chains`'s or
-/// `get_clips`'s -- caught a topology change.
+/// Whether a whole-set read's bracket -- `get_device_chains`'s, `get_clips`'s,
+/// or `get_arrangement`'s -- caught a topology change.
 ///
 /// A count comparison alone catches an add or a delete but misses a
 /// same-count REORDER: the indices in the returned `TrackChain` (or
@@ -662,9 +663,14 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             )
             .await
             {
-                Ok(notes) => ToolResult::live(
-                    json!({ "notes": notes.notes, "count": notes.notes.len() }),
-                    notes.missing_reason,
+                Ok(result) => ToolResult::live(
+                    json!({
+                        "notes": result.notes.notes,
+                        "count": result.notes.notes.len(),
+                        "name": result.name,
+                        "start": result.start,
+                    }),
+                    result.notes.missing_reason,
                 ),
                 Err(arrangement::ArrangementNotesError::IdentityChanged) => {
                     ToolResult::missing("arrangement_clip_identity_changed")
