@@ -44,7 +44,13 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/song/get/beat"
         // The wire-version handshake -- one int, no key. See
         // shared/wire-version.json and mixingpal/version.py.
-        | "/live/mixingpal/get/version" => KeyArity::None,
+        | "/live/mixingpal/get/version"
+        // Cannot be subscribed: upstream registers this as a plain handler
+        // rather than through its property list, so there is no
+        // start_listen for it. Reply is a flat (name, time, name, time,
+        // ...) list, not a keyed value -- but it is still one reply to one
+        // request, so the request itself is keyless.
+        | "/live/song/get/cue_points" => KeyArity::None,
 
         "/live/track/get/name"
         | "/live/track/get/mute"
@@ -176,6 +182,7 @@ mod tests {
             ("/live/song/get/signature_denominator", KeyArity::None),
             ("/live/song/get/beat", KeyArity::None),
             ("/live/mixingpal/get/version", KeyArity::None),
+            ("/live/song/get/cue_points", KeyArity::None),
             ("/live/clip/get/notes", KeyArity::Args(2)),
             ("/live/clip/get/notes_window", KeyArity::Args(3)),
             ("/live/clip/get/num_notes", KeyArity::Args(2)),

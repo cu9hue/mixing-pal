@@ -9,6 +9,7 @@ pub enum PollKind {
     FocusedNotes,
     Meters,
     ScriptVersion,
+    CuePoints,
 }
 
 impl PollKind {
@@ -20,6 +21,7 @@ impl PollKind {
             PollKind::FocusedNotes,
             PollKind::Meters,
             PollKind::ScriptVersion,
+            PollKind::CuePoints,
         ]
     }
 
@@ -37,6 +39,9 @@ impl PollKind {
             // Surface) -- 5s catches that without polling a near-constant
             // value at the same rate as faders.
             PollKind::ScriptVersion => Duration::from_secs(5),
+            // Locators change when the producer drops one, which is rare --
+            // no need to poll them at fader/track-state rates.
+            PollKind::CuePoints => Duration::from_secs(5),
         }
     }
 
@@ -50,6 +55,7 @@ impl PollKind {
             PollKind::FocusedNotes => 3,
             PollKind::Meters => 4,
             PollKind::ScriptVersion => 5,
+            PollKind::CuePoints => 6,
         }
     }
 }

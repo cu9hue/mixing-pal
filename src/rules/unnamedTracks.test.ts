@@ -14,6 +14,7 @@ function setOf(names: Array<string | null>): SetState {
     rootNote: null,
     selectedTrack: null,
     scriptVersion: 2,
+    cuePoints: [],
     tracks,
   };
 }

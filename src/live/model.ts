@@ -8,6 +8,12 @@ export interface TrackState {
   meter: number | null;
 }
 
+/// One of the producer's locators: a name and its position in beats.
+export interface CuePoint {
+  name: string;
+  time: number;
+}
+
 export interface SetState {
   tempo: number | null;
   isPlaying: boolean;
@@ -16,6 +22,7 @@ export interface SetState {
   selectedTrack: number | null;
   tracks: Record<number, TrackState>;
   scriptVersion: number | null;
+  cuePoints: CuePoint[];
 }
 
 export interface Delta {

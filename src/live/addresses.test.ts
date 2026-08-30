@@ -1,13 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { SONG_FIELDS, TRACK_FIELDS, NUM_TRACKS_ADDR } from "./apply";
+import { SONG_FIELDS, TRACK_FIELDS, NUM_TRACKS_ADDR, CUE_POINTS_ADDR } from "./apply";
 import manifest from "../../shared/handled-addresses.json";
 
-// num_tracks is handled directly in applyDelta (it prunes state.tracks)
-// rather than through SONG_FIELDS's generic field-copy map -- see apply.ts's
-// comment on NUM_TRACKS_ADDR. Listed here, separately from SONG_FIELDS, so
-// the equality check below still holds for every field that IS a plain
-// SONG_FIELDS copy.
-const handledOutsideFieldMaps = [NUM_TRACKS_ADDR];
+// num_tracks and cue_points are handled directly in applyDelta (num_tracks
+// prunes state.tracks; cue_points decodes a flat name/time list) rather than
+// through SONG_FIELDS's generic field-copy map -- see apply.ts's comments on
+// NUM_TRACKS_ADDR and CUE_POINTS_ADDR. Listed here, separately from
+// SONG_FIELDS, so the equality check below still holds for every field that
+// IS a plain SONG_FIELDS copy.
+const handledOutsideFieldMaps = [NUM_TRACKS_ADDR, CUE_POINTS_ADDR];
 
 // This file is one half of the address-consistency tripwire from I4 in the
 // 2026-08-16 whole-branch review: shared/handled-addresses.json is the

@@ -35,6 +35,13 @@ export function buildContext(state: SetState, goal: string): string {
       ` · ${state.isPlaying ? "playing" : "stopped"}`,
   );
 
+  if (state.cuePoints.length > 0) {
+    const sections = state.cuePoints
+      .map((c) => `${fence(c.name)} ${c.time}`)
+      .join(", ");
+    lines.push(`SECTIONS (beats)  ${sections}`);
+  }
+
   const trimmedGoal = goal.trim();
   if (trimmedGoal !== "") lines.push(`GOAL  ${trimmedGoal}`);
 

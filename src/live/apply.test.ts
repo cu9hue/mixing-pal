@@ -102,4 +102,25 @@ describe("applyDelta", () => {
       ]);
     });
   });
+
+  it("maps a cue point reply into pairs", () => {
+    const state = applyDelta(emptySet(), {
+      addr: "/live/song/get/cue_points",
+      args: ["Intro", 0, "Drop", 64],
+    });
+    expect(state.cuePoints).toEqual([
+      { name: "Intro", time: 0 },
+      { name: "Drop", time: 64 },
+    ]);
+  });
+
+  it("ignores a ragged cue point reply rather than half-applying it", () => {
+    // A trailing name with no time would misplace every section after it.
+    const before = { ...emptySet(), cuePoints: [{ name: "Intro", time: 0 }] };
+    const after = applyDelta(before, {
+      addr: "/live/song/get/cue_points",
+      args: ["Intro", 0, "Drop"],
+    });
+    expect(after.cuePoints).toEqual(before.cuePoints);
+  });
 });

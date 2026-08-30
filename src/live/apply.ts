@@ -1,4 +1,4 @@
-import { Delta, SetState, TrackState, emptyTrack } from "./model";
+import { CuePoint, Delta, SetState, TrackState, emptyTrack } from "./model";
 
 export function emptySet(): SetState {
   return {
@@ -9,6 +9,7 @@ export function emptySet(): SetState {
     selectedTrack: null,
     tracks: {},
     scriptVersion: null,
+    cuePoints: [],
   };
 }
 
@@ -46,6 +47,11 @@ export const TRACK_FIELDS: Record<string, keyof TrackState> = {
 // check there excludes it from the SONG_FIELDS comparison.
 export const NUM_TRACKS_ADDR = "/live/song/get/num_tracks";
 
+// Handled directly rather than through SONG_FIELDS for the same reason
+// NUM_TRACKS_ADDR is: the reply is a flat (name, time, name, time, ...)
+// list, not a single value to copy into one field.
+export const CUE_POINTS_ADDR = "/live/song/get/cue_points";
+
 export function applyDelta(state: SetState, delta: Delta): SetState {
   if (delta.addr === NUM_TRACKS_ADDR) {
     const n = delta.args[0];
@@ -57,6 +63,20 @@ export function applyDelta(state: SetState, delta: Delta): SetState {
       if (Number(key) < n) tracks[Number(key)] = track;
     }
     return { ...state, tracks };
+  }
+
+  if (delta.addr === CUE_POINTS_ADDR) {
+    // An odd-length reply is a half-decoded locator list, which would
+    // misplace every section after the bad entry. Keep what we had.
+    if (delta.args.length % 2 !== 0) return state;
+    const cuePoints: CuePoint[] = [];
+    for (let i = 0; i < delta.args.length; i += 2) {
+      const name = delta.args[i];
+      const time = delta.args[i + 1];
+      if (typeof name !== "string" || typeof time !== "number") return state;
+      cuePoints.push({ name, time });
+    }
+    return { ...state, cuePoints };
   }
 
   const songField = SONG_FIELDS[delta.addr];

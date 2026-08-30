@@ -10,6 +10,7 @@ const STATE: SetState = {
   rootNote: 9,
   selectedTrack: 1,
   scriptVersion: 2,
+  cuePoints: [],
   tracks: {
     0: { ...emptyTrack(), name: "Kick" },
     1: { ...emptyTrack(), name: "Pad Wide" },

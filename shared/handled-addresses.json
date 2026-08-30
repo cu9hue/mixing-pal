@@ -7,7 +7,8 @@
     "/live/song/get/root_note",
     "/live/view/get/selected_track",
     "/live/song/get/num_tracks",
-    "/live/mixingpal/get/version"
+    "/live/mixingpal/get/version",
+    "/live/song/get/cue_points"
   ],
   "trackFields": [
     "/live/track/get/name",

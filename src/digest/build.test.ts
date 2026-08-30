@@ -93,4 +93,24 @@ describe("buildContext", () => {
     expect(out).toContain("use get_arrangement;");
     expect(out).toContain("get_arrangement_notes");
   });
+
+  it("names the producer's sections, fenced, with the unit", () => {
+    // A bare "«Verse» 32" leaves the model to guess bars or beats, and it
+    // will guess wrong against a producer reading bars off Live's ruler.
+    const state = { ...emptySet(), cuePoints: [
+      { name: "Intro", time: 0 },
+      { name: "Drop", time: 64 },
+    ] };
+    const out = buildContext(state, "");
+    expect(out).toContain("SECTIONS (beats)");
+    expect(out).toContain("«Intro» 0");
+    expect(out).toContain("«Drop» 64");
+  });
+
+  it("omits the sections line entirely when the set has no locators", () => {
+    // An empty "SECTIONS" line would read as "this set has no structure"
+    // rather than "nobody dropped a locator".
+    const out = buildContext({ ...emptySet(), cuePoints: [] }, "");
+    expect(out).not.toContain("SECTIONS");
+  });
 });

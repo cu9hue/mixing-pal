@@ -9,6 +9,7 @@ const BASE: SetState = {
   rootNote: 9,
   selectedTrack: null,
   scriptVersion: 2,
+  cuePoints: [],
   tracks: {},
 };
 

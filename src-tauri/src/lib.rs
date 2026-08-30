@@ -127,6 +127,10 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
     "/live/master/get/output_meter_level",
     // PollKind::ScriptVersion, observed raw -- the wire-version handshake.
     "/live/mixingpal/get/version",
+    // PollKind::CuePoints, observed raw. Unlike every other polled address
+    // above, this one is mirrored on purpose (NOT in is_resolve_only): the
+    // digest reads the producer's locators from SetState on every turn.
+    "/live/song/get/cue_points",
 ];
 
 /// Every literal address the poll loop sends on the wire, outside of
@@ -170,6 +174,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/arrangement_clip/get/length",
     "/live/arrangement_clip/get/num_notes",
     "/live/arrangement_clip/get/notes_window",
+    "/live/song/get/cue_points",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -1076,6 +1081,9 @@ async fn poll_kind(
                 vec![],
             )
             .await;
+        }
+        PollKind::CuePoints => {
+            register_and_send(table, poll_socket, now, "/live/song/get/cue_points", vec![]).await;
         }
     }
 }
