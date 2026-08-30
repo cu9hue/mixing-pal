@@ -255,6 +255,7 @@ pub fn build_body(s: &Settings, messages: &[ChatMessage]) -> Result<serde_json::
         "messages": wire,
         "tools": tool_schema(),
         "tool_choice": "auto",
+        "max_tokens": MAX_OUTPUT_TOKENS,
     }))
 }
 
@@ -289,6 +290,21 @@ pub async fn complete_with_body(
         tool_calls: message.tool_calls.unwrap_or_default(),
     })
 }
+
+/// The output ceiling this app sends on every request.
+///
+/// Sent explicitly because leaving it unset makes the ceiling whoever routes
+/// the request. OpenRouter fills in the model's advertised
+/// `max_completion_tokens` and the provider behind that model id can enforce
+/// a lower one: `moonshotai/kimi-k2` advertises 100352, and the request came
+/// back `max_tokens: 100352 exceeds maximum 98304` before the model ran. That
+/// is not a failure a producer can act on, and nothing in the set or the
+/// conversation causes it.
+///
+/// 4096 is a ceiling, not a budget: the prompt asks for brief answers and the
+/// card is 320px wide. It sits far under every cap this app has seen, so a
+/// provider changing its own limit cannot take the app down.
+pub const MAX_OUTPUT_TOKENS: u32 = 4096;
 
 /// A trivial tool the probe asks the model to call. Deliberately not one of
 /// the app's real tools: a provider that rejects a real tool's schema would
@@ -380,6 +396,7 @@ pub async fn probe(client: &reqwest::Client, s: &Settings) -> Result<(), ProbeFa
             }
         }],
         "tool_choice": "auto",
+        "max_tokens": MAX_OUTPUT_TOKENS,
     });
 
     let quote = |text: String| ProbeFailure {
@@ -852,6 +869,51 @@ mod tests {
         // src/ui/markdown.ts parses a subset. A table renders as literal
         // pipes in the producer's chat pane.
         assert!(SYSTEM_PROMPT.contains("Tables and links"));
+    }
+
+    #[test]
+    fn the_request_names_its_own_output_ceiling() {
+        // Left unset, the ceiling is whoever routes the request. OpenRouter
+        // fills in the model's advertised max_completion and the provider it
+        // routed to can enforce a lower one, which is a 400 before the model
+        // ever runs.
+        let s = Settings::default();
+        let body = build_body(&s, &[ChatMessage {
+            role: "user".into(),
+            content: Some("what is on the drums?".into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }])
+        .unwrap();
+        assert_eq!(body["max_tokens"], serde_json::json!(MAX_OUTPUT_TOKENS));
+    }
+
+    #[tokio::test]
+    async fn the_probe_names_the_same_output_ceiling_as_a_real_turn() {
+        // A probe that omits it certifies a configuration the app then fails
+        // on -- the same reason the probe mirrors the role skeleton.
+        let server = MockServer::start().await;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
+        let captured = seen.clone();
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(move |req: &Request| {
+                let body: serde_json::Value = req.body_json().unwrap();
+                *captured.lock().unwrap() = body["max_tokens"].clone();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "choices": [{ "message": { "tool_calls": [{
+                        "id": "1",
+                        "type": "function",
+                        "function": { "name": PROBE_TOOL, "arguments": "{\"value\":1}" }
+                    }] } }]
+                }))
+            })
+            .mount(&server)
+            .await;
+
+        let s = Settings { base_url: server.uri(), model: "m".into(), api_key: "k".into() };
+        probe(&reqwest::Client::new(), &s).await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), serde_json::json!(MAX_OUTPUT_TOKENS));
     }
 
     #[tokio::test]
