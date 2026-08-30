@@ -633,6 +633,13 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             )
         }
         "get_arrangement_notes" => {
+            // No track_identity/topology_moved bracket here, unlike
+            // get_clip_notes: arrangement::get_arrangement_notes already
+            // brackets the read with its own identity check on the clip
+            // itself, which is finer-grained than a track-name sample and
+            // catches a track-level shift too, whenever it changes this
+            // clip's (name, start, length) at this index. A second, coarser
+            // bracket here would be redundant.
             let (Some(track), Some(index)) = (
                 int_arg(args, "track").filter(|t| *t >= 0),
                 int_arg(args, "index").filter(|i| *i >= 0),

@@ -376,10 +376,22 @@ mod tests {
         Arc::new(LiveQuery::new(app, table))
     }
 
-    /// Answers the identity read with one name the first time and a
-    /// different one afterwards, which is what a clip inserted earlier in
-    /// the timeline looks like from the client's side.
-    async fn fake_live_with_moving_clip() -> Arc<LiveQuery> {
+    /// Answers the identity read with `first` the first time and `second`
+    /// afterwards -- each a `(name, start)` pair, with length held at `8.0`
+    /// throughout.
+    ///
+    /// Two cases exercise this, because Live names an arrangement clip after
+    /// its source clip: a track of duplicated loops has many clips all
+    /// called e.g. "Drums", so a real insertion does not reliably change the
+    /// name. It always changes `start`, though -- everything from the
+    /// inserted clip onward slides later on the timeline -- so `start` is
+    /// what actually distinguishes index 2 before and after an insertion,
+    /// and the two cases below vary the name and the start independently so
+    /// neither field alone can make the identity check pass by accident.
+    async fn fake_live_with_moving_clip(
+        first: (&'static str, f32),
+        second: (&'static str, f32),
+    ) -> Arc<LiveQuery> {
         let live = OscSocket::bind_to(0, 0).await.unwrap();
         let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
         let app_port = app.local_port();
@@ -407,7 +419,7 @@ mod tests {
                 match req.addr.as_str() {
                     "/live/mixingpal/get/arrangement" => {
                         seen_identity += 1;
-                        let name = if seen_identity == 1 { "Verse" } else { "Chorus" };
+                        let (name, start) = if seen_identity == 1 { first } else { second };
                         let _ = live
                             .send_to(
                                 app_port,
@@ -417,7 +429,7 @@ mod tests {
                                     OscType::Int(0),
                                     OscType::Int(1),
                                     OscType::String(name.into()),
-                                    OscType::Float(32.0),
+                                    OscType::Float(start),
                                     OscType::Float(8.0),
                                 ],
                             )
@@ -535,13 +547,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn notes_are_dropped_when_the_clip_moved_during_the_read() {
+    async fn notes_are_dropped_when_the_clip_at_the_index_was_renamed() {
+        // A clip index that survives being reused for a different clip --
+        // e.g. the old one deleted and a new one dropped in at the same
+        // slot -- keeps its start and length but not its name.
+        let q = fake_live_with_moving_clip(("Verse", 32.0), ("Chorus", 32.0)).await;
+        let err = get_arrangement_notes(q, 0, 0, Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ArrangementNotesError::IdentityChanged));
+    }
+
+    #[tokio::test]
+    async fn notes_are_dropped_when_the_clip_at_the_index_shifted_on_the_timeline() {
         // Arrangement indices shift when a clip is added earlier in the
-        // timeline. Without this, a read taken across that edit returns a
-        // neighbour's notes as if they were the asked-for clip's -- the
-        // failure the bracket exists to prevent, and one the model cannot
-        // detect for itself.
-        let q = fake_live_with_moving_clip().await;
+        // timeline. That kind of edit does NOT change the name: Live names
+        // an arrangement clip after its source clip, so a track of
+        // duplicated loops has many clips all called e.g. "Drums" -- name
+        // alone cannot tell one apart from the next. It always changes
+        // `start`, which is why an identity check that pinned only the name
+        // would miss the failure this bracket exists to prevent: a read
+        // taken across the edit returning a neighbour's notes as if they
+        // were the asked-for clip's, and one the model cannot detect for
+        // itself.
+        let q = fake_live_with_moving_clip(("Verse", 32.0), ("Verse", 28.0)).await;
         let err = get_arrangement_notes(q, 0, 0, Duration::from_millis(300))
             .await
             .unwrap_err();
