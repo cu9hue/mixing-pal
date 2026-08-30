@@ -17,6 +17,14 @@ class ArrangementHandler(AbletonOSCHandler):
     Ranged for the reason `rack.py` is: a track with many clips serialises
     past the datagram cap, and only the sender knows the sizes.
 
+    Upstream's `create_track_callback` answers an out-of-range track with an
+    `Index out of range` ERROR reply (confirmed against Live 12 on
+    2026-08-30, probing track 2 of a two-track set). This handler sends
+    nothing instead. Both look the same to the client -- neither resolves the
+    pending request, so it times out into a named gap -- but the two families
+    are not identical on the wire, and this silence is deliberate rather than
+    an oversight to "fix" later.
+
     Returning None sends no reply at all (see `osc_server.process_message`'s
     `if rv is not None`), which is byte-identical to a lost datagram from the
     client's side. That is how "there is no track at that index" arrives.

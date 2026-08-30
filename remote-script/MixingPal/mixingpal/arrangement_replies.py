@@ -22,6 +22,20 @@ MAX_REPLY_BYTES = 8960
 def clips_of(track):
     """Every arrangement clip, as (name, start_time, length).
 
+    `track.arrangement_clips` yields Clip OBJECTS, not ids -- probed against
+    Live 12 on 2026-08-30 via upstream's own
+    `/live/track/get/arrangement_clips/name`, which answered `,isssssssss`
+    for a nine-clip track. Cycling '74's LOM docs describe this property as
+    a list of ids, but that is the Max-for-Live access layer; the Python
+    control-surface API hands back objects, the same way `clip_slots[i].clip`
+    already does everywhere else in this package. Attribute access here is
+    therefore safe.
+
+    That probe also found every one of those nine names empty: Live shows a
+    derived label in the timeline and leaves `clip.name` unset. Unnamed is
+    the normal case on the arrangement, and `arrangement.rs` omits the field
+    rather than sending a bare fence.
+
     One pass over `track.arrangement_clips`, so the three values of a clip
     are read together and cannot disagree. Reading them from three separate
     endpoints is what this endpoint exists to avoid: three replies are three

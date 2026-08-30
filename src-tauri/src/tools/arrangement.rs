@@ -25,7 +25,18 @@ pub struct ArrangementClip {
     /// Position in the track's `arrangement_clips` list, and exactly what
     /// `get_arrangement_notes` takes. Not a bar number and not a slot.
     pub index: i32,
-    pub name: String,
+    /// Absent when the clip has no name, rather than an empty fence.
+    ///
+    /// Probed against Live 12 on 2026-08-30: a track with nine arrangement
+    /// clips answered every name as an empty string. Live shows a derived
+    /// label in the timeline and leaves `clip.name` unset, so unnamed is the
+    /// normal case there -- the opposite of session slots, which producers
+    /// do name. `fence("")` is `«»`, and sending that per clip costs tokens
+    /// on every call and reads to the model as a name it can quote back at
+    /// the producer. Omitted instead, the way `TrackClips::midi` omits an
+    /// unknown flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// f64, not f32: `json!` widens an f32 by casting its raw bits, which
     /// keeps the f32 rounding error (an off-grid clip start would reach the
     /// model as `31.999998092651367`, in the same turn the SECTIONS line
@@ -81,7 +92,8 @@ fn decode_page(reply: &[OscType], expect_start: usize) -> Option<(usize, usize, 
     let mut clips = Vec::with_capacity(fields.len() / 3);
     for (offset, triple) in fields.chunks_exact(3).enumerate() {
         let name = match &triple[0] {
-            OscType::String(s) => fence(s),
+            OscType::String(s) if s.is_empty() => None,
+            OscType::String(s) => Some(fence(s)),
             _ => return None,
         };
         clips.push(ArrangementClip {
@@ -182,13 +194,19 @@ pub enum ArrangementNotesError {
 }
 
 /// One arrangement clip's identity: what makes "index 3" a particular clip
+///
+/// On an unnamed timeline -- the normal case, see `ArrangementClip::name` --
+/// this degenerates to `(start, length)`, and that is still the half that
+/// matters: an insertion earlier in the timeline shifts `start` and leaves
+/// any name alone. The name is the weaker discriminator here, not the
+/// stronger one, which is why both tests pin `start` as well.
 /// rather than a position.
 async fn identity_of(
     q: &LiveQuery,
     track: i32,
     index: i32,
     timeout: Duration,
-) -> Option<(String, f64, f64)> {
+) -> Option<(Option<String>, f64, f64)> {
     let reply = q
         .query(
             "/live/mixingpal/get/arrangement",
@@ -211,7 +229,9 @@ async fn identity_of(
 /// `get_arrangement` first, which the schema permits.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrangementClipNotes {
-    pub name: String,
+    /// Absent for an unnamed clip, for the reason `ArrangementClip::name`
+    /// records.
+    pub name: Option<String>,
     pub start: f64,
     pub notes: ClipNotes,
 }
@@ -273,8 +293,48 @@ mod tests {
         let (start, total, clips) = decode_page(&reply, 0).unwrap();
         assert_eq!((start, total), (0, 7));
         assert_eq!(clips.len(), 2);
-        assert_eq!(clips[0].name, "«Verse»");
+        assert_eq!(clips[0].name.as_deref(), Some("«Verse»"));
         assert_eq!((clips[0].start, clips[0].length), (32.0, 64.0));
+    }
+
+    #[test]
+    fn an_unnamed_arrangement_clip_carries_no_name_at_all() {
+        // Probed against Live 12 on 2026-08-30: a track with nine
+        // arrangement clips answered `,isssssssss` with every string empty.
+        // Live shows a derived label in the timeline and leaves `clip.name`
+        // unset, so unnamed is the NORMAL case there, unlike session slots
+        // which producers do name. Fencing an empty name yields `«»`, which
+        // costs tokens on every clip of every call and reads to the model as
+        // a name it can quote back at the producer.
+        let reply = vec![
+            OscType::Int(0),
+            OscType::Int(0),
+            OscType::Int(1),
+            OscType::String("".into()),
+            OscType::Float(32.0),
+            OscType::Float(8.0),
+        ];
+        let (_, _, clips) = decode_page(&reply, 0).unwrap();
+        assert_eq!(clips[0].name, None);
+        let rendered = serde_json::to_value(&clips[0]).unwrap();
+        assert!(rendered.get("name").is_none(), "{rendered}");
+        // The position still arrives: it is what carries the information on
+        // an unnamed timeline.
+        assert_eq!(clips[0].start, 32.0);
+    }
+
+    #[test]
+    fn a_named_arrangement_clip_still_carries_its_fenced_name() {
+        let reply = vec![
+            OscType::Int(0),
+            OscType::Int(0),
+            OscType::Int(1),
+            OscType::String("Verse".into()),
+            OscType::Float(0.0),
+            OscType::Float(4.0),
+        ];
+        let (_, _, clips) = decode_page(&reply, 0).unwrap();
+        assert_eq!(clips[0].name.as_deref(), Some("«Verse»"));
     }
 
     #[test]
@@ -632,7 +692,7 @@ mod tests {
         // test that pins the bracket letting one through.
         let q = fake_live_with_moving_clip(("Verse", 32.0), ("Verse", 32.0)).await;
         let result = get_arrangement_notes(q, 0, 0, Duration::from_millis(300)).await.unwrap();
-        assert_eq!(result.name, "«Verse»");
+        assert_eq!(result.name.as_deref(), Some("«Verse»"));
         assert_eq!(result.start, 32.0);
         assert_eq!(
             result.notes.notes,
