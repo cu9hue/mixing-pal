@@ -1,4 +1,5 @@
-use crate::osc::query::LiveQuery;
+use crate::osc::query::{LiveQuery, QueryError};
+use crate::tools::clip_notes::{self, ClipNotes, ARRANGEMENT_NOTES};
 use crate::tools::fence::fence;
 use rosc::OscType;
 use serde::Serialize;
@@ -171,6 +172,68 @@ pub async fn get_arrangement(q: Arc<LiveQuery>, num_tracks: i32, timeout: Durati
     ArrangementMap { tracks, missing }
 }
 
+#[derive(Debug)]
+pub enum ArrangementNotesError {
+    Query(QueryError),
+    /// The clip at this index was not the same clip before and after the
+    /// read. Its notes are dropped rather than returned under the wrong name.
+    IdentityChanged,
+}
+
+/// One arrangement clip's identity: what makes "index 3" a particular clip
+/// rather than a position.
+async fn identity_of(
+    q: &LiveQuery,
+    track: i32,
+    index: i32,
+    timeout: Duration,
+) -> Option<(String, f32, f32)> {
+    let reply = q
+        .query(
+            "/live/mixingpal/get/arrangement",
+            vec![OscType::Int(track), OscType::Int(index), OscType::Int(1)],
+            timeout,
+        )
+        .await
+        .ok()?;
+    let (_, _, clips) = decode_page(&reply, index as usize)?;
+    let clip = clips.first()?;
+    Some((clip.name.clone(), clip.start, clip.length))
+}
+
+/// Notes in one arrangement clip, bracketed by an identity check.
+///
+/// The bracket is not defence in depth, it is the guard. Arrangement indices
+/// shift when a clip is added earlier in the timeline, so a read spanning
+/// that edit lands on a neighbour and returns real notes under the wrong
+/// clip's name -- a confident, wrong answer, and one the model has no way to
+/// detect. Checking in Rust rather than echoing the identity and hoping the
+/// model compares it is the pattern `device_params` and `rack_contents`
+/// already use.
+pub async fn get_arrangement_notes(
+    q: Arc<LiveQuery>,
+    track: i32,
+    index: i32,
+    timeout: Duration,
+) -> Result<ClipNotes, ArrangementNotesError> {
+    let before = identity_of(&q, track, index, timeout)
+        .await
+        .ok_or(ArrangementNotesError::Query(QueryError::NoReply))?;
+
+    let notes = clip_notes::get_notes_at(q.clone(), ARRANGEMENT_NOTES, track, index, timeout)
+        .await
+        .map_err(ArrangementNotesError::Query)?;
+
+    let after = identity_of(&q, track, index, timeout)
+        .await
+        .ok_or(ArrangementNotesError::Query(QueryError::NoReply))?;
+
+    if before != after {
+        return Err(ArrangementNotesError::IdentityChanged);
+    }
+    Ok(notes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +376,94 @@ mod tests {
         Arc::new(LiveQuery::new(app, table))
     }
 
+    /// Answers the identity read with one name the first time and a
+    /// different one afterwards, which is what a clip inserted earlier in
+    /// the timeline looks like from the client's side.
+    async fn fake_live_with_moving_clip() -> Arc<LiveQuery> {
+        let live = OscSocket::bind_to(0, 0).await.unwrap();
+        let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
+        let app_port = app.local_port();
+        let table = Arc::new(Mutex::new(RequestTable::new()));
+
+        let recv_socket = app.clone();
+        let recv_table = table.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Ok(msg) = recv_socket.recv().await {
+                    if let Ok(mut t) = recv_table.lock() {
+                        t.resolve(&msg);
+                    }
+                }
+            }
+        });
+
+        tokio::spawn(async move {
+            let mut seen_identity = 0;
+            loop {
+                let req = match live.recv().await {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                match req.addr.as_str() {
+                    "/live/mixingpal/get/arrangement" => {
+                        seen_identity += 1;
+                        let name = if seen_identity == 1 { "Verse" } else { "Chorus" };
+                        let _ = live
+                            .send_to(
+                                app_port,
+                                &req.addr,
+                                vec![
+                                    OscType::Int(0),
+                                    OscType::Int(0),
+                                    OscType::Int(1),
+                                    OscType::String(name.into()),
+                                    OscType::Float(32.0),
+                                    OscType::Float(8.0),
+                                ],
+                            )
+                            .await;
+                    }
+                    "/live/arrangement_clip/get/length" => {
+                        let _ = live
+                            .send_to(
+                                app_port,
+                                &req.addr,
+                                vec![req.args[0].clone(), req.args[1].clone(), OscType::Float(8.0)],
+                            )
+                            .await;
+                    }
+                    "/live/arrangement_clip/get/num_notes" => {
+                        let _ = live
+                            .send_to(
+                                app_port,
+                                &req.addr,
+                                vec![req.args[0].clone(), req.args[1].clone(), OscType::Int(1)],
+                            )
+                            .await;
+                    }
+                    "/live/arrangement_clip/get/notes_window" => {
+                        let mut reply = vec![
+                            req.args[0].clone(),
+                            req.args[1].clone(),
+                            req.args[2].clone(),
+                        ];
+                        reply.extend(vec![
+                            OscType::Int(60),
+                            OscType::Float(0.0),
+                            OscType::Float(0.5),
+                            OscType::Float(100.0),
+                            OscType::Bool(false),
+                        ]);
+                        let _ = live.send_to(app_port, &req.addr, reply).await;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        Arc::new(LiveQuery::new(app, table))
+    }
+
     fn timeline(names: &[(&str, f32, f32)]) -> Vec<(String, f32, f32)> {
         names.iter().map(|(n, a, l)| ((*n).to_string(), *a, *l)).collect()
     }
@@ -381,5 +532,19 @@ mod tests {
         assert!(map.tracks[0].truncated);
         assert_eq!(map.tracks[0].clips.len(), MAX_WINDOWS);
         assert!(map.missing.is_empty(), "a truncated read is not a missing one");
+    }
+
+    #[tokio::test]
+    async fn notes_are_dropped_when_the_clip_moved_during_the_read() {
+        // Arrangement indices shift when a clip is added earlier in the
+        // timeline. Without this, a read taken across that edit returns a
+        // neighbour's notes as if they were the asked-for clip's -- the
+        // failure the bracket exists to prevent, and one the model cannot
+        // detect for itself.
+        let q = fake_live_with_moving_clip().await;
+        let err = get_arrangement_notes(q, 0, 0, Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ArrangementNotesError::IdentityChanged));
     }
 }

@@ -89,7 +89,11 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // clip count, not an echo of `span`, so `span` cannot be in the key:
         // it would never match the reply's third value and no read would
         // ever resolve.
-        | "/live/mixingpal/get/arrangement" => KeyArity::Args(2),
+        | "/live/mixingpal/get/arrangement"
+        // Same shape as the session clip's length and count -- (track,
+        // index) in, echoed straight back with the value appended.
+        | "/live/arrangement_clip/get/length"
+        | "/live/arrangement_clip/get/num_notes" => KeyArity::Args(2),
 
         // The window ordinal the client stamped on the request, echoed
         // back. It is what makes two windows of ONE clip different keys, so
@@ -106,7 +110,11 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // parameter addresses. `span` is deliberately NOT in the key; see
         // the spec's Devices section on why that is safe here and what
         // closes it.
-        | "/live/mixingpal/get/rack/chains" => KeyArity::Args(3),
+        | "/live/mixingpal/get/rack/chains"
+        // Same role as the session clip's own window ordinal: what makes
+        // two windows of ONE arrangement clip distinct keys, and what lets
+        // `clip_notes::get_notes_at` share the decoder unmodified.
+        | "/live/arrangement_clip/get/notes_window" => KeyArity::Args(3),
 
         "/live/song/get/track_data"
         | "/live/song/get/track_names"
@@ -182,6 +190,9 @@ mod tests {
             // -- `span` cannot be in the key, because the reply's third
             // value is the real total, not an echo of it.
             ("/live/mixingpal/get/arrangement", KeyArity::Args(2)),
+            ("/live/arrangement_clip/get/length", KeyArity::Args(2)),
+            ("/live/arrangement_clip/get/num_notes", KeyArity::Args(2)),
+            ("/live/arrangement_clip/get/notes_window", KeyArity::Args(3)),
             ("/live/device/get/parameter/value_string", KeyArity::Args(3)),
             ("/live/device/get/parameters/name_range", KeyArity::Args(3)),
             (

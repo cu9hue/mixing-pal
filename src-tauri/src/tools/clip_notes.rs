@@ -69,6 +69,33 @@ pub struct Note {
     pub mute: bool,
 }
 
+/// The three addresses one note read uses.
+///
+/// Session and arrangement clips are different objects in Live and are
+/// reached by different address families, but the reply shapes are identical
+/// by construction (`mixingpal/clip_replies.py` builds both), so everything
+/// below this line -- the decoder, the window halving, the retry budget --
+/// is shared rather than copied. Copying it was the alternative, and this is
+/// the most delicate code in the app.
+#[derive(Debug, Clone, Copy)]
+pub struct NoteAddresses {
+    pub length: &'static str,
+    pub num_notes: &'static str,
+    pub notes_window: &'static str,
+}
+
+pub const SESSION_NOTES: NoteAddresses = NoteAddresses {
+    length: "/live/clip/get/length",
+    num_notes: "/live/clip/get/num_notes",
+    notes_window: "/live/clip/get/notes_window",
+};
+
+pub const ARRANGEMENT_NOTES: NoteAddresses = NoteAddresses {
+    length: "/live/arrangement_clip/get/length",
+    num_notes: "/live/arrangement_clip/get/num_notes",
+    notes_window: "/live/arrangement_clip/get/notes_window",
+};
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ClipNotes {
     pub notes: Vec<Note>,
@@ -212,8 +239,9 @@ pub fn decode_notes(args: &[OscType], expect_window: u32) -> Option<Vec<Note>> {
 /// windows costs up to k ticks, not one. That is the failure `num_notes`
 /// exists to make rare, and the reason this is a round-based retry rather
 /// than one giant fan-out.
-pub async fn get_clip_notes(
+pub async fn get_notes_at(
     q: Arc<LiveQuery>,
+    addrs: NoteAddresses,
     track: i32,
     clip: i32,
     timeout: Duration,
@@ -222,19 +250,19 @@ pub async fn get_clip_notes(
     // and answers nothing -- so this failing is also how "there is no clip
     // here" reaches the caller, distinct from "the clip has no notes".
     // The length and the note count are independent, so they go out
-    // together: `/live/clip/get/length` is `KeyArity::Args(2)` and
-    // `/live/clip/get/num_notes` is a different address, so the two are
-    // trivially distinguishable and AbletonOSC answers both inside the same
-    // ~100 ms tick (`osc_server.process()` drains the whole socket per
-    // tick). Asking for the count therefore costs no round trip at all.
+    // together: `addrs.length` is `KeyArity::Args(2)` and `addrs.num_notes`
+    // is a different address, so the two are trivially distinguishable and
+    // AbletonOSC answers both inside the same ~100 ms tick
+    // (`osc_server.process()` drains the whole socket per tick). Asking for
+    // the count therefore costs no round trip at all.
     let (length_reply, count_reply) = tokio::join!(
         q.query(
-            "/live/clip/get/length",
+            addrs.length,
             vec![OscType::Int(track), OscType::Int(clip)],
             timeout,
         ),
         q.query(
-            "/live/clip/get/num_notes",
+            addrs.num_notes,
             vec![OscType::Int(track), OscType::Int(clip)],
             timeout / COUNT_HINT_TIMEOUT_DIVISOR,
         )
@@ -298,7 +326,7 @@ pub async fn get_clip_notes(
                     OscType::Float(span),
                 ];
                 tokio::spawn(async move {
-                    (window, q.query("/live/clip/get/notes_window", args, timeout).await)
+                    (window, q.query(addrs.notes_window, args, timeout).await)
                 })
             })
             .collect();
@@ -348,6 +376,17 @@ pub async fn get_clip_notes(
             .then(a.pitch.cmp(&b.pitch))
     });
     Ok(ClipNotes { notes, missing_reason })
+}
+
+/// Session-view clip notes. The shape the app has always had; the address
+/// family is now explicit so the arrangement read can share everything else.
+pub async fn get_clip_notes(
+    q: Arc<LiveQuery>,
+    track: i32,
+    clip: i32,
+    timeout: Duration,
+) -> Result<ClipNotes, QueryError> {
+    get_notes_at(q, SESSION_NOTES, track, clip, timeout).await
 }
 
 #[cfg(test)]

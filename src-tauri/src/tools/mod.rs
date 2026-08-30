@@ -147,6 +147,21 @@ pub fn tool_schema() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "get_arrangement_notes",
+                "description": "Every MIDI note in one arrangement-view clip, as pitch, start, duration, velocity, mute. Queried from Live at call time and fetched in pages. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip has no notes to read.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "track": { "type": "integer", "description": "Zero-based track index." },
+                        "index": { "type": "integer", "description": "The clip's position in that track's arrangement, as reported by get_arrangement." }
+                    },
+                    "required": ["track", "index"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "get_device_chains",
                 "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device, marked [rack]; call get_rack_contents on it to see what is inside. Whether a device is switched on or bypassed is not reported. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
                 "parameters": {
@@ -616,6 +631,47 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 json!({ "tracks": map.tracks, "missing": map.missing }),
                 missing_reason,
             )
+        }
+        "get_arrangement_notes" => {
+            let (Some(track), Some(index)) = (
+                int_arg(args, "track").filter(|t| *t >= 0),
+                int_arg(args, "index").filter(|i| *i >= 0),
+            ) else {
+                return ToolResult::missing("bad_arguments");
+            };
+            let query = match ctx.query.lock() {
+                Ok(q) => q.clone(),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            let Some(query) = query else {
+                return ToolResult::missing("not_connected");
+            };
+
+            match arrangement::get_arrangement_notes(
+                query,
+                track as i32,
+                index as i32,
+                arrangement::QUERY_TIMEOUT,
+            )
+            .await
+            {
+                Ok(notes) => ToolResult::live(
+                    json!({ "notes": notes.notes, "count": notes.notes.len() }),
+                    notes.missing_reason,
+                ),
+                Err(arrangement::ArrangementNotesError::IdentityChanged) => {
+                    ToolResult::missing("arrangement_clip_identity_changed")
+                }
+                Err(arrangement::ArrangementNotesError::Query(QueryError::NoReply)) => {
+                    ToolResult::missing("no_reply")
+                }
+                Err(arrangement::ArrangementNotesError::Query(QueryError::Busy)) => {
+                    ToolResult::missing("busy")
+                }
+                Err(arrangement::ArrangementNotesError::Query(QueryError::Transport(e))) => {
+                    ToolResult::missing(&format!("transport_error: {e}"))
+                }
+            }
         }
         "get_device_chains" => {
             // Without a count there is nothing to iterate. Querying 0..0
@@ -1116,8 +1172,8 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_lists_exactly_the_seven_tools_the_model_may_call() {
-        // Renamed from six. get_arrangement is the seventh.
+    fn the_schema_lists_exactly_the_eight_tools_the_model_may_call() {
+        // Renamed from seven. get_arrangement_notes is the eighth.
         let schema = tool_schema();
         let names: Vec<&str> = schema
             .as_array()
@@ -1132,6 +1188,7 @@ mod tests {
                 "get_clip_notes",
                 "get_clips",
                 "get_arrangement",
+                "get_arrangement_notes",
                 "get_device_chains",
                 "get_device_params",
                 "get_rack_contents"

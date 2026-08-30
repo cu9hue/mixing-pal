@@ -91,5 +91,6 @@ describe("buildContext", () => {
     expect(out).toContain("get_device_params");
     expect(out).toContain("get_rack_contents");
     expect(out).toContain("get_arrangement");
+    expect(out).toContain("get_arrangement_notes");
   });
 });

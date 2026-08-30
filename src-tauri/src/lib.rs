@@ -167,6 +167,9 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/mixingpal/get/version",
     "/live/mixingpal/get/rack/chains",
     "/live/mixingpal/get/arrangement",
+    "/live/arrangement_clip/get/length",
+    "/live/arrangement_clip/get/num_notes",
+    "/live/arrangement_clip/get/notes_window",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -314,6 +317,10 @@ fn handle_inbound(
     // - arrangement is get_arrangement's paged read of one track's timeline,
     //   keyed on (track, start): the same case as the parameter page, one
     //   retained entry per page rather than per track.
+    // - the arrangement_clip addresses are get_arrangement_notes's reads,
+    //   keyed on (track, index) or (track, index, window) -- the same case
+    //   as clip/get/notes and friends, for a clip on the timeline instead
+    //   of in a session slot.
     let is_resolve_only = matches!(
         msg.addr.as_str(),
         "/live/song/get/track_data"
@@ -331,6 +338,9 @@ fn handle_inbound(
             | "/live/device/get/parameters/value_string_range"
             | "/live/mixingpal/get/rack/chains"
             | "/live/mixingpal/get/arrangement"
+            | "/live/arrangement_clip/get/length"
+            | "/live/arrangement_clip/get/num_notes"
+            | "/live/arrangement_clip/get/notes_window"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
@@ -1335,6 +1345,9 @@ mod tests {
         "/live/device/get/parameters/value_string_range",
         "/live/mixingpal/get/rack/chains",
         "/live/mixingpal/get/arrangement",
+        "/live/arrangement_clip/get/length",
+        "/live/arrangement_clip/get/num_notes",
+        "/live/arrangement_clip/get/notes_window",
     ];
 
     #[test]

@@ -55,7 +55,8 @@ same as a MIDI clip that is empty.
 - The SECTIONS line names the producer's locators and where they are, and \
 that is all the context block says about the timeline. For what actually \
 plays where - which tracks are in a section, where the arrangement thins \
-out, what drops at the drop - call get_arrangement. Arrangement clip \
+out, what drops at the drop - call get_arrangement, and then \
+get_arrangement_notes on the few clips that matter. Arrangement clip \
 indices and session slot indices are different numbers: an index from \
 get_arrangement is never a slot for get_clip_notes.
 - For pan, an exact fader value, or one track's full mixer state, call \
