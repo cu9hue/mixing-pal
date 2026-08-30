@@ -42,9 +42,12 @@ export interface ToolRunner {
 
 /**
  * A model that keeps calling tools and never answers would otherwise spend
- * the producer's credit until they notice. There are six tools now, and the
- * prompt routinely chains a whole-set call into a couple of narrower ones --
- * six round trips is still believed enough to cover that plus a follow-up.
+ * the producer's credit until they notice. There are eight tools now, and
+ * the prompt routinely chains a whole-set call into a couple of narrower
+ * ones -- get_device_chains into get_device_params or get_rack_contents,
+ * get_clips into get_clip_notes, and now get_arrangement into
+ * get_arrangement_notes, a second two-step drill-down. Six round trips is
+ * still believed enough to cover one such chain plus a follow-up.
  */
 export const MAX_ROUND_TRIPS = 6;
 

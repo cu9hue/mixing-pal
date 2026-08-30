@@ -106,6 +106,18 @@ fn clip_is_midi(track: &Value) -> bool {
     track["midi"].as_bool() == Some(true)
 }
 
+/// True when arrangement clip `index` appears in this track's `arrangement`
+/// array in the fixture -- the arrangement equivalent of `slot_is_filled`.
+/// Unlike a session slot, an arrangement index has no gaps: it is a plain
+/// position in the array, so existence is just a bounds check.
+fn arrangement_clip_exists(track: &Value, index: Option<i32>) -> bool {
+    let Some(index) = index else { return false };
+    if index < 0 {
+        return false;
+    }
+    track["arrangement"].as_array().map(|a| (index as usize) < a.len()).unwrap_or(false)
+}
+
 /// A Live that answers from the fixture.
 ///
 /// It deliberately does NOT answer `/live/mixingpal/get/device/identity`,
@@ -275,6 +287,67 @@ async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         ));
                         reply.push(OscType::Float(clip["start"].as_f64().unwrap() as f32));
                         reply.push(OscType::Float(clip["length"].as_f64().unwrap() as f32));
+                    }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
+                "/live/arrangement_clip/get/length" => {
+                    if !arrangement_clip_exists(&track, int_at(1)) {
+                        continue; // an unreadable clip gets silence, like real Live
+                    }
+                    let clip = &track["arrangement"][int_at(1).unwrap() as usize];
+                    let length = clip["length"].as_f64().unwrap() as f32;
+                    let _ = live
+                        .send_to(
+                            app_port,
+                            &req.addr,
+                            vec![req.args[0].clone(), req.args[1].clone(), OscType::Float(length)],
+                        )
+                        .await;
+                }
+                "/live/arrangement_clip/get/num_notes" => {
+                    if !(arrangement_clip_exists(&track, int_at(1)) && clip_is_midi(&track)) {
+                        continue;
+                    }
+                    let index = int_at(1).unwrap_or(0).to_string();
+                    let count =
+                        track["arrangementNotes"][&index].as_array().map(|n| n.len()).unwrap_or(0);
+                    let _ = live
+                        .send_to(
+                            app_port,
+                            &req.addr,
+                            vec![
+                                req.args[0].clone(),
+                                req.args[1].clone(),
+                                OscType::Int(count as i32),
+                            ],
+                        )
+                        .await;
+                }
+                "/live/arrangement_clip/get/notes_window" => {
+                    if !(arrangement_clip_exists(&track, int_at(1)) && clip_is_midi(&track)) {
+                        continue;
+                    }
+                    let index = int_at(1).unwrap_or(0).to_string();
+                    let (start, span) = (float_at(5).unwrap_or(0.0), float_at(6).unwrap_or(4.0));
+                    // (track, clip, window) echoed back, ordinal and all.
+                    let mut reply = vec![
+                        req.args[0].clone(),
+                        req.args[1].clone(),
+                        req.args[2].clone(),
+                    ];
+                    if let Some(notes) = track["arrangementNotes"][&index].as_array() {
+                        for n in notes {
+                            let at = n["start"].as_f64().unwrap() as f32;
+                            if at >= start && at < start + span {
+                                reply.extend(vec![
+                                    OscType::Int(n["pitch"].as_i64().unwrap() as i32),
+                                    OscType::Float(at),
+                                    OscType::Float(0.5),
+                                    OscType::Float(100.0),
+                                    OscType::Bool(false),
+                                ]);
+                            }
+                        }
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }

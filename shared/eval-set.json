@@ -6,7 +6,7 @@
     "rootNote": 9,
     "scaleName": "Minor",
     "selectedTrack": 0,
-    "scriptVersion": 4,
+    "scriptVersion": 5,
     "cuePoints": [
       { "name": "Intro", "time": 0 },
       { "name": "Drop", "time": 64 }
@@ -30,6 +30,12 @@
         { "name": "Pad Intro", "start": 0.0, "length": 32.0 },
         { "name": "Pad Outro", "start": 96.0, "length": 32.0 }
       ],
+      "arrangementNotes": {
+        "0": [
+          { "pitch": 57, "start": 0.0 },
+          { "pitch": 60, "start": 0.0 }
+        ]
+      },
       "notes": {
         "0": [
           { "pitch": 57, "start": 0.0 },
