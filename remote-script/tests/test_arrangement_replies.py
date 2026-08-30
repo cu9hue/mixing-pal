@@ -27,6 +27,18 @@ arrangement_reply = arrangement_replies.arrangement_reply
 clips_of = arrangement_replies.clips_of
 window_of = arrangement_replies.window_of
 
+# Loaded by file path, not `from MixingPal.mixingpal.clip_replies import ...`,
+# for the same reason arrangement_replies is above: mixingpal/__init__.py
+# imports handlers that reach ableton.v2.control_surface, which exists only
+# inside Live. See test_clip_replies.py, which loads it the same way.
+_CLIP_TARGET = os.path.join(_HERE, "..", "MixingPal", "mixingpal", "clip_replies.py")
+_CLIP_SPEC = importlib.util.spec_from_file_location("clip_replies", _CLIP_TARGET)
+clip_replies = importlib.util.module_from_spec(_CLIP_SPEC)
+_CLIP_SPEC.loader.exec_module(clip_replies)
+
+notes_window_reply = clip_replies.notes_window_reply
+num_notes_reply = clip_replies.num_notes_reply
+
 
 class FakeClip:
     def __init__(self, name, start_time, length):
@@ -92,6 +104,30 @@ class ArrangementReply(unittest.TestCase):
         # would stop it after one page and silently truncate the timeline.
         reply = arrangement_reply(0, 0, 40, [("a", 0.0, 4.0)])
         self.assertEqual(reply[2], 40)
+
+
+class FakeNote:
+    def __init__(self, pitch, start_time):
+        self.pitch = pitch
+        self.start_time = start_time
+        self.duration = 0.5
+        self.velocity = 100
+        self.mute = False
+
+
+class ArrangementNotesShareTheSessionShape(unittest.TestCase):
+    def test_the_note_reply_is_byte_identical_to_the_session_one(self):
+        # The Rust decoder is reused rather than copied, and it reads these
+        # positionally. If the two shapes ever diverge, the arrangement read
+        # returns notes that are plausible and wrong.
+        notes = [FakeNote(60, 0.0), FakeNote(64, 1.0)]
+        self.assertEqual(
+            notes_window_reply(2, 7, 3, notes),
+            (2, 7, 3, 60, 0.0, 0.5, 100, False, 64, 1.0, 0.5, 100, False),
+        )
+
+    def test_the_count_reply_is_byte_identical_to_the_session_one(self):
+        self.assertEqual(num_notes_reply(1, 4, [FakeNote(60, 0.0)]), (1, 4, 1))
 
 
 if __name__ == "__main__":
