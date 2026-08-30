@@ -13,14 +13,20 @@ Nothing here imports Live, so `remote-script/tests` can exercise it directly.
 # so a longer one cannot survive the trip intact.
 NAME_CAP = 120
 
-# One datagram's worth, under the 9216-byte macOS UDP cap with room for the
-# address and type tags. Past it, Live's sendto raises and the client receives
-# nothing at all -- silence indistinguishable from a lost datagram.
+#--------------------------------------------------------------------------------
+# Mirrors MAX_DATAGRAM - HEADER_SLACK in src-tauri/src/osc/budget.rs, and is
+# pinned from the Rust side by arrangement_byte_ceiling_matches_the_budget, the
+# way rack_paths.py's identical constant is pinned by
+# rack_byte_ceiling_matches_the_budget. One datagram's worth, under the
+# 9216-byte macOS UDP cap with room for the address and type tags. Past it,
+# Live's sendto raises and the client receives NOTHING AT ALL -- silence, not
+# truncation, indistinguishable from a lost reply.
+#--------------------------------------------------------------------------------
 MAX_REPLY_BYTES = 8960
 
 
-def clips_of(track):
-    """Every arrangement clip, as (name, start_time, length).
+def clip_record(clip):
+    """One arrangement clip, as (name, start_time, length).
 
     `track.arrangement_clips` yields Clip OBJECTS, not ids -- probed against
     Live 12 on 2026-08-30 via upstream's own
@@ -36,31 +42,43 @@ def clips_of(track):
     the normal case on the arrangement, and `arrangement.rs` omits the field
     rather than sending a bare fence.
 
-    One pass over `track.arrangement_clips`, so the three values of a clip
-    are read together and cannot disagree. Reading them from three separate
-    endpoints is what this endpoint exists to avoid: three replies are three
-    moments, and a producer editing between them mis-zips the timeline
-    silently.
+    One pass over the clip, so its three values are read together and cannot
+    disagree. Reading them from three separate endpoints is what this
+    endpoint exists to avoid: three replies are three moments, and a producer
+    editing between them mis-zips the timeline silently.
     """
-    return [
-        (str(clip.name)[:NAME_CAP], float(clip.start_time), float(clip.length))
-        for clip in track.arrangement_clips
-    ]
+    return (str(clip.name)[:NAME_CAP], float(clip.start_time), float(clip.length))
 
 
 def _record_bytes(record):
     """Roughly what one record costs on the wire.
 
-    The name is the only variable part; the two floats are 4 bytes each plus
-    type tags, and OSC pads strings to a 4-byte boundary. Deliberately an
-    over-estimate: under-counting is what makes sendto raise.
+    The name is the only variable part; the numbers are 4 bytes each plus a
+    type tag, and OSC pads strings to a 4-byte boundary with at least one
+    NUL. An over-estimate: 16 covers three type tags and two 4-byte floats
+    with a whole slot to spare, and a record with one number costs even less
+    than that.
+
+    The name is measured in UTF-8 BYTES, because that is what `pythonosc`
+    writes (`osc_types.write_string` encodes with `val.encode('utf-8')`).
+    Measuring Python's codepoint count instead under-counts an accented, CJK
+    or emoji clip name by up to 4x, and under-counting is what makes sendto
+    raise.
     """
-    name = record[0]
-    return ((len(name) + 4) // 4) * 4 + 16
+    name = str(record[0]).encode("utf-8")
+    return 4 * ((len(name) // 4) + 1) + 16
 
 
-def window_of(entries, start, span, budget=MAX_REPLY_BYTES):
-    """Records from entries[start:], at most `span` and at most what fits.
+def window_of(clips, start, span, budget=MAX_REPLY_BYTES):
+    """Records for `clips[start:start + span]`, at most what fits a datagram.
+
+    Takes the track's clip LIST rather than records already read, and reads
+    three properties only for the clips inside the window. Reading the whole
+    track and slicing afterwards costs three LOM property reads per clip on
+    the track for every page: a 700-clip track paged to completion spent
+    ~11,200 property reads to deliver ~700, all on Live's single callback
+    thread. The handler still reports the track's true clip count, which is
+    `len(clips)` and costs nothing.
 
     The HANDLER owns the window, not the client, for the reason `rack_paths`'
     `build_window` documents: only the sender knows the byte sizes, and a
@@ -69,12 +87,17 @@ def window_of(entries, start, span, budget=MAX_REPLY_BYTES):
 
     A single oversized record is still returned, so every reply carries at
     least one and the client's paging loop always makes progress.
+
+    Indexes rather than slices: `clips` is a Live list, and `arrangement.py`
+    already relies on `len()` and `[i]` on it and on nothing else.
     """
     start = max(0, start)
     span = max(0, span)
+    stop = min(len(clips), start + span)
     out = []
     used = 0
-    for record in entries[start:start + span]:
+    for index in range(start, stop):
+        record = clip_record(clips[index])
         cost = _record_bytes(record)
         if out and used + cost > budget:
             break
@@ -94,3 +117,44 @@ def arrangement_reply(track_index, start, total, records):
     """
     flat = [field for record in records for field in record]
     return (track_index, start, total, *flat)
+
+
+def identity_reply(track_index, index, clip):
+    """`(track, index, name, start_time, length)` for ONE clip.
+
+    A separate address from the map, modelled on
+    `/live/mixingpal/get/device/identity` and existing for the same reason.
+    The map's key is `(track, start)`, so an identity read phrased as a
+    span-1 page collides with a span-48 page of the same track whenever
+    `index == start`: the second registrant joins the first and takes its
+    reply, and a page expecting 48 records receives one. A distinct address
+    cannot collide, and it reads one clip instead of rescanning a track.
+    """
+    return (track_index, index, *clip_record(clip))
+
+
+def cue_points_reply(cue_points, budget=MAX_REPLY_BYTES):
+    """`(total, *(name, time))`, cut to one datagram.
+
+    Bounded rather than paged. The poll loop fires this every five seconds
+    into the mirror and never awaits a reply, so there is nothing to drive a
+    paging loop; upstream's `/live/song/get/cue_points` is unbounded instead,
+    and a set with enough locators makes its sendto raise, which reaches the
+    client as silence -- indistinguishable from "this set has no locators",
+    every five seconds, forever.
+
+    `total` is the true locator count, not the number of records carried, so
+    the client can say that the SECTIONS line is a subset rather than
+    presenting it as the whole structure.
+    """
+    total = len(cue_points)
+    out = [total]
+    used = 0
+    for cue in cue_points:
+        record = (str(cue.name)[:NAME_CAP], float(cue.time))
+        cost = _record_bytes(record)
+        if used + cost > budget:
+            break
+        out.extend(record)
+        used += cost
+    return tuple(out)

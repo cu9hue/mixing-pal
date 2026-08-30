@@ -14,6 +14,7 @@ Run: python3 -m unittest discover -s remote-script/tests -v
 
 import importlib.util
 import os
+import sys
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -23,9 +24,37 @@ arrangement_replies = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(arrangement_replies)
 
 NAME_CAP = arrangement_replies.NAME_CAP
+MAX_REPLY_BYTES = arrangement_replies.MAX_REPLY_BYTES
 arrangement_reply = arrangement_replies.arrangement_reply
-clips_of = arrangement_replies.clips_of
+clip_record = arrangement_replies.clip_record
+cue_points_reply = arrangement_replies.cue_points_reply
+identity_reply = arrangement_replies.identity_reply
 window_of = arrangement_replies.window_of
+
+# The vendored pythonosc, which is what actually serialises a reply inside
+# Live. Imported as a package rather than by file path because its builder
+# imports its own siblings; it reaches nothing under `abletonosc/`, so it
+# loads fine outside Live. Used below to measure what a record really costs
+# instead of recomputing it, so the test cannot repeat the estimator's own
+# mistake.
+sys.path.insert(0, os.path.join(_HERE, "..", "MixingPal"))
+from pythonosc.osc_message_builder import OscMessageBuilder  # noqa: E402
+
+
+def encoded_arg_bytes(fields):
+    """Bytes `pythonosc` writes for `fields` themselves.
+
+    The datagram less its address block and its type-tag block: those two
+    are the header, and `HEADER_SLACK` in `src-tauri/src/osc/budget.rs`
+    covers them. What is left is the variable part the estimators above are
+    trying to bound.
+    """
+    builder = OscMessageBuilder(address="/x")
+    for arg in fields:
+        builder.add_arg(arg)
+    address = 4 * ((len("/x") // 4) + 1)
+    tags = 4 * (((1 + len(fields)) // 4) + 1)
+    return len(builder.build().dgram) - address - tags
 
 # Loaded by file path, not `from MixingPal.mixingpal.clip_replies import ...`,
 # for the same reason arrangement_replies is above: mixingpal/__init__.py
@@ -52,46 +81,103 @@ class FakeTrack:
         self.arrangement_clips = clips
 
 
-class ClipsOf(unittest.TestCase):
-    def test_returns_name_start_and_length_in_timeline_order(self):
-        track = FakeTrack([FakeClip("Verse", 32.0, 64.0), FakeClip("Fill", 60.0, 4.0)])
+class ExplodingClip(object):
+    """Fails the test if anything reads its properties.
+
+    `window_of` used to read every clip on the track and slice afterwards,
+    which cost three LOM property reads per clip per page. This is how the
+    test says "the clips outside the window were never touched".
+    """
+
+    def __init__(self, case):
+        self._case = case
+
+    def __getattr__(self, attr):
+        self._case.fail("a clip outside the window was read: %s" % attr)
+
+
+class ClipRecord(unittest.TestCase):
+    def test_returns_name_start_and_length_together(self):
         self.assertEqual(
-            clips_of(track),
-            [("Verse", 32.0, 64.0), ("Fill", 60.0, 4.0)],
+            clip_record(FakeClip("Verse", 32.0, 64.0)),
+            ("Verse", 32.0, 64.0),
+        )
+
+    def test_a_long_name_is_capped_on_the_wire(self):
+        self.assertEqual(len(clip_record(FakeClip("x" * 500, 0.0, 4.0))[0]), NAME_CAP)
+
+
+class WindowOf(unittest.TestCase):
+    def clips(self, count):
+        return [FakeClip("c%d" % i, float(i) * 4.0, 4.0) for i in range(count)]
+
+    def test_returns_at_most_span_records_from_start(self):
+        self.assertEqual(
+            window_of(self.clips(3), 1, 2, budget=MAX_REPLY_BYTES),
+            [("c1", 4.0, 4.0), ("c2", 8.0, 4.0)],
         )
 
     def test_a_track_with_nothing_on_the_timeline_is_empty_not_an_error(self):
         # Normal early in the writing phase, and the client must be able to
         # tell it apart from a track that did not answer.
-        self.assertEqual(clips_of(FakeTrack([])), [])
-
-    def test_a_long_name_is_capped_on_the_wire(self):
-        track = FakeTrack([FakeClip("x" * 500, 0.0, 4.0)])
-        self.assertEqual(len(clips_of(track)[0][0]), NAME_CAP)
-
-
-class WindowOf(unittest.TestCase):
-    def test_returns_at_most_span_records_from_start(self):
-        entries = [("a", 0.0, 4.0), ("b", 4.0, 4.0), ("c", 8.0, 4.0)]
-        self.assertEqual(window_of(entries, 1, 2, budget=8960), entries[1:3])
+        self.assertEqual(window_of(FakeTrack([]).arrangement_clips, 0, 48), [])
 
     def test_a_start_past_the_end_returns_nothing_rather_than_raising(self):
-        self.assertEqual(window_of([("a", 0.0, 4.0)], 5, 2, budget=8960), [])
+        self.assertEqual(window_of(self.clips(1), 5, 2, budget=MAX_REPLY_BYTES), [])
+
+    def test_only_the_clips_inside_the_window_are_read(self):
+        # The whole point of taking the clip list rather than a list of
+        # records: a 700-clip track paged to completion cost ~11,200 property
+        # reads to deliver ~700, on Live's single callback thread.
+        clips = [ExplodingClip(self) for _ in range(20)]
+        clips[5] = FakeClip("Verse", 32.0, 8.0)
+        clips[6] = FakeClip("Fill", 40.0, 4.0)
+        self.assertEqual(
+            window_of(clips, 5, 2),
+            [("Verse", 32.0, 8.0), ("Fill", 40.0, 4.0)],
+        )
 
     def test_the_budget_cuts_the_window_short(self):
         # The sender owns the window, because only it knows the byte sizes.
         # A reply past the datagram cap makes Live's sendto raise and the
         # client receives nothing at all.
-        entries = [("x" * 100, float(i), 4.0) for i in range(50)]
-        got = window_of(entries, 0, 50, budget=400)
+        clips = [FakeClip("x" * 100, float(i), 4.0) for i in range(50)]
+        got = window_of(clips, 0, 50, budget=400)
         self.assertGreater(len(got), 0)
         self.assertLess(len(got), 50)
 
     def test_one_oversized_record_is_still_returned(self):
         # Every reply carries at least one record, or the client's paging
         # loop cannot make progress.
-        entries = [("x" * 500, 0.0, 4.0)]
-        self.assertEqual(len(window_of(entries, 0, 10, budget=10)), 1)
+        self.assertEqual(len(window_of([FakeClip("x" * 500, 0.0, 4.0)], 0, 10, budget=10)), 1)
+
+
+class RecordBytes(unittest.TestCase):
+    def test_the_estimate_covers_a_multi_byte_name(self):
+        # Three emoji are three codepoints and twelve UTF-8 bytes, and
+        # pythonosc writes the bytes. Counting codepoints under-counted this
+        # record by enough to pack a page past the cap, and past the cap
+        # Live's sendto raises and the client receives nothing at all.
+        record = clip_record(FakeClip("\U0001F3B9\U0001F3B9\U0001F3B9", 32.0, 8.0))
+        self.assertGreaterEqual(
+            arrangement_replies._record_bytes(record),
+            encoded_arg_bytes(record),
+        )
+
+    def test_the_estimate_covers_a_full_page_of_multi_byte_names(self):
+        # What the cap actually protects: a whole window, not one record.
+        clips = [FakeClip("é" * NAME_CAP, float(i), 4.0) for i in range(48)]
+        window = window_of(clips, 0, 48)
+        estimate = sum(arrangement_replies._record_bytes(r) for r in window)
+        encoded = encoded_arg_bytes([f for r in window for f in r])
+        self.assertLessEqual(estimate, MAX_REPLY_BYTES)
+        self.assertGreaterEqual(estimate, encoded)
+
+    def test_the_estimate_covers_a_cue_point_record(self):
+        self.assertGreaterEqual(
+            arrangement_replies._record_bytes(("中文セク", 64.0)),
+            encoded_arg_bytes(("中文セク", 64.0)),
+        )
 
 
 class ArrangementReply(unittest.TestCase):
@@ -104,6 +190,53 @@ class ArrangementReply(unittest.TestCase):
         # would stop it after one page and silently truncate the timeline.
         reply = arrangement_reply(0, 0, 40, [("a", 0.0, 4.0)])
         self.assertEqual(reply[2], 40)
+
+
+class IdentityReply(unittest.TestCase):
+    def test_echoes_the_key_then_the_clip_s_three_fields(self):
+        # A separate address from the map, so an identity read can never
+        # join a span-48 page and take its reply. The Rust decoder reads
+        # these five positionally.
+        self.assertEqual(
+            identity_reply(2, 7, FakeClip("Verse", 32.0, 64.0)),
+            (2, 7, "Verse", 32.0, 64.0),
+        )
+
+    def test_an_unnamed_clip_still_carries_its_position(self):
+        # Unnamed is the normal case on the timeline, and position is what
+        # the bracket actually compares.
+        self.assertEqual(identity_reply(0, 0, FakeClip("", 28.0, 4.0)), (0, 0, "", 28.0, 4.0))
+
+
+class FakeCuePoint(object):
+    def __init__(self, name, time):
+        self.name = name
+        self.time = time
+
+
+class CuePointsReply(unittest.TestCase):
+    def test_the_total_leads_and_the_pairs_follow(self):
+        reply = cue_points_reply([FakeCuePoint("Intro", 0.0), FakeCuePoint("Drop", 64.0)])
+        self.assertEqual(reply, (2, "Intro", 0.0, "Drop", 64.0))
+
+    def test_a_set_with_no_locators_answers_rather_than_going_silent(self):
+        # Zero locators is a real answer, and the client must be able to
+        # tell it apart from a reply Live could not send.
+        self.assertEqual(cue_points_reply([]), (0,))
+
+    def test_the_total_stays_true_when_the_records_are_cut(self):
+        # This is the whole reason the total leads: upstream's unbounded
+        # handler overfills the datagram, sendto raises, and the client sees
+        # nothing at all -- indistinguishable from a set with no locators.
+        cues = [FakeCuePoint("Section %d" % i, float(i) * 16.0) for i in range(500)]
+        reply = cue_points_reply(cues)
+        self.assertEqual(reply[0], 500)
+        self.assertLess((len(reply) - 1) // 2, 500)
+        self.assertLessEqual(encoded_arg_bytes(reply), MAX_REPLY_BYTES)
+
+    def test_a_long_locator_name_is_capped_on_the_wire(self):
+        reply = cue_points_reply([FakeCuePoint("x" * 500, 0.0)])
+        self.assertEqual(len(reply[1]), NAME_CAP)
 
 
 class FakeNote:

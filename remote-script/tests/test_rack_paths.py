@@ -10,6 +10,7 @@ Run: python3 -m unittest discover -s remote-script/tests -v
 
 import importlib.util
 import os
+import sys
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -17,6 +18,28 @@ _TARGET = os.path.join(_HERE, "..", "MixingPal", "mixingpal", "rack_paths.py")
 _SPEC = importlib.util.spec_from_file_location("rack_paths", _TARGET)
 rack_paths = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(rack_paths)
+
+# The vendored pythonosc, which is what actually serialises a reply inside
+# Live. Used below to measure what a record really costs instead of
+# recomputing it, so the test cannot repeat the estimator's own mistake.
+sys.path.insert(0, os.path.join(_HERE, "..", "MixingPal"))
+from pythonosc.osc_message_builder import OscMessageBuilder  # noqa: E402
+
+
+def encoded_arg_bytes(fields):
+    """Bytes `pythonosc` writes for `fields` themselves.
+
+    The datagram less its address block and its type-tag block: those two
+    are the header, and `HEADER_SLACK` in `src-tauri/src/osc/budget.rs`
+    covers them. What is left is the variable part the estimators above are
+    trying to bound.
+    """
+    builder = OscMessageBuilder(address="/x")
+    for arg in fields:
+        builder.add_arg(arg)
+    address = 4 * ((len("/x") // 4) + 1)
+    tags = 4 * (((1 + len(fields)) // 4) + 1)
+    return len(builder.build().dgram) - address - tags
 
 
 class FakeDevice(object):
@@ -163,6 +186,28 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(record[4], 40)
         self.assertEqual(record[5], rack_paths.MAX_DEVICES_PER_CHAIN)
         self.assertEqual(len(record), 6 + rack_paths.MAX_DEVICES_PER_CHAIN)
+
+    def test_the_estimate_covers_a_multi_byte_chain_record(self):
+        # pythonosc encodes a string with `val.encode('utf-8')`, so a chain
+        # or device named in emoji or CJK costs up to 4x what its codepoint
+        # count says. Under-counting is what packs a window past the cap,
+        # and past the cap Live's sendto raises and the client receives
+        # nothing at all.
+        record = rack_paths.chain_record(
+            (FakeChain("\U0001F3B9\U0001F3B9\U0001F3B9",
+                       [FakeDevice("コンプレッサー")]),
+             -1, "\U0001F3B9\U0001F3B9\U0001F3B9", False, False))
+        self.assertGreaterEqual(
+            rack_paths.record_bytes(record), encoded_arg_bytes(record))
+
+    def test_a_window_of_multi_byte_names_still_fits_a_datagram(self):
+        # What the cap actually protects: a whole window, not one record.
+        name = "é" * rack_paths.NAME_CAP
+        entries = [(FakeChain(name, [FakeDevice(name) for _ in range(4)]),
+                    -1, name, False, False) for _ in range(64)]
+        window = rack_paths.build_window(entries, 0, 64)
+        encoded = encoded_arg_bytes([f for r in window for f in r])
+        self.assertLessEqual(encoded, rack_paths.MAX_REPLY_BYTES)
 
     def test_the_span_bounds_the_window(self):
         self.assertEqual(len(rack_paths.build_window(self.entries(50), 0, 8)), 8)

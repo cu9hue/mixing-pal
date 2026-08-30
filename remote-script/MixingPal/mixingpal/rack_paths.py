@@ -109,8 +109,15 @@ def resolve(track, path):
 
 def osc_string_bytes(text):
     """An OSC string pads to a multiple of 4 with at least one NUL, plus one
-    byte of type tag."""
-    return 4 * ((len(text) // 4) + 1) + 1
+    byte of type tag.
+
+    Measured in UTF-8 BYTES, because that is what `pythonosc` writes
+    (`osc_types.write_string` encodes with `val.encode('utf-8')`). Python's
+    codepoint count under-counts an accented, CJK or emoji device name by up
+    to 4x, and under-counting is what makes sendto raise -- which reaches
+    the client as silence, not as truncation.
+    """
+    return 4 * ((len(str(text).encode("utf-8")) // 4) + 1) + 1
 
 
 def record_bytes(record):

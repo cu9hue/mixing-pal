@@ -183,6 +183,29 @@ mod tests {
         );
     }
 
+    /// `mixingpal/arrangement_replies.py` fills its own reply window too,
+    /// so it carries a second copy of this module's ceiling -- for the
+    /// arrangement map, the clip identity read, and the bounded cue-point
+    /// reply. Same failure as `rack_byte_ceiling_matches_the_budget` above
+    /// guards against, and pinned the same way: a copy that drifts high
+    /// makes Live's `sendto` raise and the client receives NOTHING.
+    #[test]
+    fn arrangement_byte_ceiling_matches_the_budget() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../remote-script/MixingPal/mixingpal/arrangement_replies.py"
+        ))
+        .expect("arrangement_replies.py is missing");
+        let line = source
+            .lines()
+            .find_map(|l| l.strip_prefix("MAX_REPLY_BYTES = "))
+            .expect("MAX_REPLY_BYTES is not declared on its own line");
+        assert_eq!(
+            line.trim().parse::<usize>().unwrap(),
+            MAX_DATAGRAM - HEADER_SLACK
+        );
+    }
+
     /// `src-tauri/src/tools/path.rs` and `rack_paths.py` each declare
     /// `MAX_PATH_LEN`, and the Python side is the one that decides whether a
     /// path the Rust side already accepted actually resolves. If Python's
