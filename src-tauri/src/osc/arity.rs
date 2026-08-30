@@ -81,7 +81,15 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // /live/device/get/num_parameters, so a bracketed parameter read
         // costs two round trips instead of four -- and unlike those two, it
         // resolves a path rather than a top-level index.
-        | "/live/mixingpal/get/device/identity" => KeyArity::Args(2),
+        | "/live/mixingpal/get/device/identity"
+        // (track, start, span) out; (track, start, total, *records) back --
+        // `arrangement_replies.py`'s own words are "track and start lead
+        // because the client's request table keys on the leading arguments
+        // of the request and the reply alike". `total` is the track's real
+        // clip count, not an echo of `span`, so `span` cannot be in the key:
+        // it would never match the reply's third value and no read would
+        // ever resolve.
+        | "/live/mixingpal/get/arrangement" => KeyArity::Args(2),
 
         // The window ordinal the client stamped on the request, echoed
         // back. It is what makes two windows of ONE clip different keys, so
@@ -170,6 +178,10 @@ mod tests {
             // costs two round trips instead of four -- and unlike those two, it
             // resolves a path rather than a top-level index.
             ("/live/mixingpal/get/device/identity", KeyArity::Args(2)),
+            // (track, start, span) out; (track, start, total, *records) back
+            // -- `span` cannot be in the key, because the reply's third
+            // value is the real total, not an echo of it.
+            ("/live/mixingpal/get/arrangement", KeyArity::Args(2)),
             ("/live/device/get/parameter/value_string", KeyArity::Args(3)),
             ("/live/device/get/parameters/name_range", KeyArity::Args(3)),
             (

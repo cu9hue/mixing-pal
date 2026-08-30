@@ -1,3 +1,4 @@
+pub mod arrangement;
 pub mod clip_notes;
 pub mod clips;
 pub mod device_chains;

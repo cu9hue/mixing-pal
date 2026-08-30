@@ -166,6 +166,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/device/get/parameters/value_string_range",
     "/live/mixingpal/get/version",
     "/live/mixingpal/get/rack/chains",
+    "/live/mixingpal/get/arrangement",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -310,6 +311,9 @@ fn handle_inbound(
     //   300-parameter device would leave four-plus retained entries holding
     //   up to 512 strings for the rest of the session -- never evicted, for
     //   the same reason clip notes never were.
+    // - arrangement is get_arrangement's paged read of one track's timeline,
+    //   keyed on (track, start): the same case as the parameter page, one
+    //   retained entry per page rather than per track.
     let is_resolve_only = matches!(
         msg.addr.as_str(),
         "/live/song/get/track_data"
@@ -326,6 +330,7 @@ fn handle_inbound(
             | "/live/device/get/parameters/name_range"
             | "/live/device/get/parameters/value_string_range"
             | "/live/mixingpal/get/rack/chains"
+            | "/live/mixingpal/get/arrangement"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
@@ -1329,6 +1334,7 @@ mod tests {
         "/live/device/get/parameters/name_range",
         "/live/device/get/parameters/value_string_range",
         "/live/mixingpal/get/rack/chains",
+        "/live/mixingpal/get/arrangement",
     ];
 
     #[test]
