@@ -19,7 +19,13 @@ from ..abletonosc.handler import AbletonOSCHandler
 # answers no window at all and get_clip_notes returns nothing after
 # exhausting its retry budget. Clip reads do not degrade here, they stop;
 # reinstalling is the fix, which is what the banner asks for.
-WIRE_VERSION = 4
+#
+# Version 5 added /live/mixingpal/get/arrangement and the
+# /live/arrangement_clip/get/* family. A stale script knows neither, so the
+# arrangement map and arrangement note reads report a named gap while
+# session, mixer and device reads keep working normally. Reinstalling is the
+# fix, which is what the banner asks for.
+WIRE_VERSION = 5
 
 
 class VersionHandler(AbletonOSCHandler):
