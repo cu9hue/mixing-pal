@@ -83,13 +83,14 @@ export function ControlSurfaceScreen({ folder }: { folder: string }) {
       <div className="setup__label">Step 3 of 4</div>
       <h1 className="setup__title">Turn it on inside Live.</h1>
       <p className="setup__body">
-        Open <b>Preferences → Link, Tempo &amp; MIDI</b>, and choose <b>{folder}</b> as a
+        Open Live's <b>Settings → Link, Tempo &amp; MIDI</b> (called{" "}
+        <b>Preferences</b> in Live 12.0 and earlier), and choose <b>{folder}</b> as a
         Control Surface.
       </p>
       <img
         className="setup__shot"
         src="/control-surface.png"
-        alt={`Live's Link, Tempo and MIDI preferences, with ${folder} chosen as a Control Surface and Input and Output left as None`}
+        alt={`Live's Link, Tempo and MIDI settings, with ${folder} chosen as a Control Surface and Input and Output left as None`}
       />
       {/* The thing people get wrong, and the reason this screen has a
           callout rather than just a picture. */}

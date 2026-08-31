@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import wireVersion from "../../shared/wire-version.json";
+// The name Live shows in the Control Surface list. Read from the manifest
+// that Rust's connector::folder() reads, because this banner is the
+// recovery path: it used to say "Mixing Pal", the product name, while
+// Live listed "MixingPal", so it sent her looking for an entry that was
+// not there.
+import connector from "../../shared/connector.json";
 import { SetupStep } from "../setup/step";
 import "./Connection.css";
 
@@ -178,8 +184,8 @@ export function Connection({
             <span className="banner__dot" />
             Not connected
           </div>
-          Open a set in Live, and check that <b>Mixing Pal</b> is selected under
-          Preferences → Link, Tempo &amp; MIDI.
+          Open a set in Live, and check that <b>{connector.folder}</b> is selected
+          under Settings → Link, Tempo &amp; MIDI.
           <button className="banner__action" onClick={() => onShowSetup("control_surface")}>
             Show me where →
           </button>
