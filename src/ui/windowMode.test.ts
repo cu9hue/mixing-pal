@@ -1,14 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { nextMode, geometryApply, MODE_GEOMETRY, ModeContext, ModeEvent } from "./windowMode";
+// @ts-expect-error no @types/node in this project; see vite.config.ts
+import { readFileSync } from "node:fs";
+// @ts-expect-error no @types/node in this project; see vite.config.ts
+import { fileURLToPath } from "node:url";
+import { nextMode, geometryApply, MODE_GEOMETRY, ModeEvent } from "./windowMode";
 
-const QUIET: ModeContext = { inputEmpty: true, turnRunning: false, unread: false };
+/** Every event the machine accepts, so the tests below can be exhaustive. */
+const EVERY_EVENT: ModeEvent[] = [
+  { type: "pill_clicked" },
+  { type: "escape" },
+  { type: "chevron_closed" },
+  { type: "setup_finished" },
+];
 
 describe("nextMode", () => {
   it("opens the card when the pill is clicked", () => {
-    expect(nextMode("pill", { type: "pill_clicked" }, QUIET)).toBe("card");
+    expect(nextMode("pill", { type: "pill_clicked" })).toBe("card");
   });
-
-
 
   // The card opens on exactly one thing: her clicking the pill. Two events
   // used to open it on the app's own initiative -- a completed answer and an
@@ -18,62 +26,63 @@ describe("nextMode", () => {
   // screen for it the most intrusive thing this app could do. The pill's
   // unread glow carries both instead.
   it("opens the card on nothing but her own click", () => {
-    const events: ModeEvent[] = [
-      { type: "escape" },
-      { type: "chevron_closed" },
-      { type: "blur" },
-      { type: "setup_finished" },
-    ];
-    for (const event of events) {
-      expect(nextMode("pill", event, QUIET)).toBe("pill");
+    for (const event of EVERY_EVENT) {
+      if (event.type === "pill_clicked") continue;
+      expect(nextMode("pill", event)).toBe("pill");
     }
-    expect(nextMode("pill", { type: "pill_clicked" }, QUIET)).toBe("card");
+    expect(nextMode("pill", { type: "pill_clicked" })).toBe("card");
   });
 
   it("collapses to the pill on escape", () => {
-    expect(nextMode("card", { type: "escape" }, QUIET)).toBe("pill");
+    expect(nextMode("card", { type: "escape" })).toBe("pill");
   });
 
   it("collapses to the pill when the chevron is closed", () => {
-    expect(nextMode("card", { type: "chevron_closed" }, QUIET)).toBe("pill");
+    expect(nextMode("card", { type: "chevron_closed" })).toBe("pill");
   });
 
-  it("collapses on blur when nothing is in flight", () => {
-    expect(nextMode("card", { type: "blur" }, QUIET)).toBe("pill");
-  });
-
-  it("stays open on blur when she has typed something", () => {
-    expect(
-      nextMode("card", { type: "blur" }, { ...QUIET, inputEmpty: false }),
-    ).toBe("card");
-  });
-
-  it("stays open on blur while a turn is running", () => {
-    expect(
-      nextMode("card", { type: "blur" }, { ...QUIET, turnRunning: true }),
-    ).toBe("card");
-  });
-
-  it("stays open on blur while something is unread", () => {
-    expect(nextMode("card", { type: "blur" }, { ...QUIET, unread: true })).toBe("card");
+  // The mirror of the test above, and the one that matters most in daily
+  // use. The card used to collapse on `blur`, so every click into Ableton
+  // took the answer off screen -- while she was working in Live, which is
+  // the only time the answer is worth anything. Closing the card is hers
+  // to do, and there are exactly two ways to do it.
+  it("closes on nothing but escape or the chevron", () => {
+    const closers = ["escape", "chevron_closed"];
+    for (const event of EVERY_EVENT) {
+      const expected = closers.includes(event.type) ? "pill" : "card";
+      expect(nextMode("card", event)).toBe(expected);
+    }
   });
 
   it("setup keeps the window until it finishes, whatever else happens", () => {
-    expect(nextMode("setup", { type: "pill_clicked" }, QUIET)).toBe("setup");
-    expect(nextMode("setup", { type: "escape" }, QUIET)).toBe("setup");
+    expect(nextMode("setup", { type: "pill_clicked" })).toBe("setup");
+    expect(nextMode("setup", { type: "escape" })).toBe("setup");
   });
 
   it("setup hands off to the card when it finishes", () => {
-    expect(nextMode("setup", { type: "setup_finished" }, QUIET)).toBe("card");
+    expect(nextMode("setup", { type: "setup_finished" })).toBe("card");
   });
 
   it("never re-enters setup once it is done", () => {
-    expect(nextMode("card", { type: "setup_finished" }, QUIET)).toBe("card");
-    expect(nextMode("pill", { type: "setup_finished" }, QUIET)).toBe("pill");
+    expect(nextMode("card", { type: "setup_finished" })).toBe("card");
+    expect(nextMode("pill", { type: "setup_finished" })).toBe("pill");
   });
+});
 
-  it("blur on the pill changes nothing", () => {
-    expect(nextMode("pill", { type: "blur" }, QUIET)).toBe("pill");
+/**
+ * A source-level tripwire, in the same spirit as cardStaysMounted.test.ts.
+ *
+ * The machine above can only refuse events it is given. Re-adding the
+ * auto-collapse means adding a window listener in App and a case here, and
+ * the exhaustive tests would happily grow to cover the new event. This is
+ * the assertion that does not move: App subscribes to no focus-loss event
+ * at all.
+ */
+describe("losing focus to Live", () => {
+  const app = readFileSync(fileURLToPath(new URL("../App.tsx", import.meta.url)), "utf8");
+
+  it("is not listened for", () => {
+    expect(app).not.toMatch(/addEventListener\(\s*["'](blur|focusout)["']/);
   });
 });
 
@@ -132,6 +141,6 @@ describe("geometryApply", () => {
 
   it("never centres the card or the pill", () => {
     expect(geometryApply("card", CARD_MEASURED, null)?.center).toBe(false);
-    expect(geometryApply("pill", { view: "pill", height: 44 }, null)?.center).toBe(false);
+    expect(geometryApply("pill", { view: "pill", height: 52 }, null)?.center).toBe(false);
   });
 });

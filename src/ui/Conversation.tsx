@@ -88,13 +88,11 @@ export function Conversation({
   goal,
   onTurnRunningChange,
   onAnswer,
-  onInputEmptyChange,
 }: {
   state: SetState;
   goal: string;
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
-  onInputEmptyChange: (empty: boolean) => void;
 }) {
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState<string | null>(null);
@@ -120,7 +118,6 @@ export function Conversation({
     const asked = input.trim();
     if (asked === "" || busy) return;
     setInput("");
-    onInputEmptyChange(true);
     setError(null);
     setAnswer(null);
     setQuestion(asked);
@@ -193,10 +190,7 @@ export function Conversation({
           className="card__input"
           value={input}
           placeholder="Ask about the set…"
-          onChange={(e) => {
-            setInput(e.target.value);
-            onInputEmptyChange(e.target.value.trim() === "");
-          }}
+          onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
         />
         {/* Permanent and non-dismissible. From here the app can state wrong

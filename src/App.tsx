@@ -23,17 +23,9 @@ export default function App() {
   const [nudges, setNudges] = useState(EMPTY_NUDGE_STATE);
   const [turnRunning, setTurnRunning] = useState(false);
   const [unread, setUnread] = useState(false);
-  const [inputEmpty, setInputEmpty] = useState(true);
-
-  // The mode machine needs the current context on every event, but the
-  // context changes far more often than the mode does. A ref keeps the
-  // dispatch callback stable so it does not re-subscribe the blur listener
-  // on every keystroke.
-  const ctx = useRef({ inputEmpty, turnRunning, unread });
-  ctx.current = { inputEmpty, turnRunning, unread };
 
   const dispatch = useCallback((event: ModeEvent) => {
-    setMode((current) => nextMode(current, event, ctx.current));
+    setMode((current) => nextMode(current, event));
   }, []);
 
   useEffect(() => {
@@ -197,14 +189,11 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
-    const onBlur = () => dispatch({ type: "blur" });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") dispatch({ type: "escape" });
     };
-    window.addEventListener("blur", onBlur);
     window.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("blur", onBlur);
       window.removeEventListener("keydown", onKey);
     };
   }, [dispatch]);
@@ -310,7 +299,6 @@ export default function App() {
             if (view !== "card") setUnread(true);
           }}
           onCollapse={() => dispatch({ type: "chevron_closed" })}
-          onInputEmptyChange={setInputEmpty}
           onShowSetup={setForcedStep}
         />
       </div>

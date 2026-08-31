@@ -34,8 +34,12 @@ export const MODE_GEOMETRY: Record<WindowMode, Geometry> = {
   // Live's preferences cannot be taught in a 320px card, so setup is a
   // real window. Not on top: it is a task she completes, not a companion.
   setup: { width: 600, height: 680, maxHeight: null, alwaysOnTop: false, centered: true },
-  // 44 square so the 26px dot has room for its glow.
-  pill: { width: 44, height: 44, maxHeight: null, alwaysOnTop: true, centered: false },
+  // 52 square so the 34px body has room for its shadow and its unread
+  // glow. The window is transparent, so any shadow that reaches past the
+  // window edge is not softened there -- it is cut off square, painting a
+  // dark rectangle around the pill. The margin here and the shadow radii
+  // in Pill.css are one budget; widen either and check the other.
+  pill: { width: 52, height: 52, maxHeight: null, alwaysOnTop: true, centered: false },
   card: { width: 320, height: null, maxHeight: CARD_MAX_HEIGHT, alwaysOnTop: true, centered: false },
 };
 
@@ -93,20 +97,23 @@ export type ModeEvent =
   | { type: "pill_clicked" }
   | { type: "escape" }
   | { type: "chevron_closed" }
-  | { type: "blur" }
   | { type: "setup_finished" };
 
 /**
- * Everything the collapse decision depends on, passed in rather than read
- * from module state so the machine stays pure.
+ * The card closes only when she closes it.
+ *
+ * A `blur` event used to collapse the card whenever the window lost focus,
+ * gated on the input being empty with no turn running and nothing unread.
+ * It defeated the thing the app is for: reading advice while working in
+ * Live. Every click into Ableton took the answer off screen, which is the
+ * one moment she needs it. Escape and the header chevron are the two ways
+ * out, and both are hers.
+ *
+ * This is why there is no ModeContext. Nothing else in the machine reads
+ * what she was typing or whether a turn is running -- that state existed
+ * for the blur gate alone.
  */
-export interface ModeContext {
-  inputEmpty: boolean;
-  turnRunning: boolean;
-  unread: boolean;
-}
-
-export function nextMode(mode: WindowMode, event: ModeEvent, ctx: ModeContext): WindowMode {
+export function nextMode(mode: WindowMode, event: ModeEvent): WindowMode {
   // Setup owns the window until it finishes. A nudge or a completed answer
   // arriving mid-setup must not yank the window out from under her -- she
   // is in the middle of Live's preferences with a screenshot in front of
@@ -132,10 +139,5 @@ export function nextMode(mode: WindowMode, event: ModeEvent, ctx: ModeContext): 
     case "escape":
     case "chevron_closed":
       return "pill";
-    case "blur":
-      if (mode !== "card") return mode;
-      // Collapsing a card she was halfway through typing into is worse
-      // than leaving one open that she has finished with.
-      return ctx.inputEmpty && !ctx.turnRunning && !ctx.unread ? "pill" : "card";
   }
 }

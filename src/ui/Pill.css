@@ -1,7 +1,14 @@
 /*
- * Three of the four states are a 26px dot in a 44px window. Only the
+ * Three of the four states are a 34px disc in a 52px window. Only the
  * failure state has words -- a broken connection is the one thing Live
  * will never tell her.
+ *
+ * The window is transparent, so every shadow here has to FIT inside the
+ * 9px of margin the window leaves around the disc. A shadow that reaches
+ * further is not faded out at the window edge, it is cut off square: the
+ * pill used to borrow --shadow-card (0 10px 34px, reaching ~27px) and so
+ * sat in a hard-edged dark rectangle the size of the whole window. Every
+ * state that sets box-shadow must go through --pill-shadow.
  */
 .pill {
   height: 100vh;
@@ -15,30 +22,37 @@
   align-items: center;
   gap: 8px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
-  box-shadow: var(--shadow-card);
-  width: 26px;
-  height: 26px;
+  /* Both layers earn their place. The first is depth, sized to the margin
+     above. The second is a dark hairline ring: Live ships a light skin as
+     well as a dark one, and without it a near-black disc on a light grey
+     host has no edge at all. */
+  --pill-shadow: 0 2px 8px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--pill-shadow);
+  width: 34px;
+  height: 34px;
   justify-content: center;
   cursor: pointer;
 }
 
+/* Bright enough to find on a grey host. This was --text-faint at 5px --
+   a dim speck on a dark disc -- and the pill was reported as invisible. */
 .pill__dot {
-  width: 5px;
-  height: 5px;
+  width: 7px;
+  height: 7px;
   border-radius: var(--radius-pill);
-  background: var(--text-faint);
+  background: var(--text-secondary);
 }
 
 .pill--unread .pill__body {
   border-color: rgba(242, 181, 68, 0.35);
-  box-shadow: var(--shadow-card), 0 0 14px rgba(242, 181, 68, 0.18);
+  box-shadow: var(--pill-shadow), 0 0 14px rgba(242, 181, 68, 0.18);
 }
 
 .pill--unread .pill__dot {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   background: var(--accent);
   box-shadow: 0 0 8px rgba(242, 181, 68, 0.9);
 }

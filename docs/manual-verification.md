@@ -396,12 +396,28 @@ Date: ___________  Live version: ___________  Tester: ___________
       a stale screenshot of this one pane is the single most likely cause
       of a failed first run.
 
-      The file committed with this task is a placeholder: a flat,
-      striped colour block, not a screenshot. It must be replaced with a
-      real screenshot of Live's Preferences → Link, Tempo & MIDI pane
-      before release, or the setup flow ships showing a fake image on the
-      one screen where a producer is meant to compare what is in front of
-      her to what is on screen.
+      Replaced with a real screenshot on 2026-08-31 (Live 12, macOS).
+      The placeholder (a flat striped colour block) had shipped in a
+      build handed to a first tester, on the one screen where a producer
+      is meant to compare what is in front of her to what is on screen.
+      This item did not catch it, because a document marked PENDING-USER
+      fails nothing. `src/setup/screenshot.test.ts` now pins the
+      placeholder's hash, so it fails the suite instead. Re-capturing for
+      a new Live version is still expected and still passes.
+
+## The pill and the card (added 2026-08-31)
+
+Status: **PENDING-USER**. All three need Live open behind the app.
+
+- [ ] The collapsed pill is findable at a glance against Live's window,
+      and sits in no dark square. The square was a shadow wider than the
+      margin the transparent window leaves around the disc, so it was cut
+      off at the window edge rather than faded out.
+- [ ] Clicking into Ableton leaves the card open. It closes on Escape and
+      on the header chevron, and on nothing else.
+- [ ] Step 3 of setup shows Live's Settings pane, and the "Leave Input and
+      Output set to None" callout and the "Waiting for Live…" dot are both
+      visible without scrolling.
 
 ## Stage 1 distribution — a clean Mac (added 2026-08-20)
 
