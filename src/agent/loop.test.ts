@@ -62,6 +62,39 @@ describe("runTurn", () => {
     expect(out.text).toBe("done");
   });
 
+  it("runs independent tool calls concurrently while preserving their message order", async () => {
+    const provider = scriptedProvider([
+      {
+        text: "",
+        toolCalls: [
+          call("a", "get_track_detail", '{"track":0}'),
+          call("b", "get_track_detail", '{"track":1}'),
+        ],
+      },
+      { text: "done", toolCalls: [] },
+    ]);
+    let releaseFirst: (() => void) | undefined;
+    const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let secondStarted = false;
+    const tools: ToolRunner = {
+      run: async (_name, args) => {
+        if ((args as { track: number }).track === 0) {
+          await first;
+          return { track: 0 };
+        }
+        secondStarted = true;
+        return { track: 1 };
+      },
+    };
+
+    const turn = runTurn(provider, tools, [{ role: "user", content: "compare them" }]);
+    await vi.waitFor(() => expect(secondStarted).toBe(true));
+    releaseFirst?.();
+    const out = await turn;
+
+    expect(out.messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id)).toEqual(["a", "b"]);
+  });
+
   it("stops at the round-trip cap instead of looping forever", async () => {
     // A model that keeps calling tools and never answers would otherwise
     // burn the producer's credit indefinitely.

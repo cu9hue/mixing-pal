@@ -63,6 +63,9 @@ const COUNT_HINT_TIMEOUT_DIVISOR: u32 = 4;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Note {
     pub pitch: i32,
+    /// Ableton Live's displayed note name. MIDI octave labels vary between
+    /// applications, so this is the name the producer sees in Live.
+    pub note: String,
     pub start: f64,
     pub duration: f64,
     pub velocity: f64,
@@ -99,10 +102,19 @@ pub const ARRANGEMENT_NOTES: NoteAddresses = NoteAddresses {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ClipNotes {
     pub notes: Vec<Note>,
+    pub length_beats: f64,
+    pub loop_region: Option<LoopRegion>,
+    pub loop_state_known: bool,
     /// Set when at least one window never answered even at the floor. The
     /// notes returned are then a real but partial read, and saying so is the
     /// whole point: the model must not present part of a clip as all of it.
     pub missing_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LoopRegion {
+    pub start_beats: f64,
+    pub end_beats: f64,
 }
 
 /// Turns the note count Live reported into an estimate worth windowing on.
@@ -187,6 +199,19 @@ fn as_bool(v: &OscType) -> Option<bool> {
     }
 }
 
+/// Ableton labels middle C (MIDI 60) as C3, one octave below the scientific
+/// pitch convention many MIDI libraries use.
+fn ableton_note_name(pitch: i32) -> String {
+    const PITCH_CLASSES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    format!(
+        "{}{}",
+        PITCH_CLASSES[pitch.rem_euclid(12) as usize],
+        pitch.div_euclid(12) - 2
+    )
+}
+
 /// Reply shape: `(track_index, clip_index, window, *note_attributes)` --
 /// see `mixingpal/clip_notes.py`'s `notes_window`, which echoes the
 /// client's own window ordinal after the two indices and flattens each
@@ -210,8 +235,10 @@ pub fn decode_notes(args: &[OscType], expect_window: u32) -> Option<Vec<Note>> {
     }
     body.chunks_exact(5)
         .map(|c| {
+            let pitch = as_i32(&c[0])?;
             Some(Note {
-                pitch: as_i32(&c[0])?,
+                pitch,
+                note: ableton_note_name(pitch),
                 start: as_f64(&c[1])?,
                 duration: as_f64(&c[2])?,
                 velocity: as_f64(&c[3])?,
@@ -379,18 +406,53 @@ pub async fn get_notes_at(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.pitch.cmp(&b.pitch))
     });
-    Ok(ClipNotes { notes, missing_reason })
+    Ok(ClipNotes {
+        notes,
+        length_beats: f64::from(length),
+        loop_region: None,
+        loop_state_known: false,
+        missing_reason,
+    })
 }
 
 /// Session-view clip notes. The shape the app has always had; the address
 /// family is now explicit so the arrangement read can share everything else.
+fn decode_loop_region(args: &[OscType]) -> Option<Option<LoopRegion>> {
+    let looping = match args.get(2)? {
+        OscType::Bool(value) => *value,
+        OscType::Int(value) => *value != 0,
+        _ => return None,
+    };
+    if !looping {
+        return Some(None);
+    }
+    let start_beats = as_f64(args.get(3)?)?;
+    let end_beats = as_f64(args.get(4)?)?;
+    (end_beats > start_beats).then_some(Some(LoopRegion { start_beats, end_beats }))
+}
+
 pub async fn get_clip_notes(
     q: Arc<LiveQuery>,
     track: i32,
     clip: i32,
     timeout: Duration,
 ) -> Result<ClipNotes, QueryError> {
-    get_notes_at(q, SESSION_NOTES, track, clip, timeout).await
+    let note_query = get_notes_at(q.clone(), SESSION_NOTES, track, clip, timeout);
+    // A stale Remote Script simply has no such endpoint. It must not turn an
+    // otherwise successful note read into the full two-second tool timeout;
+    // the count-hint budget is enough for one Live tick and keeps this
+    // compatibility probe bounded.
+    let loop_query = q.query(
+        "/live/mixingpal/get/clip/loop_region",
+        vec![OscType::Int(track), OscType::Int(clip)],
+        timeout / COUNT_HINT_TIMEOUT_DIVISOR,
+    );
+    let (notes, loop_reply) = tokio::join!(note_query, loop_query);
+    let mut notes = notes?;
+    let loop_region = loop_reply.ok().as_deref().and_then(decode_loop_region);
+    notes.loop_state_known = loop_region.is_some();
+    notes.loop_region = loop_region.flatten();
+    Ok(notes)
 }
 
 #[cfg(test)]
@@ -437,9 +499,17 @@ mod tests {
 
         let notes = decode_notes(&args, 0).unwrap();
         assert_eq!(notes.len(), 2);
-        assert_eq!(notes[0], Note { pitch: 60, start: 0.0, duration: 0.5, velocity: 100.0, mute: false });
+        assert_eq!(notes[0], Note { pitch: 60, note: "C3".into(), start: 0.0, duration: 0.5, velocity: 100.0, mute: false });
         assert_eq!(notes[1].pitch, 64);
+        assert_eq!(notes[1].note, "E3");
         assert_eq!(notes[1].start, 1.0);
+    }
+
+    #[test]
+    fn note_names_match_live_piano_roll_labels() {
+        assert_eq!(ableton_note_name(40), "E1");
+        assert_eq!(ableton_note_name(60), "C3");
+        assert_eq!(ableton_note_name(127), "G8");
     }
 
     #[test]

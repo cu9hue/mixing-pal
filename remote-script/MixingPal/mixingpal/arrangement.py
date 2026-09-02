@@ -1,7 +1,8 @@
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
 from .arrangement_replies import (
-    arrangement_reply, cue_points_reply, identity_reply, window_of)
+    arrangement_reply, cue_points_reply, identity_reply, timeline_fingerprint_reply,
+    window_of)
 from .clip_replies import notes_window_reply, num_notes_reply
 
 
@@ -49,11 +50,16 @@ class ArrangementHandler(AbletonOSCHandler):
             return tracks[index]
 
         def arrangement(params: Tuple[Any]):
-            track_index = int(params[0])
+            if len(params) != 3:
+                return None
+            try:
+                track_index = int(params[0])
+                start, span = max(0, int(params[1])), max(0, int(params[2]))
+            except (TypeError, ValueError):
+                return None
             track = track_at(track_index)
             if track is None:
                 return None
-            start, span = max(0, int(params[1])), max(0, int(params[2]))
             # One access to the Live list: `len` is O(1) on it and
             # `window_of` reads clip properties only inside the window, so a
             # page costs three property reads per clip DELIVERED rather than
@@ -65,17 +71,37 @@ class ArrangementHandler(AbletonOSCHandler):
         self.osc_server.add_handler(
             "/live/mixingpal/get/arrangement", arrangement)
 
+        def arrangement_fingerprint(params: Tuple[Any]):
+            if len(params) != 1:
+                return None
+            try:
+                track_index = int(params[0])
+            except (TypeError, ValueError):
+                return None
+            track = track_at(track_index)
+            if track is None:
+                return None
+            return timeline_fingerprint_reply(track_index, track.arrangement_clips)
+
+        self.osc_server.add_handler(
+            "/live/mixingpal/get/arrangement/fingerprint", arrangement_fingerprint)
+
         def arrangement_clip_at(params):
             """The arrangement clip at (track, index), or None.
 
             None sends no reply, which is how "there is no clip there"
             reaches the client -- the same way an empty session slot does.
             """
-            track = track_at(int(params[0]))
+            if len(params) < 2:
+                return None
+            try:
+                track_index, index = int(params[0]), int(params[1])
+            except (TypeError, ValueError):
+                return None
+            track = track_at(track_index)
             if track is None:
                 return None
             clips = track.arrangement_clips
-            index = int(params[1])
             if index < 0 or index >= len(clips):
                 return None
             return clips[index]
@@ -126,12 +152,17 @@ class ArrangementHandler(AbletonOSCHandler):
             return num_notes_reply(int(params[0]), int(params[1]), notes)
 
         def arrangement_notes_window(params: Tuple[Any]):
+            if len(params) != 7:
+                return None
             clip = arrangement_clip_at(params)
             if clip is None:
                 return None
-            window = int(params[2])
-            from_pitch, pitch_span = int(params[3]), int(params[4])
-            start, span = float(params[5]), float(params[6])
+            try:
+                window = int(params[2])
+                from_pitch, pitch_span = int(params[3]), int(params[4])
+                start, span = float(params[5]), float(params[6])
+            except (TypeError, ValueError):
+                return None
             notes = clip.get_notes_extended(from_pitch, pitch_span, start, span)
             return notes_window_reply(
                 int(params[0]), int(params[1]), window, notes)

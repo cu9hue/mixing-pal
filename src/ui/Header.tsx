@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BrandMark } from "./BrandMark";
 import { GOAL_MAX_LENGTH } from "./goal";
 
 /**
@@ -25,6 +26,7 @@ export function Header({
 
   return (
     <div className="card__header" data-tauri-drag-region>
+      <BrandMark />
       <span className={`card__dot ${connected ? "card__dot--ok" : "card__dot--error"}`} />
       {editing ? (
         <input

@@ -28,13 +28,23 @@ class DeviceRangeHandler(AbletonOSCHandler):
             return far more than the caller asked for and blow past the
             datagram cap this ranged form exists to avoid.
             """
-            track_index = int(params[0])
-            raw_path = str(params[1])
-            start, span = max(0, int(params[2])), max(0, int(params[3]))
+            if len(params) != 4:
+                return None
+            try:
+                track_index = int(params[0])
+                raw_path = str(params[1])
+                start, span = max(0, int(params[2])), max(0, int(params[3]))
+            except (TypeError, ValueError):
+                return None
+            tracks = self.song.tracks
+            if track_index < 0 or track_index >= len(tracks):
+                return None
             path = parse_path(raw_path)
             if path is None:
                 return None
-            device = resolve(self.song.tracks[track_index], path)
+            device = resolve(tracks[track_index], path)
+            if device is None:
+                return None
             window = list(device.parameters)[start:start + span]
             return track_index, raw_path, start, window
 

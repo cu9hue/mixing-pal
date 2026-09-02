@@ -21,6 +21,12 @@ pub const REQUEST_SPAN: usize = 48;
 pub const MAX_WINDOWS: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LoopRegion {
+    pub start_beats: f64,
+    pub end_beats: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ArrangementClip {
     /// Position in the track's `arrangement_clips` list, and exactly what
     /// `get_arrangement_notes` takes. Not a bar number and not a slot.
@@ -43,8 +49,14 @@ pub struct ArrangementClip {
     /// prints `32`). Decoded through `clip_notes::as_f64`'s shortest-decimal
     /// round-trip for the same reason `deltas::to_json` and `clip_notes`
     /// itself do.
+    #[serde(rename = "start_beats")]
     pub start: f64,
+    #[serde(rename = "length_beats")]
     pub length: f64,
+    /// Present only when Live repeats the clip's source MIDI. The note read
+    /// lists source notes once; playback repeats them through `length_beats`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loop_region: Option<LoopRegion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -80,7 +92,7 @@ pub struct ArrangementMap {
     pub changed: Vec<i32>,
 }
 
-/// `(track, start, total, *(name, start_time, length))`.
+/// `(track, start, total, *(name, start_time, length, looping, loop_start, loop_end))`.
 ///
 /// Returns `(start, total, clips)` with each clip's index already resolved
 /// from the page offset, or `None` if the reply is not the page that was
@@ -99,24 +111,78 @@ fn decode_page(reply: &[OscType], expect_start: usize) -> Option<(usize, usize, 
     let total = usize::try_from(int_at(2)?).ok()?;
 
     let fields = reply.get(3..)?;
-    if fields.len() % 3 != 0 {
+    if fields.len() % 6 != 0 {
         return None;
     }
-    let mut clips = Vec::with_capacity(fields.len() / 3);
-    for (offset, triple) in fields.chunks_exact(3).enumerate() {
-        let name = match &triple[0] {
+    let mut clips = Vec::with_capacity(fields.len() / 6);
+    for (offset, record) in fields.chunks_exact(6).enumerate() {
+        let name = match &record[0] {
             OscType::String(s) if s.is_empty() => None,
             OscType::String(s) => Some(fence(s)),
             _ => return None,
         };
+        let looping = match &record[3] {
+            OscType::Bool(value) => *value,
+            OscType::Int(value) => *value != 0,
+            _ => return None,
+        };
+        let loop_region = if looping {
+            let start_beats = clip_notes::as_f64(&record[4])?;
+            let end_beats = clip_notes::as_f64(&record[5])?;
+            if end_beats <= start_beats {
+                return None;
+            }
+            Some(LoopRegion { start_beats, end_beats })
+        } else {
+            None
+        };
         clips.push(ArrangementClip {
             index: (start + offset) as i32,
             name,
-            start: clip_notes::as_f64(&triple[1])?,
-            length: clip_notes::as_f64(&triple[2])?,
+            start: clip_notes::as_f64(&record[1])?,
+            length: clip_notes::as_f64(&record[2])?,
+            loop_region,
         });
     }
     Some((start, total, clips))
+}
+
+/// `(track, total, digest)` from the Remote Script's one-pass timeline
+/// fingerprint. The digest covers the exact records this module returns, so
+/// it catches a reorder or an edit that preserves the clip count.
+fn decode_fingerprint(reply: &[OscType], expect_track: i32) -> Option<(usize, String)> {
+    match reply.first()? {
+        OscType::Int(track) if *track == expect_track => {}
+        _ => return None,
+    }
+    let total = match reply.get(1)? {
+        OscType::Int(total) if *total >= 0 => *total as usize,
+        _ => return None,
+    };
+    let digest = match reply.get(2)? {
+        OscType::String(value) if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => value.clone(),
+        _ => return None,
+    };
+    Some((total, digest))
+}
+
+async fn timeline_fingerprint(
+    q: &LiveQuery,
+    track: i32,
+    timeout: Duration,
+) -> Option<(usize, String)> {
+    q.query(
+        "/live/mixingpal/get/arrangement/fingerprint",
+        vec![OscType::Int(track)],
+        // Version-6 scripts have the map endpoint but not this coherence
+        // guard. Treat it as an optional short compatibility probe rather
+        // than holding an otherwise useful map for the full query timeout.
+        timeout / 4,
+    )
+    .await
+    .ok()
+    .as_deref()
+    .and_then(|reply| decode_fingerprint(reply, track))
 }
 
 /// One track's whole timeline, paged.
@@ -133,6 +199,7 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
     let mut truncated = false;
     let mut changed = false;
     let mut first_total: Option<usize> = None;
+    let before_fingerprint = timeline_fingerprint(q, track, timeout).await;
 
     loop {
         if windows >= MAX_WINDOWS {
@@ -202,6 +269,24 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
         }
     }
 
+    if let Some(before) = before_fingerprint {
+        match timeline_fingerprint(q, track, timeout).await {
+            Some(after) if after != before => {
+                // Do not hand a model a plausible but spliced timeline. A
+                // same-count reorder can make every individual page valid
+                // while pairing one clip's name with another's position.
+                clips.clear();
+                truncated = false;
+                changed = true;
+            }
+            Some(_) => {}
+            // The final probe missing is not evidence of a mutation. The
+            // map pages already carry their ordinary count consistency
+            // check, and a temporary no-reply must not erase good data.
+            None => {}
+        }
+    }
+
     Some(TrackArrangement { track, clips, truncated, changed })
 }
 
@@ -256,13 +341,35 @@ pub enum ArrangementNotesError {
 /// `KeyArity::Args(2)`, so the request table already refuses a reply that
 /// echoes anything else. Same as `device_params::decode_identity`, which
 /// this is modelled on.
-fn decode_identity(reply: &[OscType]) -> Option<(Option<String>, f64, f64)> {
+fn decode_identity(
+    reply: &[OscType],
+) -> Option<(Option<String>, f64, f64, Option<LoopRegion>)> {
     let name = match reply.get(2)? {
         OscType::String(s) if s.is_empty() => None,
         OscType::String(s) => Some(fence(s)),
         _ => return None,
     };
-    Some((name, clip_notes::as_f64(reply.get(3)?)?, clip_notes::as_f64(reply.get(4)?)?))
+    let looping = match reply.get(5)? {
+        OscType::Bool(value) => *value,
+        OscType::Int(value) => *value != 0,
+        _ => return None,
+    };
+    let loop_region = if looping {
+        let start_beats = clip_notes::as_f64(reply.get(6)?)?;
+        let end_beats = clip_notes::as_f64(reply.get(7)?)?;
+        if end_beats <= start_beats {
+            return None;
+        }
+        Some(LoopRegion { start_beats, end_beats })
+    } else {
+        None
+    };
+    Some((
+        name,
+        clip_notes::as_f64(reply.get(3)?)?,
+        clip_notes::as_f64(reply.get(4)?)?,
+        loop_region,
+    ))
 }
 
 /// One arrangement clip's identity: what makes "index 3" a particular clip
@@ -287,7 +394,7 @@ async fn identity_of(
     track: i32,
     index: i32,
     timeout: Duration,
-) -> Option<(Option<String>, f64, f64)> {
+) -> Option<(Option<String>, f64, f64, Option<LoopRegion>)> {
     q.query(
         "/live/mixingpal/get/arrangement/identity",
         vec![OscType::Int(track), OscType::Int(index)],
@@ -312,6 +419,8 @@ pub struct ArrangementClipNotes {
     /// records.
     pub name: Option<String>,
     pub start: f64,
+    pub length: f64,
+    pub loop_region: Option<LoopRegion>,
     pub notes: ClipNotes,
 }
 
@@ -345,8 +454,8 @@ pub async fn get_arrangement_notes(
     if before != after {
         return Err(ArrangementNotesError::IdentityChanged);
     }
-    let (name, start, _length) = before;
-    Ok(ArrangementClipNotes { name, start, notes })
+    let (name, start, length, loop_region) = before;
+    Ok(ArrangementClipNotes { name, start, length, loop_region, notes })
 }
 
 #[cfg(test)]
@@ -357,7 +466,7 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
-    fn decode_page_reads_the_header_then_every_triple() {
+    fn decode_page_reads_the_header_then_every_record() {
         let reply = vec![
             OscType::Int(2),
             OscType::Int(0),
@@ -365,15 +474,28 @@ mod tests {
             OscType::String("Verse".into()),
             OscType::Float(32.0),
             OscType::Float(64.0),
+            OscType::Bool(true),
+            OscType::Float(0.0),
+            OscType::Float(16.0),
             OscType::String("Fill".into()),
             OscType::Float(60.0),
             OscType::Float(4.0),
+            OscType::Bool(false),
+            OscType::Float(0.0),
+            OscType::Float(0.0),
         ];
         let (start, total, clips) = decode_page(&reply, 0).unwrap();
         assert_eq!((start, total), (0, 7));
         assert_eq!(clips.len(), 2);
         assert_eq!(clips[0].name.as_deref(), Some("«Verse»"));
         assert_eq!((clips[0].start, clips[0].length), (32.0, 64.0));
+        assert_eq!(
+            clips[0].loop_region,
+            Some(LoopRegion {
+                start_beats: 0.0,
+                end_beats: 16.0,
+            })
+        );
     }
 
     #[test]
@@ -392,6 +514,9 @@ mod tests {
             OscType::String("".into()),
             OscType::Float(32.0),
             OscType::Float(8.0),
+            OscType::Bool(false),
+            OscType::Float(0.0),
+            OscType::Float(0.0),
         ];
         let (_, _, clips) = decode_page(&reply, 0).unwrap();
         assert_eq!(clips[0].name, None);
@@ -411,6 +536,9 @@ mod tests {
             OscType::String("Verse".into()),
             OscType::Float(0.0),
             OscType::Float(4.0),
+            OscType::Bool(false),
+            OscType::Float(0.0),
+            OscType::Float(0.0),
         ];
         let (_, _, clips) = decode_page(&reply, 0).unwrap();
         assert_eq!(clips[0].name.as_deref(), Some("«Verse»"));
@@ -555,6 +683,9 @@ mod tests {
                     reply.push(OscType::String(name.clone()));
                     reply.push(OscType::Float(*at));
                     reply.push(OscType::Float(*len));
+                    reply.push(OscType::Bool(false));
+                    reply.push(OscType::Float(0.0));
+                    reply.push(OscType::Float(0.0));
                 }
                 if let Some(expect) = fake.hold_until_all_arrive {
                     held.push(reply);
@@ -631,6 +762,9 @@ mod tests {
                                     OscType::String(name.into()),
                                     OscType::Float(start),
                                     OscType::Float(8.0),
+                                    OscType::Bool(false),
+                                    OscType::Float(0.0),
+                                    OscType::Float(0.0),
                                 ],
                             )
                             .await;
@@ -823,17 +957,45 @@ mod tests {
     #[test]
     fn decode_identity_refuses_every_reply_it_cannot_vouch_for() {
         use rosc::OscType::{Float, Int, String as S};
-        let good = vec![Int(0), Int(2), S("Verse".into()), Float(32.0), Float(8.0)];
+        let good = vec![
+            Int(0),
+            Int(2),
+            S("Verse".into()),
+            Float(32.0),
+            Float(8.0),
+            OscType::Bool(true),
+            Float(0.0),
+            Float(4.0),
+        ];
         assert_eq!(
             decode_identity(&good),
-            Some((Some(fence("Verse")), 32.0, 8.0))
+            Some((
+                Some(fence("Verse")),
+                32.0,
+                8.0,
+                Some(LoopRegion {
+                    start_beats: 0.0,
+                    end_beats: 4.0,
+                }),
+            ))
         );
 
         // Unnamed is the normal case on the timeline, and it must not
         // become the `«»` an empty fence would produce.
         let mut unnamed = good.clone();
         unnamed[2] = S("".into());
-        assert_eq!(decode_identity(&unnamed), Some((None, 32.0, 8.0)));
+        assert_eq!(
+            decode_identity(&unnamed),
+            Some((
+                None,
+                32.0,
+                8.0,
+                Some(LoopRegion {
+                    start_beats: 0.0,
+                    end_beats: 4.0,
+                }),
+            ))
+        );
 
         // Truncated before the name, the start, and the length.
         assert!(decode_identity(&good[..2]).is_none());
@@ -918,6 +1080,7 @@ mod tests {
             result.notes.notes,
             vec![clip_notes::Note {
                 pitch: 60,
+                note: "C3".into(),
                 start: 0.0,
                 duration: 0.5,
                 velocity: 100.0,

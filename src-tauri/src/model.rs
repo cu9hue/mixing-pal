@@ -52,6 +52,12 @@ that matter. A track name is not evidence about what it plays. Slot indices \
 have gaps, so use the ones get_clips reports rather than counting from zero. \
 An audio track's clips are listed too; they have no notes, which is not the \
 same as a MIDI clip that is empty.
+- Session clip note results include length_beats and loop_region. Source notes
+repeat through length_beats when loop_region is present; do not call later
+iterations silent because the notes are listed once.
+- A note tool result includes note, the exact pitch label Ableton displays. \
+Use note when naming a pitch. MIDI octave labels vary between applications, \
+so do not derive or change an octave from the numeric pitch field.
 - The SECTIONS line names the producer's locators and where they are, and \
 that is all the context block says about the timeline. For what actually \
 plays where - which tracks are in a section, where the arrangement thins \
@@ -60,7 +66,11 @@ get_arrangement_notes on the few clips that matter. Arrangement clip \
 indices and session slot indices are different numbers: an index from \
 get_arrangement is never a slot for get_clip_notes. A note's start is \
 measured from the start of its clip, so its position on the timeline is the \
-clip's start plus the note's.
+clip's start_beats plus the note's. Timing fields ending in `_beats` are \
+beats, never bar counts. A loop_region means the listed source notes repeat \
+through the clip's length_beats; do not call later iterations silence because \
+the notes are listed only once. Never say an arrangement is empty until \
+get_arrangement has said so.
 - For pan, an exact fader value, or one track's full mixer state, call \
 get_track_detail. The context block's line per track is a summary, and it is \
 a mirror read that may be a couple of seconds old.
@@ -871,6 +881,12 @@ mod tests {
         // reads as "you have no note data at all".
         assert!(SYSTEM_PROMPT.contains("MIDI notes"));
         assert!(SYSTEM_PROMPT.contains("cannot hear"));
+    }
+
+    #[test]
+    fn the_prompt_treats_live_note_names_as_authoritative() {
+        assert!(SYSTEM_PROMPT.contains("exact pitch label Ableton displays"));
+        assert!(SYSTEM_PROMPT.contains("do not derive or change an octave"));
     }
 
     #[test]

@@ -72,6 +72,10 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // the track index alone is the key, so every track's flags can be
         // in flight at once, alongside its names.
         | "/live/track/get/devices/can_have_chains"
+        // (track) in, (track, total, digest) back. The digest is a
+        // whole-timeline generation marker, so it is deliberately outside
+        // the request key.
+        | "/live/mixingpal/get/arrangement/fingerprint"
         | "/live/return/get/volume"
         | "/live/return/get/panning"
         | "/live/return/get/name" => KeyArity::Args(1),
@@ -82,6 +86,8 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // as the notes themselves -- the reply echoes (track, clip).
         | "/live/clip/get/num_notes"
         | "/live/clip/get/length"
+        // (track, clip) in, (track, clip, looping, start, end) back.
+        | "/live/mixingpal/get/clip/loop_region"
         // (track, path) in, (track, path, name, num_parameters) back. One
         // address in place of the retired /live/device/get/name and
         // /live/device/get/num_parameters, so a bracketed parameter read
@@ -176,6 +182,7 @@ mod tests {
             // ONE string argument, which is what keeps this a constant
             // rather than a function of the request.
             ("/live/track/get/devices/can_have_chains", KeyArity::Args(1)),
+            ("/live/mixingpal/get/arrangement/fingerprint", KeyArity::Args(1)),
             ("/live/track/get/send", KeyArity::Args(2)),
             ("/live/return/get/volume", KeyArity::Args(1)),
             ("/live/return/get/panning", KeyArity::Args(1)),
@@ -194,6 +201,7 @@ mod tests {
             ("/live/clip/get/notes_window", KeyArity::Args(3)),
             ("/live/clip/get/num_notes", KeyArity::Args(2)),
             ("/live/clip/get/length", KeyArity::Args(2)),
+            ("/live/mixingpal/get/clip/loop_region", KeyArity::Args(2)),
             // (track, path) in, (track, path, name, num_parameters) back. One
             // address in place of the retired /live/device/get/name and
             // /live/device/get/num_parameters, so a bracketed parameter read

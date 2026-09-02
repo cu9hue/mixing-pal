@@ -28,6 +28,31 @@
   border-bottom: 1px solid var(--border);
 }
 
+.brand-mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.brand-mark__solid {
+  fill: oklch(0.68 0.28 340);
+}
+
+.brand-mark__core {
+  fill: oklch(0.87 0.28 133);
+}
+
+.brand-mark__echo {
+  fill: none;
+  stroke: oklch(0.68 0.28 340);
+  stroke-width: 2;
+  opacity: 0.6;
+}
+
+.brand-mark__echo--far {
+  opacity: 0.3;
+}
+
 .card__dot {
   width: 5px;
   height: 5px;

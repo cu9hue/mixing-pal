@@ -25,18 +25,32 @@ class RackHandler(AbletonOSCHandler):
         def device_for(params):
             """(device, raw_path) or (None, raw_path) for a path this script
             refuses to walk."""
-            raw_path = str(params[1])
+            if len(params) < 2:
+                return None, None
+            try:
+                track_index = int(params[0])
+                raw_path = str(params[1])
+            except (TypeError, ValueError):
+                return None, None
+            tracks = self.song.tracks
+            if track_index < 0 or track_index >= len(tracks):
+                return None, raw_path
             path = parse_path(raw_path)
             if path is None:
                 return None, raw_path
-            return resolve(self.song.tracks[int(params[0])], path), raw_path
+            return resolve(tracks[track_index], path), raw_path
 
         def rack_chains(params: Tuple[Any]):
             device, raw_path = device_for(params)
             if device is None:
                 return None
-            track_index = int(params[0])
-            start, span = max(0, int(params[2])), max(0, int(params[3]))
+            if len(params) != 4:
+                return None
+            try:
+                track_index = int(params[0])
+                start, span = max(0, int(params[2])), max(0, int(params[3]))
+            except (TypeError, ValueError):
+                return None
             entries = chains_of(device)
             records = build_window(entries, start, span)
             flat = [field for record in records for field in record]

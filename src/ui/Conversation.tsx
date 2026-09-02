@@ -7,6 +7,8 @@ import { BlockNode, InlineNode, parseMarkdown } from "./markdown";
 import { progressLabel } from "./progressLabel";
 import { waitingLabel } from "./waitingLabel";
 
+const MAX_HISTORY_MESSAGES = 12;
+
 function renderInline(nodes: InlineNode[]): ReactNode {
   return nodes.map((n, i) => {
     switch (n.type) {
@@ -79,9 +81,8 @@ function renderBlocks(blocks: BlockNode[]): ReactNode {
 /**
  * Reading model 2: only the current exchange is on screen.
  *
- * `history` still holds the whole conversation and the whole thing goes to
- * the model on every turn -- that is a separate concern from what she
- * looks at. The session reader that surfaces the rest is a later plan.
+ * `history` keeps a short recent context window for the model. The session
+ * reader that surfaces older exchanges is a later plan.
  */
 export function Conversation({
   state,
@@ -130,10 +131,13 @@ export function Conversation({
     // turn, rebuilt each time so it reflects the set as it is now, not as
     // it was when the conversation started.
     const turn: ChatMessage[] = [
-      ...history,
+      ...history.slice(-MAX_HISTORY_MESSAGES),
       { role: "user", content: `${buildContext(state, goal)}\n\n---\n\n${asked}` },
     ];
-    setHistory((h) => [...h, { role: "user", content: asked }]);
+    setHistory((h) => [
+      ...h,
+      { role: "user" as const, content: asked },
+    ].slice(-MAX_HISTORY_MESSAGES));
 
     try {
       // runTurn reports a tool BEFORE it runs and has no "finished" signal,
@@ -154,7 +158,10 @@ export function Conversation({
       const out = await runTurn(tauriProvider, tracked, turn, (name, args) =>
         setProgress(progressLabel(name, args, state)),
       );
-      setHistory((h) => [...h, { role: "assistant", content: out.text }]);
+      setHistory((h) => [
+        ...h,
+        { role: "assistant" as const, content: out.text },
+      ].slice(-MAX_HISTORY_MESSAGES));
       setAnswer(out.text);
       onAnswer();
     } catch (e) {

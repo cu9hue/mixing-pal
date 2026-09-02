@@ -65,11 +65,14 @@ impl LiveQuery {
             };
 
             match registration {
-                Registration::New(_) => self
-                    .socket
-                    .send(addr, args.clone())
-                    .await
-                    .map_err(|e| QueryError::Transport(e.to_string()))?,
+                Registration::New(id) => {
+                    if let Err(error) = self.socket.send(addr, args.clone()).await {
+                        if let Ok(mut table) = self.table.lock() {
+                            table.cancel(addr, &args, id);
+                        }
+                        return Err(QueryError::Transport(error.to_string()));
+                    }
+                }
                 // An equivalent request is already on the wire; its reply
                 // will reach this watcher too.
                 Registration::Joined(_) => {}

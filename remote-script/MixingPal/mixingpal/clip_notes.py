@@ -35,6 +35,14 @@ class ClipNotesHandler(AbletonOSCHandler):
         self.class_identifier = "clip_notes"
 
     def init_api(self):
+        def clip_indices(params):
+            if len(params) != 2:
+                return None
+            try:
+                return int(params[0]), int(params[1])
+            except (TypeError, ValueError):
+                return None
+
         def clip_at(track_index, clip_index):
             """The clip at (track, clip), or None if there isn't one.
 
@@ -79,10 +87,15 @@ class ClipNotesHandler(AbletonOSCHandler):
             The ordinal is opaque here. Live never interprets it; it only
             has to come back unchanged.
             """
-            track_index, clip_index, window = (
-                int(params[0]), int(params[1]), int(params[2]))
-            pitch_start, pitch_span = int(params[3]), int(params[4])
-            time_start, time_span = float(params[5]), float(params[6])
+            if len(params) != 7:
+                return None
+            try:
+                track_index, clip_index, window = (
+                    int(params[0]), int(params[1]), int(params[2]))
+                pitch_start, pitch_span = int(params[3]), int(params[4])
+                time_start, time_span = float(params[5]), float(params[6])
+            except (TypeError, ValueError):
+                return None
             clip = clip_at(track_index, clip_index)
             if clip is None:
                 return None
@@ -91,13 +104,32 @@ class ClipNotesHandler(AbletonOSCHandler):
             return notes_window_reply(track_index, clip_index, window, notes)
 
         def num_notes(params: Tuple[Any]):
-            track_index, clip_index = int(params[0]), int(params[1])
+            indices = clip_indices(params)
+            if indices is None:
+                return None
+            track_index, clip_index = indices
             clip = clip_at(track_index, clip_index)
             if clip is None:
                 return None
             notes = clip.get_notes_extended(0, 128, 0.0, clip.length)
             return num_notes_reply(track_index, clip_index, notes)
 
+        def loop_region(params: Tuple[Any]):
+            indices = clip_indices(params)
+            if indices is None:
+                return None
+            track_index, clip_index = indices
+            clip = clip_at(track_index, clip_index)
+            if clip is None:
+                return None
+            looping = bool(clip.looping)
+            if looping:
+                start, end = float(clip.loop_start), float(clip.loop_end)
+            else:
+                start, end = 0.0, 0.0
+            return (track_index, clip_index, looping, start, end)
+
         self.osc_server.add_handler(
             "/live/clip/get/notes_window", notes_window)
         self.osc_server.add_handler("/live/clip/get/num_notes", num_notes)
+        self.osc_server.add_handler("/live/mixingpal/get/clip/loop_region", loop_region)

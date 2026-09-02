@@ -72,14 +72,18 @@ export async function runTurn(
       tool_calls: completion.toolCalls,
     });
 
-    // One tool message per call id, in order. A provider rejects the whole
-    // next request if any id goes unanswered.
-    for (const c of completion.toolCalls) {
+    // Independent calls in one completion cannot depend on each other's
+    // output: the model has not received either result yet. Run them all at
+    // once, then append their replies in the provider's original order.
+    // This matters when it asks to inspect several clips: Live can process
+    // the requests in one tick, but awaiting them here used to serialize the
+    // entire batch before the next model request.
+    const toolMessages = await Promise.all(completion.toolCalls.map(async (c) => {
       let args: unknown;
       try {
         args = JSON.parse(c.function.arguments || "{}");
       } catch {
-        history.push({
+        return {
           role: "tool",
           tool_call_id: c.id,
           content: JSON.stringify({
@@ -89,8 +93,7 @@ export async function runTurn(
             fresh: false,
             missing_reason: "bad_arguments",
           }),
-        });
-        continue;
+        } satisfies ChatMessage;
       }
 
       onProgress?.(c.function.name, args);
@@ -106,12 +109,13 @@ export async function runTurn(
           missing_reason: `tool_failed: ${String(err)}`,
         };
       }
-      history.push({
+      return {
         role: "tool",
         tool_call_id: c.id,
         content: JSON.stringify(result),
-      });
-    }
+      } satisfies ChatMessage;
+    }));
+    history.push(...toolMessages);
   }
 
   return {

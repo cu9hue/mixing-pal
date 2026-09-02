@@ -109,7 +109,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clip_notes",
-                "description": "Every MIDI note in one session-view clip, as pitch, start, duration, velocity, mute. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read.",
+                "description": "Every MIDI note in one session-view clip, as note, pitch, start, duration, velocity, mute, plus length_beats and loop_region. Source notes repeat through length_beats when loop_region is present; never call later iterations silent merely because notes are listed once. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -136,7 +136,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement",
-                "description": "Every track's arrangement timeline: for each clip, its index, start time in beats, length in beats, and its name when it has one. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; one round trip per track covers the set, so calling it is cheap. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. A track with an empty list genuinely has nothing on the timeline, which is normal early in a writing session. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated.",
+                "description": "Every track's arrangement timeline: for each clip, its index, start_beats, length_beats, and its name when it has one. These are beats, never bar counts. A loop_region is present when Live repeats the clip's MIDI: source notes repeat in that region through the clip's length_beats, so an absent note after one loop is not silence. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; one round trip per track covers the set, so calling it is cheap. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. A track with an empty list genuinely has nothing on the timeline, which is normal early in a writing session. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -148,7 +148,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "Every MIDI note in one arrangement-view clip, as pitch, start, duration, velocity, mute. Queried from Live at call time and fetched in pages. Each note's start is measured from the START OF THE CLIP, not from the start of the song, while the result's own start field is the clip's position on the timeline: a note's position on the timeline, and against the SECTIONS line, is result.start + note.start. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip has no notes to read.",
+                "description": "Every MIDI note in one arrangement-view clip, as note, pitch, start, duration, velocity, mute. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts. Each note's start is measured from the start of the clip, not from the start of the song: its position on the timeline is result.start_beats + note.start. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip has no notes to read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -236,7 +236,7 @@ fn int_arg(args: &serde_json::Value, name: &str) -> Option<i64> {
 /// asked about, and a negative index would resolve there rather than fail,
 /// because Python slices from the end.
 fn track_and_path(args: &serde_json::Value) -> Option<(i64, DevicePath)> {
-    let track = int_arg(args, "track").filter(|t| *t >= 0)?;
+    let track = int_arg(args, "track").filter(|t| (0..=i64::from(i32::MAX)).contains(t))?;
     Some((track, DevicePath::parse(args.get("path"))?))
 }
 
@@ -266,6 +266,16 @@ fn track_count(coalescer: &Mutex<Coalescer>) -> Option<i64> {
         .args
         .first()?
         .as_i64()
+}
+
+/// Reject an impossible track index before it becomes an OSC timeout.
+///
+/// The mirror is advisory: when it has not observed a count yet, a live tool
+/// is still allowed to ask Live. When it *has* a non-negative count, though,
+/// an index beyond it cannot become valid during this request and asking it
+/// makes the model wait for the ordinary two-second no-reply timeout.
+fn known_track_is_out_of_range(coalescer: &Mutex<Coalescer>, track: i64) -> bool {
+    matches!(track_count(coalescer), Some(count) if count >= 0 && track >= count)
 }
 
 /// Whether the track under a paged query moved between two identity samples.
@@ -496,7 +506,7 @@ fn arrangement_reasons(
 pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult {
     match name {
         "get_track_detail" => {
-            let Some(track) = int_arg(args, "track").filter(|t| *t >= 0) else {
+            let Some(track) = int_arg(args, "track").filter(|t| (0..=i64::from(u32::MAX)).contains(t)) else {
                 return ToolResult::missing("bad_arguments");
             };
             // Short guard, no await inside: the mirror read is synchronous.
@@ -518,11 +528,14 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
         }
         "get_clip_notes" => {
             let (Some(track), Some(clip)) = (
-                int_arg(args, "track").filter(|t| *t >= 0),
-                int_arg(args, "clip").filter(|c| *c >= 0),
+                int_arg(args, "track").filter(|t| (0..=i64::from(i32::MAX)).contains(t)),
+                int_arg(args, "clip").filter(|c| (0..=i64::from(i32::MAX)).contains(c)),
             ) else {
                 return ToolResult::missing("bad_arguments");
             };
+            if known_track_is_out_of_range(&ctx.coalescer, track) {
+                return ToolResult::missing("track_out_of_range");
+            }
             // Clone the Arc out and DROP the guard before awaiting -- a
             // std::sync::Mutex guard is !Send and holding one across an
             // .await would not compile, which is exactly why this codebase
@@ -552,7 +565,13 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
 
             match outcome {
                 Ok(notes) => ToolResult::live(
-                    json!({ "notes": notes.notes, "count": notes.notes.len() }),
+                    json!({
+                        "notes": notes.notes,
+                        "count": notes.notes.len(),
+                        "length_beats": notes.length_beats,
+                        "loop_region": notes.loop_region,
+                        "loop_state_known": notes.loop_state_known,
+                    }),
                     notes.missing_reason,
                 ),
                 Err(QueryError::NoReply) => ToolResult::missing("no_reply"),
@@ -653,11 +672,14 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
         }
         "get_arrangement_notes" => {
             let (Some(track), Some(index)) = (
-                int_arg(args, "track").filter(|t| *t >= 0),
-                int_arg(args, "index").filter(|i| *i >= 0),
+                int_arg(args, "track").filter(|t| (0..=i64::from(i32::MAX)).contains(t)),
+                int_arg(args, "index").filter(|i| (0..=i64::from(i32::MAX)).contains(i)),
             ) else {
                 return ToolResult::missing("bad_arguments");
             };
+            if known_track_is_out_of_range(&ctx.coalescer, track) {
+                return ToolResult::missing("track_out_of_range");
+            }
             let query = match ctx.query.lock() {
                 Ok(q) => q.clone(),
                 Err(_) => return ToolResult::missing("mirror_unavailable"),
@@ -693,7 +715,9 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                         "notes": result.notes.notes,
                         "count": result.notes.notes.len(),
                         "name": result.name,
-                        "start": result.start,
+                        "start_beats": result.start,
+                        "length_beats": result.length,
+                        "loop_region": result.loop_region,
                     }),
                     result.notes.missing_reason,
                 ),
@@ -767,6 +791,9 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             let Some((track, path)) = track_and_path(args) else {
                 return ToolResult::missing("bad_arguments");
             };
+            if known_track_is_out_of_range(&ctx.coalescer, track) {
+                return ToolResult::missing("track_out_of_range");
+            }
             let query = match ctx.query.lock() {
                 Ok(q) => q.clone(),
                 Err(_) => return ToolResult::missing("mirror_unavailable"),
@@ -813,6 +840,9 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             let Some((track, path)) = track_and_path(args) else {
                 return ToolResult::missing("bad_arguments");
             };
+            if known_track_is_out_of_range(&ctx.coalescer, track) {
+                return ToolResult::missing("track_out_of_range");
+            }
             let query = match ctx.query.lock() {
                 Ok(q) => q.clone(),
                 Err(_) => return ToolResult::missing("mirror_unavailable"),
@@ -1296,6 +1326,9 @@ mod tests {
                             rosc::OscType::String("Verse".into()),
                             rosc::OscType::Float(start),
                             rosc::OscType::Float(8.0),
+                            rosc::OscType::Bool(false),
+                            rosc::OscType::Float(0.0),
+                            rosc::OscType::Float(0.0),
                         ]
                     }
                     "/live/arrangement_clip/get/length" => vec![
@@ -1345,7 +1378,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_clip_that_stayed_put_returns_its_notes_and_its_own_start() {
+    async fn a_clip_that_stayed_put_returns_its_notes_and_its_own_timing() {
         // The success path through the arm, and the field the schema now
         // tells the model to add to each note's start.
         let ctx = moving_clip_ctx(32.0, 32.0).await;
@@ -1353,7 +1386,8 @@ mod tests {
         assert_eq!(r.missing_reason, None);
         assert_eq!(r.value["count"], json!(1));
         assert_eq!(r.value["name"], json!("«Verse»"));
-        assert_eq!(r.value["start"], json!(32.0));
+        assert_eq!(r.value["start_beats"], json!(32.0));
+        assert_eq!(r.value["length_beats"], json!(8.0));
         assert_eq!(r.value["notes"][0]["start"], json!(0.0));
     }
 

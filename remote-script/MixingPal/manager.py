@@ -7,15 +7,21 @@ from . import abletonosc
 import importlib
 import traceback
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 
 logger = logging.getLogger("abletonosc")
+MAX_LOG_BYTES = 2 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
 
 class Manager(ControlSurface):
     def __init__(self, c_instance):
         ControlSurface.__init__(self, c_instance)
 
         self.log_level = "info"
+        self.osc_server = None
+        self.log_file_handler = None
+        self.live_osc_error_handler = None
 
         self.handlers = []
         self.midi_mappings = {}
@@ -44,7 +50,10 @@ class Manager(ControlSurface):
         if not os.path.exists(log_dir):
             os.mkdir(log_dir, 0o755)
         log_path = os.path.join(log_dir, "abletonosc.log")
-        self.log_file_handler = logging.FileHandler(log_path)
+        # A control surface can run for weeks. Keep a small recent history
+        # without allowing one verbose debug session to consume the disk.
+        self.log_file_handler = RotatingFileHandler(
+            log_path, maxBytes=MAX_LOG_BYTES, backupCount=LOG_BACKUP_COUNT)
         self.log_file_handler.setLevel(self.log_level.upper())
         formatter = logging.Formatter('(%(asctime)s) [%(levelname)s] %(message)s')
         self.log_file_handler.setFormatter(formatter)
@@ -64,8 +73,14 @@ class Manager(ControlSurface):
         logger.addHandler(self.live_osc_error_handler)
 
     def stop_logging(self):
-        logger.removeHandler(self.log_file_handler)
-        logger.removeHandler(self.live_osc_error_handler)
+        if self.log_file_handler is not None:
+            logger.removeHandler(self.log_file_handler)
+            self.log_file_handler.close()
+            self.log_file_handler = None
+        if self.live_osc_error_handler is not None:
+            logger.removeHandler(self.live_osc_error_handler)
+            self.live_osc_error_handler.close()
+            self.live_osc_error_handler = None
 
     def init_api(self):
         def test_callback(params):
@@ -143,7 +158,8 @@ class Manager(ControlSurface):
         self.show_message("Disconnecting...")
         logger.info("Disconnecting...")
         self.stop_logging()
-        self.osc_server.shutdown()
+        if self.osc_server is not None:
+            self.osc_server.shutdown()
         super().disconnect()
 
     def build_midi_map(self, midi_map_handle):

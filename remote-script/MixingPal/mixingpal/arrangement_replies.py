@@ -9,6 +9,8 @@ timeline that is plausible and wrong.
 Nothing here imports Live, so `remote-script/tests` can exercise it directly.
 """
 
+import hashlib
+
 # Caps every name on the wire. The Rust side fences to 120 characters anyway,
 # so a longer one cannot survive the trip intact.
 NAME_CAP = 120
@@ -26,7 +28,7 @@ MAX_REPLY_BYTES = 8960
 
 
 def clip_record(clip):
-    """One arrangement clip, as (name, start_time, length).
+    """One arrangement clip, as (name, start_time, length, looping, loop_start, loop_end).
 
     `track.arrangement_clips` yields Clip OBJECTS, not ids -- probed against
     Live 12 on 2026-08-30 via upstream's own
@@ -42,12 +44,21 @@ def clip_record(clip):
     the normal case on the arrangement, and `arrangement.rs` omits the field
     rather than sending a bare fence.
 
-    One pass over the clip, so its three values are read together and cannot
+    One pass over the clip, so its timing values are read together and cannot
     disagree. Reading them from three separate endpoints is what this
     endpoint exists to avoid: three replies are three moments, and a producer
     editing between them mis-zips the timeline silently.
     """
-    return (str(clip.name)[:NAME_CAP], float(clip.start_time), float(clip.length))
+    looping = bool(clip.looping)
+    if looping:
+        loop_start = float(clip.loop_start)
+        loop_end = float(clip.loop_end)
+    else:
+        # Keep one fixed record shape. These values have no meaning while
+        # looping is false, and the Rust decoder omits them from JSON.
+        loop_start, loop_end = 0.0, 0.0
+    return (str(clip.name)[:NAME_CAP], float(clip.start_time), float(clip.length),
+            looping, loop_start, loop_end)
 
 
 def _record_bytes(record):
@@ -66,6 +77,8 @@ def _record_bytes(record):
     raise.
     """
     name = str(record[0]).encode("utf-8")
+    # Four floats occupy sixteen bytes. The boolean carries only an OSC type
+    # tag, which this estimator's header slack already covers.
     return 4 * ((len(name) // 4) + 1) + 16
 
 
@@ -107,7 +120,7 @@ def window_of(clips, start, span, budget=MAX_REPLY_BYTES):
 
 
 def arrangement_reply(track_index, start, total, records):
-    """`(track, start, total, *(name, start_time, length))`.
+    """`(track, start, total, *(name, start_time, length, looping, loop_start, loop_end))`.
 
     `track` and `start` lead because the client's request table keys on the
     leading arguments of the request and the reply alike. `total` is the
@@ -120,7 +133,7 @@ def arrangement_reply(track_index, start, total, records):
 
 
 def identity_reply(track_index, index, clip):
-    """`(track, index, name, start_time, length)` for ONE clip.
+    """`(track, index, name, start_time, length, looping, loop_start, loop_end)` for ONE clip.
 
     A separate address from the map, modelled on
     `/live/mixingpal/get/device/identity` and existing for the same reason.
@@ -131,6 +144,19 @@ def identity_reply(track_index, index, clip):
     cannot collide, and it reads one clip instead of rescanning a track.
     """
     return (track_index, index, *clip_record(clip))
+
+
+def timeline_fingerprint_reply(track_index, clips):
+    """`(track, total, digest)` for one coherent arrangement timeline.
+
+    The map pages records, so a same-count reorder between pages used to be
+    indistinguishable from a stable list. One fingerprint before and after a
+    read makes that mutation observable without putting a whole-track scan in
+    every page handler. The digest covers the same fields the map returns.
+    """
+    records = tuple(clip_record(clips[index]) for index in range(len(clips)))
+    digest = hashlib.sha256(repr(records).encode("utf-8")).hexdigest()
+    return (track_index, len(clips), digest)
 
 
 def cue_points_reply(cue_points, budget=MAX_REPLY_BYTES):

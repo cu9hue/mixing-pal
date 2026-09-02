@@ -757,7 +757,15 @@ pub fn run() {
             app.manage(Arc::new(ModelState {
                 settings: Mutex::new(settings::load(&config_dir)),
                 config_dir,
-                client: reqwest::Client::new(),
+                // A router can accept a request and then leave it pending
+                // indefinitely while an upstream model is saturated. Keep
+                // a turn bounded and return a normal provider error instead
+                // of leaving the chat UI permanently in its thinking state.
+                client: reqwest::Client::builder()
+                    .connect_timeout(Duration::from_secs(10))
+                    .timeout(Duration::from_secs(60))
+                    .build()
+                    .expect("the built-in HTTP client configuration is valid"),
             }));
 
             // Bound synchronously, via the background tokio runtime Tauri

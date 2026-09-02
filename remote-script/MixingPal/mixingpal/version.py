@@ -25,7 +25,12 @@ from ..abletonosc.handler import AbletonOSCHandler
 # arrangement map and arrangement note reads report a named gap while
 # session, mixer and device reads keep working normally. Reinstalling is the
 # fix, which is what the banner asks for.
-WIRE_VERSION = 5
+#
+# Version 6 adds loop boundaries to arrangement records. A stale script has
+# the old three-field records, which must not be decoded as loop metadata.
+# Version 7 adds session loop metadata, so source notes are never presented
+# as the whole clip's playback.
+WIRE_VERSION = 7
 
 
 class VersionHandler(AbletonOSCHandler):
