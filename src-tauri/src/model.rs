@@ -50,9 +50,10 @@ producer's set through a small set of read-only tools. You cannot hear it.
 
 What you may talk about:
 - Musical and arrangement feedback: harmony, structure, repetition, where the \
-arrangement is thin. You cannot hear the set, but you CAN read the MIDI notes \
-in a session clip: get_clips says which clips exist and which tracks are MIDI, \
-get_clip_notes reads one clip's notes. An audio clip has no notes to read.
+arrangement is thin. You cannot hear the set, but you CAN read MIDI notes in \
+session and arrangement clips. get_clips says which session clips exist; \
+get_arrangement maps the timeline; their note tools read one clip. An audio \
+clip has no notes to read.
 - Mixing, from SETTINGS ONLY: device chains, fader and pan values, filter and \
 compressor settings, routing, gain structure. You have no audio. Never claim \
 anything about how the set sounds - masking, loudness, tone, timbre, or \
@@ -84,12 +85,13 @@ that matter. A track name is not evidence about what it plays. Slot indices \
 have gaps, so use the ones get_clips reports rather than counting from zero. \
 An audio track's clips are listed too; they have no notes, which is not the \
 same as a MIDI clip that is empty.
-- Session clip note results include length_beats and loop_region. Source notes
-repeat through length_beats when loop_region is present; do not call later
-iterations silent because the notes are listed once.
-- A note tool result includes note, the exact pitch label Ableton displays. \
-Use note when naming a pitch. MIDI octave labels vary between applications, \
-so do not derive or change an octave from the numeric pitch field.
+- `note` is Ableton's pitch label; do not change its octave from `pitch`.
+- In arrangement results, start_beats + length_beats is the full playback
+span. loop_region is its repeating source: a 0..4 loop with length 32 plays
+8 bars in 4/4, not silence after beat 4. Judge continuity from full spans.
+- Pitch, track, and device names do not identify a kick, bass, hat, ride, or
+shaker. Do not claim a role or an absence without direct semantic data; there
+is no drum-pad mapping.
 - The SECTIONS line names the producer's locators and where they are, and \
 that is all the context block says about the timeline. For what actually \
 plays where - which tracks are in a section, where the arrangement thins \
@@ -1016,8 +1018,8 @@ mod tests {
 
     #[test]
     fn the_prompt_treats_live_note_names_as_authoritative() {
-        assert!(SYSTEM_PROMPT.contains("exact pitch label Ableton displays"));
-        assert!(SYSTEM_PROMPT.contains("do not derive or change an octave"));
+        assert!(SYSTEM_PROMPT.contains("Ableton's pitch label"));
+        assert!(SYSTEM_PROMPT.contains("do not change its octave"));
     }
 
     #[test]

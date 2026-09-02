@@ -1325,7 +1325,7 @@ mod tests {
                             req.args[1].clone(),
                             rosc::OscType::String("Verse".into()),
                             rosc::OscType::Float(start),
-                            rosc::OscType::Float(8.0),
+                            rosc::OscType::Float(start + 8.0),
                             rosc::OscType::Bool(false),
                             rosc::OscType::Float(0.0),
                             rosc::OscType::Float(0.0),

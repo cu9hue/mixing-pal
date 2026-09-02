@@ -107,7 +107,7 @@ class ArrangementHandler(AbletonOSCHandler):
             return clips[index]
 
         def arrangement_identity(params: Tuple[Any]):
-            """One clip's `(name, start_time, length)`, on its own address.
+            """One clip's `(name, start_time, end_time)`, on its own address.
 
             The map cannot serve this. Its key is `(track, start)`, so an
             identity read phrased as a span-1 page of the same track joins a

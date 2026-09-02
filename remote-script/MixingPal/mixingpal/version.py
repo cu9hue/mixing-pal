@@ -29,8 +29,9 @@ from ..abletonosc.handler import AbletonOSCHandler
 # Version 6 adds loop boundaries to arrangement records. A stale script has
 # the old three-field records, which must not be decoded as loop metadata.
 # Version 7 adds session loop metadata, so source notes are never presented
-# as the whole clip's playback.
-WIRE_VERSION = 7
+# as the whole clip's playback. Version 8 makes arrangement timing use the
+# clip's end_time rather than its source-loop length.
+WIRE_VERSION = 8
 
 
 class VersionHandler(AbletonOSCHandler):

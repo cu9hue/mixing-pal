@@ -345,10 +345,16 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         reply.push(OscType::String(
                             clip["name"].as_str().unwrap().to_string(),
                         ));
-                        reply.push(OscType::Float(clip["start"].as_f64().unwrap() as f32));
-                        reply.push(OscType::Float(clip["length"].as_f64().unwrap() as f32));
+                        let start_beats = clip["start"].as_f64().unwrap();
+                        reply.push(OscType::Float(start_beats as f32));
+                        // Wire 8: the record carries the clip's END time, not
+                        // its length. The fixture keeps `length` because that
+                        // is what a person writing a fixture thinks in.
+                        reply.push(OscType::Float(
+                            (start_beats + clip["length"].as_f64().unwrap()) as f32,
+                        ));
                         // `decode_page` reads six fields per record: name,
-                        // start, length, looping, loop_start, loop_end.
+                        // start, end, looping, loop_start, loop_end.
                         match clip["loop"].as_array() {
                             Some(l) => {
                                 reply.push(OscType::Bool(true));
@@ -373,12 +379,16 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         continue; // an unreadable clip gets silence, like real Live
                     }
                     let clip = &track["arrangement"][int_at(1).unwrap() as usize];
+                    let start_beats = clip["start"].as_f64().unwrap();
                     let mut reply = vec![
                         req.args[0].clone(),
                         req.args[1].clone(),
                         OscType::String(clip["name"].as_str().unwrap().to_string()),
-                        OscType::Float(clip["start"].as_f64().unwrap() as f32),
-                        OscType::Float(clip["length"].as_f64().unwrap() as f32),
+                        OscType::Float(start_beats as f32),
+                        // Wire 8: end time, not length. See the map arm above.
+                        OscType::Float(
+                            (start_beats + clip["length"].as_f64().unwrap()) as f32,
+                        ),
                     ];
                     // `decode_identity` reads looping, then loop_start and
                     // loop_end only when it is true.

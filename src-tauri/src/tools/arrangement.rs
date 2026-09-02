@@ -92,7 +92,7 @@ pub struct ArrangementMap {
     pub changed: Vec<i32>,
 }
 
-/// `(track, start, total, *(name, start_time, length, looping, loop_start, loop_end))`.
+/// `(track, start, total, *(name, start_time, end_time, looping, loop_start, loop_end))`.
 ///
 /// Returns `(start, total, clips)` with each clip's index already resolved
 /// from the page offset, or `None` if the reply is not the page that was
@@ -136,11 +136,16 @@ fn decode_page(reply: &[OscType], expect_start: usize) -> Option<(usize, usize, 
         } else {
             None
         };
+        let start_beats = clip_notes::as_f64(&record[1])?;
+        let end_beats = clip_notes::as_f64(&record[2])?;
+        if end_beats <= start_beats {
+            return None;
+        }
         clips.push(ArrangementClip {
             index: (start + offset) as i32,
             name,
-            start: clip_notes::as_f64(&record[1])?,
-            length: clip_notes::as_f64(&record[2])?,
+            start: start_beats,
+            length: end_beats - start_beats,
             loop_region,
         });
     }
@@ -364,12 +369,9 @@ fn decode_identity(
     } else {
         None
     };
-    Some((
-        name,
-        clip_notes::as_f64(reply.get(3)?)?,
-        clip_notes::as_f64(reply.get(4)?)?,
-        loop_region,
-    ))
+    let start_beats = clip_notes::as_f64(reply.get(3)?)?;
+    let end_beats = clip_notes::as_f64(reply.get(4)?)?;
+    (end_beats > start_beats).then_some((name, start_beats, end_beats - start_beats, loop_region))
 }
 
 /// One arrangement clip's identity: what makes "index 3" a particular clip
@@ -473,13 +475,13 @@ mod tests {
             OscType::Int(7),
             OscType::String("Verse".into()),
             OscType::Float(32.0),
-            OscType::Float(64.0),
+            OscType::Float(96.0),
             OscType::Bool(true),
             OscType::Float(0.0),
             OscType::Float(16.0),
             OscType::String("Fill".into()),
             OscType::Float(60.0),
-            OscType::Float(4.0),
+            OscType::Float(64.0),
             OscType::Bool(false),
             OscType::Float(0.0),
             OscType::Float(0.0),
@@ -513,7 +515,7 @@ mod tests {
             OscType::Int(1),
             OscType::String("".into()),
             OscType::Float(32.0),
-            OscType::Float(8.0),
+            OscType::Float(40.0),
             OscType::Bool(false),
             OscType::Float(0.0),
             OscType::Float(0.0),
@@ -606,7 +608,7 @@ mod tests {
         assert!(clips.is_empty());
     }
 
-    /// `timelines[i]` is track i's clips as (name, start, length). `silent`
+    /// `timelines[i]` is track i's clips as (name, start, end). `silent`
     /// names tracks that get no reply at all, which is what a lost datagram
     /// looks like from the client's side. `page` is how many records the
     /// fake returns per reply, so a track longer than one page exercises the
@@ -679,10 +681,10 @@ mod tests {
                     OscType::Int(start as i32),
                     OscType::Int(total),
                 ];
-                for (name, at, len) in timeline.iter().skip(start).take(page) {
+                for (name, at, end) in timeline.iter().skip(start).take(page) {
                     reply.push(OscType::String(name.clone()));
                     reply.push(OscType::Float(*at));
-                    reply.push(OscType::Float(*len));
+                    reply.push(OscType::Float(*end));
                     reply.push(OscType::Bool(false));
                     reply.push(OscType::Float(0.0));
                     reply.push(OscType::Float(0.0));
@@ -709,7 +711,7 @@ mod tests {
     }
 
     /// Answers the identity read with `first` the first time and `second`
-    /// afterwards -- each a `(name, start)` pair, with length held at `8.0`
+    /// afterwards -- each a `(name, start)` pair, with an eight-beat span.
     /// throughout.
     ///
     /// Two cases exercise this, because Live names an arrangement clip after
@@ -761,7 +763,7 @@ mod tests {
                                     req.args[1].clone(),
                                     OscType::String(name.into()),
                                     OscType::Float(start),
-                                    OscType::Float(8.0),
+                                    OscType::Float(start + 8.0),
                                     OscType::Bool(false),
                                     OscType::Float(0.0),
                                     OscType::Float(0.0),
@@ -811,7 +813,7 @@ mod tests {
     }
 
     fn timeline(names: &[(&str, f32, f32)]) -> Vec<(String, f32, f32)> {
-        names.iter().map(|(n, a, l)| ((*n).to_string(), *a, *l)).collect()
+        names.iter().map(|(n, start, end)| ((*n).to_string(), *start, *end)).collect()
     }
 
     #[tokio::test]
@@ -821,7 +823,7 @@ mod tests {
         let q = fake_live(FakeLive {
             timelines: vec![
                 timeline(&[("Beat", 32.0, 64.0)]),
-                timeline(&[("Sub", 32.0, 32.0)]),
+                timeline(&[("Sub", 32.0, 40.0)]),
                 timeline(&[]),
             ],
             hold_until_all_arrive: Some(3),
@@ -962,7 +964,7 @@ mod tests {
             Int(2),
             S("Verse".into()),
             Float(32.0),
-            Float(8.0),
+            Float(40.0),
             OscType::Bool(true),
             Float(0.0),
             Float(4.0),

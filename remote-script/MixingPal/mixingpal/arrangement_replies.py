@@ -28,7 +28,7 @@ MAX_REPLY_BYTES = 8960
 
 
 def clip_record(clip):
-    """One arrangement clip, as (name, start_time, length, looping, loop_start, loop_end).
+    """One arrangement clip, as (name, start_time, end_time, looping, loop_start, loop_end).
 
     `track.arrangement_clips` yields Clip OBJECTS, not ids -- probed against
     Live 12 on 2026-08-30 via upstream's own
@@ -57,7 +57,11 @@ def clip_record(clip):
         # Keep one fixed record shape. These values have no meaning while
         # looping is false, and the Rust decoder omits them from JSON.
         loop_start, loop_end = 0.0, 0.0
-    return (str(clip.name)[:NAME_CAP], float(clip.start_time), float(clip.length),
+    # `length` is the source loop's length for an arrangement clip. It is
+    # not how long that loop occupies the timeline: that is end_time minus
+    # start_time. Conflating them makes four bars of repeated MIDI look like
+    # one bar followed by silence.
+    return (str(clip.name)[:NAME_CAP], float(clip.start_time), float(clip.end_time),
             looping, loop_start, loop_end)
 
 
@@ -133,7 +137,7 @@ def arrangement_reply(track_index, start, total, records):
 
 
 def identity_reply(track_index, index, clip):
-    """`(track, index, name, start_time, length, looping, loop_start, loop_end)` for ONE clip.
+    """`(track, index, name, start_time, end_time, looping, loop_start, loop_end)` for ONE clip.
 
     A separate address from the map, modelled on
     `/live/mixingpal/get/device/identity` and existing for the same reason.

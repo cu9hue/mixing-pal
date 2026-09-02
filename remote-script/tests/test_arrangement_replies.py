@@ -71,10 +71,12 @@ num_notes_reply = clip_replies.num_notes_reply
 
 
 class FakeClip:
-    def __init__(self, name, start_time, length, looping=False, loop_start=0.0, loop_end=0.0):
+    def __init__(self, name, start_time, length, looping=False, loop_start=0.0, loop_end=0.0,
+                 end_time=None):
         self.name = name
         self.start_time = start_time
         self.length = length
+        self.end_time = start_time + length if end_time is None else end_time
         self.looping = looping
         self.loop_start = loop_start
         self.loop_end = loop_end
@@ -103,8 +105,8 @@ class ExplodingClip(object):
 class ClipRecord(unittest.TestCase):
     def test_returns_playback_timing_together(self):
         self.assertEqual(
-            clip_record(FakeClip("Verse", 32.0, 64.0, True, 0.0, 16.0)),
-            ("Verse", 32.0, 64.0, True, 0.0, 16.0),
+            clip_record(FakeClip("Verse", 32.0, 4.0, True, 0.0, 4.0, end_time=64.0)),
+            ("Verse", 32.0, 64.0, True, 0.0, 4.0),
         )
 
     def test_a_long_name_is_capped_on_the_wire(self):
@@ -118,7 +120,7 @@ class WindowOf(unittest.TestCase):
     def test_returns_at_most_span_records_from_start(self):
         self.assertEqual(
             window_of(self.clips(3), 1, 2, budget=MAX_REPLY_BYTES),
-            [("c1", 4.0, 4.0, False, 0.0, 0.0), ("c2", 8.0, 4.0, False, 0.0, 0.0)],
+            [("c1", 4.0, 8.0, False, 0.0, 0.0), ("c2", 8.0, 12.0, False, 0.0, 0.0)],
         )
 
     def test_a_track_with_nothing_on_the_timeline_is_empty_not_an_error(self):
@@ -138,7 +140,7 @@ class WindowOf(unittest.TestCase):
         clips[6] = FakeClip("Fill", 40.0, 4.0)
         self.assertEqual(
             window_of(clips, 5, 2),
-            [("Verse", 32.0, 8.0, False, 0.0, 0.0), ("Fill", 40.0, 4.0, False, 0.0, 0.0)],
+            [("Verse", 32.0, 40.0, False, 0.0, 0.0), ("Fill", 40.0, 44.0, False, 0.0, 0.0)],
         )
 
     def test_the_budget_cuts_the_window_short(self):
@@ -202,14 +204,14 @@ class IdentityReply(unittest.TestCase):
         # join a span-48 page and take its reply. The Rust decoder reads
         # these five positionally.
         self.assertEqual(
-            identity_reply(2, 7, FakeClip("Verse", 32.0, 64.0, True, 0.0, 16.0)),
-            (2, 7, "Verse", 32.0, 64.0, True, 0.0, 16.0),
+            identity_reply(2, 7, FakeClip("Verse", 32.0, 4.0, True, 0.0, 4.0, end_time=64.0)),
+            (2, 7, "Verse", 32.0, 64.0, True, 0.0, 4.0),
         )
 
     def test_an_unnamed_clip_still_carries_its_position(self):
         # Unnamed is the normal case on the timeline, and position is what
         # the bracket actually compares.
-        self.assertEqual(identity_reply(0, 0, FakeClip("", 28.0, 4.0)), (0, 0, "", 28.0, 4.0, False, 0.0, 0.0))
+        self.assertEqual(identity_reply(0, 0, FakeClip("", 28.0, 4.0)), (0, 0, "", 28.0, 32.0, False, 0.0, 0.0))
 
 
 class TimelineFingerprintReply(unittest.TestCase):
