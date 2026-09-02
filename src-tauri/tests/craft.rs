@@ -190,7 +190,7 @@ async fn judge(
     answer: &str,
     mentor: &str,
     props: &[Property],
-) -> BTreeMap<String, (bool, String)> {
+) -> Result<BTreeMap<String, (bool, String)>, String> {
     let list = props
         .iter()
         .map(|p| format!("- {}: {}", p.key, p.description))
@@ -216,19 +216,16 @@ async fn judge(
             { "role": "user", "content": user },
         ],
     });
-    let raw = match post_chat(&reqwest::Client::new(), &s, body).await {
+    let raw = match post_chat(&common::client(), &s, body).await {
         Ok(raw) => raw,
-        Err(e) => {
-            let reason = format!("judge call failed: {e}");
-            return props.iter().map(|p| (p.key.to_string(), (false, reason.clone()))).collect();
-        }
+        Err(e) => return Err(format!("judge call failed: {e}")),
     };
     let content = raw["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
     let parsed = match (content.find('{'), content.rfind('}')) {
         (Some(a), Some(b)) if a < b => serde_json::from_str(&content[a..=b]).unwrap_or(Value::Null),
         _ => Value::Null,
     };
-    props
+    Ok(props
         .iter()
         .map(|p| {
             let v = &parsed[p.key];
@@ -239,7 +236,7 @@ async fn judge(
                 .unwrap_or_else(|| format!("no verdict; judge said: {content}"));
             (p.key.to_string(), (pass, reason))
         })
-        .collect()
+        .collect())
 }
 
 fn context_for(goal: Option<&str>) -> String {
@@ -253,15 +250,22 @@ fn context_for(goal: Option<&str>) -> String {
 struct Run {
     answer: String,
     called: Vec<String>,
+    calls: Vec<common::ToolCallRecord>,
     verdicts: BTreeMap<String, (bool, String)>,
+    /// Set when the provider call or the judge call failed outright, rather
+    /// than the run exhausting its round trips or answering empty. Those two
+    /// stay ordinary failed runs the majority absorbs; this one is an
+    /// infrastructure fault `run_all` panics on, once every run has finished.
+    infra_error: Option<String>,
 }
 
 async fn run_once(sc: &Scenario) -> Run {
     let context = context_for(sc.goal);
     let turn = common::ask(fixture(), &context, sc.question).await;
-    // A truncated, errored, or empty run is a failed run, not a panic: it
-    // fails every property, with the reason recorded, so `tally`'s report
-    // shows why.
+    // A truncated or empty run is a failed run, not a panic: it fails every
+    // property, with the reason recorded, so `tally`'s report shows why. A
+    // provider error is an infrastructure fault, recorded in `infra_error`
+    // too, for `run_all` to panic on once every run has finished.
     let failure = if let Some(e) = &turn.error {
         Some(format!("provider error: {e}"))
     } else if turn.truncated {
@@ -274,10 +278,25 @@ async fn run_once(sc: &Scenario) -> Run {
     if let Some(reason) = failure {
         let verdicts =
             sc.must.iter().map(|p| (p.key.to_string(), (false, reason.clone()))).collect();
-        return Run { answer: reason, called: turn.called, verdicts };
+        let infra_error = turn.error.as_ref().map(|_| reason.clone());
+        return Run { answer: reason, called: turn.called, calls: turn.calls, verdicts, infra_error };
     }
-    let verdicts = judge(sc.question, &context, &turn.answer, sc.mentor, sc.must).await;
-    Run { answer: turn.answer, called: turn.called, verdicts }
+    match judge(sc.question, &context, &turn.answer, sc.mentor, sc.must).await {
+        Ok(verdicts) => {
+            Run { answer: turn.answer, called: turn.called, calls: turn.calls, verdicts, infra_error: None }
+        }
+        Err(e) => {
+            let verdicts =
+                sc.must.iter().map(|p| (p.key.to_string(), (false, e.clone()))).collect();
+            Run {
+                answer: turn.answer,
+                called: turn.called,
+                calls: turn.calls,
+                verdicts,
+                infra_error: Some(e),
+            }
+        }
+    }
 }
 
 const RUNS: usize = 3;
@@ -297,6 +316,18 @@ async fn run_all(sc: &Scenario) -> (Vec<Run>, String) {
             run.called, run.answer, run.verdicts
         ));
         runs.push(run);
+    }
+    // A transport error -- the provider or the judge call itself failed --
+    // is an infrastructure fault, not model variance: it panics only after
+    // every run has completed, with the full report printed, rather than
+    // being absorbed by the majority like a truncated or empty run.
+    let errors: Vec<&str> =
+        runs.iter().filter_map(|r| r.infra_error.as_deref()).collect();
+    if !errors.is_empty() {
+        panic!(
+            "infrastructure error on \"{}\": {:?}{report}",
+            sc.question, errors
+        );
     }
     (runs, report)
 }
@@ -339,14 +370,15 @@ async fn stances(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (Vec<Stance>, S
     (stances, report)
 }
 
-/// The stance held by more than half the runs, else `Stance::None`.
-fn majority(stances: &[Stance]) -> Stance {
-    for candidate in [Stance::Keep, Stance::Reduce] {
-        if stances.iter().filter(|s| **s == candidate).count() * 2 > stances.len() {
-            return candidate;
-        }
+/// The stance every run holds, else `Stance::None`. An empty slice is
+/// `None`.
+fn unanimous(stances: &[Stance]) -> Stance {
+    let Some(first) = stances.first() else { return Stance::None };
+    if *first != Stance::None && stances.iter().all(|s| s == first) {
+        *first
+    } else {
+        Stance::None
     }
-    Stance::None
 }
 
 async fn passes_majority(sc: &Scenario, extra: impl Fn(&Run) -> bool) {
@@ -402,8 +434,15 @@ const PAD_TOO_BUSY: Scenario = Scenario {
 /// Either read path is fine: the session clip or the timeline clip. Shared
 /// by `is_the_pad_too_busy` and both arms of `the_goal_changes_the_advice`,
 /// which needs the same note read before it trusts a stance on movement.
+///
+/// A read of another track, or a read that came back missing, does not
+/// count: only a successful read of track 0, the Pad, grounds the verdict.
 fn reads_the_notes(run: &Run) -> bool {
-    run.called.iter().any(|c| c == "get_clip_notes" || c == "get_arrangement_notes")
+    run.calls.iter().any(|c| {
+        (c.name == "get_clip_notes" || c.name == "get_arrangement_notes")
+            && c.args["track"] == json!(0)
+            && c.missing_reason.is_none()
+    })
 }
 
 #[tokio::test]
@@ -450,19 +489,25 @@ const CHORDS_TECHNO: Scenario = Scenario {
 // the expected direction would be a genre fact, and this repo holds none. A
 // model that keeps movement under both goals for a stated reason fails here,
 // and the report says so.
+//
+// Unanimity within an arm is the control: a model whose stance flips between
+// runs under one goal is not being conditioned by the goal, and that is a
+// red result worth seeing, not noise. Two independent three-run majorities
+// would let a goal-blind model that varies at random pass about half the
+// time; requiring unanimity in both arms closes that gap.
 #[tokio::test]
 async fn the_goal_changes_the_advice() {
     let (garage_stances, garage_report) = stances(&CHORDS_GARAGE, reads_the_notes).await;
     let (techno_stances, techno_report) = stances(&CHORDS_TECHNO, reads_the_notes).await;
-    let garage = majority(&garage_stances);
-    let techno = majority(&techno_stances);
+    let garage = unanimous(&garage_stances);
+    let techno = unanimous(&techno_stances);
     assert!(
         garage != Stance::None,
-        "under the garage goal, no majority stance on movement emerged: {garage_report}"
+        "under the garage goal, no unanimous stance on movement emerged: {garage_report}"
     );
     assert!(
         techno != Stance::None,
-        "under the techno goal, no majority stance on movement emerged: {techno_report}"
+        "under the techno goal, no unanimous stance on movement emerged: {techno_report}"
     );
     assert!(
         garage != techno,

@@ -45,6 +45,17 @@ pub fn settings() -> Settings {
     }
 }
 
+/// The same bounds the shipped app uses (src-tauri/src/lib.rs): a provider
+/// that accepts the connection and never answers becomes a failed run,
+/// not a hung release gate.
+pub fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .expect("the eval HTTP client configuration is valid")
+}
+
 /// The mirror the tools read for track count and per-track identity.
 pub fn mirror(f: &Value) -> Arc<Mutex<Coalescer>> {
     let mut c = Coalescer::new();
@@ -518,9 +529,20 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
     Arc::new(LiveQuery::new(app, table))
 }
 
+/// One tool call the loop made, with what it was asked and whether Live
+/// answered. `Turn::called` keeps the bare names for the honesty suite's
+/// order assertions; this is the record the craft suite grounds on.
+pub struct ToolCallRecord {
+    pub name: String,
+    pub args: Value,
+    /// The result's `missing_reason`, `None` when the read came back whole.
+    pub missing_reason: Option<String>,
+}
+
 pub struct Turn {
     pub answer: String,
     pub called: Vec<String>,
+    pub calls: Vec<ToolCallRecord>,
     /// Set when the loop exhausted `MAX_ROUND_TRIPS` without a final answer.
     /// Mirrors `runTurn`'s own `truncated` flag in `src/agent/loop.ts`: a
     /// scenario that ran out of steps answered nothing, and an assertion
@@ -555,7 +577,7 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
         query: Arc::new(Mutex::new(Some(fake_live(f).await))),
     };
     let s = settings();
-    let client = reqwest::Client::new();
+    let http = client();
 
     let mut messages = vec![ChatMessage {
         role: "user".into(),
@@ -564,16 +586,23 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
         tool_call_id: None,
     }];
     let mut called: Vec<String> = Vec::new();
+    let mut calls: Vec<ToolCallRecord> = Vec::new();
 
     for _ in 0..MAX_ROUND_TRIPS {
-        let completion: Completion = match complete(&client, &s, messages.clone()).await {
+        let completion: Completion = match complete(&http, &s, messages.clone()).await {
             Ok(c) => c,
             Err(e) => {
-                return Turn { answer: String::new(), called, truncated: false, error: Some(e) }
+                return Turn {
+                    answer: String::new(),
+                    called,
+                    calls,
+                    truncated: false,
+                    error: Some(e),
+                }
             }
         };
         if completion.tool_calls.is_empty() {
-            return Turn { answer: completion.text, called, truncated: false, error: None };
+            return Turn { answer: completion.text, called, calls, truncated: false, error: None };
         }
         messages.push(ChatMessage {
             role: "assistant".into(),
@@ -585,6 +614,14 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
             called.push(call.function.name.clone());
             let args: Value = serde_json::from_str(&call.function.arguments).unwrap_or(json!({}));
             let result: ToolResult = execute(&ctx, &call.function.name, &args).await;
+            let missing_reason = serde_json::to_value(&result)
+                .ok()
+                .and_then(|v| v["missing_reason"].as_str().map(str::to_string));
+            calls.push(ToolCallRecord {
+                name: call.function.name.clone(),
+                args: args.clone(),
+                missing_reason,
+            });
             messages.push(ChatMessage {
                 role: "tool".into(),
                 content: Some(serde_json::to_string(&result).unwrap()),
@@ -593,5 +630,5 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
             });
         }
     }
-    Turn { answer: String::new(), called, truncated: true, error: None }
+    Turn { answer: String::new(), called, calls, truncated: true, error: None }
 }

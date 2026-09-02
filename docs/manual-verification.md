@@ -636,12 +636,16 @@ of three is noise the majority absorbs. A reason beginning `no verdict;
 judge said:` means the judge did not return JSON: check the judge model.
 
 A provider or judge error -- the endpoint refused the request outright: a bad
-key, an unknown model name, a wrong base URL -- is a failed run, not a panic:
-it fails every property with the error in the reason and shows up in the
-report like any other failed run. So does a run that ran out of round trips
-or returned an empty answer. There are no retries. The `the provider
-answered` panic in the model evals above is a different suite and still
-panics; this one does not.
+key, an unknown model name, a wrong base URL -- fails the scenario, once
+every run has completed, with every run's report printed: it is an
+infrastructure fault, not model variance. A run that ran out of round trips
+or returned an empty answer is still a failed run the majority absorbs. The
+harness never retries a run. The HTTP client may reissue a request the
+server refused before reading it (an HTTP/2 refused stream); that never
+produces a second recorded run, and a request the server accepted is never
+sent twice. The `the provider answered` panic in the model evals above is a
+different suite: it panics on the first error rather than waiting for every
+run to finish.
 
 The mentor answers in `craft.rs` illustrate the shape of a good answer. The
 claims they make about garage or techno are not facts this repo stands

@@ -269,7 +269,11 @@ peak time".
 Judge scores, on each answer alone, two properties: does the answer treat the
 pad's harmonic movement as something to keep, and as something to reduce.
 One and not the other is a stance; both or neither is no stance. Each arm's
-majority stance must exist and the two must differ. The scenario asserts
+stance must be unanimous across its runs and the two must differ. Unanimity
+within an arm is the control: two independent three-run majorities would let
+a goal-blind model that varies at random pass about half the time, while
+unanimity in both arms and a difference between them happens by chance a few
+percent of the time. The scenario asserts
 that the goal moved the verdict, never which way: naming the expected
 direction would be a genre fact, and this repo holds none. This is the eval
 that proves the goal is doing work.
