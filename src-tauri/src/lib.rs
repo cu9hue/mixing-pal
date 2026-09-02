@@ -42,7 +42,7 @@ pub mod bench_api {
 #[cfg(feature = "evals")]
 pub mod eval_api {
     pub use crate::deltas::{Coalescer, Delta};
-    pub use crate::model::{complete, ChatMessage, Completion, ToolCall, REMINDER, SYSTEM_PROMPT};
+    pub use crate::model::{complete, post_chat, ChatMessage, Completion, ToolCall, REMINDER, SYSTEM_PROMPT};
     pub use crate::osc::query::LiveQuery;
     pub use crate::osc::requests::RequestTable;
     pub use crate::osc::socket::OscSocket;
