@@ -1,0 +1,166 @@
+{
+  "goal": "dark garage, 2am",
+  "song": {
+    "tempo": 132,
+    "isPlaying": false,
+    "rootNote": 9,
+    "scaleName": "Minor",
+    "selectedTrack": 0,
+    "scriptVersion": 7,
+    "cuePoints": [
+      { "name": "Intro", "time": 0 },
+      { "name": "Drop", "time": 64 },
+      { "name": "Break", "time": 96 },
+      { "name": "Drop 2", "time": 128 }
+    ],
+    "cuePointsTotal": 4
+  },
+  "tracks": [
+    {
+      "name": "Pad",
+      "volumeDb": "-6.0 dB",
+      "volume": 0.72,
+      "panning": 0.0,
+      "mute": false,
+      "solo": false,
+      "midi": true,
+      "silent": false,
+      "clips": [{ "slot": 0, "name": "Chords" }],
+      "devices": [],
+      "racks": [],
+      "deviceDetail": {},
+      "arrangement": [
+        { "name": "Chords", "start": 0.0, "length": 64.0 },
+        { "name": "Chords", "start": 96.0, "length": 32.0 }
+      ],
+      "notes": {
+        "0": [
+          { "pitch": 57, "start": 0.0 },
+          { "pitch": 60, "start": 0.0 },
+          { "pitch": 64, "start": 0.0 },
+          { "pitch": 53, "start": 2.0 },
+          { "pitch": 57, "start": 2.0 },
+          { "pitch": 60, "start": 2.0 }
+        ]
+      },
+      "arrangementNotes": {
+        "0": [
+          { "pitch": 57, "start": 0.0 },
+          { "pitch": 60, "start": 0.0 },
+          { "pitch": 64, "start": 0.0 },
+          { "pitch": 53, "start": 2.0 },
+          { "pitch": 57, "start": 2.0 },
+          { "pitch": 60, "start": 2.0 }
+        ],
+        "1": [
+          { "pitch": 57, "start": 0.0 },
+          { "pitch": 60, "start": 0.0 },
+          { "pitch": 64, "start": 0.0 },
+          { "pitch": 53, "start": 2.0 },
+          { "pitch": 57, "start": 2.0 },
+          { "pitch": 60, "start": 2.0 }
+        ]
+      }
+    },
+    {
+      "name": "Drums",
+      "volumeDb": "-3.0 dB",
+      "volume": 0.80,
+      "panning": 0.0,
+      "mute": false,
+      "solo": false,
+      "midi": true,
+      "silent": false,
+      "clips": [{ "slot": 0, "name": "Beat" }],
+      "devices": ["Drum Rack"],
+      "racks": [true],
+      "deviceDetail": {
+        "0": {
+          "params": [
+            ["Device On", "On"],
+            ["Macro 1", "0.0"],
+            ["Macro 2", "0.0"]
+          ],
+          "chains": [
+            { "name": "Kick", "note": 36, "devices": ["Simpler"] },
+            { "name": "Clap", "note": 39, "devices": ["Simpler"] },
+            { "name": "Hats", "note": 42, "devices": ["Simpler"] }
+          ]
+        }
+      },
+      "arrangement": [{ "name": "Beat", "start": 0.0, "length": 160.0 }],
+      "notes": {
+        "0": [
+          { "pitch": 36, "start": 0.0 },
+          { "pitch": 42, "start": 0.5 },
+          { "pitch": 39, "start": 1.0 },
+          { "pitch": 42, "start": 1.5 },
+          { "pitch": 36, "start": 2.0 },
+          { "pitch": 42, "start": 2.5 },
+          { "pitch": 39, "start": 3.0 },
+          { "pitch": 42, "start": 3.5 }
+        ]
+      },
+      "arrangementNotes": {
+        "0": [
+          { "pitch": 36, "start": 0.0 },
+          { "pitch": 42, "start": 0.5 },
+          { "pitch": 39, "start": 1.0 },
+          { "pitch": 42, "start": 1.5 },
+          { "pitch": 36, "start": 2.0 },
+          { "pitch": 42, "start": 2.5 },
+          { "pitch": 39, "start": 3.0 },
+          { "pitch": 42, "start": 3.5 }
+        ]
+      }
+    },
+    {
+      "name": "Bass",
+      "volumeDb": "-5.0 dB",
+      "volume": 0.75,
+      "panning": 0.0,
+      "mute": false,
+      "solo": false,
+      "midi": true,
+      "silent": false,
+      "clips": [],
+      "devices": [],
+      "racks": [],
+      "deviceDetail": {},
+      "arrangement": [],
+      "notes": {},
+      "arrangementNotes": {}
+    },
+    {
+      "name": "Vox",
+      "volumeDb": "-8.0 dB",
+      "volume": 0.68,
+      "panning": 0.0,
+      "mute": false,
+      "solo": false,
+      "midi": false,
+      "silent": false,
+      "clips": [{ "slot": 0, "name": "Take 3" }],
+      "devices": ["Compressor"],
+      "racks": [false],
+      "deviceDetail": {
+        "0": {
+          "params": [
+            ["Device On", "On"],
+            ["Threshold", "-18.0 dB"],
+            ["Ratio", "4.00 : 1"],
+            ["Attack", "10.0 ms"],
+            ["Release", "100 ms"],
+            ["Output Gain", "3.0 dB"]
+          ]
+        }
+      },
+      "arrangement": [
+        { "name": "Take 3", "start": 64.0, "length": 32.0 },
+        { "name": "Take 3", "start": 128.0, "length": 32.0 }
+      ],
+      "notes": {},
+      "arrangementNotes": {}
+    }
+  ]
+}

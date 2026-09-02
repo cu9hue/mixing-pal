@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildContext } from "./build";
 import { SetState, TrackState } from "../live/model";
-import fixture from "../../shared/eval-set.json";
-import expectedContext from "../../shared/eval-context.txt?raw";
+import evalFixture from "../../shared/eval-set.json";
+import evalContext from "../../shared/eval-context.txt?raw";
+import craftFixture from "../../shared/craft-set.json";
+import craftContext from "../../shared/craft-context.txt?raw";
 
-// The fixture is the eval suite's set, and Rust builds its fake Live from
+// Each fixture is one eval suite's set, and Rust builds its fake Live from
 // the same file. Rust cannot call buildContext, so the rendered digest is
 // checked in beside it and pinned here -- the same two-language pinning
 // shared/wire-version.json already uses.
@@ -30,9 +32,12 @@ function fixtureState(fixture: EvalFixture): SetState {
   return { ...fixture.song, tracks };
 }
 
-describe("the eval fixture", () => {
+describe.each([
+  ["eval-set.json", evalFixture, evalContext],
+  ["craft-set.json", craftFixture, craftContext],
+])("the fixture %s", (_name, fixture, context) => {
   it("renders to the checked-in context block", () => {
-    const expected = expectedContext.replace(/\n$/, "");
+    const expected = context.replace(/\n$/, "");
     expect(buildContext(fixtureState(fixture), fixture.goal)).toBe(expected);
   });
 });
