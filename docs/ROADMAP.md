@@ -1,0 +1,111 @@
+# Roadmap
+
+Date: 2026-09-02
+
+What ships next and why, in one place. The specs under `docs/superpowers/specs`
+hold the detail. This file is the index. Update it when a spec is approved or a
+milestone ships.
+
+## The gate
+
+One decision shapes everything below. The waitlist at
+[mixingpal.com](https://mixingpal.com) opened on 2026-09-02 and promotion starts
+on 2026-09-03. If sign-ups show demand, the launch track opens. If they do not,
+it stays shut and nothing in it gets built.
+
+The launch track has a fixed order. A proxy that holds the provider key comes
+before any invite goes out, because an invited producer cannot run the app on a
+pasted OpenRouter key. So: proxy, then signing, then invites. Never the reverse.
+
+Everything under **Now** ships with no gate. It needs no proxy, no signing, and
+no server.
+
+## Where we are
+
+App 0.1.0, wire version 7. Shipped:
+
+- The set mirror over OSC, a vendored AbletonOSC fork, and a connector the app
+  installs itself.
+- Chat with eight read tools: track detail, clips, clip notes, arrangement,
+  arrangement notes, device chains, device params, rack contents.
+- The product shell: pill and card, first run, the goal, and one nudge rule
+  (unnamed tracks).
+- An unsigned `.dmg`, with `docs/opening-an-unsigned-build.md` for getting past
+  Gatekeeper.
+- Prompt guardrails and three real-model evals (`src-tauri/tests/evals.rs`).
+- The arrangement view: section names in the context block, the arrangement
+  map, arrangement notes. Landing now; the diff is uncommitted.
+
+Model access today: the producer pastes an OpenRouter key in Advanced. That is
+fine for one person and a blocker for everyone else.
+
+## Now
+
+Ordered. Each item says what, why, size, and what it waits on.
+
+1. **Land the arrangement view.** Commit the diff, run every suite, cut a
+   build. Size S. Waits on nothing.
+
+2. **Thread view.** Earlier exchanges scroll above the current one inside the
+   card. The latest exchange stays the anchor at the bottom, so the window
+   geometry does not change. Why: a follow-up erases the answer she was acting
+   on, and asking again costs a round trip. Size S. Waits on nothing; the
+   history is already in `Conversation.tsx` state.
+
+3. **Set identity.** The connector writes a random id into the set with
+   `Song.set_data` on first contact and reads it back with `Song.get_data` on
+   every load. The app receives it in the mirror. Why: everything per-set needs
+   to know which set is open, and the mirror has no name or path today. A
+   fingerprint from track names breaks the moment she adds a track. Size M,
+   wire bump. Open question to settle first: what `set_data` does on a set
+   that has never been saved.
+
+4. **Per-set persistence.** The raw thread saved in the app data directory,
+   keyed by set id, restored on open, dropped 30 days after last open. Why: she
+   closes the app and comes back to the track. Size S. Waits on 3.
+
+5. **Per-set notes.** A short note the model writes per set: what was
+   discussed, what she decided, what she was going to try. Shown in the card,
+   editable, and sent ahead of the question as a user turn on return, the same
+   way the context block rides. Why: a note beats a transcript. The live
+   context corrects stale facts on every turn, and she can read it. Size M.
+   Waits on 4.
+
+6. **Advice quality.** Spec:
+   `docs/superpowers/specs/2026-09-02-craft-ontology-design.md`. A second
+   layer on the prompt: a fixed set of axes a track is judged on, each tagged
+   readable or ear-only; a genre prior derived from the goal; a fixed shape
+   for a move; and permission to say "leave it". Judged by prose evals on a
+   clean fixture, kept apart from the tool-call evals. Why: the site promises
+   reasoning in plain language, about her track, and today nothing in the
+   repo says what good advice is. Size L and open-ended: this is a loop, not
+   a task. Waits on nothing, but the waitlist tells us which genres the
+   second fixture should cover.
+
+## When the waitlist says go
+
+All specced or named already. The order is fixed by the gate.
+
+1. **Model access.** Subsystem B of the product UI spec: a proxy holding the
+   provider key, invite codes, per-account caps, consented trace capture. No
+   spec yet. Size L.
+2. **Signing.** Apple enrollment, Developer ID signing, notarization, stapling.
+   Distribution stage 2. Size M, mostly waiting on Apple.
+3. **Updates.** Tagged release CI, hosted artifacts, the updater. Distribution
+   stage 3. Size M.
+4. **Invites.**
+
+## Deferred, with the trigger
+
+| Item | Why it waits | Build it when |
+| --- | --- | --- |
+| Streaming | A question is two to four round trips; streaming only the last one buys little | Prose after the last tool call routinely runs past a few seconds |
+| Stock-device extractor | The drill-down tools removed the blindness it was for (spec amendment 2026-08-19) | Drill-down proves insufficient in practice |
+| More nudge rules | Interrupting mid-take is the most intrusive thing the app can do | A second observation is true often and cheap to check |
+| Ableton Extensions SDK | Needs the 12.4.5 beta and cannot hold a process | Extensions ship stable with a background mode |
+| Local model provider | The `ModelProvider` seam exists; nobody has asked | Someone asks |
+
+## Not doing
+
+From the first spec, still standing: no writes to the set, no audio analysis,
+no screen capture, no music theory engine.
