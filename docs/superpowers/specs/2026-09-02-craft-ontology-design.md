@@ -266,10 +266,13 @@ stated as conditional.
 twice, once with the goal "dark garage, 2am" and once with "minimal techno,
 peak time".
 
-Judge scores, on each answer alone: does the answer treat harmonic movement
-as desirable? Expected yes for garage, no for techno. The scenario passes
-only if the two verdicts differ. This is the eval that proves the goal is
-doing work.
+Judge scores, on each answer alone, two properties: does the answer treat the
+pad's harmonic movement as something to keep, and as something to reduce.
+One and not the other is a stance; both or neither is no stance. Each arm's
+majority stance must exist and the two must differ. The scenario asserts
+that the goal moved the verdict, never which way: naming the expected
+direction would be a genre fact, and this repo holds none. This is the eval
+that proves the goal is doing work.
 
 ### The judge
 

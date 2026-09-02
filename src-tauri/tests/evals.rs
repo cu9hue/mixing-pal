@@ -22,7 +22,9 @@ fn fixture() -> Value {
 }
 
 async fn ask(question: &str) -> Turn {
-    common::ask(fixture(), &common::context("eval-context.txt"), question).await
+    let turn = common::ask(fixture(), &common::context("eval-context.txt"), question).await;
+    assert!(turn.error.is_none(), "the provider answered: {}", turn.error.as_deref().unwrap_or(""));
+    turn
 }
 
 fn lower(s: &str) -> String {

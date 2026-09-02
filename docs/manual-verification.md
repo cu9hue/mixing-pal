@@ -635,11 +635,13 @@ property. A property failing three of three runs is a prompt finding. One
 of three is noise the majority absorbs. A reason beginning `no verdict;
 judge said:` means the judge did not return JSON: check the judge model.
 
-A panic reading `the judge answered` means the judge endpoint refused the
-request outright (a bad key, an unknown `MIXINGPAL_JUDGE_MODEL`, a wrong
-base URL), not a red scenario; a run that ran out of round trips or
-returned an empty answer counts as a failed run in the tally and shows its
-reason in the report.
+A provider or judge error -- the endpoint refused the request outright: a bad
+key, an unknown model name, a wrong base URL -- is a failed run, not a panic:
+it fails every property with the error in the reason and shows up in the
+report like any other failed run. So does a run that ran out of round trips
+or returned an empty answer. There are no retries. The `the provider
+answered` panic in the model evals above is a different suite and still
+panics; this one does not.
 
 The mentor answers in `craft.rs` illustrate the shape of a good answer. The
 claims they make about garage or techno are not facts this repo stands

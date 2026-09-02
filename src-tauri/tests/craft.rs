@@ -73,6 +73,15 @@ async fn the_fake_live_serves_the_craft_fixture_in_full() {
 
     let comp = read(&ctx, "get_device_params", json!({ "track": 3, "path": [0] })).await.to_string();
     assert!(comp.contains("Threshold") && comp.contains("-18.0 dB"), "{comp}");
+
+    // The Pad's clips loop, and the fake must say so: a correct model reads
+    // them as mostly silent otherwise, contradicting the fixture's premise.
+    let arr_notes = read(&ctx, "get_arrangement_notes", json!({ "track": 0, "index": 0 })).await;
+    assert!(!arr_notes["value"]["loop_region"].is_null(), "{arr_notes}");
+
+    let clip_notes = read(&ctx, "get_clip_notes", json!({ "track": 0, "clip": 0 })).await;
+    assert_eq!(clip_notes["value"]["loop_state_known"], json!(true), "{clip_notes}");
+    assert!(!clip_notes["value"]["loop_region"].is_null(), "{clip_notes}");
 }
 
 /// One thing the judge looks for. `description` is what the judge reads;
@@ -172,6 +181,9 @@ fn judge_settings() -> Settings {
 /// `(pass, reason)` per property key. A judge reply that cannot be parsed
 /// fails every property, with the raw text as the reason, so a broken
 /// judge shows up as red runs with its output attached, never as green.
+/// The request caps output at 600 tokens, which is why `JUDGE_PROMPT` holds
+/// every reason to one sentence: a scenario with several properties would
+/// otherwise blow the budget before the reply's JSON object closes.
 async fn judge(
     question: &str,
     context: &str,
@@ -198,12 +210,19 @@ async fn judge(
     let body = json!({
         "model": s.model,
         "temperature": 0,
+        "max_tokens": 600,
         "messages": [
             { "role": "system", "content": JUDGE_PROMPT },
             { "role": "user", "content": user },
         ],
     });
-    let raw = post_chat(&reqwest::Client::new(), &s, body).await.expect("the judge answered");
+    let raw = match post_chat(&reqwest::Client::new(), &s, body).await {
+        Ok(raw) => raw,
+        Err(e) => {
+            let reason = format!("judge call failed: {e}");
+            return props.iter().map(|p| (p.key.to_string(), (false, reason.clone()))).collect();
+        }
+    };
     let content = raw["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
     let parsed = match (content.find('{'), content.rfind('}')) {
         (Some(a), Some(b)) if a < b => serde_json::from_str(&content[a..=b]).unwrap_or(Value::Null),
@@ -240,22 +259,22 @@ struct Run {
 async fn run_once(sc: &Scenario) -> Run {
     let context = context_for(sc.goal);
     let turn = common::ask(fixture(), &context, sc.question).await;
-    // A truncated or empty run is a failed run, not a panic: it fails every
-    // property, with the reason recorded, so `tally`'s report shows why.
-    let failure = if turn.truncated {
-        Some("ran out of round trips")
+    // A truncated, errored, or empty run is a failed run, not a panic: it
+    // fails every property, with the reason recorded, so `tally`'s report
+    // shows why.
+    let failure = if let Some(e) = &turn.error {
+        Some(format!("provider error: {e}"))
+    } else if turn.truncated {
+        Some("ran out of round trips".to_string())
     } else if turn.answer.trim().is_empty() {
-        Some("empty final message")
+        Some("empty final message".to_string())
     } else {
         None
     };
     if let Some(reason) = failure {
-        let verdicts = sc
-            .must
-            .iter()
-            .map(|p| (p.key.to_string(), (false, reason.to_string())))
-            .collect();
-        return Run { answer: reason.to_string(), called: turn.called, verdicts };
+        let verdicts =
+            sc.must.iter().map(|p| (p.key.to_string(), (false, reason.clone()))).collect();
+        return Run { answer: reason, called: turn.called, verdicts };
     }
     let verdicts = judge(sc.question, &context, &turn.answer, sc.mentor, sc.must).await;
     Run { answer: turn.answer, called: turn.called, verdicts }
@@ -263,26 +282,71 @@ async fn run_once(sc: &Scenario) -> Run {
 
 const RUNS: usize = 3;
 
-/// Runs the scenario `RUNS` times. A run passes when every property passes
-/// and `extra` holds (tool-call checks live there, the judge never sees
-/// tool calls). Returns the pass count and a report of every run, so a red
-/// scenario shows the answers and the judge's reasons in one place.
-async fn tally(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (usize, String) {
-    let mut passes = 0;
+/// Runs the scenario `RUNS` times and formats the same per-run report both
+/// `tally` and `stances` show on failure: the tools called, the answer, and
+/// the judge's verdicts. The pass/fail or stance meaning of a run is for the
+/// caller to compute from the returned `Run`s, since that differs between
+/// the two.
+async fn run_all(sc: &Scenario) -> (Vec<Run>, String) {
+    let mut runs = Vec::with_capacity(RUNS);
     let mut report = String::new();
     for i in 0..RUNS {
         let run = run_once(sc).await;
-        let ok = run.verdicts.values().all(|(p, _)| *p) && extra(&run);
-        passes += ok as usize;
         report.push_str(&format!(
-            "\n--- run {i}: {} tools {:?}\n{}\n{:#?}\n",
-            if ok { "PASS" } else { "FAIL" },
-            run.called,
-            run.answer,
-            run.verdicts
+            "\n--- run {i}: tools {:?}\n{}\n{:#?}\n",
+            run.called, run.answer, run.verdicts
         ));
+        runs.push(run);
     }
+    (runs, report)
+}
+
+/// A run passes when every property passes and `extra` holds (tool-call
+/// checks live there, the judge never sees tool calls). Returns the pass
+/// count and a report of every run, so a red scenario shows the answers and
+/// the judge's reasons in one place.
+async fn tally(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (usize, String) {
+    let (runs, report) = run_all(sc).await;
+    let passes = runs.iter().filter(|r| r.verdicts.values().all(|(p, _)| *p) && extra(r)).count();
     (passes, report)
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Stance {
+    Keep,
+    Reduce,
+    None,
+}
+
+/// What one run said about the pad's movement. Both properties true or both
+/// false is no stance: the answer did not commit.
+fn stance(run: &Run) -> Stance {
+    let desirable = run.verdicts.get("movement_desirable").map(|v| v.0).unwrap_or(false);
+    let reduced = run.verdicts.get("movement_reduced").map(|v| v.0).unwrap_or(false);
+    match (desirable, reduced) {
+        (true, false) => Stance::Keep,
+        (false, true) => Stance::Reduce,
+        _ => Stance::None,
+    }
+}
+
+/// Runs the scenario `RUNS` times like `tally`, recording each run's stance
+/// on the pad's harmonic movement rather than a pass/fail. A run that fails
+/// `extra` counts as `Stance::None`: it never earned a claim about movement.
+async fn stances(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (Vec<Stance>, String) {
+    let (runs, report) = run_all(sc).await;
+    let stances = runs.iter().map(|r| if extra(r) { stance(r) } else { Stance::None }).collect();
+    (stances, report)
+}
+
+/// The stance held by more than half the runs, else `Stance::None`.
+fn majority(stances: &[Stance]) -> Stance {
+    for candidate in [Stance::Keep, Stance::Reduce] {
+        if stances.iter().filter(|s| **s == candidate).count() * 2 > stances.len() {
+            return candidate;
+        }
+    }
+    Stance::None
 }
 
 async fn passes_majority(sc: &Scenario, extra: impl Fn(&Run) -> bool) {
@@ -334,16 +398,17 @@ const PAD_TOO_BUSY: Scenario = Scenario {
     must: &[VERDICT_LEAVE, READABLE_SOURCE, NO_INVENTED_CHANGE],
 };
 
+/// The verdict has to rest on the notes, so a read of them is required.
+/// Either read path is fine: the session clip or the timeline clip. Shared
+/// by `is_the_pad_too_busy` and both arms of `the_goal_changes_the_advice`,
+/// which needs the same note read before it trusts a stance on movement.
+fn reads_the_notes(run: &Run) -> bool {
+    run.called.iter().any(|c| c == "get_clip_notes" || c == "get_arrangement_notes")
+}
+
 #[tokio::test]
 async fn is_the_pad_too_busy() {
-    // The verdict has to rest on the notes, so a read of them is required.
-    // Either read path is fine: the session clip or the timeline clip.
-    passes_majority(&PAD_TOO_BUSY, |run| {
-        run.called
-            .iter()
-            .any(|c| c == "get_clip_notes" || c == "get_arrangement_notes")
-    })
-    .await;
+    passes_majority(&PAD_TOO_BUSY, reads_the_notes).await;
 }
 
 // Scenario 4. Ear-only axes handed over, one readable observation with its
@@ -371,28 +436,36 @@ const CHORDS_GARAGE: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: None,
     mentor: "",
-    must: &[MOVEMENT_DESIRABLE],
+    must: &[MOVEMENT_DESIRABLE, MOVEMENT_REDUCED],
 };
 
 const CHORDS_TECHNO: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: Some("minimal techno, peak time"),
     mentor: "",
-    must: &[MOVEMENT_REDUCED],
+    must: &[MOVEMENT_DESIRABLE, MOVEMENT_REDUCED],
 };
 
+// The test asserts that the goal moved the verdict, never which way: naming
+// the expected direction would be a genre fact, and this repo holds none. A
+// model that keeps movement under both goals for a stated reason fails here,
+// and the report says so.
 #[tokio::test]
 async fn the_goal_changes_the_advice() {
-    let (garage_yes, garage_report) = tally(&CHORDS_GARAGE, |_| true).await;
-    let (techno_yes, techno_report) = tally(&CHORDS_TECHNO, |_| true).await;
-    // Both arms are positive properties, each passing on a majority, and
-    // the scenario passes only when both do.
+    let (garage_stances, garage_report) = stances(&CHORDS_GARAGE, reads_the_notes).await;
+    let (techno_stances, techno_report) = stances(&CHORDS_TECHNO, reads_the_notes).await;
+    let garage = majority(&garage_stances);
+    let techno = majority(&techno_stances);
     assert!(
-        garage_yes * 2 > RUNS,
-        "under the garage goal, movement should read as desirable: {garage_yes}/{RUNS}{garage_report}"
+        garage != Stance::None,
+        "under the garage goal, no majority stance on movement emerged: {garage_report}"
     );
     assert!(
-        techno_yes * 2 > RUNS,
-        "under the techno goal, movement should read as something to reduce: {techno_yes}/{RUNS}{techno_report}"
+        techno != Stance::None,
+        "under the techno goal, no majority stance on movement emerged: {techno_report}"
+    );
+    assert!(
+        garage != techno,
+        "the goal should change the verdict; both arms landed on {garage:?}:{garage_report}{techno_report}"
     );
 }

@@ -25,13 +25,13 @@
       "solo": false,
       "midi": true,
       "silent": false,
-      "clips": [{ "slot": 0, "name": "Chords" }],
+      "clips": [{ "slot": 0, "name": "Chords", "loop": [0.0, 4.0] }],
       "devices": [],
       "racks": [],
       "deviceDetail": {},
       "arrangement": [
-        { "name": "Chords", "start": 0.0, "length": 64.0 },
-        { "name": "Chords", "start": 96.0, "length": 32.0 }
+        { "name": "Chords", "start": 0.0, "length": 64.0, "loop": [0.0, 4.0] },
+        { "name": "Chords", "start": 96.0, "length": 32.0, "loop": [0.0, 4.0] }
       ],
       "notes": {
         "0": [
@@ -71,7 +71,7 @@
       "solo": false,
       "midi": true,
       "silent": false,
-      "clips": [{ "slot": 0, "name": "Beat" }],
+      "clips": [{ "slot": 0, "name": "Beat", "loop": [0.0, 4.0] }],
       "devices": ["Drum Rack"],
       "racks": [true],
       "deviceDetail": {
@@ -88,7 +88,7 @@
           ]
         }
       },
-      "arrangement": [{ "name": "Beat", "start": 0.0, "length": 160.0 }],
+      "arrangement": [{ "name": "Beat", "start": 0.0, "length": 160.0, "loop": [0.0, 4.0] }],
       "notes": {
         "0": [
           { "pitch": 36, "start": 0.0 },

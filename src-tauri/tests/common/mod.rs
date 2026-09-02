@@ -294,6 +294,32 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
+                "/live/mixingpal/get/clip/loop_region" => {
+                    if !(slot_is_filled(&track, int_at(1)) && clip_is_midi(&track)) {
+                        continue; // an unreadable clip gets silence, like real Live
+                    }
+                    let slot = int_at(1).unwrap_or(0) as i64;
+                    let clip = track["clips"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|c| c["slot"].as_i64() == Some(slot))
+                        .unwrap();
+                    let mut reply = vec![req.args[0].clone(), req.args[1].clone()];
+                    match clip["loop"].as_array() {
+                        Some(l) => {
+                            reply.push(OscType::Bool(true));
+                            reply.push(OscType::Float(l[0].as_f64().unwrap() as f32));
+                            reply.push(OscType::Float(l[1].as_f64().unwrap() as f32));
+                        }
+                        None => {
+                            reply.push(OscType::Bool(false));
+                            reply.push(OscType::Float(0.0));
+                            reply.push(OscType::Float(0.0));
+                        }
+                    }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
                 "/live/mixingpal/get/arrangement" => {
                     let start = int_at(1).unwrap_or(0) as usize;
                     let span = int_at(2).unwrap_or(48) as usize;
@@ -309,11 +335,20 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         ));
                         reply.push(OscType::Float(clip["start"].as_f64().unwrap() as f32));
                         reply.push(OscType::Float(clip["length"].as_f64().unwrap() as f32));
-                        // No fixture clip loops; `decode_page` still reads
-                        // six fields per record, so these three are fixed.
-                        reply.push(OscType::Bool(false));
-                        reply.push(OscType::Float(0.0));
-                        reply.push(OscType::Float(0.0));
+                        // `decode_page` reads six fields per record: name,
+                        // start, length, looping, loop_start, loop_end.
+                        match clip["loop"].as_array() {
+                            Some(l) => {
+                                reply.push(OscType::Bool(true));
+                                reply.push(OscType::Float(l[0].as_f64().unwrap() as f32));
+                                reply.push(OscType::Float(l[1].as_f64().unwrap() as f32));
+                            }
+                            None => {
+                                reply.push(OscType::Bool(false));
+                                reply.push(OscType::Float(0.0));
+                                reply.push(OscType::Float(0.0));
+                            }
+                        }
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
@@ -326,22 +361,24 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         continue; // an unreadable clip gets silence, like real Live
                     }
                     let clip = &track["arrangement"][int_at(1).unwrap() as usize];
-                    let _ = live
-                        .send_to(
-                            app_port,
-                            &req.addr,
-                            vec![
-                                req.args[0].clone(),
-                                req.args[1].clone(),
-                                OscType::String(clip["name"].as_str().unwrap().to_string()),
-                                OscType::Float(clip["start"].as_f64().unwrap() as f32),
-                                OscType::Float(clip["length"].as_f64().unwrap() as f32),
-                                // No fixture clip loops; `decode_identity`
-                                // still reads this field.
-                                OscType::Bool(false),
-                            ],
-                        )
-                        .await;
+                    let mut reply = vec![
+                        req.args[0].clone(),
+                        req.args[1].clone(),
+                        OscType::String(clip["name"].as_str().unwrap().to_string()),
+                        OscType::Float(clip["start"].as_f64().unwrap() as f32),
+                        OscType::Float(clip["length"].as_f64().unwrap() as f32),
+                    ];
+                    // `decode_identity` reads looping, then loop_start and
+                    // loop_end only when it is true.
+                    match clip["loop"].as_array() {
+                        Some(l) => {
+                            reply.push(OscType::Bool(true));
+                            reply.push(OscType::Float(l[0].as_f64().unwrap() as f32));
+                            reply.push(OscType::Float(l[1].as_f64().unwrap() as f32));
+                        }
+                        None => reply.push(OscType::Bool(false)),
+                    }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
                 "/live/arrangement_clip/get/length" => {
                     if !arrangement_clip_exists(&track, int_at(1)) {
@@ -491,6 +528,10 @@ pub struct Turn {
     /// exhaustion as success -- including the empty string it returns
     /// satisfying a "does not contain X" check for free.
     pub truncated: bool,
+    /// Set when the provider call itself failed (`complete` returned `Err`),
+    /// rather than the model answering. `answer` is empty and `called` holds
+    /// whatever tool calls happened before the failure.
+    pub error: Option<String>,
 }
 
 impl Turn {
@@ -525,11 +566,14 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
     let mut called: Vec<String> = Vec::new();
 
     for _ in 0..MAX_ROUND_TRIPS {
-        let completion: Completion = complete(&client, &s, messages.clone())
-            .await
-            .expect("the provider answered");
+        let completion: Completion = match complete(&client, &s, messages.clone()).await {
+            Ok(c) => c,
+            Err(e) => {
+                return Turn { answer: String::new(), called, truncated: false, error: Some(e) }
+            }
+        };
         if completion.tool_calls.is_empty() {
-            return Turn { answer: completion.text, called, truncated: false };
+            return Turn { answer: completion.text, called, truncated: false, error: None };
         }
         messages.push(ChatMessage {
             role: "assistant".into(),
@@ -549,5 +593,5 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
             });
         }
     }
-    Turn { answer: String::new(), called, truncated: true }
+    Turn { answer: String::new(), called, truncated: true, error: None }
 }
