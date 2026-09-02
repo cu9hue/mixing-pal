@@ -53,11 +53,27 @@ pub fn mirror(f: &Value) -> Arc<Mutex<Coalescer>> {
         addr: "/live/song/get/num_tracks".into(),
         args: vec![json!(tracks.len())],
     });
+    // Each field is observed only when the fixture carries it: the honesty
+    // fixture has no `volume` or `panning`, and `get_track_detail` reports
+    // an absent field as absent rather than as a failed read.
+    let fields = [
+        ("/live/track/get/name", "name"),
+        ("/live/track/get/volume", "volume"),
+        ("/live/track/get/volume_db", "volumeDb"),
+        ("/live/track/get/panning", "panning"),
+        ("/live/track/get/mute", "mute"),
+        ("/live/track/get/solo", "solo"),
+    ];
     for (i, t) in tracks.iter().enumerate() {
-        c.observe_delta(Delta {
-            addr: "/live/track/get/name".into(),
-            args: vec![json!(i), t["name"].clone()],
-        });
+        for (addr, key) in fields {
+            if t[key].is_null() {
+                continue;
+            }
+            c.observe_delta(Delta {
+                addr: addr.into(),
+                args: vec![json!(i), t[key].clone()],
+            });
+        }
     }
     Arc::new(Mutex::new(c))
 }
@@ -111,13 +127,16 @@ fn arrangement_clip_exists(track: &Value, index: Option<i32>) -> bool {
 
 /// A Live that answers from the fixture.
 ///
-/// It deliberately does NOT answer `/live/mixingpal/get/device/identity`,
-/// the address `get_rack_contents` queries first (`rack_contents.rs`'s
-/// `device_identity` bracket, via `device_params::device_identity`): the
-/// drum scenario asserts the model opens the Rack and then reports a named
-/// gap instead of concluding there is no compression. Silence is what an
-/// unreadable rack looks like from the client's side, and it costs that
-/// scenario one query timeout.
+/// A device answers `/live/mixingpal/get/device/identity`, the parameter
+/// windows, and `/live/mixingpal/get/rack/chains` only when its track's
+/// `deviceDetail` describes it. `shared/eval-set.json` describes none, so
+/// there `get_rack_contents` (`rack_contents.rs`'s `device_identity`
+/// bracket) goes unanswered: the drum scenario asserts the model opens the
+/// Rack and then reports a named gap instead of concluding there is no
+/// compression. Silence is what an unreadable rack looks like from the
+/// client's side, and it costs that scenario one query timeout.
+/// `shared/craft-set.json` describes every device, and `craft.rs` checks
+/// that it reads in full.
 pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
     let live = OscSocket::bind_to(0, 0).await.unwrap();
     let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
@@ -153,11 +172,23 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                 Some(OscType::Int(v)) => Some(*v as f32),
                 _ => None,
             };
+            let str_at = |n: usize| match req.args.get(n) {
+                Some(OscType::String(s)) => Some(s.clone()),
+                _ => None,
+            };
             let Some(track_index) = int_at(0) else { continue };
             let Some(track) = track_at(track_index) else { continue };
             if track["silent"] == json!(true) {
                 continue; // the reply Live could not send
             }
+            // A device answers reads only when the fixture describes it.
+            // The honesty fixture describes none, so its rack stays
+            // unreadable, which its drum scenario depends on.
+            let device_detail = || -> Option<(String, Value)> {
+                let path = str_at(1)?;
+                let detail = track["deviceDetail"].get(path.as_str())?.clone();
+                Some((path, detail))
+            };
 
             match req.addr.as_str() {
                 "/live/track/get/clips/name" => {
@@ -278,6 +309,11 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         ));
                         reply.push(OscType::Float(clip["start"].as_f64().unwrap() as f32));
                         reply.push(OscType::Float(clip["length"].as_f64().unwrap() as f32));
+                        // No fixture clip loops; `decode_page` still reads
+                        // six fields per record, so these three are fixed.
+                        reply.push(OscType::Bool(false));
+                        reply.push(OscType::Float(0.0));
+                        reply.push(OscType::Float(0.0));
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
@@ -300,6 +336,9 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                                 OscType::String(clip["name"].as_str().unwrap().to_string()),
                                 OscType::Float(clip["start"].as_f64().unwrap() as f32),
                                 OscType::Float(clip["length"].as_f64().unwrap() as f32),
+                                // No fixture clip loops; `decode_identity`
+                                // still reads this field.
+                                OscType::Bool(false),
                             ],
                         )
                         .await;
@@ -365,7 +404,76 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
-                _ => {} // including /live/mixingpal/get/device/identity: see the doc comment
+                "/live/mixingpal/get/device/identity" => {
+                    let Some((path, detail)) = device_detail() else { continue };
+                    let index: usize = path.parse().unwrap_or(usize::MAX);
+                    let Some(name) = track["devices"].get(index).and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let total = detail["params"].as_array().map(|p| p.len()).unwrap_or(0);
+                    let _ = live
+                        .send_to(
+                            app_port,
+                            &req.addr,
+                            vec![
+                                OscType::Int(track_index),
+                                OscType::String(path),
+                                OscType::String(name.to_string()),
+                                OscType::Int(total as i32),
+                            ],
+                        )
+                        .await;
+                }
+                addr @ ("/live/device/get/parameters/name_range"
+                | "/live/device/get/parameters/value_string_range") => {
+                    let Some((path, detail)) = device_detail() else { continue };
+                    let start = int_at(2).unwrap_or(0).max(0) as usize;
+                    let span = int_at(3).unwrap_or(0).max(0) as usize;
+                    let column = if addr.ends_with("name_range") { 0 } else { 1 };
+                    let params = detail["params"].as_array().cloned().unwrap_or_default();
+                    let mut reply = vec![
+                        OscType::Int(track_index),
+                        OscType::String(path),
+                        OscType::Int(start as i32),
+                    ];
+                    for p in params.iter().skip(start).take(span) {
+                        reply.push(OscType::String(p[column].as_str().unwrap().to_string()));
+                    }
+                    let _ = live.send_to(app_port, addr, reply).await;
+                }
+                "/live/mixingpal/get/rack/chains" => {
+                    // `(track, path, start, total_chains, can_have_chains, *records)`,
+                    // each record `name, note, mute, solo, total_devices,
+                    // reported_devices, *names` -- the shape
+                    // `rack_contents::decode_window` reads.
+                    let Some((path, detail)) = device_detail() else { continue };
+                    let index: usize = path.parse().unwrap_or(usize::MAX);
+                    let is_rack = track["racks"].get(index).and_then(Value::as_bool).unwrap_or(false);
+                    let start = int_at(2).unwrap_or(0).max(0) as usize;
+                    let span = int_at(3).unwrap_or(0).max(0) as usize;
+                    let chains = detail["chains"].as_array().cloned().unwrap_or_default();
+                    let mut reply = vec![
+                        OscType::Int(track_index),
+                        OscType::String(path),
+                        OscType::Int(start as i32),
+                        OscType::Int(chains.len() as i32),
+                        OscType::Int(is_rack as i32),
+                    ];
+                    for c in chains.iter().skip(start).take(span) {
+                        let devices = c["devices"].as_array().cloned().unwrap_or_default();
+                        reply.push(OscType::String(c["name"].as_str().unwrap().to_string()));
+                        reply.push(OscType::Int(c["note"].as_i64().unwrap_or(-1) as i32));
+                        reply.push(OscType::Int(0));
+                        reply.push(OscType::Int(0));
+                        reply.push(OscType::Int(devices.len() as i32));
+                        reply.push(OscType::Int(devices.len() as i32));
+                        for d in &devices {
+                            reply.push(OscType::String(d.as_str().unwrap().to_string()));
+                        }
+                    }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
+                _ => {} // an address the fixture cannot answer
             }
         }
     });
