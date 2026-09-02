@@ -42,7 +42,10 @@ pub mod bench_api {
 #[cfg(feature = "evals")]
 pub mod eval_api {
     pub use crate::deltas::{Coalescer, Delta};
-    pub use crate::model::{complete, post_chat, ChatMessage, Completion, ToolCall, REMINDER, SYSTEM_PROMPT};
+    pub use crate::model::{
+        complete, post_chat, ChatMessage, Completion, ToolCall, MODEL_CONNECT_TIMEOUT,
+        MODEL_TIMEOUT, REMINDER, SYSTEM_PROMPT,
+    };
     pub use crate::osc::query::LiveQuery;
     pub use crate::osc::requests::RequestTable;
     pub use crate::osc::socket::OscSocket;
@@ -757,13 +760,13 @@ pub fn run() {
             app.manage(Arc::new(ModelState {
                 settings: Mutex::new(settings::load(&config_dir)),
                 config_dir,
-                // A router can accept a request and then leave it pending
-                // indefinitely while an upstream model is saturated. Keep
-                // a turn bounded and return a normal provider error instead
-                // of leaving the chat UI permanently in its thinking state.
+                // Bounded, so a router that accepts a request and never
+                // answers becomes a provider error instead of a chat pane
+                // stuck thinking. The numbers live beside the message that
+                // quotes them: see model::MODEL_TIMEOUT.
                 client: reqwest::Client::builder()
-                    .connect_timeout(Duration::from_secs(10))
-                    .timeout(Duration::from_secs(60))
+                    .connect_timeout(model::MODEL_CONNECT_TIMEOUT)
+                    .timeout(model::MODEL_TIMEOUT)
                     .build()
                     .expect("the built-in HTTP client configuration is valid"),
             }));

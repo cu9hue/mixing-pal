@@ -1,6 +1,38 @@
 use crate::settings::Settings;
 use crate::tools::tool_schema;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// How long the app waits to open a connection to the provider.
+pub const MODEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the app waits for one completion, end to end.
+///
+/// A router can accept a request and leave it pending while an upstream
+/// model is saturated, so the wait has to be bounded or the chat pane sits
+/// in its thinking state forever. But the bound has to clear a real answer:
+/// the prose round of a turn carries the whole context plus every tool
+/// result, and a model that thinks before it writes took over a minute on
+/// 2026-09-02. Sixty seconds cut that turn off and reported it as a broken
+/// reply. Both the shipped client (lib.rs) and the eval harness build from
+/// this constant, and the timeout message quotes it.
+pub const MODEL_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// What to tell the producer when a request to `url` failed at `stage`.
+///
+/// reqwest reports a total timeout that fires while the body is still
+/// pending as "error decoding response body", which reads as a corrupt
+/// reply. It is a slow model. Name it, and name the limit.
+fn transport_error(url: &str, stage: &str, e: reqwest::Error) -> String {
+    if e.is_timeout() {
+        format!(
+            "the model did not answer within the app's {}-second limit",
+            MODEL_TIMEOUT.as_secs()
+        )
+    } else {
+        format!("{stage} {url}: {e}")
+    }
+}
 
 /// Backend-owned. The webview cannot see, replace, or extend this -- see the
 /// spec's "Where the split actually falls".
@@ -230,13 +262,13 @@ pub async fn post_chat(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("could not reach {url}: {e}"))?;
+        .map_err(|e| transport_error(&url, "could not reach", e))?;
 
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|e| format!("could not read the reply from {url}: {e}"))?;
+        .map_err(|e| transport_error(&url, "could not read the reply from", e))?;
     if !status.is_success() {
         // The provider's own message is the useful part: it distinguishes a
         // wrong key from no credit from an unknown model name. Redacted
@@ -734,6 +766,35 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("402"), "{err}");
         assert!(err.contains("insufficient credits"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_model_that_outlasts_the_client_timeout_is_reported_as_slow_not_as_a_bad_reply() {
+        // Seen in production on 2026-09-02: the prose round of a turn ran
+        // past the client's total timeout and reqwest reported it as "error
+        // decoding response body". The producer read that as a broken
+        // provider. A timeout is a timeout; say so, and say the limit.
+        let server = MockServer::start().await;
+        capture(
+            &server,
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({
+                    "choices": [{ "message": { "role": "assistant", "content": "late" } }]
+                }))
+                .set_delay(std::time::Duration::from_millis(400)),
+        )
+        .await;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(50))
+            .build()
+            .unwrap();
+
+        let err = complete(&client, &settings_for(&server), vec![user("hi")])
+            .await
+            .unwrap_err();
+        assert!(err.contains("did not answer within"), "{err}");
+        assert!(err.contains(&MODEL_TIMEOUT.as_secs().to_string()), "{err}");
+        assert!(!err.contains("decoding"), "{err}");
     }
 
     #[tokio::test]

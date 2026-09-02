@@ -45,13 +45,14 @@ pub fn settings() -> Settings {
     }
 }
 
-/// The same bounds the shipped app uses (src-tauri/src/lib.rs): a provider
-/// that accepts the connection and never answers becomes a failed run,
-/// not a hung release gate.
+/// The same bounds the shipped app uses, from the same constants
+/// (`model::MODEL_TIMEOUT`): a provider that accepts the connection and never
+/// answers becomes a failed run, not a hung release gate, and the prose
+/// round of a craft scenario gets the same room a producer's turn gets.
 pub fn client() -> reqwest::Client {
     reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(MODEL_CONNECT_TIMEOUT)
+        .timeout(MODEL_TIMEOUT)
         .build()
         .expect("the eval HTTP client configuration is valid")
 }
