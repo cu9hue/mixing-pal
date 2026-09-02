@@ -32,19 +32,41 @@ App 0.1.0, wire version 7. Shipped:
   (unnamed tracks).
 - An unsigned `.dmg`, with `docs/opening-an-unsigned-build.md` for getting past
   Gatekeeper.
-- Prompt guardrails and three real-model evals (`src-tauri/tests/evals.rs`).
+- Prompt guardrails and six honesty evals (`src-tauri/tests/evals.rs`), plus
+  the craft layer: the "What a good answer is" prompt section and five
+  judge-scored craft evals (`src-tauri/tests/craft.rs`). Neither eval suite
+  has yet run against a real model.
 - The arrangement view: section names in the context block, the arrangement
-  map, arrangement notes. Landing now; the diff is uncommitted.
+  map, arrangement notes, loop regions, and Live's note names.
 
 Model access today: the producer pastes an OpenRouter key in Advanced. That is
 fine for one person and a blocker for everyone else.
+
+## The rule for advice
+
+Three parties, three jobs. Settled 2026-09-02 and standing for every item in
+the advice vertical.
+
+- **We own what good is.** The axes a track is judged on, the shape of a
+  move, and the rule that an answer may say "leave it". This is the opinion,
+  and it is the only part that can be defended in a test.
+- **The model owns the how.** Which move, in which genre's terms, and why.
+  No genre facts live in the repo: every rule of that kind is a workaround
+  for a limit the model may not have, and it would constrain a stronger
+  model as much as it helps a weaker one.
+- **The user owns whether it worked.** The model cannot hear. The outcome
+  signal comes back from her ear, so every move ends with what to listen
+  for, and the per-set notes exist to record what she heard. Without that
+  record there is no outcome to converge on.
+
+One corollary for anything that accumulates: it needs a deletion story from
+the start. Context that only grows degrades what it was meant to improve.
 
 ## Now
 
 Ordered. Each item says what, why, size, and what it waits on.
 
-1. **Land the arrangement view.** Commit the diff, run every suite, cut a
-   build. Size S. Waits on nothing.
+1. **Land the arrangement view.** Done 2026-09-02 (ba5c78e).
 
 2. **Thread view.** Earlier exchanges scroll above the current one inside the
    card. The latest exchange stays the anchor at the bottom, so the window
@@ -68,19 +90,20 @@ Ordered. Each item says what, why, size, and what it waits on.
    discussed, what she decided, what she was going to try. Shown in the card,
    editable, and sent ahead of the question as a user turn on return, the same
    way the context block rides. Why: a note beats a transcript. The live
-   context corrects stale facts on every turn, and she can read it. Size M.
+   context corrects stale facts on every turn, and she can read it. A note
+   records outcomes (the axis, the move, what she heard), never advice, and
+   carries a size cap, so it does not become a second prompt. Size M.
    Waits on 4.
 
 6. **Advice quality.** Spec:
-   `docs/superpowers/specs/2026-09-02-craft-ontology-design.md`. A second
-   layer on the prompt: a fixed set of axes a track is judged on, each tagged
-   readable or ear-only; a genre prior derived from the goal; a fixed shape
-   for a move; and permission to say "leave it". Judged by prose evals on a
-   clean fixture, kept apart from the tool-call evals. Why: the site promises
-   reasoning in plain language, about her track, and today nothing in the
-   repo says what good advice is. Size L and open-ended: this is a loop, not
-   a task. Waits on nothing, but the waitlist tells us which genres the
-   second fixture should cover.
+   `docs/superpowers/specs/2026-09-02-craft-ontology-design.md`. Shipped
+   2026-09-02 (c095d72..ea9bc34): the prompt's "What a good answer is"
+   section, a clean fixture, and five judge-scored craft scenarios beside
+   the tool-call evals. What remains is the loop: the craft scenarios have
+   never run against a real model. First paid run per
+   `docs/manual-verification.md`, scenario five first; then change the
+   prompt against red properties and add fixtures for the goals the
+   waitlist names. Size open-ended. Waits on a provider key in the shell.
 
 ## When the waitlist says go
 
