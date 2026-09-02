@@ -302,7 +302,10 @@ pub async fn get_notes_at(
     // clip is empty" -- unwrap_or(0.0) would turn an unreadable reply into a
     // fabricated zero-span window, which returns {notes: [], missing_reason:
     // null}, i.e. an invented "this clip is empty" the reply never said.
-    let length = length_reply?.get(2).and_then(as_f64).ok_or(QueryError::NoReply)? as f32;
+    let length = length_reply?
+        .get(2)
+        .and_then(as_f64)
+        .ok_or(QueryError::NoReply)? as f32;
 
     // The count is a HINT, not data: it only decides how wide the first
     // windows are. Every way it can be absent -- a Remote Script too old to
@@ -356,9 +359,9 @@ pub async fn get_notes_at(
                     OscType::Float(start),
                     OscType::Float(span),
                 ];
-                tokio::spawn(async move {
-                    (window, q.query(addrs.notes_window, args, timeout).await)
-                })
+                tokio::spawn(
+                    async move { (window, q.query(addrs.notes_window, args, timeout).await) },
+                )
             })
             .collect();
 
@@ -388,9 +391,7 @@ pub async fn get_notes_at(
                     next.push(first);
                     next.push(second);
                 }
-                Ok((_, Err(QueryError::NoReply))) => {
-                    missing_reason = Some("too_large".to_string())
-                }
+                Ok((_, Err(QueryError::NoReply))) => missing_reason = Some("too_large".to_string()),
                 Ok((_, Err(e))) => return Err(e),
                 // A panicked window task is one window's worth of missing
                 // notes, not a failed read of the clip.
@@ -428,7 +429,10 @@ fn decode_loop_region(args: &[OscType]) -> Option<Option<LoopRegion>> {
     }
     let start_beats = as_f64(args.get(3)?)?;
     let end_beats = as_f64(args.get(4)?)?;
-    (end_beats > start_beats).then_some(Some(LoopRegion { start_beats, end_beats }))
+    (end_beats > start_beats).then_some(Some(LoopRegion {
+        start_beats,
+        end_beats,
+    }))
 }
 
 pub async fn get_clip_notes(
@@ -486,7 +490,10 @@ mod tests {
         args.extend(note_values(60, 0.0));
 
         assert!(decode_notes(&args, 7).is_some(), "its own window decodes");
-        assert!(decode_notes(&args, 8).is_none(), "another window's does not");
+        assert!(
+            decode_notes(&args, 8).is_none(),
+            "another window's does not"
+        );
     }
 
     #[test]
@@ -499,7 +506,17 @@ mod tests {
 
         let notes = decode_notes(&args, 0).unwrap();
         assert_eq!(notes.len(), 2);
-        assert_eq!(notes[0], Note { pitch: 60, note: "C3".into(), start: 0.0, duration: 0.5, velocity: 100.0, mute: false });
+        assert_eq!(
+            notes[0],
+            Note {
+                pitch: 60,
+                note: "C3".into(),
+                start: 0.0,
+                duration: 0.5,
+                velocity: 100.0,
+                mute: false
+            }
+        );
         assert_eq!(notes[1].pitch, 64);
         assert_eq!(notes[1].note, "E3");
         assert_eq!(notes[1].start, 1.0);
@@ -623,9 +640,10 @@ mod tests {
                     "/live/clip/get/notes_window" => {
                         let (start, span) = (f(5), f(6));
                         let silent = fake.silent_all
-                            || fake.silent.iter().any(|(s, p)| {
-                                (s - start).abs() < 1e-3 && (p - span).abs() < 1e-3
-                            });
+                            || fake
+                                .silent
+                                .iter()
+                                .any(|(s, p)| (s - start).abs() < 1e-3 && (p - span).abs() < 1e-3);
                         if silent {
                             continue; // the reply Live could not send
                         }
@@ -657,11 +675,7 @@ mod tests {
                                 }
                                 for reply in held.drain(..) {
                                     let _ = live
-                                        .send_to(
-                                            app_port,
-                                            "/live/clip/get/notes_window",
-                                            reply,
-                                        )
+                                        .send_to(app_port, "/live/clip/get/notes_window", reply)
                                         .await;
                                 }
                             }
@@ -716,9 +730,16 @@ mod tests {
         // so nothing past it is worth building.
         let cap = MAX_WINDOWS * max_notes_per_window();
 
-        assert_eq!(usable_note_estimate(i32::MAX), cap, "a hostile count is bounded");
+        assert_eq!(
+            usable_note_estimate(i32::MAX),
+            cap,
+            "a hostile count is bounded"
+        );
         assert_eq!(usable_note_estimate(cap as i32 + 1), cap);
-        assert_eq!(note_windows(128.0, usable_note_estimate(i32::MAX)).len(), MAX_WINDOWS);
+        assert_eq!(
+            note_windows(128.0, usable_note_estimate(i32::MAX)).len(),
+            MAX_WINDOWS
+        );
 
         // A count the budget CAN use is passed through untouched -- the
         // clamp must not quietly under-window an ordinary dense clip.
@@ -790,8 +811,9 @@ mod tests {
         // serial pager can never satisfy -- it would time out on the first
         // and start halving, which shows up as more than two requests and a
         // partial read.
-        let notes: Vec<(f32, i32)> =
-            (0..400).map(|i| (i as f32 * 16.0 / 400.0, 36 + (i % 60) as i32)).collect();
+        let notes: Vec<(f32, i32)> = (0..400)
+            .map(|i| (i as f32 * 16.0 / 400.0, 36 + (i % 60) as i32))
+            .collect();
         let (q, seen) = spawn(FakeLive {
             length: 16.0,
             notes,
@@ -828,8 +850,9 @@ mod tests {
         // neither.
         //
         // 400 notes over 16 beats needs ceil(400 / 358) = 2 windows.
-        let notes: Vec<(f32, i32)> =
-            (0..400).map(|i| (i as f32 * 16.0 / 400.0, 36 + (i % 60) as i32)).collect();
+        let notes: Vec<(f32, i32)> = (0..400)
+            .map(|i| (i as f32 * 16.0 / 400.0, 36 + (i % 60) as i32))
+            .collect();
         let (q, seen) = spawn(FakeLive {
             length: 16.0,
             notes: notes.clone(),
@@ -844,7 +867,11 @@ mod tests {
 
         let result = get_clip_notes(q, 2, 1, FAST).await.unwrap();
 
-        assert_eq!(result.notes.len(), 400, "every note, reassembled from both windows");
+        assert_eq!(
+            result.notes.len(),
+            400,
+            "every note, reassembled from both windows"
+        );
         assert_eq!(result.missing_reason, None);
         assert_eq!(
             seen.lock().unwrap().get("/live/clip/get/notes_window"),
@@ -882,7 +909,11 @@ mod tests {
         let result = get_clip_notes(q, 2, 1, timeout).await.unwrap();
         let elapsed = started.elapsed();
 
-        assert_eq!(result.notes.len(), 3, "the clip still reads, count or no count");
+        assert_eq!(
+            result.notes.len(),
+            3,
+            "the clip still reads, count or no count"
+        );
         assert_eq!(result.missing_reason, None);
         assert!(
             elapsed < timeout / 2,
@@ -908,7 +939,10 @@ mod tests {
         .await;
 
         let result = get_clip_notes(q, 2, 1, FAST).await.unwrap();
-        assert_eq!(result.missing_reason, None, "the halves answered, so nothing is missing");
+        assert_eq!(
+            result.missing_reason, None,
+            "the halves answered, so nothing is missing"
+        );
         assert_eq!(
             result.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(),
             vec![60, 63, 67, 70],
@@ -937,7 +971,12 @@ mod tests {
         assert_eq!(result.missing_reason.as_deref(), Some("too_large"));
         assert!(result.notes.is_empty());
         assert!(
-            *seen.lock().unwrap().get("/live/clip/get/notes_window").unwrap() <= MAX_WINDOWS,
+            *seen
+                .lock()
+                .unwrap()
+                .get("/live/clip/get/notes_window")
+                .unwrap()
+                <= MAX_WINDOWS,
             "the splitter must be bounded"
         );
     }
@@ -953,7 +992,10 @@ mod tests {
         let app = Arc::new(OscSocket::bind_to(0, _live.local_port()).await.unwrap());
         let table = Arc::new(Mutex::new(RequestTable::new()));
         let q = Arc::new(LiveQuery::new(app, table));
-        assert_eq!(get_clip_notes(q, 9, 9, FAST).await, Err(QueryError::NoReply));
+        assert_eq!(
+            get_clip_notes(q, 9, 9, FAST).await,
+            Err(QueryError::NoReply)
+        );
     }
 
     #[tokio::test]
@@ -1029,6 +1071,9 @@ mod tests {
         })
         .await;
 
-        assert_eq!(get_clip_notes(q, 2, 1, FAST).await, Err(QueryError::NoReply));
+        assert_eq!(
+            get_clip_notes(q, 2, 1, FAST).await,
+            Err(QueryError::NoReply)
+        );
     }
 }

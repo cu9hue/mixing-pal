@@ -8,7 +8,7 @@
 
 use mixing_pal_lib::eval_api::*;
 use rosc::OscType;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 /// Mirrors `MAX_ROUND_TRIPS` in `src/agent/loop.ts`. The eval drives its own
@@ -35,8 +35,7 @@ pub fn context(name: &str) -> String {
 
 pub fn settings() -> Settings {
     let var = |name: &str| {
-        std::env::var(name)
-            .unwrap_or_else(|_| panic!("{name} must be set to run the eval suite"))
+        std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set to run the eval suite"))
     };
     Settings {
         base_url: var("MIXINGPAL_EVAL_BASE_URL"),
@@ -101,7 +100,11 @@ pub fn mirror(f: &Value) -> Arc<Mutex<Coalescer>> {
 /// case scenario 5 exists to check.
 fn slot_is_filled(track: &Value, slot: Option<i32>) -> bool {
     let Some(slot) = slot else { return false };
-    track["clips"].as_array().unwrap().iter().any(|c| c["slot"].as_i64() == Some(slot as i64))
+    track["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["slot"].as_i64() == Some(slot as i64))
 }
 
 /// True when the fixture marks this track as MIDI.
@@ -134,7 +137,10 @@ fn arrangement_clip_exists(track: &Value, index: Option<i32>) -> bool {
     if index < 0 {
         return false;
     }
-    track["arrangement"].as_array().map(|a| (index as usize) < a.len()).unwrap_or(false)
+    track["arrangement"]
+        .as_array()
+        .map(|a| (index as usize) < a.len())
+        .unwrap_or(false)
 }
 
 /// A Live that answers from the fixture.
@@ -188,8 +194,12 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                 Some(OscType::String(s)) => Some(s.clone()),
                 _ => None,
             };
-            let Some(track_index) = int_at(0) else { continue };
-            let Some(track) = track_at(track_index) else { continue };
+            let Some(track_index) = int_at(0) else {
+                continue;
+            };
+            let Some(track) = track_at(track_index) else {
+                continue;
+            };
             if track["silent"] == json!(true) {
                 continue; // the reply Live could not send
             }
@@ -213,8 +223,9 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         .unwrap_or(-1);
                     for slot in 0..=highest {
                         match clips.iter().find(|c| c["slot"].as_i64() == Some(slot)) {
-                            Some(c) => reply
-                                .push(OscType::String(c["name"].as_str().unwrap().to_string())),
+                            Some(c) => {
+                                reply.push(OscType::String(c["name"].as_str().unwrap().to_string()))
+                            }
                             None => reply.push(OscType::Nil),
                         }
                     }
@@ -265,7 +276,10 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         continue;
                     }
                     let slot = int_at(1).unwrap_or(0).to_string();
-                    let count = track["notes"][&slot].as_array().map(|n| n.len()).unwrap_or(0);
+                    let count = track["notes"][&slot]
+                        .as_array()
+                        .map(|n| n.len())
+                        .unwrap_or(0);
                     let _ = live
                         .send_to(
                             app_port,
@@ -342,9 +356,7 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         OscType::Int(clips.len() as i32),
                     ];
                     for clip in clips.iter().skip(start).take(span) {
-                        reply.push(OscType::String(
-                            clip["name"].as_str().unwrap().to_string(),
-                        ));
+                        reply.push(OscType::String(clip["name"].as_str().unwrap().to_string()));
                         let start_beats = clip["start"].as_f64().unwrap();
                         reply.push(OscType::Float(start_beats as f32));
                         // Wire 8: the record carries the clip's END time, not
@@ -353,8 +365,10 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         reply.push(OscType::Float(
                             (start_beats + clip["length"].as_f64().unwrap()) as f32,
                         ));
-                        // `decode_page` reads six fields per record: name,
-                        // start, end, looping, loop_start, loop_end.
+                        // Wire 9 adds the placement's own mute and MIDI
+                        // type before its loop metadata.
+                        reply.push(OscType::Bool(false));
+                        reply.push(OscType::Bool(true));
                         match clip["loop"].as_array() {
                             Some(l) => {
                                 reply.push(OscType::Bool(true));
@@ -386,10 +400,10 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         OscType::String(clip["name"].as_str().unwrap().to_string()),
                         OscType::Float(start_beats as f32),
                         // Wire 8: end time, not length. See the map arm above.
-                        OscType::Float(
-                            (start_beats + clip["length"].as_f64().unwrap()) as f32,
-                        ),
+                        OscType::Float((start_beats + clip["length"].as_f64().unwrap()) as f32),
                     ];
+                    reply.push(OscType::Bool(false));
+                    reply.push(OscType::Bool(true));
                     // `decode_identity` reads looping, then loop_start and
                     // loop_end only when it is true.
                     match clip["loop"].as_array() {
@@ -412,7 +426,11 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         .send_to(
                             app_port,
                             &req.addr,
-                            vec![req.args[0].clone(), req.args[1].clone(), OscType::Float(length)],
+                            vec![
+                                req.args[0].clone(),
+                                req.args[1].clone(),
+                                OscType::Float(length),
+                            ],
                         )
                         .await;
                 }
@@ -421,8 +439,10 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         continue;
                     }
                     let index = int_at(1).unwrap_or(0).to_string();
-                    let count =
-                        track["arrangementNotes"][&index].as_array().map(|n| n.len()).unwrap_or(0);
+                    let count = track["arrangementNotes"][&index]
+                        .as_array()
+                        .map(|n| n.len())
+                        .unwrap_or(0);
                     let _ = live
                         .send_to(
                             app_port,
@@ -464,7 +484,9 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
                 "/live/mixingpal/get/device/identity" => {
-                    let Some((path, detail)) = device_detail() else { continue };
+                    let Some((path, detail)) = device_detail() else {
+                        continue;
+                    };
                     let index: usize = path.parse().unwrap_or(usize::MAX);
                     let Some(name) = track["devices"].get(index).and_then(Value::as_str) else {
                         continue;
@@ -485,7 +507,9 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                 }
                 addr @ ("/live/device/get/parameters/name_range"
                 | "/live/device/get/parameters/value_string_range") => {
-                    let Some((path, detail)) = device_detail() else { continue };
+                    let Some((path, detail)) = device_detail() else {
+                        continue;
+                    };
                     let start = int_at(2).unwrap_or(0).max(0) as usize;
                     let span = int_at(3).unwrap_or(0).max(0) as usize;
                     let column = if addr.ends_with("name_range") { 0 } else { 1 };
@@ -505,9 +529,14 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                     // each record `name, note, mute, solo, total_devices,
                     // reported_devices, *names` -- the shape
                     // `rack_contents::decode_window` reads.
-                    let Some((path, detail)) = device_detail() else { continue };
+                    let Some((path, detail)) = device_detail() else {
+                        continue;
+                    };
                     let index: usize = path.parse().unwrap_or(usize::MAX);
-                    let is_rack = track["racks"].get(index).and_then(Value::as_bool).unwrap_or(false);
+                    let is_rack = track["racks"]
+                        .get(index)
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     let start = int_at(2).unwrap_or(0).max(0) as usize;
                     let span = int_at(3).unwrap_or(0).max(0) as usize;
                     let chains = detail["chains"].as_array().cloned().unwrap_or_default();
@@ -609,11 +638,17 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
                     calls,
                     truncated: false,
                     error: Some(e),
-                }
+                };
             }
         };
         if completion.tool_calls.is_empty() {
-            return Turn { answer: completion.text, called, calls, truncated: false, error: None };
+            return Turn {
+                answer: completion.text,
+                called,
+                calls,
+                truncated: false,
+                error: None,
+            };
         }
         messages.push(ChatMessage {
             role: "assistant".into(),
@@ -641,5 +676,11 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
             });
         }
     }
-    Turn { answer: String::new(), called, calls, truncated: true, error: None }
+    Turn {
+        answer: String::new(),
+        called,
+        calls,
+        truncated: true,
+        error: None,
+    }
 }

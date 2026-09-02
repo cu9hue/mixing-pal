@@ -146,7 +146,7 @@ class ArrangementHandler(AbletonOSCHandler):
 
         def arrangement_num_notes(params: Tuple[Any]):
             clip = arrangement_clip_at(params)
-            if clip is None:
+            if clip is None or not bool(getattr(clip, "is_midi_clip", False)):
                 return None
             notes = clip.get_notes_extended(0, 128, 0.0, float(clip.length))
             return num_notes_reply(int(params[0]), int(params[1]), notes)
@@ -155,7 +155,7 @@ class ArrangementHandler(AbletonOSCHandler):
             if len(params) != 7:
                 return None
             clip = arrangement_clip_at(params)
-            if clip is None:
+            if clip is None or not bool(getattr(clip, "is_midi_clip", False)):
                 return None
             try:
                 window = int(params[2])

@@ -97,7 +97,7 @@ class ClipNotesHandler(AbletonOSCHandler):
             except (TypeError, ValueError):
                 return None
             clip = clip_at(track_index, clip_index)
-            if clip is None:
+            if clip is None or not bool(getattr(clip, "is_midi_clip", False)):
                 return None
             notes = clip.get_notes_extended(
                 pitch_start, pitch_span, time_start, time_span)
@@ -109,7 +109,7 @@ class ClipNotesHandler(AbletonOSCHandler):
                 return None
             track_index, clip_index = indices
             clip = clip_at(track_index, clip_index)
-            if clip is None:
+            if clip is None or not bool(getattr(clip, "is_midi_clip", False)):
                 return None
             notes = clip.get_notes_extended(0, 128, 0.0, clip.length)
             return num_notes_reply(track_index, clip_index, notes)

@@ -123,11 +123,7 @@ fn mark_racks(devices: &mut [String], flags: &[bool]) -> bool {
 ///
 /// Never returns `Err`. One track failing is one track's worth of missing
 /// data, not a failed read of the set.
-pub async fn get_device_chains(
-    q: Arc<LiveQuery>,
-    num_tracks: i32,
-    timeout: Duration,
-) -> ChainMap {
+pub async fn get_device_chains(q: Arc<LiveQuery>, num_tracks: i32, timeout: Duration) -> ChainMap {
     // Spawn every request for BOTH addresses first, so all 2N are in flight
     // before anything is awaited -- awaiting in order below does not
     // serialise anything, the requests already went out.
@@ -145,8 +141,12 @@ pub async fn get_device_chains(
             .collect()
     }
     let name_handles = spawn_all(&q, "/live/track/get/devices/name", num_tracks, timeout);
-    let flag_handles =
-        spawn_all(&q, "/live/track/get/devices/can_have_chains", num_tracks, timeout);
+    let flag_handles = spawn_all(
+        &q,
+        "/live/track/get/devices/can_have_chains",
+        num_tracks,
+        timeout,
+    );
 
     let mut flags: Vec<Option<Vec<bool>>> = Vec::with_capacity(flag_handles.len());
     for handle in flag_handles {
@@ -182,7 +182,11 @@ pub async fn get_device_chains(
             Ok(Err(_)) | Err(_) => missing.push(index),
         }
     }
-    ChainMap { tracks, missing, flags_missing }
+    ChainMap {
+        tracks,
+        missing,
+        flags_missing,
+    }
 }
 
 #[cfg(test)]
@@ -328,7 +332,11 @@ mod tests {
     #[test]
     fn decode_chain_fails_closed_on_a_non_string_in_the_name_list() {
         // Guessing which elements are names would invent a chain.
-        let reply = vec![OscType::Int(0), OscType::String("EQ Eight".into()), OscType::Int(9)];
+        let reply = vec![
+            OscType::Int(0),
+            OscType::String("EQ Eight".into()),
+            OscType::Int(9),
+        ];
         assert!(decode_chain(&reply).is_none());
     }
 
@@ -353,7 +361,11 @@ mod tests {
         let (q, _) = fake_live(f).await;
 
         let map = get_device_chains(q, 4, FAST).await;
-        assert_eq!(map.tracks.len(), 4, "requests were serialised, not concurrent");
+        assert_eq!(
+            map.tracks.len(),
+            4,
+            "requests were serialised, not concurrent"
+        );
         assert!(map.missing.is_empty());
     }
 
@@ -366,7 +378,10 @@ mod tests {
         let (q, _) = fake_live(f).await;
 
         let map = get_device_chains(q, 5, FAST).await;
-        assert_eq!(map.tracks.iter().map(|t| t.track).collect::<Vec<_>>(), vec![0, 2, 4]);
+        assert_eq!(
+            map.tracks.iter().map(|t| t.track).collect::<Vec<_>>(),
+            vec![0, 2, 4]
+        );
         assert_eq!(map.missing, vec![1, 3]);
     }
 
@@ -377,7 +392,10 @@ mod tests {
         let (q, _) = fake_live(f).await;
 
         let map = get_device_chains(q, 3, FAST).await;
-        assert_eq!(map.tracks.iter().map(|t| t.track).collect::<Vec<_>>(), vec![0, 2]);
+        assert_eq!(
+            map.tracks.iter().map(|t| t.track).collect::<Vec<_>>(),
+            vec![0, 2]
+        );
         assert_eq!(map.missing, vec![1]);
     }
 
@@ -401,7 +419,10 @@ mod tests {
         let map = get_device_chains(q, 0, FAST).await;
         assert!(map.tracks.is_empty());
         assert!(map.missing.is_empty());
-        assert_eq!(counts.lock().unwrap().get("/live/track/get/devices/name"), None);
+        assert_eq!(
+            counts.lock().unwrap().get("/live/track/get/devices/name"),
+            None
+        );
     }
 
     #[test]
@@ -436,7 +457,10 @@ mod tests {
             decode_flags(&[OscType::Int(0), OscType::Bool(true), OscType::Int(0)]),
             Some(vec![true, false])
         );
-        assert_eq!(decode_flags(&[OscType::Int(0), OscType::String("x".into())]), None);
+        assert_eq!(
+            decode_flags(&[OscType::Int(0), OscType::String("x".into())]),
+            None
+        );
     }
 
     #[tokio::test]

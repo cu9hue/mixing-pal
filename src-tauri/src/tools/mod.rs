@@ -109,7 +109,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clip_notes",
-                "description": "Every MIDI note in one session-view clip, as note, pitch, start, duration, velocity, mute, plus length_beats and loop_region. Source notes repeat through length_beats when loop_region is present; never call later iterations silent merely because notes are listed once. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read.",
+                "description": "Every MIDI note in one session-view clip, as note, pitch, start, duration, velocity, mute, plus source_length_beats and loop_region. A note with mute true does not sound and must be excluded from rhythm or harmony claims. source_length_beats is the source clip length, not a finite playback span: when looping is true, its source notes repeat while the clip is launched. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -136,7 +136,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement",
-                "description": "Every track's arrangement timeline: for each clip, its index, start_beats, length_beats, and its name when it has one. These are beats, never bar counts. A loop_region is present when Live repeats the clip's MIDI: source notes repeat in that region through the clip's length_beats, so an absent note after one loop is not silence. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; one round trip per track covers the set, so calling it is cheap. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. A track with an empty list genuinely has nothing on the timeline, which is normal early in a writing session. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated.",
+                "description": "Every track's arrangement placements: for each clip, its index, start_beats, length_beats, muted state, MIDI type, and its name when it has one. These are beats, never bar counts. A placement is audible only when muted is false; is_midi false means it is audio and has no MIDI notes. When the current time signature is known, each clip also has one-based bar_start and length_bars; use bar_start when speaking about bars, never start_beats (in 4/4, start_beats 32 is bar 9). A loop_region is present when Live repeats the clip's MIDI: source notes repeat in that region through the clip's length_beats, so an absent note after one loop is not silence. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; one round trip per track covers the set, so calling it is cheap. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. A track with an empty list genuinely has nothing on the timeline, which is normal early in a writing session. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a MIDI clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -148,7 +148,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "Every MIDI note in one arrangement-view clip, as note, pitch, start, duration, velocity, mute. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts. Each note's start is measured from the start of the clip, not from the start of the song: its position on the timeline is result.start_beats + note.start. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip has no notes to read.",
+                "description": "Every MIDI note in one arrangement-view clip, as note, pitch, start, duration, velocity, mute. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes one-based bar_start and length_bars. Each note's start is measured from the start of the clip, not from the start of the song: its position on the timeline is result.start_beats + note.start. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -268,6 +268,84 @@ fn track_count(coalescer: &Mutex<Coalescer>) -> Option<i64> {
         .as_i64()
 }
 
+/// The currently mirrored global meter, when it can safely turn beat offsets
+/// into the one-based bar labels producers use in conversation. A set can
+/// change meter over time; the payload names this as the current signature,
+/// so raw `*_beats` remain authoritative in that unusual case.
+fn time_signature(coalescer: &Mutex<Coalescer>) -> Option<(i64, i64)> {
+    let c = coalescer.lock().ok()?;
+    let numerator = c
+        .lookup("/live/song/get/signature_numerator", &[])?
+        .args
+        .first()?
+        .as_i64()?;
+    let denominator = c
+        .lookup("/live/song/get/signature_denominator", &[])?
+        .args
+        .first()?
+        .as_i64()?;
+    (numerator > 0 && denominator > 0).then_some((numerator, denominator))
+}
+
+fn bar_position(beat: f64, beats_per_bar: f64) -> f64 {
+    (beat / beats_per_bar).floor() + 1.0
+}
+
+/// Adds producer-facing bar labels without replacing the unambiguous beat
+/// values the OSC protocol carries.
+fn arrangement_payload(
+    map: &arrangement::ArrangementMap,
+    signature: Option<(i64, i64)>,
+) -> serde_json::Value {
+    let mut payload = json!({ "tracks": map.tracks, "missing": map.missing });
+    let Some((numerator, denominator)) = signature else {
+        return payload;
+    };
+    let beats_per_bar = numerator as f64 * 4.0 / denominator as f64;
+    if !beats_per_bar.is_finite() || beats_per_bar <= 0.0 {
+        return payload;
+    }
+    payload["time_signature"] = json!({ "numerator": numerator, "denominator": denominator });
+    payload["bar_positions_assume_current_signature"] = json!(true);
+    let Some(tracks) = payload["tracks"].as_array_mut() else {
+        return payload;
+    };
+    for track in tracks {
+        let Some(clips) = track["clips"].as_array_mut() else {
+            continue;
+        };
+        for clip in clips {
+            let (Some(start), Some(length)) =
+                (clip["start_beats"].as_f64(), clip["length_beats"].as_f64())
+            else {
+                continue;
+            };
+            clip["bar_start"] = json!(bar_position(start, beats_per_bar));
+            clip["length_bars"] = json!(length / beats_per_bar);
+        }
+    }
+    payload
+}
+
+fn add_bar_timing(
+    payload: &mut serde_json::Value,
+    start_beats: f64,
+    length_beats: f64,
+    signature: Option<(i64, i64)>,
+) {
+    let Some((numerator, denominator)) = signature else {
+        return;
+    };
+    let beats_per_bar = numerator as f64 * 4.0 / denominator as f64;
+    if !beats_per_bar.is_finite() || beats_per_bar <= 0.0 {
+        return;
+    }
+    payload["time_signature"] = json!({ "numerator": numerator, "denominator": denominator });
+    payload["bar_positions_assume_current_signature"] = json!(true);
+    payload["bar_start"] = json!(bar_position(start_beats, beats_per_bar));
+    payload["length_bars"] = json!(length_beats / beats_per_bar);
+}
+
 /// Reject an impossible track index before it becomes an OSC timeout.
 ///
 /// The mirror is advisory: when it has not observed a count yet, a live tool
@@ -310,6 +388,31 @@ fn topology_moved(before: &Option<serde_json::Value>, after: &Option<serde_json:
 /// do not. A set past this is legal, so the result reports the truncation
 /// instead of presenting the first `MAX_FANOUT_TRACKS` tracks as the set.
 const MAX_FANOUT_TRACKS: i64 = 512;
+
+/// Arrangement maps are an orientation tool, not a full-score export. A
+/// model prompt with hundreds of thousands of placements is slow and causes
+/// it to miss the musical evidence it did receive. Keep the earliest
+/// placements and mark the result partial; callers can still drill into any
+/// returned clip with `get_arrangement_notes`.
+const MAX_ARRANGEMENT_CLIPS_FOR_MODEL: usize = 512;
+
+fn trim_arrangement_for_model(map: &mut arrangement::ArrangementMap) -> Option<String> {
+    let mut remaining = MAX_ARRANGEMENT_CLIPS_FOR_MODEL;
+    let mut omitted = 0usize;
+    for track in &mut map.tracks {
+        if track.clips.len() > remaining {
+            omitted += track.clips.len() - remaining;
+            track.clips.truncate(remaining);
+            track.truncated = true;
+        }
+        remaining = remaining.saturating_sub(track.clips.len());
+    }
+    (omitted > 0).then(|| {
+        format!(
+            "model_output_truncated_to_first_{MAX_ARRANGEMENT_CLIPS_FOR_MODEL}_arrangement_clips: omitted {omitted} later placements"
+        )
+    })
+}
 
 /// Whether a whole-set read's bracket -- `get_device_chains`'s, `get_clips`'s,
 /// or `get_arrangement`'s -- caught a topology change.
@@ -506,7 +609,9 @@ fn arrangement_reasons(
 pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult {
     match name {
         "get_track_detail" => {
-            let Some(track) = int_arg(args, "track").filter(|t| (0..=i64::from(u32::MAX)).contains(t)) else {
+            let Some(track) =
+                int_arg(args, "track").filter(|t| (0..=i64::from(u32::MAX)).contains(t))
+            else {
                 return ToolResult::missing("bad_arguments");
             };
             // Short guard, no await inside: the mirror read is synchronous.
@@ -568,7 +673,8 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                     json!({
                         "notes": notes.notes,
                         "count": notes.notes.len(),
-                        "length_beats": notes.length_beats,
+                        "source_length_beats": notes.length_beats,
+                        "looping": notes.loop_state_known.then_some(notes.loop_region.is_some()),
                         "loop_region": notes.loop_region,
                         "loop_state_known": notes.loop_state_known,
                     }),
@@ -601,14 +707,16 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // rather than copied: the hazard is identical -- a same-count
             // reorder would leave these track indices naming another
             // track's clips, and the answer would go back looking whole.
-            let before: Vec<Option<serde_json::Value>> =
-                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            let before: Vec<Option<serde_json::Value>> = (0..read_tracks)
+                .map(|t| track_identity(&ctx.coalescer, t))
+                .collect();
 
             let map = clips::get_clips(query, read_tracks as i32, clips::QUERY_TIMEOUT).await;
 
             let after_count = track_count(&ctx.coalescer);
-            let after: Vec<Option<serde_json::Value>> =
-                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            let after: Vec<Option<serde_json::Value>> = (0..read_tracks)
+                .map(|t| track_identity(&ctx.coalescer, t))
+                .collect();
             if chains_moved(num_tracks, after_count, &before, &after) {
                 return ToolResult::missing("topology_changed");
             }
@@ -639,35 +747,43 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // Same bracket as the chain map and the clip map: a same-count
             // reorder would leave these track indices naming another track's
             // timeline, and the answer would go back looking whole.
-            let before: Vec<Option<serde_json::Value>> =
-                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            let before: Vec<Option<serde_json::Value>> = (0..read_tracks)
+                .map(|t| track_identity(&ctx.coalescer, t))
+                .collect();
 
-            let map = arrangement::get_arrangement(
-                query,
-                read_tracks as i32,
-                arrangement::QUERY_TIMEOUT,
-            )
-            .await;
+            let mut map =
+                arrangement::get_arrangement(query, read_tracks as i32, arrangement::QUERY_TIMEOUT)
+                    .await;
 
             let after_count = track_count(&ctx.coalescer);
-            let after: Vec<Option<serde_json::Value>> =
-                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            let after: Vec<Option<serde_json::Value>> = (0..read_tracks)
+                .map(|t| track_identity(&ctx.coalescer, t))
+                .collect();
             if chains_moved(num_tracks, after_count, &before, &after) {
                 return ToolResult::missing("topology_changed");
             }
 
-            let truncated: Vec<i32> =
-                map.tracks.iter().filter(|t| t.truncated).map(|t| t.track).collect();
-            let missing_reason = arrangement_reasons(
+            let truncated: Vec<i32> = map
+                .tracks
+                .iter()
+                .filter(|t| t.truncated)
+                .map(|t| t.track)
+                .collect();
+            let mut reasons: Vec<String> = arrangement_reasons(
                 num_tracks,
                 read_tracks,
                 &map.missing,
                 &truncated,
                 &map.changed,
-            );
+            )
+            .into_iter()
+            .collect();
+            if let Some(reason) = trim_arrangement_for_model(&mut map) {
+                reasons.push(reason);
+            }
             ToolResult::live(
-                json!({ "tracks": map.tracks, "missing": map.missing }),
-                missing_reason,
+                arrangement_payload(&map, time_signature(&ctx.coalescer)),
+                (!reasons.is_empty()).then(|| reasons.join("; ")),
             )
         }
         "get_arrangement_notes" => {
@@ -710,17 +826,28 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             }
 
             match outcome {
-                Ok(result) => ToolResult::live(
-                    json!({
+                Ok(result) => {
+                    let mut payload = json!({
                         "notes": result.notes.notes,
                         "count": result.notes.notes.len(),
                         "name": result.name,
                         "start_beats": result.start,
                         "length_beats": result.length,
+                        "muted": result.muted,
+                        "is_midi": result.is_midi,
                         "loop_region": result.loop_region,
-                    }),
-                    result.notes.missing_reason,
-                ),
+                    });
+                    add_bar_timing(
+                        &mut payload,
+                        result.start,
+                        result.length,
+                        time_signature(&ctx.coalescer),
+                    );
+                    ToolResult::live(payload, result.notes.missing_reason)
+                }
+                Err(arrangement::ArrangementNotesError::NotMidi) => {
+                    ToolResult::missing("not_midi_clip")
+                }
                 Err(arrangement::ArrangementNotesError::IdentityChanged) => {
                     ToolResult::missing("arrangement_clip_identity_changed")
                 }
@@ -756,8 +883,9 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // Bracket the whole-set read with every track's mirrored name,
             // not just the count -- see `chains_moved` for why the count
             // alone is not enough.
-            let before: Vec<Option<serde_json::Value>> =
-                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            let before: Vec<Option<serde_json::Value>> = (0..read_tracks)
+                .map(|t| track_identity(&ctx.coalescer, t))
+                .collect();
 
             let map = device_chains::get_device_chains(
                 query,
@@ -771,8 +899,9 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             .await;
 
             let after_count = track_count(&ctx.coalescer);
-            let after: Vec<Option<serde_json::Value>> =
-                (0..read_tracks).map(|t| track_identity(&ctx.coalescer, t)).collect();
+            let after: Vec<Option<serde_json::Value>> = (0..read_tracks)
+                .map(|t| track_identity(&ctx.coalescer, t))
+                .collect();
             // The counts compared here are the REAL ones, clamped or not: a
             // set that grew from 600 to 700 tracks moved, and comparing two
             // clamped counts would call that stable.
@@ -856,9 +985,13 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // Live while asking. get_rack_contents brackets the DEVICE
             // itself; this one catches the TRACK moving underneath it.
             let before = track_identity(&ctx.coalescer, track);
-            let outcome =
-                rack_contents::get_rack_contents(&query, track as i32, &path, rack_contents::QUERY_TIMEOUT)
-                    .await;
+            let outcome = rack_contents::get_rack_contents(
+                &query,
+                track as i32,
+                &path,
+                rack_contents::QUERY_TIMEOUT,
+            )
+            .await;
             if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
                 return ToolResult::missing("topology_changed");
             }
@@ -970,7 +1103,13 @@ mod tests {
             .find(|t| t["function"]["name"] == "get_device_chains")
             .unwrap()
             .clone();
-        assert_eq!(tool["function"]["parameters"]["required"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            tool["function"]["parameters"]["required"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     fn description_of(name: &str) -> String {
@@ -1003,8 +1142,10 @@ mod tests {
         // channel the model reads -- a limit recorded in the spec alone does
         // not reach it. Without this it describes a bypassed EQ's 80 Hz low
         // cut as if it were shaping the bass.
-        assert!(description_of("get_device_chains")
-            .contains("Whether a device is switched on or bypassed is not reported"));
+        assert!(
+            description_of("get_device_chains")
+                .contains("Whether a device is switched on or bypassed is not reported")
+        );
     }
 
     #[test]
@@ -1055,12 +1196,17 @@ mod tests {
                 .find(|t| t["function"]["name"] == name)
                 .unwrap()
                 .clone();
-            let required = tool["function"]["parameters"]["required"].as_array().unwrap();
+            let required = tool["function"]["parameters"]["required"]
+                .as_array()
+                .unwrap();
             assert!(required.iter().any(|r| r == "track"), "{name}");
             assert!(required.iter().any(|r| r == "path"), "{name}");
             // Two ways to name one device is an ambiguity a model resolves
             // badly and inconsistently.
-            assert!(tool["function"]["parameters"]["properties"]["device"].is_null(), "{name}");
+            assert!(
+                tool["function"]["parameters"]["properties"]["device"].is_null(),
+                "{name}"
+            );
         }
     }
 
@@ -1073,7 +1219,11 @@ mod tests {
             .iter()
             .filter_map(|t| t["function"]["name"].as_str())
             .collect();
-        for expected in ["get_device_chains", "get_device_params", "get_rack_contents"] {
+        for expected in [
+            "get_device_chains",
+            "get_device_params",
+            "get_rack_contents",
+        ] {
             assert!(names.contains(&expected), "{expected}");
         }
     }
@@ -1082,7 +1232,12 @@ mod tests {
     async fn a_malformed_path_is_refused_before_it_reaches_the_wire() {
         let ctx = disconnected_ctx(one_track_mirror());
         for path in [json!([]), json!([0, 1]), json!([-1]), json!("0.1")] {
-            let r = execute(&ctx, "get_rack_contents", &json!({ "track": 0, "path": path })).await;
+            let r = execute(
+                &ctx,
+                "get_rack_contents",
+                &json!({ "track": 0, "path": path }),
+            )
+            .await;
             assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"), "{path}");
         }
     }
@@ -1122,9 +1277,18 @@ mod tests {
         let r = execute(&ctx, "get_device_chains", &json!({})).await;
 
         let reason = r.missing_reason.clone().unwrap_or_default();
-        assert!(reason.starts_with("truncated_to_first_512_tracks"), "{reason}");
-        assert!(reason.contains("600"), "the real count has to be named: {reason}");
-        assert!(!r.fresh, "a truncated map is not a complete read of the set");
+        assert!(
+            reason.starts_with("truncated_to_first_512_tracks"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("600"),
+            "the real count has to be named: {reason}"
+        );
+        assert!(
+            !r.fresh,
+            "a truncated map is not a complete read of the set"
+        );
 
         let tracks = r.value["tracks"].as_array().unwrap();
         let missing = r.value["missing"].as_array().unwrap();
@@ -1148,7 +1312,11 @@ mod tests {
         assert!(reason.contains("4294967301"), "{reason}");
         let tracks = r.value["tracks"].as_array().unwrap();
         let missing = r.value["missing"].as_array().unwrap();
-        assert_eq!(tracks.len() + missing.len(), 512, "the count wrapped instead of clamping");
+        assert_eq!(
+            tracks.len() + missing.len(),
+            512,
+            "the count wrapped instead of clamping"
+        );
     }
 
     #[test]
@@ -1206,7 +1374,13 @@ mod tests {
             .find(|t| t["function"]["name"] == "get_arrangement")
             .cloned()
             .expect("get_arrangement is in the schema");
-        assert_eq!(tool["function"]["parameters"]["required"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            tool["function"]["parameters"]["required"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -1229,6 +1403,71 @@ mod tests {
              with another clip's position)"
         );
         assert!(!reason.contains("no_reply_for_tracks"));
+    }
+
+    #[test]
+    fn one_based_bar_positions_do_not_relabel_beats_as_bars() {
+        assert_eq!(bar_position(0.0, 4.0), 1.0);
+        assert_eq!(bar_position(28.0, 4.0), 8.0);
+        assert_eq!(bar_position(32.0, 4.0), 9.0);
+    }
+
+    #[test]
+    fn arrangement_payload_exposes_bar_nine_for_beat_thirty_two_in_four_four() {
+        let map = arrangement::ArrangementMap {
+            tracks: vec![arrangement::TrackArrangement {
+                track: 0,
+                clips: vec![arrangement::ArrangementClip {
+                    index: 0,
+                    name: None,
+                    start: 32.0,
+                    length: 4.0,
+                    muted: false,
+                    is_midi: true,
+                    loop_region: None,
+                }],
+                truncated: false,
+                changed: false,
+            }],
+            missing: vec![],
+            changed: vec![],
+        };
+        let payload = arrangement_payload(&map, Some((4, 4)));
+        assert_eq!(
+            payload["time_signature"],
+            json!({ "numerator": 4, "denominator": 4 })
+        );
+        assert_eq!(payload["tracks"][0]["clips"][0]["bar_start"], json!(9.0));
+        assert_eq!(payload["tracks"][0]["clips"][0]["length_bars"], json!(1.0));
+    }
+
+    #[test]
+    fn arrangement_model_payload_is_bounded_and_explicitly_partial() {
+        let clips = (0..(MAX_ARRANGEMENT_CLIPS_FOR_MODEL + 2))
+            .map(|index| arrangement::ArrangementClip {
+                index: index as i32,
+                name: None,
+                start: index as f64,
+                length: 1.0,
+                muted: false,
+                is_midi: true,
+                loop_region: None,
+            })
+            .collect();
+        let mut map = arrangement::ArrangementMap {
+            tracks: vec![arrangement::TrackArrangement {
+                track: 0,
+                clips,
+                truncated: false,
+                changed: false,
+            }],
+            missing: vec![],
+            changed: vec![],
+        };
+        let reason = trim_arrangement_for_model(&mut map).unwrap();
+        assert_eq!(map.tracks[0].clips.len(), MAX_ARRANGEMENT_CLIPS_FOR_MODEL);
+        assert!(map.tracks[0].truncated);
+        assert!(reason.contains("omitted 2 later placements"));
     }
 
     #[test]
@@ -1266,7 +1505,12 @@ mod tests {
     #[tokio::test]
     async fn get_arrangement_notes_before_the_socket_binds_says_so() {
         let ctx = disconnected_ctx(one_track_mirror());
-        let r = execute(&ctx, "get_arrangement_notes", &json!({ "track": 0, "index": 0 })).await;
+        let r = execute(
+            &ctx,
+            "get_arrangement_notes",
+            &json!({ "track": 0, "index": 0 }),
+        )
+        .await;
         assert_eq!(r.missing_reason.as_deref(), Some("not_connected"));
     }
 
@@ -1278,7 +1522,12 @@ mod tests {
         // than return an empty note list, which would read as "this clip has
         // no notes in it".
         let ctx = answering_ctx(one_track_mirror()).await;
-        let r = execute(&ctx, "get_arrangement_notes", &json!({ "track": 0, "index": 0 })).await;
+        let r = execute(
+            &ctx,
+            "get_arrangement_notes",
+            &json!({ "track": 0, "index": 0 }),
+        )
+        .await;
         assert_eq!(r.missing_reason.as_deref(), Some("no_reply"));
         assert_eq!(r.value, serde_json::Value::Null);
     }
@@ -1327,6 +1576,8 @@ mod tests {
                             rosc::OscType::Float(start),
                             rosc::OscType::Float(start + 8.0),
                             rosc::OscType::Bool(false),
+                            rosc::OscType::Bool(true),
+                            rosc::OscType::Bool(false),
                             rosc::OscType::Float(0.0),
                             rosc::OscType::Float(0.0),
                         ]
@@ -1366,7 +1617,12 @@ mod tests {
     #[tokio::test]
     async fn a_clip_that_moved_mid_read_reports_the_literal_the_docs_quote() {
         let ctx = moving_clip_ctx(32.0, 28.0).await;
-        let r = execute(&ctx, "get_arrangement_notes", &json!({ "track": 0, "index": 0 })).await;
+        let r = execute(
+            &ctx,
+            "get_arrangement_notes",
+            &json!({ "track": 0, "index": 0 }),
+        )
+        .await;
         assert_eq!(
             r.missing_reason.as_deref(),
             Some("arrangement_clip_identity_changed")
@@ -1382,7 +1638,12 @@ mod tests {
         // The success path through the arm, and the field the schema now
         // tells the model to add to each note's start.
         let ctx = moving_clip_ctx(32.0, 32.0).await;
-        let r = execute(&ctx, "get_arrangement_notes", &json!({ "track": 0, "index": 0 })).await;
+        let r = execute(
+            &ctx,
+            "get_arrangement_notes",
+            &json!({ "track": 0, "index": 0 }),
+        )
+        .await;
         assert_eq!(r.missing_reason, None);
         assert_eq!(r.value["count"], json!(1));
         assert_eq!(r.value["name"], json!("«Verse»"));
@@ -1397,7 +1658,12 @@ mod tests {
         // Python slices from the END on one, so it would resolve inside
         // Live to a real but different device rather than naming none.
         let ctx = disconnected_ctx(one_track_mirror());
-        let result = execute(&ctx, "get_device_params", &json!({ "track": 0, "path": [-1] })).await;
+        let result = execute(
+            &ctx,
+            "get_device_params",
+            &json!({ "track": 0, "path": [-1] }),
+        )
+        .await;
         assert_eq!(result.missing_reason.as_deref(), Some("bad_arguments"));
     }
 
@@ -1441,7 +1707,9 @@ mod tests {
         assert_eq!(result.missing_reason, None);
         assert!(result.fresh);
         assert_eq!(result.value["name"], "«Bass»");
-        let fresh_as_of = result.fresh_as_of.expect("a mirror read must report an age");
+        let fresh_as_of = result
+            .fresh_as_of
+            .expect("a mirror read must report an age");
         assert!(fresh_as_of <= result.queried_at);
     }
 
@@ -1477,16 +1745,28 @@ mod tests {
     #[test]
     fn int_arg_accepts_an_integral_float_but_rejects_a_fractional_one() {
         // Real providers commonly emit floats for integer fields.
-        assert_eq!(int_arg(&serde_json::json!({ "track": 1.0 }), "track"), Some(1));
-        assert_eq!(int_arg(&serde_json::json!({ "track": -2.0 }), "track"), Some(-2));
+        assert_eq!(
+            int_arg(&serde_json::json!({ "track": 1.0 }), "track"),
+            Some(1)
+        );
+        assert_eq!(
+            int_arg(&serde_json::json!({ "track": -2.0 }), "track"),
+            Some(-2)
+        );
         assert_eq!(int_arg(&serde_json::json!({ "track": 1.5 }), "track"), None);
-        assert_eq!(int_arg(&serde_json::json!({ "track": 3 }), "track"), Some(3));
+        assert_eq!(
+            int_arg(&serde_json::json!({ "track": 3 }), "track"),
+            Some(3)
+        );
     }
 
     #[test]
     fn track_identity_reads_the_mirrored_name() {
         let coalescer = Mutex::new(one_track_mirror());
-        assert_eq!(track_identity(&coalescer, 0), Some(serde_json::json!("Bass")));
+        assert_eq!(
+            track_identity(&coalescer, 0),
+            Some(serde_json::json!("Bass"))
+        );
         assert_eq!(track_identity(&coalescer, 4), None);
     }
 
@@ -1566,7 +1846,10 @@ mod tests {
             missing_reason: Some("malformed_reply".to_string()),
         };
         let payload = rack_payload(&unobserved);
-        assert!(payload.get("is_rack").is_none(), "is_rack must be absent, not null");
+        assert!(
+            payload.get("is_rack").is_none(),
+            "is_rack must be absent, not null"
+        );
         assert!(payload.get("total_chains").is_none());
         assert_eq!(payload["chains"], json!([]));
     }
@@ -1634,7 +1917,10 @@ rack_marks_unavailable_for_tracks: 2 (their devices are listed, but which are Ra
         // Defaulting a missing track index to 0 would answer a question the
         // model did not ask, about a track it did not name.
         let ctx = disconnected_ctx(one_track_mirror());
-        for args in [serde_json::json!({}), serde_json::json!({ "track": "bass" })] {
+        for args in [
+            serde_json::json!({}),
+            serde_json::json!({ "track": "bass" }),
+        ] {
             let result = execute(&ctx, "get_track_detail", &args).await;
             assert_eq!(result.missing_reason.as_deref(), Some("bad_arguments"));
         }
@@ -1651,7 +1937,13 @@ rack_marks_unavailable_for_tracks: 2 (their devices are listed, but which are Ra
             .find(|t| t["function"]["name"] == "get_clips")
             .cloned()
             .expect("get_clips is in the schema");
-        assert_eq!(tool["function"]["parameters"]["required"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            tool["function"]["parameters"]["required"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[test]

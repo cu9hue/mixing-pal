@@ -62,11 +62,18 @@ fn decode_clips(reply: &[OscType]) -> Option<TrackClips> {
     for (slot, arg) in reply.get(1..)?.iter().enumerate() {
         match arg {
             OscType::Nil => {}
-            OscType::String(s) => clips.push(Clip { slot: slot as i32, name: fence(s) }),
+            OscType::String(s) => clips.push(Clip {
+                slot: slot as i32,
+                name: fence(s),
+            }),
             _ => return None,
         }
     }
-    Some(TrackClips { track, midi: None, clips })
+    Some(TrackClips {
+        track,
+        midi: None,
+        clips,
+    })
 }
 
 /// `/live/track/get/has_midi_input` replies `(track_index, flag)`.
@@ -140,7 +147,11 @@ pub async fn get_clips(q: Arc<LiveQuery>, num_tracks: i32, timeout: Duration) ->
             Ok(Err(_)) | Err(_) => missing.push(index),
         }
     }
-    ClipMap { tracks, missing, midi_missing }
+    ClipMap {
+        tracks,
+        missing,
+        midi_missing,
+    }
 }
 
 #[cfg(test)]
@@ -162,10 +173,19 @@ mod tests {
         ];
         let t = decode_clips(&reply).unwrap();
         assert_eq!(t.track, 3);
-        assert_eq!(t.clips, vec![
-            Clip { slot: 0, name: "«Verse Chords»".into() },
-            Clip { slot: 2, name: "«Fill»".into() },
-        ]);
+        assert_eq!(
+            t.clips,
+            vec![
+                Clip {
+                    slot: 0,
+                    name: "«Verse Chords»".into()
+                },
+                Clip {
+                    slot: 2,
+                    name: "«Fill»".into()
+                },
+            ]
+        );
     }
 
     #[test]
@@ -181,7 +201,11 @@ mod tests {
     #[test]
     fn decode_clips_fails_closed_on_an_unexpected_type() {
         // Guessing which entries are clips would invent a session grid.
-        let reply = vec![OscType::Int(0), OscType::String("A".into()), OscType::Int(9)];
+        let reply = vec![
+            OscType::Int(0),
+            OscType::String("A".into()),
+            OscType::Int(9),
+        ];
         assert!(decode_clips(&reply).is_none());
     }
 
@@ -197,9 +221,18 @@ mod tests {
         // pythonosc serialises a Python bool with the T/F type tags; an int
         // is just as unambiguous. Accepting only one would lose the flag on
         // a detail no test outside Live can settle.
-        assert_eq!(decode_midi_flag(&[OscType::Int(0), OscType::Bool(true)]), Some(true));
-        assert_eq!(decode_midi_flag(&[OscType::Int(0), OscType::Int(0)]), Some(false));
-        assert_eq!(decode_midi_flag(&[OscType::Int(0), OscType::String("y".into())]), None);
+        assert_eq!(
+            decode_midi_flag(&[OscType::Int(0), OscType::Bool(true)]),
+            Some(true)
+        );
+        assert_eq!(
+            decode_midi_flag(&[OscType::Int(0), OscType::Int(0)]),
+            Some(false)
+        );
+        assert_eq!(
+            decode_midi_flag(&[OscType::Int(0), OscType::String("y".into())]),
+            None
+        );
     }
 
     /// `clips[i]` is track i's slots (`None` for an empty slot), `midi[i]`
@@ -280,7 +313,9 @@ mod tests {
                             });
                         }
                     }
-                    let _ = live.send_to(app_port, "/live/track/get/clips/name", reply).await;
+                    let _ = live
+                        .send_to(app_port, "/live/track/get/clips/name", reply)
+                        .await;
                 }
                 for t in held_midi.drain(..) {
                     let flag = fake.midi.get(t as usize).copied().unwrap_or(true);
@@ -322,7 +357,11 @@ mod tests {
     #[tokio::test]
     async fn a_silent_track_is_named_in_missing_not_dropped() {
         let q = fake_live(FakeLive {
-            clips: vec![slots(&[Some("A")]), slots(&[Some("B")]), slots(&[Some("C")])],
+            clips: vec![
+                slots(&[Some("A")]),
+                slots(&[Some("B")]),
+                slots(&[Some("C")]),
+            ],
             midi: vec![true, true, true],
             silent: vec![1],
             ..Default::default()
@@ -330,7 +369,10 @@ mod tests {
         .await;
         let map = get_clips(q, 3, Duration::from_millis(300)).await;
         assert_eq!(map.missing, vec![1]);
-        assert_eq!(map.tracks.iter().map(|t| t.track).collect::<Vec<_>>(), vec![0, 2]);
+        assert_eq!(
+            map.tracks.iter().map(|t| t.track).collect::<Vec<_>>(),
+            vec![0, 2]
+        );
     }
 
     #[tokio::test]

@@ -42,7 +42,10 @@ class DeviceRangeHandler(AbletonOSCHandler):
             path = parse_path(raw_path)
             if path is None:
                 return None
-            device = resolve(tracks[track_index], path)
+            try:
+                device = resolve(tracks[track_index], path)
+            except (IndexError, AttributeError):
+                return None
             if device is None:
                 return None
             window = list(device.parameters)[start:start + span]

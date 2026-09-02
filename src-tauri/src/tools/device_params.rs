@@ -108,7 +108,11 @@ async fn fetch_window(
     // path their timeouts overlap in one window instead of stacking.
     let (names, values) = tokio::join!(
         q.query("/live/device/get/parameters/name_range", args(), timeout),
-        q.query("/live/device/get/parameters/value_string_range", args(), timeout),
+        q.query(
+            "/live/device/get/parameters/value_string_range",
+            args(),
+            timeout
+        ),
     );
     let (names, values) = (names?, values?);
 
@@ -129,7 +133,11 @@ async fn fetch_window(
             .into_iter()
             .zip(values)
             .enumerate()
-            .map(|(n, (name, value))| Param { index: start + n, name, value })
+            .map(|(n, (name, value))| Param {
+                index: start + n,
+                name,
+                value,
+            })
             .collect(),
     ))
 }
@@ -360,7 +368,10 @@ mod tests {
     }
 
     fn fake(total: usize) -> FakeDevice {
-        FakeDevice { total, ..Default::default() }
+        FakeDevice {
+            total,
+            ..Default::default()
+        }
     }
 
     /// Aborts every background task spawned by `fake_live_recording` when
@@ -506,7 +517,11 @@ mod tests {
 
     async fn fake_live(
         fake: FakeDevice,
-    ) -> (Arc<LiveQuery>, Arc<Mutex<HashMap<String, usize>>>, TaskGuard) {
+    ) -> (
+        Arc<LiveQuery>,
+        Arc<Mutex<HashMap<String, usize>>>,
+        TaskGuard,
+    ) {
         let (q, counts, _requests, guard) = fake_live_recording(fake).await;
         (q, counts, guard)
     }
@@ -554,9 +569,21 @@ mod tests {
         assert_eq!(
             d.params,
             vec![
-                Param { index: 0, name: "«Param 0»".into(), value: "«0.0 Hz»".into() },
-                Param { index: 1, name: "«Param 1»".into(), value: "«1.0 Hz»".into() },
-                Param { index: 2, name: "«Param 2»".into(), value: "«2.0 Hz»".into() },
+                Param {
+                    index: 0,
+                    name: "«Param 0»".into(),
+                    value: "«0.0 Hz»".into()
+                },
+                Param {
+                    index: 1,
+                    name: "«Param 1»".into(),
+                    value: "«1.0 Hz»".into()
+                },
+                Param {
+                    index: 2,
+                    name: "«Param 2»".into(),
+                    value: "«2.0 Hz»".into()
+                },
             ]
         );
         // One window: one name_range and one value_string_range.
@@ -573,7 +600,10 @@ mod tests {
 
         assert!(d.params.is_empty());
         assert_eq!(d.total, 0);
-        assert_eq!(d.missing_reason, None, "empty is a real answer, not missing data");
+        assert_eq!(
+            d.missing_reason, None,
+            "empty is a real answer, not missing data"
+        );
     }
 
     #[tokio::test]
@@ -598,7 +628,10 @@ mod tests {
 
         let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
 
-        assert!(!d.params.is_empty(), "the shrunken retry never reached the wire");
+        assert!(
+            !d.params.is_empty(),
+            "the shrunken retry never reached the wire"
+        );
         assert_eq!(d.missing_reason, None);
         assert_eq!(d.params.len(), 200);
         let c = counts.lock().unwrap();
@@ -734,7 +767,10 @@ mod tests {
         let path = path0();
 
         let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
-        assert_eq!(d.missing_reason.as_deref(), Some("device_identity_unverified"));
+        assert_eq!(
+            d.missing_reason.as_deref(),
+            Some("device_identity_unverified")
+        );
         assert!(d.params.is_empty());
     }
 
@@ -762,7 +798,10 @@ mod tests {
         let (q, _, _guard) = fake_live(f).await;
         let path = DevicePath::parse(Some(&serde_json::json!([9]))).unwrap();
 
-        assert_eq!(get_device_params(&q, 0, &path, FAST).await, Err(QueryError::NoReply));
+        assert_eq!(
+            get_device_params(&q, 0, &path, FAST).await,
+            Err(QueryError::NoReply)
+        );
     }
 
     #[tokio::test]
@@ -771,7 +810,11 @@ mod tests {
         // AND /live/device/get/num_parameters. The bracket reads identity
         // once before the paging loop and once after; anything more means a
         // caller crept back in.
-        let (q, counts, _guard) = fake_live(FakeDevice { total: 4, ..Default::default() }).await;
+        let (q, counts, _guard) = fake_live(FakeDevice {
+            total: 4,
+            ..Default::default()
+        })
+        .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
         let out = get_device_params(&q, 0, &path, FAST).await.unwrap();
         assert_eq!(out.params.len(), 4);
@@ -785,12 +828,18 @@ mod tests {
     async fn the_path_reaches_the_wire_as_a_dotted_string_not_an_index() {
         // The whole point of the change: a device inside a rack has no
         // top-level index, so an int here would name a different device.
-        let (q, _counts, requests, _guard) =
-            fake_live_recording(FakeDevice { total: 2, ..Default::default() }).await;
+        let (q, _counts, requests, _guard) = fake_live_recording(FakeDevice {
+            total: 2,
+            ..Default::default()
+        })
+        .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0, 4, 1]))).unwrap();
         let _ = get_device_params(&q, 3, &path, FAST).await;
         let seen = requests.lock().unwrap();
-        assert!(!seen.is_empty(), "no requests were recorded, so .all() would pass vacuously");
+        assert!(
+            !seen.is_empty(),
+            "no requests were recorded, so .all() would pass vacuously"
+        );
         assert!(seen.iter().all(|args| matches!(
             args.get(1),
             Some(OscType::String(s)) if s == "0.4.1"

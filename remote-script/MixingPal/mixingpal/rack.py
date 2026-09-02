@@ -38,7 +38,10 @@ class RackHandler(AbletonOSCHandler):
             path = parse_path(raw_path)
             if path is None:
                 return None, raw_path
-            return resolve(tracks[track_index], path), raw_path
+            try:
+                return resolve(tracks[track_index], path), raw_path
+            except (IndexError, AttributeError):
+                return None, raw_path
 
         def rack_chains(params: Tuple[Any]):
             device, raw_path = device_for(params)

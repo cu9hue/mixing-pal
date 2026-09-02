@@ -1,5 +1,5 @@
 use crate::osc::query::{LiveQuery, QueryError};
-use crate::tools::clip_notes::{self, ClipNotes, ARRANGEMENT_NOTES};
+use crate::tools::clip_notes::{self, ARRANGEMENT_NOTES, ClipNotes};
 use crate::tools::fence::fence;
 use rosc::OscType;
 use serde::Serialize;
@@ -53,6 +53,10 @@ pub struct ArrangementClip {
     pub start: f64,
     #[serde(rename = "length_beats")]
     pub length: f64,
+    /// A muted placement remains on the timeline but is not audible.
+    pub muted: bool,
+    /// Audio placements have timing but cannot yield MIDI notes.
+    pub is_midi: bool,
     /// Present only when Live repeats the clip's source MIDI. The note read
     /// lists source notes once; playback repeats them through `length_beats`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,14 +96,18 @@ pub struct ArrangementMap {
     pub changed: Vec<i32>,
 }
 
-/// `(track, start, total, *(name, start_time, end_time, looping, loop_start, loop_end))`.
+/// `(track, start, total, *(name, start_time, end_time, muted, is_midi,
+/// looping, loop_start, loop_end))`.
 ///
 /// Returns `(start, total, clips)` with each clip's index already resolved
 /// from the page offset, or `None` if the reply is not the page that was
-/// asked for or does not decode cleanly. Fails closed on a ragged triple:
+/// asked for or does not decode cleanly. Fails closed on a ragged record:
 /// guessing which field is missing would invent a timeline, and the model
 /// sends these indices back to read notes.
-fn decode_page(reply: &[OscType], expect_start: usize) -> Option<(usize, usize, Vec<ArrangementClip>)> {
+fn decode_page(
+    reply: &[OscType],
+    expect_start: usize,
+) -> Option<(usize, usize, Vec<ArrangementClip>)> {
     let int_at = |i: usize| match reply.get(i)? {
         OscType::Int(v) => Some(*v),
         _ => None,
@@ -111,28 +119,29 @@ fn decode_page(reply: &[OscType], expect_start: usize) -> Option<(usize, usize, 
     let total = usize::try_from(int_at(2)?).ok()?;
 
     let fields = reply.get(3..)?;
-    if fields.len() % 6 != 0 {
+    if fields.len() % 8 != 0 {
         return None;
     }
-    let mut clips = Vec::with_capacity(fields.len() / 6);
-    for (offset, record) in fields.chunks_exact(6).enumerate() {
+    let mut clips = Vec::with_capacity(fields.len() / 8);
+    for (offset, record) in fields.chunks_exact(8).enumerate() {
         let name = match &record[0] {
             OscType::String(s) if s.is_empty() => None,
             OscType::String(s) => Some(fence(s)),
             _ => return None,
         };
-        let looping = match &record[3] {
-            OscType::Bool(value) => *value,
-            OscType::Int(value) => *value != 0,
-            _ => return None,
-        };
+        let muted = as_bool(&record[3])?;
+        let is_midi = as_bool(&record[4])?;
+        let looping = as_bool(&record[5])?;
         let loop_region = if looping {
-            let start_beats = clip_notes::as_f64(&record[4])?;
-            let end_beats = clip_notes::as_f64(&record[5])?;
+            let start_beats = clip_notes::as_f64(&record[6])?;
+            let end_beats = clip_notes::as_f64(&record[7])?;
             if end_beats <= start_beats {
                 return None;
             }
-            Some(LoopRegion { start_beats, end_beats })
+            Some(LoopRegion {
+                start_beats,
+                end_beats,
+            })
         } else {
             None
         };
@@ -146,10 +155,20 @@ fn decode_page(reply: &[OscType], expect_start: usize) -> Option<(usize, usize, 
             name,
             start: start_beats,
             length: end_beats - start_beats,
+            muted,
+            is_midi,
             loop_region,
         });
     }
     Some((start, total, clips))
+}
+
+fn as_bool(field: &OscType) -> Option<bool> {
+    match field {
+        OscType::Bool(value) => Some(*value),
+        OscType::Int(value) => Some(*value != 0),
+        _ => None,
+    }
 }
 
 /// `(track, total, digest)` from the Remote Script's one-pass timeline
@@ -165,7 +184,11 @@ fn decode_fingerprint(reply: &[OscType], expect_track: i32) -> Option<(usize, St
         _ => return None,
     };
     let digest = match reply.get(2)? {
-        OscType::String(value) if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => value.clone(),
+        OscType::String(value)
+            if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            value.clone()
+        }
         _ => return None,
     };
     Some((total, digest))
@@ -292,7 +315,12 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
         }
     }
 
-    Some(TrackArrangement { track, clips, truncated, changed })
+    Some(TrackArrangement {
+        track,
+        clips,
+        truncated,
+        changed,
+    })
 }
 
 /// Every track's timeline, all tracks concurrently.
@@ -306,7 +334,11 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
 ///
 /// Never returns `Err`. One track failing is one track's worth of missing
 /// data, not a failed read of the set.
-pub async fn get_arrangement(q: Arc<LiveQuery>, num_tracks: i32, timeout: Duration) -> ArrangementMap {
+pub async fn get_arrangement(
+    q: Arc<LiveQuery>,
+    num_tracks: i32,
+    timeout: Duration,
+) -> ArrangementMap {
     let handles: Vec<_> = (0..num_tracks)
         .map(|track| {
             let q = q.clone();
@@ -328,50 +360,73 @@ pub async fn get_arrangement(q: Arc<LiveQuery>, num_tracks: i32, timeout: Durati
             _ => missing.push(index as i32),
         }
     }
-    ArrangementMap { tracks, missing, changed }
+    ArrangementMap {
+        tracks,
+        missing,
+        changed,
+    }
 }
 
 #[derive(Debug)]
 pub enum ArrangementNotesError {
     Query(QueryError),
+    /// An audio placement has no MIDI notes to read.
+    NotMidi,
     /// The clip at this index was not the same clip before and after the
     /// read. Its notes are dropped rather than returned under the wrong name.
     IdentityChanged,
 }
 
-/// `(track, index, name, start_time, length)` from
+/// `(track, index, name, start_time, end_time, muted, is_midi, looping,
+/// loop_start, loop_end)` from
 /// `/live/mixingpal/get/arrangement/identity`.
 ///
 /// The echoed `(track, index)` is not re-checked: the address is
 /// `KeyArity::Args(2)`, so the request table already refuses a reply that
 /// echoes anything else. Same as `device_params::decode_identity`, which
 /// this is modelled on.
-fn decode_identity(
-    reply: &[OscType],
-) -> Option<(Option<String>, f64, f64, Option<LoopRegion>)> {
+#[derive(Debug, Clone, PartialEq)]
+struct ArrangementIdentity {
+    name: Option<String>,
+    start: f64,
+    length: f64,
+    muted: bool,
+    is_midi: bool,
+    loop_region: Option<LoopRegion>,
+}
+
+fn decode_identity(reply: &[OscType]) -> Option<ArrangementIdentity> {
     let name = match reply.get(2)? {
         OscType::String(s) if s.is_empty() => None,
         OscType::String(s) => Some(fence(s)),
         _ => return None,
     };
-    let looping = match reply.get(5)? {
-        OscType::Bool(value) => *value,
-        OscType::Int(value) => *value != 0,
-        _ => return None,
-    };
+    let muted = as_bool(reply.get(5)?)?;
+    let is_midi = as_bool(reply.get(6)?)?;
+    let looping = as_bool(reply.get(7)?)?;
     let loop_region = if looping {
-        let start_beats = clip_notes::as_f64(reply.get(6)?)?;
-        let end_beats = clip_notes::as_f64(reply.get(7)?)?;
+        let start_beats = clip_notes::as_f64(reply.get(8)?)?;
+        let end_beats = clip_notes::as_f64(reply.get(9)?)?;
         if end_beats <= start_beats {
             return None;
         }
-        Some(LoopRegion { start_beats, end_beats })
+        Some(LoopRegion {
+            start_beats,
+            end_beats,
+        })
     } else {
         None
     };
     let start_beats = clip_notes::as_f64(reply.get(3)?)?;
     let end_beats = clip_notes::as_f64(reply.get(4)?)?;
-    (end_beats > start_beats).then_some((name, start_beats, end_beats - start_beats, loop_region))
+    (end_beats > start_beats).then_some(ArrangementIdentity {
+        name,
+        start: start_beats,
+        length: end_beats - start_beats,
+        muted,
+        is_midi,
+        loop_region,
+    })
 }
 
 /// One arrangement clip's identity: what makes "index 3" a particular clip
@@ -396,7 +451,7 @@ async fn identity_of(
     track: i32,
     index: i32,
     timeout: Duration,
-) -> Option<(Option<String>, f64, f64, Option<LoopRegion>)> {
+) -> Option<ArrangementIdentity> {
     q.query(
         "/live/mixingpal/get/arrangement/identity",
         vec![OscType::Int(track), OscType::Int(index)],
@@ -422,6 +477,8 @@ pub struct ArrangementClipNotes {
     pub name: Option<String>,
     pub start: f64,
     pub length: f64,
+    pub muted: bool,
+    pub is_midi: bool,
     pub loop_region: Option<LoopRegion>,
     pub notes: ClipNotes,
 }
@@ -445,6 +502,10 @@ pub async fn get_arrangement_notes(
         .await
         .ok_or(ArrangementNotesError::Query(QueryError::NoReply))?;
 
+    if !before.is_midi {
+        return Err(ArrangementNotesError::NotMidi);
+    }
+
     let notes = clip_notes::get_notes_at(q.clone(), ARRANGEMENT_NOTES, track, index, timeout)
         .await
         .map_err(ArrangementNotesError::Query)?;
@@ -456,8 +517,15 @@ pub async fn get_arrangement_notes(
     if before != after {
         return Err(ArrangementNotesError::IdentityChanged);
     }
-    let (name, start, length, loop_region) = before;
-    Ok(ArrangementClipNotes { name, start, length, loop_region, notes })
+    Ok(ArrangementClipNotes {
+        name: before.name,
+        start: before.start,
+        length: before.length,
+        muted: before.muted,
+        is_midi: before.is_midi,
+        loop_region: before.loop_region,
+        notes,
+    })
 }
 
 #[cfg(test)]
@@ -476,12 +544,16 @@ mod tests {
             OscType::String("Verse".into()),
             OscType::Float(32.0),
             OscType::Float(96.0),
+            OscType::Bool(false),
+            OscType::Bool(true),
             OscType::Bool(true),
             OscType::Float(0.0),
             OscType::Float(16.0),
             OscType::String("Fill".into()),
             OscType::Float(60.0),
             OscType::Float(64.0),
+            OscType::Bool(false),
+            OscType::Bool(true),
             OscType::Bool(false),
             OscType::Float(0.0),
             OscType::Float(0.0),
@@ -517,6 +589,8 @@ mod tests {
             OscType::Float(32.0),
             OscType::Float(40.0),
             OscType::Bool(false),
+            OscType::Bool(true),
+            OscType::Bool(false),
             OscType::Float(0.0),
             OscType::Float(0.0),
         ];
@@ -538,6 +612,8 @@ mod tests {
             OscType::String("Verse".into()),
             OscType::Float(0.0),
             OscType::Float(4.0),
+            OscType::Bool(false),
+            OscType::Bool(true),
             OscType::Bool(false),
             OscType::Float(0.0),
             OscType::Float(0.0),
@@ -648,7 +724,11 @@ mod tests {
         });
 
         tokio::spawn(async move {
-            let page = if fake.page == 0 { REQUEST_SPAN } else { fake.page };
+            let page = if fake.page == 0 {
+                REQUEST_SPAN
+            } else {
+                fake.page
+            };
             let mut held: Vec<Vec<OscType>> = Vec::new();
             let mut answered = 0usize;
             loop {
@@ -685,6 +765,8 @@ mod tests {
                     reply.push(OscType::String(name.clone()));
                     reply.push(OscType::Float(*at));
                     reply.push(OscType::Float(*end));
+                    reply.push(OscType::Bool(false));
+                    reply.push(OscType::Bool(true));
                     reply.push(OscType::Bool(false));
                     reply.push(OscType::Float(0.0));
                     reply.push(OscType::Float(0.0));
@@ -725,6 +807,7 @@ mod tests {
     async fn fake_live_with_moving_clip(
         first: (&'static str, f32),
         second: (&'static str, f32),
+        is_midi: bool,
     ) -> Arc<LiveQuery> {
         let live = OscSocket::bind_to(0, 0).await.unwrap();
         let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
@@ -765,6 +848,8 @@ mod tests {
                                     OscType::Float(start),
                                     OscType::Float(start + 8.0),
                                     OscType::Bool(false),
+                                    OscType::Bool(is_midi),
+                                    OscType::Bool(false),
                                     OscType::Float(0.0),
                                     OscType::Float(0.0),
                                 ],
@@ -776,7 +861,11 @@ mod tests {
                             .send_to(
                                 app_port,
                                 &req.addr,
-                                vec![req.args[0].clone(), req.args[1].clone(), OscType::Float(8.0)],
+                                vec![
+                                    req.args[0].clone(),
+                                    req.args[1].clone(),
+                                    OscType::Float(8.0),
+                                ],
                             )
                             .await;
                     }
@@ -813,7 +902,10 @@ mod tests {
     }
 
     fn timeline(names: &[(&str, f32, f32)]) -> Vec<(String, f32, f32)> {
-        names.iter().map(|(n, start, end)| ((*n).to_string(), *start, *end)).collect()
+        names
+            .iter()
+            .map(|(n, start, end)| ((*n).to_string(), *start, *end))
+            .collect()
     }
 
     #[tokio::test]
@@ -838,20 +930,26 @@ mod tests {
     #[tokio::test]
     async fn a_silent_track_is_named_in_missing_not_reported_empty() {
         let q = fake_live(FakeLive {
-            timelines: vec![timeline(&[("Beat", 0.0, 8.0)]), timeline(&[]), timeline(&[])],
+            timelines: vec![
+                timeline(&[("Beat", 0.0, 8.0)]),
+                timeline(&[]),
+                timeline(&[]),
+            ],
             silent: vec![1],
             ..Default::default()
         })
         .await;
         let map = get_arrangement(q, 3, Duration::from_millis(300)).await;
         assert_eq!(map.missing, vec![1]);
-        assert_eq!(map.tracks.iter().map(|t| t.track).collect::<Vec<_>>(), vec![0, 2]);
+        assert_eq!(
+            map.tracks.iter().map(|t| t.track).collect::<Vec<_>>(),
+            vec![0, 2]
+        );
     }
 
     #[tokio::test]
     async fn a_long_timeline_is_paged_until_the_total_is_reached() {
-        let long: Vec<(&str, f32, f32)> =
-            (0..10).map(|_| ("Clip", 0.0, 4.0)).collect();
+        let long: Vec<(&str, f32, f32)> = (0..10).map(|_| ("Clip", 0.0, 4.0)).collect();
         let q = fake_live(FakeLive {
             timelines: vec![timeline(&long)],
             page: 3,
@@ -868,8 +966,7 @@ mod tests {
     #[tokio::test]
     async fn a_timeline_longer_than_the_window_budget_reports_truncated() {
         // MAX_WINDOWS round trips at one record each cannot reach the total.
-        let long: Vec<(&str, f32, f32)> =
-            (0..100).map(|_| ("Clip", 0.0, 4.0)).collect();
+        let long: Vec<(&str, f32, f32)> = (0..100).map(|_| ("Clip", 0.0, 4.0)).collect();
         let q = fake_live(FakeLive {
             timelines: vec![timeline(&long)],
             page: 1,
@@ -879,7 +976,10 @@ mod tests {
         let map = get_arrangement(q, 1, QUERY_TIMEOUT).await;
         assert!(map.tracks[0].truncated);
         assert_eq!(map.tracks[0].clips.len(), MAX_WINDOWS);
-        assert!(map.missing.is_empty(), "a truncated read is not a missing one");
+        assert!(
+            map.missing.is_empty(),
+            "a truncated read is not a missing one"
+        );
     }
 
     #[tokio::test]
@@ -896,7 +996,10 @@ mod tests {
         })
         .await;
         let map = get_arrangement(q, 1, Duration::from_millis(300)).await;
-        assert!(map.missing.is_empty(), "a partial read is not a missing one");
+        assert!(
+            map.missing.is_empty(),
+            "a partial read is not a missing one"
+        );
         assert_eq!(map.tracks[0].clips.len(), 3);
         assert!(map.tracks[0].truncated);
         assert!(!map.tracks[0].changed, "nothing said the timeline moved");
@@ -941,7 +1044,10 @@ mod tests {
         // well as suspect. `truncated: false` here would read as "this is
         // the whole timeline".
         assert!(map.tracks[0].truncated);
-        assert!(map.missing.is_empty(), "a changed timeline is not a missing one");
+        assert!(
+            map.missing.is_empty(),
+            "a changed timeline is not a missing one"
+        );
     }
 
     #[tokio::test]
@@ -965,21 +1071,25 @@ mod tests {
             S("Verse".into()),
             Float(32.0),
             Float(40.0),
+            OscType::Bool(false),
+            OscType::Bool(true),
             OscType::Bool(true),
             Float(0.0),
             Float(4.0),
         ];
         assert_eq!(
             decode_identity(&good),
-            Some((
-                Some(fence("Verse")),
-                32.0,
-                8.0,
-                Some(LoopRegion {
+            Some(ArrangementIdentity {
+                name: Some(fence("Verse")),
+                start: 32.0,
+                length: 8.0,
+                muted: false,
+                is_midi: true,
+                loop_region: Some(LoopRegion {
                     start_beats: 0.0,
                     end_beats: 4.0,
                 }),
-            ))
+            })
         );
 
         // Unnamed is the normal case on the timeline, and it must not
@@ -988,15 +1098,17 @@ mod tests {
         unnamed[2] = S("".into());
         assert_eq!(
             decode_identity(&unnamed),
-            Some((
-                None,
-                32.0,
-                8.0,
-                Some(LoopRegion {
+            Some(ArrangementIdentity {
+                name: None,
+                start: 32.0,
+                length: 8.0,
+                muted: false,
+                is_midi: true,
+                loop_region: Some(LoopRegion {
                     start_beats: 0.0,
                     end_beats: 4.0,
                 }),
-            ))
+            })
         );
 
         // Truncated before the name, the start, and the length.
@@ -1040,7 +1152,7 @@ mod tests {
         // A clip index that survives being reused for a different clip --
         // e.g. the old one deleted and a new one dropped in at the same
         // slot -- keeps its start and length but not its name.
-        let q = fake_live_with_moving_clip(("Verse", 32.0), ("Chorus", 32.0)).await;
+        let q = fake_live_with_moving_clip(("Verse", 32.0), ("Chorus", 32.0), true).await;
         let err = get_arrangement_notes(q, 0, 0, Duration::from_millis(300))
             .await
             .unwrap_err();
@@ -1059,7 +1171,7 @@ mod tests {
         // taken across the edit returning a neighbour's notes as if they
         // were the asked-for clip's, and one the model cannot detect for
         // itself.
-        let q = fake_live_with_moving_clip(("Verse", 32.0), ("Verse", 28.0)).await;
+        let q = fake_live_with_moving_clip(("Verse", 32.0), ("Verse", 28.0), true).await;
         let err = get_arrangement_notes(q, 0, 0, Duration::from_millis(300))
             .await
             .unwrap_err();
@@ -1074,8 +1186,10 @@ mod tests {
         // clip that answers the SAME (name, start) both times -- nothing
         // moved it -- is what most reads look like, and this is the only
         // test that pins the bracket letting one through.
-        let q = fake_live_with_moving_clip(("Verse", 32.0), ("Verse", 32.0)).await;
-        let result = get_arrangement_notes(q, 0, 0, Duration::from_millis(300)).await.unwrap();
+        let q = fake_live_with_moving_clip(("Verse", 32.0), ("Verse", 32.0), true).await;
+        let result = get_arrangement_notes(q, 0, 0, Duration::from_millis(300))
+            .await
+            .unwrap();
         assert_eq!(result.name.as_deref(), Some("«Verse»"));
         assert_eq!(result.start, 32.0);
         assert_eq!(
@@ -1089,5 +1203,14 @@ mod tests {
                 mute: false,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn an_audio_arrangement_placement_never_starts_a_midi_note_read() {
+        let q = fake_live_with_moving_clip(("Audio", 0.0), ("Audio", 0.0), false).await;
+        let err = get_arrangement_notes(q, 0, 0, Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ArrangementNotesError::NotMidi));
     }
 }

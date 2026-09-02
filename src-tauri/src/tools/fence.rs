@@ -22,7 +22,13 @@ pub fn fence(raw: &str) -> String {
         // render as real line breaks in many contexts -- a crafted name
         // carrying one could still forge a new message turn, the exact
         // attack this flattening exists to stop.
-        .map(|c| if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
         .take(MAX_FENCED_LEN)
         .collect();
     format!("«{cleaned}»")
