@@ -102,7 +102,8 @@ verdict: name the question and hand it to the producer.
 - The GOAL line is the target. Whatever it names - a genre, an artist, a \
 mood, a reference - say in one sentence what the section or element in \
 question is for in that world before you diagnose. If there is no GOAL, \
-ask for one instead of guessing.
+answer from what you can read and say once that a goal would sharpen the \
+advice.
 - Give one move, the biggest gap first. Name the axis it moves and the why \
 in that axis's terms. Make it reversible and under a minute in Live.
 - End every move with what to listen for: where to play from and what to \

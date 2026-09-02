@@ -585,6 +585,14 @@ Assertions are on which tools the model called, not on its wording. A red
 scenario is a finding: read the answer in the failure message before deciding
 whether the prompt or the assertion is wrong.
 
+On the first real run, three scenarios see data no previous run would have.
+The fake Live's arrangement replies were short two fields per record since
+the loop-region change (wire 7) and were being refused by the decoder, so
+`an arrangement question reads the timeline before answering` had been
+asserting a call while the model read a refusal; and the mirror now carries
+fader, mute, and solo for every fixture track. Neither changes what pass
+means; both change what the model is answering from.
+
 Date: ___________  Model: ___________  Base URL: ___________
 
 - [ ] a harmony question reads the clip before answering
@@ -626,6 +634,12 @@ A red scenario prints every run's answer and the judge's reason per
 property. A property failing three of three runs is a prompt finding. One
 of three is noise the majority absorbs. A reason beginning `no verdict;
 judge said:` means the judge did not return JSON: check the judge model.
+
+A panic reading `the judge answered` means the judge endpoint refused the
+request outright (a bad key, an unknown `MIXINGPAL_JUDGE_MODEL`, a wrong
+base URL), not a red scenario; a run that ran out of round trips or
+returned an empty answer counts as a failed run in the tally and shows its
+reason in the report.
 
 The mentor answers in `craft.rs` illustrate the shape of a good answer. The
 claims they make about garage or techno are not facts this repo stands

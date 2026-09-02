@@ -13,11 +13,16 @@
 //!
 //! Unlike `evals.rs`, these assert on prose, through a judge. Wording is not
 //! stable across runs, so each scenario passes on a majority of three.
+//!
+//! Every mentor answer in this file illustrates the shape of a good answer.
+//! The claims they make about garage, techno, or any style are not facts
+//! this repo stands behind, and the judge is told not to grade them.
 
 mod common;
 
 use mixing_pal_lib::eval_api::*;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 fn fixture() -> Value {
@@ -70,8 +75,6 @@ async fn the_fake_live_serves_the_craft_fixture_in_full() {
     assert!(comp.contains("Threshold") && comp.contains("-18.0 dB"), "{comp}");
 }
 
-use std::collections::BTreeMap;
-
 /// One thing the judge looks for. `description` is what the judge reads;
 /// `key` is what it answers under.
 struct Property {
@@ -83,6 +86,9 @@ const SECTION_PURPOSE: Property = Property {
     key: "section_purpose",
     description: "States, in about one sentence, what the section or element in question is for in the world the GOAL line names. Judge only that the statement is present and tied to the GOAL. Never judge whether it is true.",
 };
+// The readable axes named here are the spec's Layer 2 table, the same list
+// `CRAFT_AXES` in `src-tauri/src/model.rs` pins to the prompt. Change one,
+// change all three.
 const NAMED_AXIS: Property = Property {
     key: "named_axis",
     description: "Diagnoses on one named axis: energy contour, contrast at section boundaries, density and space, repetition against variation, low-end ownership, rhythmic relationship, or harmonic movement.",
@@ -131,6 +137,10 @@ const MOVEMENT_DESIRABLE: Property = Property {
     key: "movement_desirable",
     description: "Treats the pad's harmonic movement, the chords changing, as something to keep or increase rather than to reduce or remove.",
 };
+const MOVEMENT_REDUCED: Property = Property {
+    key: "movement_reduced",
+    description: "Treats the pad's harmonic movement, the chords changing, as something to reduce, hold still, or remove.",
+};
 
 const JUDGE_PROMPT: &str = "\
 You grade one answer from a music-production copilot against a list of \
@@ -174,9 +184,14 @@ async fn judge(
         .map(|p| format!("- {}: {}", p.key, p.description))
         .collect::<Vec<_>>()
         .join("\n");
+    let mentor_block = if mentor.is_empty() {
+        "MENTOR ANSWER\n(none for this scenario: score the answer on its own)".to_string()
+    } else {
+        format!("MENTOR ANSWER (the bar, not the key)\n{mentor}")
+    };
     let user = format!(
         "QUESTION\n{question}\n\nCONTEXT BLOCK THE COPILOT SAW\n{context}\n\n\
-         MENTOR ANSWER (the bar, not the key)\n{mentor}\n\n\
+         {mentor_block}\n\n\
          ANSWER UNDER TEST\n{answer}\n\nPROPERTIES\n{list}"
     );
     let s = judge_settings();
@@ -225,8 +240,23 @@ struct Run {
 async fn run_once(sc: &Scenario) -> Run {
     let context = context_for(sc.goal);
     let turn = common::ask(fixture(), &context, sc.question).await;
-    assert!(!turn.truncated, "ran out of round trips: {:?}", turn.called);
-    assert!(!turn.answer.trim().is_empty(), "the provider returned an empty final message");
+    // A truncated or empty run is a failed run, not a panic: it fails every
+    // property, with the reason recorded, so `tally`'s report shows why.
+    let failure = if turn.truncated {
+        Some("ran out of round trips")
+    } else if turn.answer.trim().is_empty() {
+        Some("empty final message")
+    } else {
+        None
+    };
+    if let Some(reason) = failure {
+        let verdicts = sc
+            .must
+            .iter()
+            .map(|p| (p.key.to_string(), (false, reason.to_string())))
+            .collect();
+        return Run { answer: reason.to_string(), called: turn.called, verdicts };
+    }
     let verdicts = judge(sc.question, &context, &turn.answer, sc.mentor, sc.must).await;
     Run { answer: turn.answer, called: turn.called, verdicts }
 }
@@ -335,35 +365,34 @@ async fn is_the_mix_okay() {
 
 // Scenario 5. Same set, same question, two goals. This is the eval that
 // proves the GOAL line does work: the answers must differ on harmonic
-// movement. Neither mentor's claim about its style is a fact this repo
-// holds; each illustrates the shape of an answer that took its goal
-// seriously.
+// movement. No mentor, because the judge is scoring exactly the property a
+// mentor would give away.
 const CHORDS_GARAGE: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: None,
-    mentor: "Keep them. A minor to F trading every two beats is the dark, 2am pull; the movement is the mood. Nothing to change on the pad. The gap is elsewhere: the Bass track is still empty.",
+    mentor: "",
     must: &[MOVEMENT_DESIRABLE],
 };
 
 const CHORDS_TECHNO: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: Some("minimal techno, peak time"),
-    mentor: "Stop them moving. For peak-time minimal techno the pad's job is a held texture, not a progression. Keep one chord, the A minor, through the drop and let the drums and a filter carry the movement. Play 64 to 96 and listen for whether it locks in harder once the harmony stands still. The drums are fine; leave them.",
-    must: &[MOVEMENT_DESIRABLE],
+    mentor: "",
+    must: &[MOVEMENT_REDUCED],
 };
 
 #[tokio::test]
 async fn the_goal_changes_the_advice() {
     let (garage_yes, garage_report) = tally(&CHORDS_GARAGE, |_| true).await;
     let (techno_yes, techno_report) = tally(&CHORDS_TECHNO, |_| true).await;
-    // Garage: movement desirable on a majority. Techno: NOT desirable on
-    // a majority. The scenario passes only when the two verdicts differ.
+    // Both arms are positive properties, each passing on a majority, and
+    // the scenario passes only when both do.
     assert!(
         garage_yes * 2 > RUNS,
         "under the garage goal, movement should read as desirable: {garage_yes}/{RUNS}{garage_report}"
     );
     assert!(
-        (RUNS - techno_yes) * 2 > RUNS,
-        "under the techno goal, movement should not read as desirable: {techno_yes}/{RUNS}{techno_report}"
+        techno_yes * 2 > RUNS,
+        "under the techno goal, movement should read as something to reduce: {techno_yes}/{RUNS}{techno_report}"
     );
 }

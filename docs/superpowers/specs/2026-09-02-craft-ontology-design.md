@@ -93,14 +93,14 @@ the test.
 | Axis | Question it asks | Tag | Read from |
 | --- | --- | --- | --- |
 | Energy contour | Does energy rise, drop, or hold on purpose across sections? | Readable, coarse | `get_arrangement`: which tracks play in which section |
-| Contrast at boundaries | Does something change when a section changes? | Readable | `get_arrangement`: entries and exits at each locator |
+| Contrast at section boundaries | Does something change when a section changes? | Readable | `get_arrangement`: entries and exits at each locator |
 | Density and space | How many things play at once, and in which registers? | Readable | `get_arrangement`, `get_clip_notes`, `get_arrangement_notes`: note counts and pitch ranges |
-| Repetition and variation | What repeats, and what breaks the repeat? | Readable | Notes and `loop_region`, clip lengths on the timeline |
+| Repetition against variation | What repeats, and what breaks the repeat? | Readable | Notes and `loop_region`, clip lengths on the timeline |
 | Low-end ownership | Does one element own the sub, and do the rest stay out? | Readable, partial | Notes below a pitch threshold; EQ high-pass settings from `get_device_params`. Timbre is not readable |
 | Rhythmic relationship | Which elements lock and which push? | Readable, coarse | Note starts against the grid |
 | Harmonic movement | Static, drifting, or moving, and does that match the intent? | Readable | Notes |
 | Groove and feel | Does it swing, does it sit? | Ear-only | Nothing |
-| Tone, loudness, masking | How it sounds | Ear-only | Nothing. Layer 1 already forbids claims here |
+| Tone, loudness, and masking | How it sounds | Ear-only | Nothing. Layer 1 already forbids claims here |
 
 "Coarse" and "partial" mean the model may make a claim but must say what the
 claim rests on. "Pad and drums are the only things in the intro" is a
@@ -117,7 +117,8 @@ What a good answer is. Four rules.
    artist, a mood, state what the section in question is supposed to do in
    that world before diagnosing. This is the genre prior, it is one sentence,
    and its content comes from the model, not from us. If the goal is empty,
-   ask for it instead of guessing.
+   answer from what can be read and say once that a goal would sharpen the
+   advice; never refuse to answer for want of one.
 2. **One move, biggest gap first.** Rank silently, give one. It names the
    axis it moves and gives the why in that axis's terms. It is reversible and
    takes under a minute in Live.
