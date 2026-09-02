@@ -593,3 +593,48 @@ Date: ___________  Model: ___________  Base URL: ___________
 - [ ] a silent track is reported as unread, not as empty
 - [ ] an audio track is not reported as having no notes
 - [ ] an arrangement question reads the timeline before answering
+
+## Craft evals
+
+Status: **PENDING-USER**. `src-tauri/tests/craft.rs` is written and its
+no-network test passes (`the_fake_live_serves_the_craft_fixture_in_full`),
+but the five scenarios below have not been run against a real provider by
+the suite that wrote them, for the same reason as the model evals above.
+
+These check the *shape* of the advice, not which tools were called: a judge
+model scores each answer against named properties (one move, the why, what
+to listen for, what to leave alone, and so on), and a scenario passes on a
+majority of three runs. The spec is
+`docs/superpowers/specs/2026-09-02-craft-ontology-design.md`.
+
+Run before each release, after the model evals:
+
+```bash
+cd src-tauri && MIXINGPAL_EVAL_BASE_URL=https://openrouter.ai/api/v1 \
+  MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
+  cargo test --features evals --test craft -- --test-threads=1
+```
+
+`MIXINGPAL_JUDGE_MODEL` names the judge; it defaults to the eval model. A
+judge should be at least as strong as the model it grades.
+
+This costs more than the model evals: 6 scenario tallies of 3 runs each
+(the goal scenario tallies twice), so 18 turns of up to 6 round trips plus
+18 judge calls, roughly 126 completions in the worst case.
+
+A red scenario prints every run's answer and the judge's reason per
+property. A property failing three of three runs is a prompt finding. One
+of three is noise the majority absorbs. A reason beginning `no verdict;
+judge said:` means the judge did not return JSON: check the judge model.
+
+The mentor answers in `craft.rs` illustrate the shape of a good answer. The
+claims they make about garage or techno are not facts this repo stands
+behind, and the judge is told not to grade them.
+
+Date: ___________  Model: ___________  Judge: ___________
+
+- [ ] why does the drop fall flat
+- [ ] what should I do next
+- [ ] is the pad too busy
+- [ ] is the mix okay
+- [ ] the goal changes the advice

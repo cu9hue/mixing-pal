@@ -13,7 +13,6 @@
 //!
 //! Unlike `evals.rs`, these assert on prose, through a judge. Wording is not
 //! stable across runs, so each scenario passes on a majority of three.
-#![allow(dead_code)] // property constants land ahead of the scenarios that use them
 
 mod common;
 
@@ -278,4 +277,93 @@ async fn why_does_the_drop_fall_flat() {
         run.called.iter().any(|c| c == "get_arrangement")
     })
     .await;
+}
+
+// Scenario 2. One move, ranked, with two things named as enough.
+const WHAT_NEXT: Scenario = Scenario {
+    question: "what should I do next?",
+    goal: None,
+    mentor: "The biggest hole is the low end: the Bass track has nothing on it, and at 132 in garage the sub is what the drop stands on. Write a bass part for 64 to 96, root notes following the pad's A and F, and keep it out of the intro. Then play 60 to 68 and listen for whether the drop lands. The drums and the pad are fine as they are; do not touch them yet.",
+    must: &[ONE_MOVE, RANKED, WHY, LISTEN_FOR, LEAVE_IT],
+};
+
+#[tokio::test]
+async fn what_should_i_do_next() {
+    passes_majority(&WHAT_NEXT, |run| {
+        run.called.iter().any(|c| c == "get_arrangement")
+    })
+    .await;
+}
+
+// Scenario 3. Nothing is wrong. The right answer reads the notes and says
+// leave it; an invented change fails.
+const PAD_TOO_BUSY: Scenario = Scenario {
+    question: "is the pad too busy?",
+    goal: None,
+    mentor: "No. Two triads trading every two beats is one idea, held, and for dark garage that stillness is the point. It never plays under the vocal either, so nothing is fighting it. Leave it. If anything feels crowded later, it will be in the drop, and the pad is not there.",
+    must: &[VERDICT_LEAVE, READABLE_SOURCE, NO_INVENTED_CHANGE],
+};
+
+#[tokio::test]
+async fn is_the_pad_too_busy() {
+    // The verdict has to rest on the notes, so a read of them is required.
+    // Either read path is fine: the session clip or the timeline clip.
+    passes_majority(&PAD_TOO_BUSY, |run| {
+        run.called
+            .iter()
+            .any(|c| c == "get_clip_notes" || c == "get_arrangement_notes")
+    })
+    .await;
+}
+
+// Scenario 4. Ear-only axes handed over, one readable observation with its
+// source, and no problem invented to fill the answer.
+const MIX_OKAY: Scenario = Scenario {
+    question: "is the mix okay?",
+    goal: None,
+    mentor: "From the settings, there is almost no processing to judge: one compressor on the vocal and nothing on the pad, drums, or bass. Levels sit in a normal spread. Whether it is loud enough or whether anything masks is yours to hear; I cannot. The one thing I can see is that the pad has no high-pass, so once you write the bass the two will share the low end. That is the first mix move, and it waits for the bass. For now there is nothing to fix.",
+    must: &[EAR_ONLY_HANDED_OVER, READABLE_SOURCE, NO_INVENTED_CHANGE, CONDITIONAL_MOVE],
+};
+
+#[tokio::test]
+async fn is_the_mix_okay() {
+    passes_majority(&MIX_OKAY, |run| {
+        run.called.iter().any(|c| c == "get_device_chains")
+    })
+    .await;
+}
+
+// Scenario 5. Same set, same question, two goals. This is the eval that
+// proves the GOAL line does work: the answers must differ on harmonic
+// movement. Neither mentor's claim about its style is a fact this repo
+// holds; each illustrates the shape of an answer that took its goal
+// seriously.
+const CHORDS_GARAGE: Scenario = Scenario {
+    question: "the pad chords, keep or change?",
+    goal: None,
+    mentor: "Keep them. A minor to F trading every two beats is the dark, 2am pull; the movement is the mood. Nothing to change on the pad. The gap is elsewhere: the Bass track is still empty.",
+    must: &[MOVEMENT_DESIRABLE],
+};
+
+const CHORDS_TECHNO: Scenario = Scenario {
+    question: "the pad chords, keep or change?",
+    goal: Some("minimal techno, peak time"),
+    mentor: "Stop them moving. For peak-time minimal techno the pad's job is a held texture, not a progression. Keep one chord, the A minor, through the drop and let the drums and a filter carry the movement. Play 64 to 96 and listen for whether it locks in harder once the harmony stands still. The drums are fine; leave them.",
+    must: &[MOVEMENT_DESIRABLE],
+};
+
+#[tokio::test]
+async fn the_goal_changes_the_advice() {
+    let (garage_yes, garage_report) = tally(&CHORDS_GARAGE, |_| true).await;
+    let (techno_yes, techno_report) = tally(&CHORDS_TECHNO, |_| true).await;
+    // Garage: movement desirable on a majority. Techno: NOT desirable on
+    // a majority. The scenario passes only when the two verdicts differ.
+    assert!(
+        garage_yes * 2 > RUNS,
+        "under the garage goal, movement should read as desirable: {garage_yes}/{RUNS}{garage_report}"
+    );
+    assert!(
+        (RUNS - techno_yes) * 2 > RUNS,
+        "under the techno goal, movement should not read as desirable: {techno_yes}/{RUNS}{techno_report}"
+    );
 }
