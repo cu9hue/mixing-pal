@@ -31,8 +31,10 @@ from ..abletonosc.handler import AbletonOSCHandler
 # Version 7 adds session loop metadata, so source notes are never presented
 # as the whole clip's playback. Version 8 makes arrangement timing use the
 # clip's end_time rather than its source-loop length. Version 9 adds each
-# arrangement placement's mute and MIDI type.
-WIRE_VERSION = 9
+# arrangement placement's mute and MIDI type. Version 10 adds a Drum Rack
+# pad's loaded sample-file name when Live exposes one. Version 11 marks Rack
+# devices inside a Rack listing, so nested Drum Racks can be opened.
+WIRE_VERSION = 11
 
 
 class VersionHandler(AbletonOSCHandler):

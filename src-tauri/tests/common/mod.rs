@@ -526,9 +526,10 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                 }
                 "/live/mixingpal/get/rack/chains" => {
                     // `(track, path, start, total_chains, can_have_chains, *records)`,
-                    // each record `name, note, mute, solo, total_devices,
-                    // reported_devices, *names` -- the shape
-                    // `rack_contents::decode_window` reads.
+                    // each record `name, note, mute, solo, sample_name,
+                    // total_devices, reported_devices, *(name, is_rack)` --
+                    // the shape `rack_contents::decode_window` reads. The
+                    // fixture names no samples and nests no racks.
                     let Some((path, detail)) = device_detail() else {
                         continue;
                     };
@@ -553,10 +554,12 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         reply.push(OscType::Int(c["note"].as_i64().unwrap_or(-1) as i32));
                         reply.push(OscType::Int(0));
                         reply.push(OscType::Int(0));
+                        reply.push(OscType::Nil);
                         reply.push(OscType::Int(devices.len() as i32));
                         reply.push(OscType::Int(devices.len() as i32));
                         for d in &devices {
                             reply.push(OscType::String(d.as_str().unwrap().to_string()));
+                            reply.push(OscType::Int(0));
                         }
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;

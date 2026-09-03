@@ -48,6 +48,7 @@ class FakeDevice(object):
         self.parameters = list(parameters)
         if chains is not None:
             self.chains = chains
+            self.can_have_chains = True
         if drum_pads is not None:
             self.drum_pads = drum_pads
             self.can_have_drum_pads = True
@@ -115,7 +116,7 @@ class ChainsOfTests(unittest.TestCase):
     def test_an_audio_effect_rack_lists_its_chains_with_no_note(self):
         rack = FakeDevice("Rack", chains=[FakeChain("Dry"), FakeChain("Wet", solo=True)])
         got = rack_paths.chains_of(rack)
-        self.assertEqual([(n, name, m, s) for (_, n, name, m, s) in got],
+        self.assertEqual([(n, name, m, s) for (_, n, name, m, s, _) in got],
                          [(-1, "Dry", False, False), (-1, "Wet", False, True)])
 
     def test_a_drum_rack_enumerates_pads_so_the_note_travels_with_its_own_chain(self):
@@ -132,7 +133,7 @@ class ChainsOfTests(unittest.TestCase):
             FakePad(42, "Hats", [hats], mute=True),
         ])
         got = rack_paths.chains_of(rack)
-        self.assertEqual([(c, n, name, m) for (c, n, name, m, _) in got],
+        self.assertEqual([(c, n, name, m) for (c, n, name, m, _, _) in got],
                          [(kick, 36, "Kick", False), (hats, 42, "Hats", True)])
 
     def test_a_kit_of_entirely_empty_pads_lists_nothing(self):
@@ -175,17 +176,24 @@ class WindowTests(unittest.TestCase):
     def entries(self, count, devices_each=2, name="Chain"):
         return [
             (FakeChain(name, [FakeDevice("Dev%d" % d) for d in range(devices_each)]),
-             -1, "%s%d" % (name, i), False, False)
+             -1, "%s%d" % (name, i), False, False, None)
             for i in range(count)
         ]
 
     def test_a_record_reports_its_true_device_count_and_how_many_it_carries(self):
         entries = self.entries(1, devices_each=40)
         (record,) = rack_paths.build_window(entries, 0, 1)
-        # name, note, mute, solo, total_devices, reported_devices, *names
-        self.assertEqual(record[4], 40)
-        self.assertEqual(record[5], rack_paths.MAX_DEVICES_PER_CHAIN)
-        self.assertEqual(len(record), 6 + rack_paths.MAX_DEVICES_PER_CHAIN)
+        # name, note, mute, solo, sample, total_devices, reported_devices,
+        # then (name, is_rack) pairs.
+        self.assertEqual(record[5], 40)
+        self.assertEqual(record[6], rack_paths.MAX_DEVICES_PER_CHAIN)
+        self.assertEqual(len(record), 7 + 2 * rack_paths.MAX_DEVICES_PER_CHAIN)
+
+    def test_a_nested_rack_is_marked_in_its_parent_chain_record(self):
+        nested = FakeDevice("Combine Kit", chains=[FakeChain("Pads")])
+        entry = (FakeChain("Parent", [nested]), -1, "Parent", False, False, None)
+        record = rack_paths.chain_record(entry)
+        self.assertEqual(record[7:], ("Combine Kit", 1))
 
     def test_the_estimate_covers_a_multi_byte_chain_record(self):
         # pythonosc encodes a string with `val.encode('utf-8')`, so a chain
@@ -196,7 +204,7 @@ class WindowTests(unittest.TestCase):
         record = rack_paths.chain_record(
             (FakeChain("\U0001F3B9\U0001F3B9\U0001F3B9",
                        [FakeDevice("コンプレッサー")]),
-             -1, "\U0001F3B9\U0001F3B9\U0001F3B9", False, False))
+             -1, "\U0001F3B9\U0001F3B9\U0001F3B9", False, False, None))
         self.assertGreaterEqual(
             rack_paths.record_bytes(record), encoded_arg_bytes(record))
 
@@ -204,7 +212,7 @@ class WindowTests(unittest.TestCase):
         # What the cap actually protects: a whole window, not one record.
         name = "é" * rack_paths.NAME_CAP
         entries = [(FakeChain(name, [FakeDevice(name) for _ in range(4)]),
-                    -1, name, False, False) for _ in range(64)]
+                    -1, name, False, False, None) for _ in range(64)]
         window = rack_paths.build_window(entries, 0, 64)
         encoded = encoded_arg_bytes([f for r in window for f in r])
         self.assertLessEqual(encoded, rack_paths.MAX_REPLY_BYTES)
@@ -231,11 +239,11 @@ class WindowTests(unittest.TestCase):
         # loop makes no progress and spins until MAX_WINDOWS.
         huge = [(FakeChain("Wide", [FakeDevice("D" * rack_paths.NAME_CAP)
                                     for _ in range(rack_paths.MAX_DEVICES_PER_CHAIN)]),
-                 -1, "Wide", False, False)]
+                 -1, "Wide", False, False, None)]
         window = rack_paths.build_window(huge, 0, 1, budget=400)
         self.assertEqual(len(window), 1)
-        self.assertEqual(window[0][4], rack_paths.MAX_DEVICES_PER_CHAIN)  # truth kept
-        self.assertLess(window[0][5], rack_paths.MAX_DEVICES_PER_CHAIN)   # payload cut
+        self.assertEqual(window[0][5], rack_paths.MAX_DEVICES_PER_CHAIN)  # truth kept
+        self.assertLess(window[0][6], rack_paths.MAX_DEVICES_PER_CHAIN)   # payload cut
         self.assertLessEqual(rack_paths.record_bytes(window[0]), 400)
 
     def test_names_are_capped_so_a_record_always_fits(self):
@@ -243,11 +251,11 @@ class WindowTests(unittest.TestCase):
         # fixed fields plus a capped name, far inside one datagram.
         long_name = "x" * 5000
         long_device_name = "y" * (rack_paths.NAME_CAP + 100)
-        entries = [(FakeChain(long_name, [FakeDevice(long_device_name)]), -1, long_name, False, False)]
+        entries = [(FakeChain(long_name, [FakeDevice(long_device_name)]), -1, long_name, False, False, None)]
         (record,) = rack_paths.build_window(entries, 0, 1)
         self.assertEqual(len(record[0]), rack_paths.NAME_CAP)  # chain name capped
-        # record[6] is the first (and only) device name in the tuple
-        self.assertEqual(len(record[6]), rack_paths.NAME_CAP)  # device name capped
+        # record[7] is the first (and only) device name in the tuple.
+        self.assertEqual(len(record[7]), rack_paths.NAME_CAP)  # device name capped
 
     def test_a_start_past_the_end_returns_nothing_rather_than_wrapping(self):
         self.assertEqual(rack_paths.build_window(self.entries(3), 10, 8), [])

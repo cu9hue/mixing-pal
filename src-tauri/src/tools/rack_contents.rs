@@ -1,4 +1,5 @@
 use crate::osc::query::{LiveQuery, QueryError};
+use crate::tools::device_chains::RACK_SUFFIX;
 use crate::tools::device_params::device_identity;
 use crate::tools::fence::fence;
 use crate::tools::path::DevicePath;
@@ -14,7 +15,7 @@ pub const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 /// is legal, but a working kit runs eight to twenty-four. Past this the
 /// tail is reported as a truncation marker rather than spent as several
 /// thousand tokens of pad names.
-pub const MAX_CHAINS: usize = 64;
+pub const MAX_CHAINS: usize = 128;
 
 /// Chains asked for per request. The handler returns at most this many and
 /// at most as many as fit, so this is a ceiling rather than a promise.
@@ -37,6 +38,10 @@ pub struct RackChain {
     /// number on an Audio Effect Rack chain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<i32>,
+    /// File name of a sample loaded in this Drum Rack pad when Live exposes
+    /// it. A generic `Simpler` device name alone cannot identify a sound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_name: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
     pub muted: bool,
     #[serde(skip_serializing_if = "is_false")]
@@ -90,10 +95,18 @@ fn str_at(reply: &[OscType], i: usize) -> Option<String> {
     }
 }
 
+fn string_or_nil_at(reply: &[OscType], i: usize) -> Option<Option<String>> {
+    match reply.get(i)? {
+        OscType::String(s) => Some(Some(fence(s))),
+        OscType::Nil => Some(None),
+        _ => None,
+    }
+}
+
 /// Decodes `(track, path, start, total_chains, can_have_chains, *records)`.
 ///
-/// Each record is `name, note, mute, solo, total_devices, reported_devices`
-/// followed by exactly `reported_devices` names, so a record announces its
+/// Each record is `name, note, mute, solo, sample_name, total_devices, reported_devices`
+/// followed by exactly `reported_devices` `(device_name, is_rack)` pairs, so a record announces its
 /// own length and a stream of variable-length records needs no separator.
 ///
 /// Fails closed on anything that does not line up. A record claiming more
@@ -121,21 +134,28 @@ fn decode_window(reply: &[OscType], expect_start: usize) -> Option<(usize, bool,
         let note = int_at(reply, i + 1)?;
         let muted = int_at(reply, i + 2)? != 0;
         let soloed = int_at(reply, i + 3)? != 0;
-        let total_devices = usize::try_from(int_at(reply, i + 4)?).ok()?;
-        let reported = usize::try_from(int_at(reply, i + 5)?).ok()?;
-        i += 6;
-        if reported > reply.len().saturating_sub(i) {
+        let sample_name = string_or_nil_at(reply, i + 4)?;
+        let total_devices = usize::try_from(int_at(reply, i + 5)?).ok()?;
+        let reported = usize::try_from(int_at(reply, i + 6)?).ok()?;
+        i += 7;
+        let device_fields = reported.checked_mul(2)?;
+        if device_fields > reply.len().saturating_sub(i) {
             return None;
         }
         let mut devices = Vec::with_capacity(reported);
         for k in 0..reported {
-            devices.push(str_at(reply, i + k)?);
+            let mut name = str_at(reply, i + k * 2)?;
+            if int_at(reply, i + k * 2 + 1)? != 0 {
+                name.push_str(RACK_SUFFIX);
+            }
+            devices.push(name);
         }
-        i += reported;
+        i += device_fields;
         chains.push(RackChain {
             index,
             name,
             note: (note >= 0).then_some(note),
+            sample_name,
             muted,
             soloed,
             devices,
@@ -306,12 +326,14 @@ mod tests {
         out
     }
 
-    /// `name, note, mute, solo, total_devices, reported_devices, *names`.
+    /// `name, note, mute, solo, sample_name, total_devices, reported_devices,
+    /// *(name, is_rack)`.
     fn record(
         name: &str,
         note: i32,
         mute: bool,
         solo: bool,
+        sample_name: Option<&str>,
         total: i32,
         names: &[&str],
     ) -> Vec<OscType> {
@@ -320,10 +342,14 @@ mod tests {
             Int(note),
             Int(mute as i32),
             Int(solo as i32),
+            sample_name.map_or(OscType::Nil, |name| S(name.into())),
             Int(total),
             Int(names.len() as i32),
         ];
-        r.extend(names.iter().map(|n| S((*n).into())));
+        for name in names {
+            r.push(S((*name).into()));
+            r.push(Int(0));
+        }
         r
     }
 
@@ -336,14 +362,15 @@ mod tests {
             2,
             true,
             vec![
-                record("Kick", 36, false, false, 2, &["Simpler", "Saturator"]),
-                record("Hats", 42, true, false, 1, &["Simpler"]),
+                record("Kick", 36, false, false, Some("kick.wav"), 2, &["Simpler", "Saturator"]),
+                record("Hats", 42, true, false, Some("hihat.wav"), 1, &["Simpler"]),
             ],
         );
         let (total, is_rack, chains) = decode_window(&r, 0).unwrap();
         assert_eq!((total, is_rack), (2, true));
         assert_eq!(chains[0].index, 0);
         assert_eq!(chains[0].note, Some(36));
+        assert_eq!(chains[0].sample_name.as_deref(), Some("«kick.wav»"));
         assert_eq!(chains[0].devices.len(), 2);
         assert_eq!(chains[1].index, 1);
         assert!(chains[1].muted);
@@ -351,10 +378,32 @@ mod tests {
     }
 
     #[test]
+    fn a_nested_rack_is_marked_outside_its_fenced_name() {
+        let r = reply(
+            0,
+            1,
+            true,
+            vec![vec![
+                S("Parent".into()),
+                Int(-1),
+                Int(0),
+                Int(0),
+                OscType::Nil,
+                Int(1),
+                Int(1),
+                S("Combine Kit".into()),
+                Int(1),
+            ]],
+        );
+        let (_, _, chains) = decode_window(&r, 0).unwrap();
+        assert_eq!(chains[0].devices, vec![format!("{}{}", fence("Combine Kit"), RACK_SUFFIX)]);
+    }
+
+    #[test]
     fn indices_continue_from_the_window_start() {
         // The model sends these back inside a path, so an index that counts
         // from zero in every window would name chain 0 of a later page.
-        let r = reply(32, 40, true, vec![record("Pad", 60, false, false, 0, &[])]);
+        let r = reply(32, 40, true, vec![record("Pad", 60, false, false, None, 0, &[])]);
         let (_, _, chains) = decode_window(&r, 32).unwrap();
         assert_eq!(chains[0].index, 32);
     }
@@ -363,7 +412,7 @@ mod tests {
     fn a_note_of_minus_one_is_absent_rather_than_a_real_note() {
         // Every rack that is not a Drum Rack reports -1. Rendering that as
         // MIDI note -1 would put a pad note on an Audio Effect Rack chain.
-        let r = reply(0, 1, true, vec![record("Wet", -1, false, false, 0, &[])]);
+        let r = reply(0, 1, true, vec![record("Wet", -1, false, false, None, 0, &[])]);
         let (_, _, chains) = decode_window(&r, 0).unwrap();
         assert_eq!(chains[0].note, None);
     }
@@ -393,21 +442,21 @@ mod tests {
             0,
             1,
             true,
-            vec![record("Kick", 36, false, false, 9, &["Simpler"])],
+            vec![record("Kick", 36, false, false, None, 9, &["Simpler"])],
         );
         // Claim two names while carrying one.
-        r[10] = Int(2);
+        r[11] = Int(2);
         assert!(decode_window(&r, 0).is_none());
     }
 
     #[test]
     fn a_wrongly_typed_field_anywhere_refuses_the_whole_window() {
-        for corrupt in 5..11usize {
+        for corrupt in [5usize, 6, 7, 8, 10, 11, 12, 13] {
             let mut r = reply(
                 0,
                 1,
                 true,
-                vec![record("Kick", 36, false, false, 1, &["Simpler"])],
+                vec![record("Kick", 36, false, false, None, 1, &["Simpler"])],
             );
             r[corrupt] = if matches!(&r[corrupt], S(_)) {
                 Int(7)
@@ -427,7 +476,7 @@ mod tests {
             0,
             1,
             true,
-            vec![record("Kick", 36, false, false, 1, &["Simpler"])],
+            vec![record("Kick", 36, false, false, None, 1, &["Simpler"])],
         );
         r.truncate(8);
         assert!(decode_window(&r, 0).is_none());
@@ -448,6 +497,7 @@ mod tests {
                 36,
                 false,
                 false,
+                None,
                 30,
                 &["Simpler", "Saturator"],
             )],
@@ -467,7 +517,7 @@ mod tests {
             0,
             1,
             true,
-            vec![record(raw_name, 36, false, false, 1, &["a\nb"])],
+            vec![record(raw_name, 36, false, false, None, 1, &["a\nb"])],
         );
         let (_, _, chains) = decode_window(&r, 0).unwrap();
         assert_eq!(chains[0].name, fence(raw_name));
@@ -490,6 +540,7 @@ mod tests {
             index: 0,
             name: "Snare".to_string(),
             note: None,
+            sample_name: None,
             muted: false,
             soloed: false,
             devices: vec![],
@@ -505,6 +556,7 @@ mod tests {
             index: 1,
             name: "Kick".to_string(),
             note: Some(36),
+            sample_name: Some("«kick.wav»".to_string()),
             muted: true,
             soloed: true,
             devices: vec![],
@@ -514,6 +566,7 @@ mod tests {
         assert_eq!(v["muted"], true);
         assert_eq!(v["soloed"], true);
         assert_eq!(v["note"], 36);
+        assert_eq!(v["sample_name"], "«kick.wav»");
     }
 
     use crate::osc::requests::RequestTable;
@@ -688,9 +741,11 @@ mod tests {
                             reply.push(OscType::Int(-1));
                             reply.push(OscType::Int(0));
                             reply.push(OscType::Int(0));
+                            reply.push(OscType::Nil);
                             reply.push(OscType::Int(1));
                             reply.push(OscType::Int(1));
                             reply.push(OscType::String("Simpler".into()));
+                            reply.push(OscType::Int(0));
                         }
                         let _ = live
                             .send_to(app_port, "/live/mixingpal/get/rack/chains", reply)
@@ -729,7 +784,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_kit_past_the_cap_reports_the_real_count_not_the_first_sixty_four() {
+    async fn a_full_drum_rack_reads_all_one_hundred_twenty_eight_pads() {
         let (q, _guard) = fake_rack(FakeRack {
             chains: 128,
             per_window: 32,
@@ -740,7 +795,7 @@ mod tests {
         let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
         assert_eq!(out.chains.len(), MAX_CHAINS);
         assert_eq!(out.total_chains, Some(128));
-        assert!(out.truncated);
+        assert!(!out.truncated);
     }
 
     #[tokio::test]

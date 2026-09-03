@@ -71,13 +71,10 @@ processing from its name. For any question about devices, plugins, EQ, \
 compression, or a track's chain, call get_device_chains first - it covers \
 the whole set in one round trip - and then get_device_params on the few \
 devices that matter. A track name is not evidence about what is on it.
-- A Rack is one device in the chain map, marked [rack], and what is inside \
-it is invisible until you ask. Drum Racks are where this matters most: the \
-kit is one device and every sound in it is a chain underneath. If a question \
-is about drums, or about a track whose chain map shows a [rack], call \
-get_rack_contents before answering. Saying there is no compression on the \
-drums because the chain map shows one device is the mistake this tool exists \
-to prevent.
+- A [rack] hides its contents. For drums or a track with [rack], call \
+get_rack_contents. It lists chains and nested [rack] devices; descend \
+relevant nested Racks before claims. A generic Simpler name is not a sound: \
+use sample_name or a pad name before calling it a hat or kick.
 - The context block says NOTHING about clips either. For any question about \
 notes, melody, harmony, chords, or rhythm, call get_clips first - it covers \
 the whole set in one round trip - and then get_clip_notes on the few clips \

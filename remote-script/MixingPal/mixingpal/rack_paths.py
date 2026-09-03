@@ -29,7 +29,7 @@ MAX_DEVICES_PER_CHAIN = 32
 
 # Caps every name on the wire. The Rust side fences to 120 characters anyway,
 # so nothing real is lost, and it bounds the worst-case record: with the name
-# list emptied, six fixed fields plus a capped name is far inside one datagram.
+# list emptied, seven fixed fields plus a capped name is far inside one datagram.
 # That is what makes shrink_to_fit terminate with a record that always fits.
 NAME_CAP = 200
 
@@ -68,8 +68,28 @@ def parse_path(raw):
     return out
 
 
+def _sample_name(chain):
+    """The loaded sample's file name, when a device exposes one.
+
+    A Drum Rack pad often contains a generic device named "Simpler". That
+    name says nothing about whether the pad is a hat, clap, or kick; the
+    sample path is the useful label. Other devices either have no `sample`
+    property or expose an empty path, which is normal and deliberately
+    returns None rather than manufacturing a label.
+    """
+    for device in chain.devices:
+        try:
+            sample = getattr(device, "sample", None)
+            path = getattr(sample, "file_path", "") if sample is not None else ""
+        except (AttributeError, RuntimeError):
+            continue
+        if path:
+            return str(path).replace("\\", "/").rsplit("/", 1)[-1][:NAME_CAP]
+    return None
+
+
 def chains_of(device):
-    """Every chain in a rack, as (chain, note, name, mute, solo).
+    """Every chain in a rack, as (chain, note, name, mute, solo, sample_name).
 
     Listing and resolution BOTH go through this, and that is the point. A
     chain index has to mean the same chain when the model reads a listing and
@@ -87,9 +107,10 @@ def chains_of(device):
     reaches the client as an answer rather than as silence.
     """
     if getattr(device, "can_have_drum_pads", False):
-        return [(pad.chains[0], pad.note, pad.name, pad.mute, pad.solo)
+        return [(pad.chains[0], pad.note, pad.name, pad.mute, pad.solo,
+                 _sample_name(pad.chains[0]))
                 for pad in device.drum_pads if len(pad.chains) > 0]
-    return [(chain, -1, chain.name, chain.mute, chain.solo)
+    return [(chain, -1, chain.name, chain.mute, chain.solo, None)
             for chain in getattr(device, "chains", [])]
 
 
@@ -126,7 +147,8 @@ def record_bytes(record):
 
 
 def chain_record(entry, max_names=MAX_DEVICES_PER_CHAIN):
-    """(name, note, mute, solo, total_devices, reported_devices, *names).
+    """(name, note, mute, solo, sample_name, total_devices, reported_devices,
+    *(device_name, is_rack)).
 
     Six fixed fields, then exactly `reported_devices` names. The record
     announces how many names it actually carries -- not how many the chain
@@ -134,11 +156,14 @@ def chain_record(entry, max_names=MAX_DEVICES_PER_CHAIN):
     separator, and so a record cut back to fit a datagram stays readable.
     `total_devices` still reports the truth.
     """
-    chain, note, name, mute, solo = entry
+    chain, note, name, mute, solo, sample_name = entry
     devices = list(chain.devices)
-    names = [str(d.name)[:NAME_CAP] for d in devices[:max(0, max_names)]]
+    reported = devices[:max(0, max_names)]
+    names = [field for d in reported for field in (
+        str(d.name)[:NAME_CAP], int(bool(getattr(d, "can_have_chains", False))))]
     return (str(name)[:NAME_CAP], int(note), int(bool(mute)), int(bool(solo)),
-            len(devices), len(names)) + tuple(names)
+            None if sample_name is None else str(sample_name)[:NAME_CAP],
+            len(devices), len(reported)) + tuple(names)
 
 
 def shrink_to_fit(entry, budget):
