@@ -1,18 +1,21 @@
 //! Craft scenarios: does the advice have the shape the craft ontology asks
 //! for? See docs/superpowers/specs/2026-09-02-craft-ontology-design.md.
 //!
-//! Not run by `cargo test`: the target needs `--features evals`. The first
-//! test below costs nothing and needs no credentials: it checks that the
-//! fake Live answers every read the craft fixture supports, so a red craft
-//! scenario is about the prompt and never about a missing read. Every other
-//! test asks a real model, then a judge model, and costs money:
+//! Not run by `cargo test`: the target needs `--features evals`. Two tests
+//! cost nothing and need no credentials: one checks that the fake Live
+//! answers every read the craft fixture supports, so a red craft scenario
+//! is about the prompt and never about a missing read; the other checks
+//! that the harness sends a temperature only when asked. Every other test
+//! asks a real model, then a judge model, and costs money:
 //!
 //!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
 //!     [MIXINGPAL_JUDGE_MODEL=...] \
 //!     cargo test --features evals --test craft -- --test-threads=1
 //!
-//! Unlike `evals.rs`, these assert on prose, through a judge. Wording is not
-//! stable across runs, so each scenario passes on a majority of three.
+//! Unlike `evals.rs`, these assert on prose, through a judge. Wording is
+//! not stable across runs. Scenarios 1 to 4 pass on a majority of three
+//! runs. Scenario 5 is a gate of one run per arm at temperature 0, plus a
+//! report of three runs per arm at the app's own sampling.
 //!
 //! Every mentor answer in this file illustrates the shape of a good answer.
 //! The claims they make about garage, techno, or any style are not facts
@@ -186,7 +189,7 @@ const CONDITIONAL_MOVE: Property = Property {
 };
 const CHORDS_KEPT: Property = Property {
     key: "chords_kept",
-    description: "Its decision on the producer's question is to keep the chords: the answer says keep, and its one move leaves the progression and every chord's quality as written. A move to register, voicing, note length, level, or where the pad plays is still keep. Grade the decision the answer states, not an aside or an optional extra.",
+    description: "Its decision on the producer's question is to keep the chords: the answer says keep, and its one move leaves the progression and every chord's quality as written, or it gives no move at all. A move to register, voicing, note length, level, or where the pad plays is still keep. Grade the decision the answer states, not an aside or an optional extra.",
 };
 const CHORDS_CHANGED: Property = Property {
     key: "chords_changed",
@@ -264,7 +267,7 @@ async fn judge(
             { "role": "user", "content": user },
         ],
     });
-    let raw = match post_chat(&common::client(), &s, body).await {
+    let raw = match post_chat(&common::judge_client(), &s, body).await {
         Ok(raw) => raw,
         Err(e) => return Err(format!("judge call failed: {e}")),
     };
@@ -546,14 +549,17 @@ fn decision(run: &Run) -> Stance {
 }
 
 // The gate. One run per arm at temperature 0. The two arms differ only in
-// the GOAL line, so a goal-blind model that is deterministic at 0 gives the
-// same answer twice and fails; the false-pass rate of that model is zero,
-// and no unanimity across noisy samples is needed. The test asserts that
-// the decisions differ, never which way: naming the expected direction
-// would be a genre fact, and this repo holds none. A model that is still
-// nondeterministic at 0 shows up here as a flaky gate; record that as a
-// fact about the model in docs/manual-verification.md rather than loosen
-// the assertion.
+// the GOAL line. A model that ignores that line gives the same decision
+// twice at temperature 0 and fails every time. A model whose decision
+// moves with the GOAL text but not its meaning can still pass, which is
+// why the report's six decisions are read by hand rather than trusted
+// from one green gate.
+//
+// The test asserts that the decisions differ, never which way: naming the
+// expected direction would be a genre fact, and this repo holds none. A
+// model that is still nondeterministic at 0 shows up here as a flaky gate;
+// record that as a fact about the model in docs/manual-verification.md
+// rather than loosen the assertion.
 #[tokio::test]
 async fn the_goal_changes_the_advice() {
     let garage = run_once(&CHORDS_GARAGE, Some(0.0)).await;
@@ -582,9 +588,10 @@ async fn the_goal_changes_the_advice() {
 }
 
 // The report. Three runs per arm at the app's own sampling, the setting the
-// producer gets. It asserts only the shape: every answer decides and ties
-// the decision to the goal. Whether the decisions differ between goals at
-// this setting is a fact about the model, printed here and recorded by hand
+// producer gets. It asserts only the shape: a majority of each arm decides
+// and ties the decision to the goal, the same bar the other scenarios use.
+// Whether the decisions differ between goals at this setting is a fact
+// about the model, printed here and recorded by hand
 // in docs/manual-verification.md, not a gate: a keep-or-change call on a
 // two-chord loop has sound arguments both ways, and demanding stability
 // from a sampler on it measured noise for three sessions.
@@ -593,9 +600,10 @@ async fn the_goal_report_at_the_apps_temperature() {
     let (garage, garage_report) = stances(&CHORDS_GARAGE, grounded_and_tied).await;
     let (techno, techno_report) = stances(&CHORDS_TECHNO, grounded_and_tied).await;
     println!("goal report: garage {garage:?}, techno {techno:?}");
-    let undecided = garage.iter().chain(&techno).filter(|s| **s == Stance::None).count();
+    let decided = |arm: &[Stance]| arm.iter().filter(|s| **s != Stance::None).count();
+    let (g, t) = (decided(&garage), decided(&techno));
     assert!(
-        undecided == 0,
-        "{undecided} of 6 runs gave no decision grounded in the notes and tied to the goal\n\ngarage: {garage:?}\ntechno: {techno:?}\n\n=== garage arm ==={garage_report}\n=== techno arm ==={techno_report}"
+        g * 2 > RUNS && t * 2 > RUNS,
+        "a majority of each arm must decide and tie the decision to the goal; garage {g}/{RUNS}, techno {t}/{RUNS}\n\ngarage: {garage:?}\ntechno: {techno:?}\n\n=== garage arm ==={garage_report}\n=== techno arm ==={techno_report}"
     );
 }

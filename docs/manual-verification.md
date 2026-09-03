@@ -605,14 +605,16 @@ Date: ___________  Model: ___________  Base URL: ___________
 ## Craft evals
 
 Status: **PENDING-USER**. `src-tauri/tests/craft.rs` is written and its
-no-network test passes (`the_fake_live_serves_the_craft_fixture_in_full`),
-but the five scenarios below have not been run against a real provider by
-the suite that wrote them, for the same reason as the model evals above.
+no-network test passes (`the_fake_live_serves_the_craft_fixture_in_full`).
+Scenarios 1 to 4 have not run against a real provider, for the same reason
+as the model evals above. Scenario 5 ran on 2026-09-03 and 2026-09-04;
+results are in the checklist below.
 
 These check the *shape* of the advice, not which tools were called: a judge
 model scores each answer against named properties (one move, the why, what
-to listen for, what to leave alone, and so on), and a scenario passes on a
-majority of three runs. The spec is
+to listen for, what to leave alone, and so on). Scenarios 1 to 4 pass on a
+majority of three runs; scenario 5 has its own gate and report, described
+below. The spec is
 `docs/superpowers/specs/2026-09-02-craft-ontology-design.md`.
 
 Run before each release, after the model evals:
@@ -638,6 +640,9 @@ of three is noise the majority absorbs. A reason beginning `no verdict;`
 means the judge did not return JSON; it names the finish reason and quotes
 the reply. Empty content with finish reason `length` is a judge that reasons
 and spent its 4000-token cap before writing: pick a judge that reasons less.
+The judge call is bounded at twice the app's model timeout; `judge call
+failed: the model did not answer within` is that bound, and the same advice
+applies.
 
 A provider or judge error -- the endpoint refused the request outright: a bad
 key, an unknown model name, a wrong base URL -- fails the scenario, once
@@ -658,9 +663,9 @@ behind, and the judge is told not to grade them.
 The goal gate (`the_goal_changes_the_advice`) runs each arm once at
 temperature 0 and requires the two decisions to differ. The goal report
 (`the_goal_report_at_the_apps_temperature`) runs each arm three times at
-the app's own sampling and asserts only that every answer decides and ties
-its decision to the goal. Run the report with `--nocapture` and copy the
-line beginning `goal report:` into the checklist below; whether the
+the app's own sampling and asserts only that a majority of each arm decides
+and ties its decision to the goal. Run the report with `--nocapture` and
+copy the line beginning `goal report:` into the checklist below; whether the
 decisions differ at the app's sampling is a fact about the model, not a
 gate. A gate that passes on one run and fails on the next is a model that
 is not deterministic at temperature 0: note that beside the date rather

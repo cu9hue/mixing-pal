@@ -121,11 +121,11 @@ What a good answer is. Four rules.
    advice; never refuse to answer for want of one.
 2. **One move, biggest gap first.** Rank silently, give one. It names the
    axis it moves and gives the why in that axis's terms. It is reversible and
-   takes under a minute in Live. When the question is a choice, the answer
-   picks one side, says which way the goal pushed it, and gives one move on
-   that side only. (Amended 2026-09-03: three real runs of scenario five
-   showed the model heading "keep" and then offering a change, so the judge
-   was grading a hedge, not a decision.)
+   takes under a minute in Live. When the question is a choice between two
+   moves, the answer picks one side, says which way the goal pushed it, and
+   gives one move on that side only. (Amended 2026-09-03: three real runs of
+   scenario five showed the model heading "keep" and then offering a change,
+   so the judge was grading a hedge, not a decision.)
 3. **End with what to listen for.** The model cannot hear. She can. Every move
    ends with a test she performs: where to play from and what to notice.
    Ear-only axes are handed over entirely: the model names the question and
@@ -180,7 +180,8 @@ stable than tool-call assertions, so:
 - Craft evals live in their own test file, `src-tauri/tests/craft.rs`, under
   the same `evals` feature and the same environment variables, so they cost
   money only when asked.
-- Each scenario passes on a majority of three runs, not on one.
+- Scenarios 1 to 4 pass on a majority of three runs, not on one; scenario 5
+  is described below.
 - The judge scores properties, not similarity. An answer that reaches a
   different move by a sound argument on a named axis passes. The mentor
   answer is there to show the judge the bar, not to be matched.
@@ -280,14 +281,16 @@ keep is the other, both or neither is none. A decision counts only when the
 run read the pad's notes and the judge found it tied to the goal.
 
 Two tests. The gate runs each arm once at temperature 0. Both decisions
-must count and must differ. The arms differ only in the GOAL line, so a
-goal-blind model that is deterministic at 0 gives the same decision twice
-and fails: the false-pass rate is zero with no majority or unanimity
-needed. The report runs each arm three times at the app's own sampling and
-asserts only that every answer decides and ties the decision to the goal;
-the six decisions are printed and recorded by hand in
-`docs/manual-verification.md`. Neither test says which goal wants which
-decision: naming that would be a genre fact, and this repo holds none.
+must count and must differ. The arms differ only in the GOAL line. A model
+that ignores that line gives the same decision twice at temperature 0 and
+fails every time. A model whose decision moves with the GOAL text but not
+its meaning can still pass, which is why the report's six decisions are
+read by hand rather than trusted from one green gate. The report runs each
+arm three times at the app's own sampling and asserts only that a majority
+of each arm decides and ties the decision to the goal; the six decisions
+are printed and recorded by hand in `docs/manual-verification.md`. Neither
+test says which goal wants which decision: naming that would be a genre
+fact, and this repo holds none.
 
 Amended 2026-09-03. The first design graded harmonic movement kept or
 reduced and required unanimity across three sampled runs per arm. Three real
@@ -299,8 +302,9 @@ A judge on hedged prose measures the hedge. The fix was to make a choice a
 choice in the prompt (Layer 3, rule 2), grade the stated decision, and move
 the causal claim to a deterministic run. A paired judge that sees both arms
 and says whether they differ "because of the goal" was considered and
-rejected: it has no model-independent false-pass rate once the judge sees
-the genre labels.
+rejected: it has no model-independent false-pass rate once one judge sees
+both arms and their genre labels side by side; the single judge sees one
+answer and never the other arm.
 
 ### The judge
 
@@ -325,9 +329,9 @@ and every other scenario runs at that default.
 - `shared/craft-set.json` exists and the fake Live in `craft.rs` serves it in
   full.
 - Scenarios 1 to 4 pass on a majority of three runs against the release
-  model; scenario 5's gate passes at temperature 0 and its report shows
-  six decisions, each tied to its goal. The runs are recorded in
-  `docs/manual-verification.md` beside the honesty evals.
+  model; scenario 5's gate passes at temperature 0 and its report shows a
+  majority of each arm deciding, each tied to its goal. The runs are
+  recorded in `docs/manual-verification.md` beside the honesty evals.
 - The honesty evals still pass with the new prompt. The craft section must
   not loosen "you cannot hear it".
 - Prompt growth is under a third of the current prompt.

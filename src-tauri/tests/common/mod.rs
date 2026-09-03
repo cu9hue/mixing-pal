@@ -56,6 +56,17 @@ pub fn client() -> reqwest::Client {
         .expect("the eval HTTP client configuration is valid")
 }
 
+/// Twice the app's limit. A judge that reasons before it writes has no
+/// producer waiting on it, but it still gets a bound: a provider that
+/// never answers must become a failed run, not a hung suite.
+pub fn judge_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(MODEL_CONNECT_TIMEOUT)
+        .timeout(MODEL_TIMEOUT * 2)
+        .build()
+        .expect("the judge HTTP client configuration is valid")
+}
+
 /// The mirror the tools read for track count and per-track identity.
 pub fn mirror(f: &Value) -> Arc<Mutex<Coalescer>> {
     let mut c = Coalescer::new();
@@ -611,16 +622,18 @@ impl Turn {
     }
 }
 
-/// `ask` at the harness settings and the app's own sampling.
+/// `ask_with` at the harness settings and the app's own sampling.
 pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
     ask_with(&settings(), None, f, context, question).await
 }
 
-/// One question through the same loop the app runs, against `s`. A
-/// `temperature` is added to every request when given; the app itself sends
-/// none, so `None` is what the producer gets and `Some(0.0)` is the goal
-/// gate's pin. Built on `build_body` and `complete_with_body`, the two halves
-/// of `complete`, so the body is the app's body plus at most that one field.
+/// One question through the same loop the app runs: the tools are answered
+/// by the fake Live, and the context block rides ahead of the question as a
+/// user turn, exactly as `Conversation.tsx` sends it. A `temperature` is
+/// added to every request when given; the app itself sends none, so `None`
+/// is what the producer gets and `Some(0.0)` is the goal gate's pin. Built
+/// on `build_body` and `complete_with_body`, the two halves of `complete`,
+/// so the body is the app's body plus at most that one field.
 pub async fn ask_with(
     s: &Settings,
     temperature: Option<f64>,
@@ -644,14 +657,13 @@ pub async fn ask_with(
     let mut calls: Vec<ToolCallRecord> = Vec::new();
 
     for _ in 0..MAX_ROUND_TRIPS {
-        let body = build_body(s, &messages).and_then(|mut body| {
-            if let Some(t) = temperature {
-                body["temperature"] = json!(t);
+        let completion = match build_body(s, &messages) {
+            Ok(mut body) => {
+                if let Some(t) = temperature {
+                    body["temperature"] = json!(t);
+                }
+                complete_with_body(&http, s, body).await
             }
-            Ok(body)
-        });
-        let completion = match body {
-            Ok(body) => complete_with_body(&http, s, body).await,
             Err(e) => Err(e),
         };
         let completion = match completion {
