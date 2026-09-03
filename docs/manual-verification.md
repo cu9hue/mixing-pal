@@ -634,6 +634,12 @@ arm, so 20 turns of up to 6 round trips plus 20 judge calls, roughly 140
 completions in the worst case. Each turn takes one to two minutes on a
 reasoning model.
 
+The bound, if every call waits out its limit, is about eight hours: 20
+turns of six 180-second calls plus a 360-second judge call each. A
+healthy provider finishes the whole suite in 20 to 30 minutes and the
+goal tests alone in about 15. If a run is past an hour, the provider is
+saturated; stop it and read the log rather than wait for the bound.
+
 A red scenario prints every run's answer and the judge's reason per
 property. A property failing three of three runs is a prompt finding. One
 of three is noise the majority absorbs. A reason beginning `no verdict;`

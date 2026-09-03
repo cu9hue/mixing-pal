@@ -10,6 +10,7 @@ use mixing_pal_lib::eval_api::*;
 use rosc::OscType;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Mirrors `MAX_ROUND_TRIPS` in `src/agent/loop.ts`. The eval drives its own
 /// loop -- the shipped one is TypeScript and is covered by `loop.test.ts`
@@ -56,13 +57,16 @@ pub fn client() -> reqwest::Client {
         .expect("the eval HTTP client configuration is valid")
 }
 
+/// The judge's bound: twice the app's, see `judge_client`.
+pub const JUDGE_TIMEOUT: Duration = Duration::from_secs(MODEL_TIMEOUT.as_secs() * 2);
+
 /// Twice the app's limit. A judge that reasons before it writes has no
 /// producer waiting on it, but it still gets a bound: a provider that
 /// never answers must become a failed run, not a hung suite.
 pub fn judge_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(MODEL_CONNECT_TIMEOUT)
-        .timeout(MODEL_TIMEOUT * 2)
+        .timeout(JUDGE_TIMEOUT)
         .build()
         .expect("the judge HTTP client configuration is valid")
 }

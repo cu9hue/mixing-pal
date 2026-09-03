@@ -129,6 +129,21 @@ async fn the_harness_sends_a_temperature_only_when_asked() {
     );
 }
 
+/// A run against the real judge bound would take six minutes, so this tests
+/// the string mapping directly: `judge_error` must swap the app's limit for
+/// the judge's, not just append it.
+#[test]
+fn a_judge_timeout_names_the_judges_limit() {
+    let raw = format!(
+        "could not read the reply from x: the model did not answer within the app's {}-second limit",
+        MODEL_TIMEOUT.as_secs()
+    );
+    let mapped = judge_error(raw);
+    let judge_limit = format!("the judge's {}-second limit", common::JUDGE_TIMEOUT.as_secs());
+    assert!(mapped.contains(&judge_limit), "{mapped}");
+    assert!(!mapped.contains("the app's"), "{mapped}");
+}
+
 /// One thing the judge looks for. `description` is what the judge reads;
 /// `key` is what it answers under.
 struct Property {
@@ -233,6 +248,15 @@ fn judge_settings() -> Settings {
 /// The request caps output at 4000 tokens, room for a judge that reasons
 /// before it writes; `JUDGE_PROMPT` still holds every reason to one
 /// sentence so the JSON object closes well inside that.
+/// `post_chat`'s transport error names the app's limit, because it cannot
+/// see the client's. The judge client waits twice that, so rewrite the
+/// message for the judge's bound rather than report a number it did not use.
+fn judge_error(e: String) -> String {
+    let app_limit = format!("the app's {}-second limit", MODEL_TIMEOUT.as_secs());
+    let judge_limit = format!("the judge's {}-second limit", common::JUDGE_TIMEOUT.as_secs());
+    e.replace(&app_limit, &judge_limit)
+}
+
 async fn judge(
     question: &str,
     context: &str,
@@ -269,7 +293,7 @@ async fn judge(
     });
     let raw = match post_chat(&common::judge_client(), &s, body).await {
         Ok(raw) => raw,
-        Err(e) => return Err(format!("judge call failed: {e}")),
+        Err(e) => return Err(format!("judge call failed: {}", judge_error(e))),
     };
     let content = raw["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
     let finish = raw["choices"][0]["finish_reason"].as_str().unwrap_or("?").to_string();
