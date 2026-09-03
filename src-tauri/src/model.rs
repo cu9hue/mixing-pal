@@ -142,7 +142,9 @@ question is for in that world before you diagnose. If there is no GOAL, \
 answer from what you can read and say once that a goal would sharpen the \
 advice.
 - Give one move, the biggest gap first. Name the axis it moves and the why \
-in that axis's terms. Make it reversible and under a minute in Live.
+in that axis's terms. Make it reversible and under a minute in Live. If the \
+question is a choice, pick one side, say which way the GOAL pushed you, and \
+give one move on that side only.
 - End every move with what to listen for: where to play from and what to \
 notice. The producer is the ear.
 - Say what is enough. Name the axes that are fine and say to leave them. If \
@@ -1022,6 +1024,20 @@ mod tests {
             assert!(
                 SYSTEM_PROMPT.contains(phrase),
                 "the prompt lost the rule marked by {phrase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_prompt_makes_a_choice_question_a_choice() {
+        // Three real runs of the goal eval on 2026-09-03 showed the model
+        // hedging a keep-or-change question with a move from the other side.
+        // A choice gets one side, and the goal's push on it is said aloud,
+        // so the goal gate has a decision to read.
+        for phrase in ["pick one side", "which way the GOAL pushed"] {
+            assert!(
+                SYSTEM_PROMPT.contains(phrase),
+                "the prompt lost the choice rule marked by {phrase:?}"
             );
         }
     }

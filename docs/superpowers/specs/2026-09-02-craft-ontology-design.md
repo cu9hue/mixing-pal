@@ -121,7 +121,11 @@ What a good answer is. Four rules.
    advice; never refuse to answer for want of one.
 2. **One move, biggest gap first.** Rank silently, give one. It names the
    axis it moves and gives the why in that axis's terms. It is reversible and
-   takes under a minute in Live.
+   takes under a minute in Live. When the question is a choice, the answer
+   picks one side, says which way the goal pushed it, and gives one move on
+   that side only. (Amended 2026-09-03: three real runs of scenario five
+   showed the model heading "keep" and then offering a change, so the judge
+   was grading a hedge, not a decision.)
 3. **End with what to listen for.** The model cannot hear. She can. Every move
    ends with a test she performs: where to play from and what to notice.
    Ear-only axes are handed over entirely: the model names the question and
