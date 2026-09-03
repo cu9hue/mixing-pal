@@ -186,11 +186,15 @@ const CONDITIONAL_MOVE: Property = Property {
 };
 const CHORDS_KEPT: Property = Property {
     key: "chords_kept",
-    description: "Keeps the pad's chords as they are: the same progression and the same chord qualities. A move to register, voicing, note length, level, or where the pad plays still keeps the chords.",
+    description: "Its decision on the producer's question is to keep the chords: the answer says keep, and its one move leaves the progression and every chord's quality as written. A move to register, voicing, note length, level, or where the pad plays is still keep. Grade the decision the answer states, not an aside or an optional extra.",
 };
 const CHORDS_CHANGED: Property = Property {
     key: "chords_changed",
-    description: "Changes the chords themselves: a different progression, a different chord quality, or notes added or removed so that a different chord sounds.",
+    description: "Its decision on the producer's question is to change the chords: the answer says change, and its one move alters the progression or a chord's quality. Grade the decision the answer states, not an aside or an optional extra.",
+};
+const GOAL_TIED: Property = Property {
+    key: "goal_tied",
+    description: "Says which way the stated GOAL pushed its decision. Do not grade whether what it says about that genre, mood, or reference is true.",
 };
 
 const JUDGE_PROMPT: &str = "\
@@ -223,9 +227,9 @@ fn judge_settings() -> Settings {
 /// `(pass, reason)` per property key. A judge reply that cannot be parsed
 /// fails every property, with the raw text as the reason, so a broken
 /// judge shows up as red runs with its output attached, never as green.
-/// The request caps output at 600 tokens, which is why `JUDGE_PROMPT` holds
-/// every reason to one sentence: a scenario with several properties would
-/// otherwise blow the budget before the reply's JSON object closes.
+/// The request caps output at 4000 tokens, room for a judge that reasons
+/// before it writes; `JUDGE_PROMPT` still holds every reason to one
+/// sentence so the JSON object closes well inside that.
 async fn judge(
     question: &str,
     context: &str,
@@ -304,9 +308,9 @@ struct Run {
     infra_error: Option<String>,
 }
 
-async fn run_once(sc: &Scenario) -> Run {
+async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
     let context = context_for(sc.goal);
-    let turn = common::ask(fixture(), &context, sc.question).await;
+    let turn = common::ask_with(&common::settings(), temperature, fixture(), &context, sc.question).await;
     // A truncated or empty run is a failed run, not a panic: it fails every
     // property, with the reason recorded, so `tally`'s report shows why. A
     // provider error is an infrastructure fault, recorded in `infra_error`
@@ -346,6 +350,12 @@ async fn run_once(sc: &Scenario) -> Run {
 
 const RUNS: usize = 3;
 
+/// One run's block in a failure report: the tools called, the answer, and
+/// the judge's verdicts.
+fn report_line(i: usize, run: &Run) -> String {
+    format!("\n--- run {i}: tools {:?}\n{}\n{:#?}\n", run.called, run.answer, run.verdicts)
+}
+
 /// Runs the scenario `RUNS` times and formats the same per-run report both
 /// `tally` and `stances` show on failure: the tools called, the answer, and
 /// the judge's verdicts. The pass/fail or stance meaning of a run is for the
@@ -355,11 +365,8 @@ async fn run_all(sc: &Scenario) -> (Vec<Run>, String) {
     let mut runs = Vec::with_capacity(RUNS);
     let mut report = String::new();
     for i in 0..RUNS {
-        let run = run_once(sc).await;
-        report.push_str(&format!(
-            "\n--- run {i}: tools {:?}\n{}\n{:#?}\n",
-            run.called, run.answer, run.verdicts
-        ));
+        let run = run_once(sc, None).await;
+        report.push_str(&report_line(i, &run));
         runs.push(run);
     }
     // A transport error -- the provider or the judge call itself failed --
@@ -414,17 +421,6 @@ async fn stances(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (Vec<Stance>, S
     let (runs, report) = run_all(sc).await;
     let stances = runs.iter().map(|r| if extra(r) { stance(r) } else { Stance::None }).collect();
     (stances, report)
-}
-
-/// The stance every run holds, else `Stance::None`. An empty slice is
-/// `None`.
-fn unanimous(stances: &[Stance]) -> Stance {
-    let Some(first) = stances.first() else { return Stance::None };
-    if *first != Stance::None && stances.iter().all(|s| s == first) {
-        *first
-    } else {
-        Stance::None
-    }
 }
 
 async fn passes_majority(sc: &Scenario, extra: impl Fn(&Run) -> bool) {
@@ -496,6 +492,17 @@ async fn is_the_pad_too_busy() {
     passes_majority(&PAD_TOO_BUSY, reads_the_notes).await;
 }
 
+/// The judge said the answer names which way the goal pushed its decision.
+fn goal_tied(run: &Run) -> bool {
+    run.verdicts.get("goal_tied").map(|v| v.0).unwrap_or(false)
+}
+
+/// A decision counts only when it rests on the notes and is tied to the
+/// goal. Shared by the gate and the report.
+fn grounded_and_tied(run: &Run) -> bool {
+    reads_the_notes(run) && goal_tied(run)
+}
+
 // Scenario 4. Ear-only axes handed over, one readable observation with its
 // source, and no problem invented to fill the answer.
 const MIX_OKAY: Scenario = Scenario {
@@ -514,54 +521,81 @@ async fn is_the_mix_okay() {
 }
 
 // Scenario 5. Same set, same question, two goals. This is the eval that
-// proves the GOAL line does work: the answers must differ on the question
-// asked, keep the chords or change them. Register, voicing, rhythm, and
-// level are not the chords; a first run showed the model varying those
-// under both goals while its stance on the chords themselves tracked the
-// goal. No mentor, because the judge is scoring exactly the property a
-// mentor would give away.
+// proves the GOAL line does work: the decision on the question asked, keep
+// the chords or change them, must differ between the goals. Register,
+// voicing, rhythm, and level are not the chords. No mentor, because the
+// judge is scoring exactly the property a mentor would give away.
 const CHORDS_GARAGE: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: None,
     mentor: "",
-    must: &[CHORDS_KEPT, CHORDS_CHANGED],
+    must: &[CHORDS_KEPT, CHORDS_CHANGED, GOAL_TIED],
 };
 
 const CHORDS_TECHNO: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: Some("minimal techno, peak time"),
     mentor: "",
-    must: &[CHORDS_KEPT, CHORDS_CHANGED],
+    must: &[CHORDS_KEPT, CHORDS_CHANGED, GOAL_TIED],
 };
 
-// The test asserts that the goal moved the verdict, never which way: naming
-// the expected direction would be a genre fact, and this repo holds none. A
-// model that keeps the chords under both goals for a stated reason fails here,
-// and the report says so.
-//
-// Unanimity within an arm is the control: a model whose stance flips between
-// runs under one goal is not being conditioned by the goal, and that is a
-// red result worth seeing, not noise. Two independent three-run majorities
-// would let a goal-blind model that varies at random pass about half the
-// time; requiring unanimity in both arms closes that gap.
+/// The stance of one run, or `None` when the run never earned one: no note
+/// read, no tie to the goal, or no single decision.
+fn decision(run: &Run) -> Stance {
+    if grounded_and_tied(run) { stance(run) } else { Stance::None }
+}
+
+// The gate. One run per arm at temperature 0. The two arms differ only in
+// the GOAL line, so a goal-blind model that is deterministic at 0 gives the
+// same answer twice and fails; the false-pass rate of that model is zero,
+// and no unanimity across noisy samples is needed. The test asserts that
+// the decisions differ, never which way: naming the expected direction
+// would be a genre fact, and this repo holds none. A model that is still
+// nondeterministic at 0 shows up here as a flaky gate; record that as a
+// fact about the model in docs/manual-verification.md rather than loosen
+// the assertion.
 #[tokio::test]
 async fn the_goal_changes_the_advice() {
-    let (garage_stances, garage_report) = stances(&CHORDS_GARAGE, reads_the_notes).await;
-    let (techno_stances, techno_report) = stances(&CHORDS_TECHNO, reads_the_notes).await;
-    let garage = unanimous(&garage_stances);
-    let techno = unanimous(&techno_stances);
-    let verdict = if garage == Stance::None {
-        "under the garage goal, no unanimous stance on the chords emerged"
-    } else if techno == Stance::None {
-        "under the techno goal, no unanimous stance on the chords emerged"
-    } else if garage == techno {
-        "the goal should change the verdict; both arms landed on the same stance"
+    let garage = run_once(&CHORDS_GARAGE, Some(0.0)).await;
+    let techno = run_once(&CHORDS_TECHNO, Some(0.0)).await;
+    let report = format!(
+        "\n\n=== garage arm ==={}\n=== techno arm ==={}",
+        report_line(0, &garage),
+        report_line(0, &techno)
+    );
+    let errors: Vec<&str> =
+        [&garage, &techno].iter().filter_map(|r| r.infra_error.as_deref()).collect();
+    assert!(errors.is_empty(), "infrastructure error on the goal gate: {errors:?}{report}");
+
+    let g = decision(&garage);
+    let t = decision(&techno);
+    let verdict = if g == Stance::None {
+        "under the garage goal, no decision grounded in the notes and tied to the goal"
+    } else if t == Stance::None {
+        "under the techno goal, no decision grounded in the notes and tied to the goal"
+    } else if g == t {
+        "the goal should change the decision; both arms decided the same way"
     } else {
         return;
     };
-    // Both arms print on any failure: whether the goal moved the verdict is
-    // only readable with the other arm's answers beside the failing one.
-    panic!(
-        "{verdict}\n\ngarage stances: {garage_stances:?}\ntechno stances: {techno_stances:?}\n\n=== garage arm ==={garage_report}\n\n=== techno arm ==={techno_report}"
+    panic!("{verdict}\n\ngarage: {g:?}\ntechno: {t:?}{report}");
+}
+
+// The report. Three runs per arm at the app's own sampling, the setting the
+// producer gets. It asserts only the shape: every answer decides and ties
+// the decision to the goal. Whether the decisions differ between goals at
+// this setting is a fact about the model, printed here and recorded by hand
+// in docs/manual-verification.md, not a gate: a keep-or-change call on a
+// two-chord loop has sound arguments both ways, and demanding stability
+// from a sampler on it measured noise for three sessions.
+#[tokio::test]
+async fn the_goal_report_at_the_apps_temperature() {
+    let (garage, garage_report) = stances(&CHORDS_GARAGE, grounded_and_tied).await;
+    let (techno, techno_report) = stances(&CHORDS_TECHNO, grounded_and_tied).await;
+    println!("goal report: garage {garage:?}, techno {techno:?}");
+    let undecided = garage.iter().chain(&techno).filter(|s| **s == Stance::None).count();
+    assert!(
+        undecided == 0,
+        "{undecided} of 6 runs gave no decision grounded in the notes and tied to the goal\n\ngarage: {garage:?}\ntechno: {techno:?}\n\n=== garage arm ==={garage_report}\n=== techno arm ==={techno_report}"
     );
 }
