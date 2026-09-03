@@ -611,15 +611,27 @@ impl Turn {
     }
 }
 
-/// One turn against the real provider, tools answered by the fake Live.
-/// The context block rides ahead of the question as a user turn, exactly
-/// as `Conversation.tsx` sends it.
+/// `ask` at the harness settings and the app's own sampling.
 pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
+    ask_with(&settings(), None, f, context, question).await
+}
+
+/// One question through the same loop the app runs, against `s`. A
+/// `temperature` is added to every request when given; the app itself sends
+/// none, so `None` is what the producer gets and `Some(0.0)` is the goal
+/// gate's pin. Built on `build_body` and `complete_with_body`, the two halves
+/// of `complete`, so the body is the app's body plus at most that one field.
+pub async fn ask_with(
+    s: &Settings,
+    temperature: Option<f64>,
+    f: Value,
+    context: &str,
+    question: &str,
+) -> Turn {
     let ctx = ToolContext {
         coalescer: mirror(&f),
         query: Arc::new(Mutex::new(Some(fake_live(f).await))),
     };
-    let s = settings();
     let http = client();
 
     let mut messages = vec![ChatMessage {
@@ -632,7 +644,17 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
     let mut calls: Vec<ToolCallRecord> = Vec::new();
 
     for _ in 0..MAX_ROUND_TRIPS {
-        let completion: Completion = match complete(&http, &s, messages.clone()).await {
+        let body = build_body(s, &messages).and_then(|mut body| {
+            if let Some(t) = temperature {
+                body["temperature"] = json!(t);
+            }
+            Ok(body)
+        });
+        let completion = match body {
+            Ok(body) => complete_with_body(&http, s, body).await,
+            Err(e) => Err(e),
+        };
+        let completion = match completion {
             Ok(c) => c,
             Err(e) => {
                 return Turn {

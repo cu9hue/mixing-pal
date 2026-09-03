@@ -84,6 +84,48 @@ async fn the_fake_live_serves_the_craft_fixture_in_full() {
     assert!(!clip_notes["value"]["loop_region"].is_null(), "{clip_notes}");
 }
 
+/// The gate runs at temperature 0 and the report at the app's sampling. The
+/// app sends no temperature, so the harness must add one only when asked.
+#[tokio::test]
+async fn the_harness_sends_a_temperature_only_when_asked() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{ "message": { "role": "assistant", "content": "keep" } }]
+        })))
+        .mount(&server)
+        .await;
+    let s = Settings {
+        base_url: server.uri(),
+        model: "test-model".into(),
+        api_key: "test-key".into(),
+    };
+    let context = common::context("craft-context.txt");
+
+    let turn = common::ask_with(&s, Some(0.0), fixture(), &context, "keep or change?").await;
+    assert_eq!(turn.answer, "keep");
+    let turn = common::ask_with(&s, None, fixture(), &context, "keep or change?").await;
+    assert_eq!(turn.answer, "keep");
+
+    let bodies: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(bodies[0]["temperature"], json!(0.0), "the gate must pin temperature 0");
+    assert!(
+        bodies[1].get("temperature").is_none(),
+        "the report must send what the app sends, which is no temperature"
+    );
+}
+
 /// One thing the judge looks for. `description` is what the judge reads;
 /// `key` is what it answers under.
 struct Property {
