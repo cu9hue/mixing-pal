@@ -632,8 +632,10 @@ This costs more than the model evals: 6 scenario tallies of 3 runs each
 
 A red scenario prints every run's answer and the judge's reason per
 property. A property failing three of three runs is a prompt finding. One
-of three is noise the majority absorbs. A reason beginning `no verdict;
-judge said:` means the judge did not return JSON: check the judge model.
+of three is noise the majority absorbs. A reason beginning `no verdict;`
+means the judge did not return JSON; it names the finish reason and quotes
+the reply. Empty content with finish reason `length` is a judge that reasons
+and spent its 4000-token cap before writing: pick a judge that reasons less.
 
 A provider or judge error -- the endpoint refused the request outright: a bad
 key, an unknown model name, a wrong base URL -- fails the scenario, once

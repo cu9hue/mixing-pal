@@ -142,13 +142,13 @@ const CONDITIONAL_MOVE: Property = Property {
     key: "conditional_move",
     description: "Any move it gives is stated as waiting on something not yet done, or it gives no move at all.",
 };
-const MOVEMENT_DESIRABLE: Property = Property {
-    key: "movement_desirable",
-    description: "Treats the pad's harmonic movement, the chords changing, as something to keep or increase rather than to reduce or remove.",
+const CHORDS_KEPT: Property = Property {
+    key: "chords_kept",
+    description: "Keeps the pad's chords as they are: the same progression and the same chord qualities. A move to register, voicing, note length, level, or where the pad plays still keeps the chords.",
 };
-const MOVEMENT_REDUCED: Property = Property {
-    key: "movement_reduced",
-    description: "Treats the pad's harmonic movement, the chords changing, as something to reduce, hold still, or remove.",
+const CHORDS_CHANGED: Property = Property {
+    key: "chords_changed",
+    description: "Changes the chords themselves: a different progression, a different chord quality, or notes added or removed so that a different chord sounds.",
 };
 
 const JUDGE_PROMPT: &str = "\
@@ -210,7 +210,9 @@ async fn judge(
     let body = json!({
         "model": s.model,
         "temperature": 0,
-        "max_tokens": 600,
+        // Room for a judge that reasons before it writes: a 600-token cap
+        // returned empty content from one, the budget spent on thinking.
+        "max_tokens": 4000,
         "messages": [
             { "role": "system", "content": JUDGE_PROMPT },
             { "role": "user", "content": user },
@@ -221,6 +223,7 @@ async fn judge(
         Err(e) => return Err(format!("judge call failed: {e}")),
     };
     let content = raw["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+    let finish = raw["choices"][0]["finish_reason"].as_str().unwrap_or("?").to_string();
     let parsed = match (content.find('{'), content.rfind('}')) {
         (Some(a), Some(b)) if a < b => serde_json::from_str(&content[a..=b]).unwrap_or(Value::Null),
         _ => Value::Null,
@@ -233,7 +236,7 @@ async fn judge(
             let reason = v["reason"]
                 .as_str()
                 .map(str::to_string)
-                .unwrap_or_else(|| format!("no verdict; judge said: {content}"));
+                .unwrap_or_else(|| format!("no verdict; finish_reason {finish}; judge said: {content}"));
             (p.key.to_string(), (pass, reason))
         })
         .collect())
@@ -345,25 +348,26 @@ async fn tally(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (usize, String) {
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum Stance {
     Keep,
-    Reduce,
+    Change,
     None,
 }
 
-/// What one run said about the pad's movement. Both properties true or both
-/// false is no stance: the answer did not commit.
+/// What one run said about the pad's chords: the question the producer
+/// asked. Both properties true or both false is no stance: the answer did
+/// not commit.
 fn stance(run: &Run) -> Stance {
-    let desirable = run.verdicts.get("movement_desirable").map(|v| v.0).unwrap_or(false);
-    let reduced = run.verdicts.get("movement_reduced").map(|v| v.0).unwrap_or(false);
-    match (desirable, reduced) {
+    let kept = run.verdicts.get("chords_kept").map(|v| v.0).unwrap_or(false);
+    let changed = run.verdicts.get("chords_changed").map(|v| v.0).unwrap_or(false);
+    match (kept, changed) {
         (true, false) => Stance::Keep,
-        (false, true) => Stance::Reduce,
+        (false, true) => Stance::Change,
         _ => Stance::None,
     }
 }
 
 /// Runs the scenario `RUNS` times like `tally`, recording each run's stance
-/// on the pad's harmonic movement rather than a pass/fail. A run that fails
-/// `extra` counts as `Stance::None`: it never earned a claim about movement.
+/// on the pad's chords rather than a pass/fail. A run that fails `extra`
+/// counts as `Stance::None`: it never earned a claim about the chords.
 async fn stances(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (Vec<Stance>, String) {
     let (runs, report) = run_all(sc).await;
     let stances = runs.iter().map(|r| if extra(r) { stance(r) } else { Stance::None }).collect();
@@ -433,7 +437,7 @@ const PAD_TOO_BUSY: Scenario = Scenario {
 /// The verdict has to rest on the notes, so a read of them is required.
 /// Either read path is fine: the session clip or the timeline clip. Shared
 /// by `is_the_pad_too_busy` and both arms of `the_goal_changes_the_advice`,
-/// which needs the same note read before it trusts a stance on movement.
+/// which needs the same note read before it trusts a stance on the chords.
 ///
 /// A read of another track, or a read that came back missing, does not
 /// count: only a successful read of track 0, the Pad, grounds the verdict.
@@ -468,26 +472,29 @@ async fn is_the_mix_okay() {
 }
 
 // Scenario 5. Same set, same question, two goals. This is the eval that
-// proves the GOAL line does work: the answers must differ on harmonic
-// movement. No mentor, because the judge is scoring exactly the property a
+// proves the GOAL line does work: the answers must differ on the question
+// asked, keep the chords or change them. Register, voicing, rhythm, and
+// level are not the chords; a first run showed the model varying those
+// under both goals while its stance on the chords themselves tracked the
+// goal. No mentor, because the judge is scoring exactly the property a
 // mentor would give away.
 const CHORDS_GARAGE: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: None,
     mentor: "",
-    must: &[MOVEMENT_DESIRABLE, MOVEMENT_REDUCED],
+    must: &[CHORDS_KEPT, CHORDS_CHANGED],
 };
 
 const CHORDS_TECHNO: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: Some("minimal techno, peak time"),
     mentor: "",
-    must: &[MOVEMENT_DESIRABLE, MOVEMENT_REDUCED],
+    must: &[CHORDS_KEPT, CHORDS_CHANGED],
 };
 
 // The test asserts that the goal moved the verdict, never which way: naming
 // the expected direction would be a genre fact, and this repo holds none. A
-// model that keeps movement under both goals for a stated reason fails here,
+// model that keeps the chords under both goals for a stated reason fails here,
 // and the report says so.
 //
 // Unanimity within an arm is the control: a model whose stance flips between
@@ -501,16 +508,18 @@ async fn the_goal_changes_the_advice() {
     let (techno_stances, techno_report) = stances(&CHORDS_TECHNO, reads_the_notes).await;
     let garage = unanimous(&garage_stances);
     let techno = unanimous(&techno_stances);
-    assert!(
-        garage != Stance::None,
-        "under the garage goal, no unanimous stance on movement emerged: {garage_report}"
-    );
-    assert!(
-        techno != Stance::None,
-        "under the techno goal, no unanimous stance on movement emerged: {techno_report}"
-    );
-    assert!(
-        garage != techno,
-        "the goal should change the verdict; both arms landed on {garage:?}:{garage_report}{techno_report}"
+    let verdict = if garage == Stance::None {
+        "under the garage goal, no unanimous stance on the chords emerged"
+    } else if techno == Stance::None {
+        "under the techno goal, no unanimous stance on the chords emerged"
+    } else if garage == techno {
+        "the goal should change the verdict; both arms landed on the same stance"
+    } else {
+        return;
+    };
+    // Both arms print on any failure: whether the goal moved the verdict is
+    // only readable with the other arm's answers beside the failing one.
+    panic!(
+        "{verdict}\n\ngarage stances: {garage_stances:?}\ntechno stances: {techno_stances:?}\n\n=== garage arm ==={garage_report}\n\n=== techno arm ==={techno_report}"
     );
 }

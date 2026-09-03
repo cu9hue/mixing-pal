@@ -266,9 +266,14 @@ stated as conditional.
 twice, once with the goal "dark garage, 2am" and once with "minimal techno,
 peak time".
 
-Judge scores, on each answer alone, two properties: does the answer treat the
-pad's harmonic movement as something to keep, and as something to reduce.
-One and not the other is a stance; both or neither is no stance. Each arm's
+Judge scores, on each answer alone, two properties: does the answer keep the
+pad's chords as they are, and does it change the chords themselves. A move to
+register, voicing, note length, level, or placement keeps the chords; a
+different progression or chord quality changes them. One and not the other
+is a stance; both or neither is no stance. (Amended 2026-09-03: the first
+real run graded harmonic movement instead, and the model kept movement under
+both goals while its answer to "keep or change" tracked the goal. The stance
+now measures the question asked.) Each arm's
 stance must be unanimous across its runs and the two must differ. Unanimity
 within an arm is the control: two independent three-run majorities would let
 a goal-blind model that varies at random pass about half the time, while
