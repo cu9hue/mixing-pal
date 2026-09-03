@@ -681,9 +681,19 @@ cd src-tauri && MIXINGPAL_EVAL_BASE_URL=https://openrouter.ai/api/v1 \
 
 Date: ___________  Model: ___________  Judge: ___________
 
+Scenario 5 record. 2026-09-03, three sessions of the earlier unanimity
+design, model and judge moonshotai/kimi-k2.5: red each time, the headline
+stance flipping between runs under one goal as often as between goals.
+2026-09-04, first run of the gate and report as written here, same model
+and judge: gate red, garage Keep and techno Keep at temperature 0, each
+tied to its goal; report did not finish, the judge outlasted the 180 s
+limit on the techno arm (the judge now has twice that). The three techno
+answers that were judged read Keep, Keep, and a Keep headline over a move
+that deletes the F chord.
+
 - [ ] why does the drop fall flat
 - [ ] what should I do next
 - [ ] is the pad too busy
 - [ ] is the mix okay
-- [ ] the goal changes the advice (gate, temperature 0): garage ______  techno ______
-- [ ] goal report at the app's sampling: `goal report:` line ______________________
+- [ ] the goal changes the advice (gate, temperature 0): garage Keep  techno Keep (2026-09-04, red)
+- [ ] goal report at the app's sampling: `goal report:` line not reached (judge timeout, 2026-09-04)
