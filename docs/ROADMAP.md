@@ -22,7 +22,7 @@ no server.
 
 ## Where we are
 
-App 0.1.0, wire version 7. Shipped:
+App 0.2.2, wire version 11. Shipped:
 
 - The set mirror over OSC, a vendored AbletonOSC fork, and a connector the app
   installs itself.
@@ -34,10 +34,13 @@ App 0.1.0, wire version 7. Shipped:
   Gatekeeper.
 - Prompt guardrails and six honesty evals (`src-tauri/tests/evals.rs`), plus
   the craft layer: the "What a good answer is" prompt section and five
-  judge-scored craft evals (`src-tauri/tests/craft.rs`). Neither eval suite
-  has yet run against a real model.
+  judge-scored craft evals (`src-tauri/tests/craft.rs`). The honesty evals
+  have not yet run against a real model. Craft scenario five ran three times
+  on 2026-09-03 (see item 6).
 - The arrangement view: section names in the context block, the arrangement
-  map, arrangement notes, loop regions, and Live's note names.
+  map with end times, per-placement mute and MIDI type, bar numbers,
+  arrangement notes, loop regions and source lengths, and Live's note names.
+- Rack contents with a Drum Rack pad's sample name and nested racks marked.
 
 Model access today: the producer pastes an OpenRouter key in Advanced. That is
 fine for one person and a blocker for everyone else.
@@ -99,11 +102,14 @@ Ordered. Each item says what, why, size, and what it waits on.
    `docs/superpowers/specs/2026-09-02-craft-ontology-design.md`. Shipped
    2026-09-02 (c095d72..ea9bc34): the prompt's "What a good answer is"
    section, a clean fixture, and five judge-scored craft scenarios beside
-   the tool-call evals. What remains is the loop: the craft scenarios have
-   never run against a real model. First paid run per
-   `docs/manual-verification.md`, scenario five first; then change the
-   prompt against red properties and add fixtures for the goals the
-   waitlist names. Size open-ended. Waits on a provider key in the shell.
+   the tool-call evals. The loop started 2026-09-03: scenario five ran three
+   times against the release model and stayed red, because it graded a hedge
+   and demanded stability from a sampler. The fix (plan
+   `docs/superpowers/plans/2026-09-03-goal-gate.md`) makes a choice question
+   a choice in the prompt, grades the stated decision, gates at temperature 0,
+   and reports the app's sampling separately. Next: scenarios one to four
+   against the release model, then fixtures for the goals the waitlist names.
+   Size open-ended. Waits on nothing; the key is the app's own.
 
 ## When the waitlist says go
 

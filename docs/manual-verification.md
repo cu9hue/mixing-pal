@@ -626,9 +626,11 @@ cd src-tauri && MIXINGPAL_EVAL_BASE_URL=https://openrouter.ai/api/v1 \
 `MIXINGPAL_JUDGE_MODEL` names the judge; it defaults to the eval model. A
 judge should be at least as strong as the model it grades.
 
-This costs more than the model evals: 6 scenario tallies of 3 runs each
-(the goal scenario tallies twice), so 18 turns of up to 6 round trips plus
-18 judge calls, roughly 126 completions in the worst case.
+This costs more than the model evals: scenarios 1 to 4 tally 3 runs each,
+and scenario 5 runs a gate of 1 run per arm plus a report of 3 runs per
+arm, so 20 turns of up to 6 round trips plus 20 judge calls, roughly 140
+completions in the worst case. Each turn takes one to two minutes on a
+reasoning model.
 
 A red scenario prints every run's answer and the judge's reason per
 property. A property failing three of three runs is a prompt finding. One
@@ -653,10 +655,30 @@ The mentor answers in `craft.rs` illustrate the shape of a good answer. The
 claims they make about garage or techno are not facts this repo stands
 behind, and the judge is told not to grade them.
 
+The goal gate (`the_goal_changes_the_advice`) runs each arm once at
+temperature 0 and requires the two decisions to differ. The goal report
+(`the_goal_report_at_the_apps_temperature`) runs each arm three times at
+the app's own sampling and asserts only that every answer decides and ties
+its decision to the goal. Run the report with `--nocapture` and copy the
+line beginning `goal report:` into the checklist below; whether the
+decisions differ at the app's sampling is a fact about the model, not a
+gate. A gate that passes on one run and fails on the next is a model that
+is not deterministic at temperature 0: note that beside the date rather
+than loosening the assertion.
+
+To run only the goal tests:
+
+```bash
+cd src-tauri && MIXINGPAL_EVAL_BASE_URL=https://openrouter.ai/api/v1 \
+  MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
+  cargo test --features evals --test craft -- --test-threads=1 --nocapture the_goal
+```
+
 Date: ___________  Model: ___________  Judge: ___________
 
 - [ ] why does the drop fall flat
 - [ ] what should I do next
 - [ ] is the pad too busy
 - [ ] is the mix okay
-- [ ] the goal changes the advice
+- [ ] the goal changes the advice (gate, temperature 0): garage ______  techno ______
+- [ ] goal report at the app's sampling: `goal report:` line ______________________

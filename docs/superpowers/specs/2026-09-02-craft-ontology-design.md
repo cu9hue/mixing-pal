@@ -270,22 +270,37 @@ stated as conditional.
 twice, once with the goal "dark garage, 2am" and once with "minimal techno,
 peak time".
 
-Judge scores, on each answer alone, two properties: does the answer keep the
-pad's chords as they are, and does it change the chords themselves. A move to
-register, voicing, note length, level, or placement keeps the chords; a
-different progression or chord quality changes them. One and not the other
-is a stance; both or neither is no stance. (Amended 2026-09-03: the first
-real run graded harmonic movement instead, and the model kept movement under
-both goals while its answer to "keep or change" tracked the goal. The stance
-now measures the question asked.) Each arm's
-stance must be unanimous across its runs and the two must differ. Unanimity
-within an arm is the control: two independent three-run majorities would let
-a goal-blind model that varies at random pass about half the time, while
-unanimity in both arms and a difference between them happens by chance a few
-percent of the time. The scenario asserts
-that the goal moved the verdict, never which way: naming the expected
-direction would be a genre fact, and this repo holds none. This is the eval
-that proves the goal is doing work.
+Judge scores, on each answer alone, three properties: the decision is to
+keep the chords, the decision is to change the chords, and the answer says
+which way the goal pushed that decision. The judge grades the decision the
+answer states, not an aside. A move to register, voicing, note length,
+level, or placement keeps the chords; a different progression or chord
+quality changes them. Keep and not change is one decision, change and not
+keep is the other, both or neither is none. A decision counts only when the
+run read the pad's notes and the judge found it tied to the goal.
+
+Two tests. The gate runs each arm once at temperature 0. Both decisions
+must count and must differ. The arms differ only in the GOAL line, so a
+goal-blind model that is deterministic at 0 gives the same decision twice
+and fails: the false-pass rate is zero with no majority or unanimity
+needed. The report runs each arm three times at the app's own sampling and
+asserts only that every answer decides and ties the decision to the goal;
+the six decisions are printed and recorded by hand in
+`docs/manual-verification.md`. Neither test says which goal wants which
+decision: naming that would be a genre fact, and this repo holds none.
+
+Amended 2026-09-03. The first design graded harmonic movement kept or
+reduced and required unanimity across three sampled runs per arm. Three real
+runs against the release model showed two things: the model's stance on
+movement stayed "keep" under both goals while its answer to the question
+asked tracked the goal, and its headline flipped between runs under one goal
+as often as between goals, because it hedged a keep with an optional change.
+A judge on hedged prose measures the hedge. The fix was to make a choice a
+choice in the prompt (Layer 3, rule 2), grade the stated decision, and move
+the causal claim to a deterministic run. A paired judge that sees both arms
+and says whether they differ "because of the goal" was considered and
+rejected: it has no model-independent false-pass rate once the judge sees
+the genre labels.
 
 ### The judge
 
@@ -296,6 +311,12 @@ list. It does not see the tool calls. The judge model is whichever
 `MIXINGPAL_EVAL_MODEL` names; a separate `MIXINGPAL_JUDGE_MODEL` overrides
 it, because a judge should be at least as strong as the model it grades.
 
+The judge call caps output at 4000 tokens, since a judge that reasons before
+it writes spends its budget thinking; an empty reply is reported with the
+provider's finish reason. Scenario 5's gate pins `temperature` to 0 on the
+model under test through the harness; the app itself sends no temperature,
+and every other scenario runs at that default.
+
 ## Acceptance
 
 - The prompt has a "What a good answer is" section naming every axis in the
@@ -303,9 +324,10 @@ it, because a judge should be at least as strong as the model it grades.
 - The tripwire test passes and fails when an axis is removed from the prompt.
 - `shared/craft-set.json` exists and the fake Live in `craft.rs` serves it in
   full.
-- The five scenarios pass on a majority of three runs against the release
-  model, and the run is recorded in `docs/manual-verification.md` beside the
-  honesty evals.
+- Scenarios 1 to 4 pass on a majority of three runs against the release
+  model; scenario 5's gate passes at temperature 0 and its report shows
+  six decisions, each tied to its goal. The runs are recorded in
+  `docs/manual-verification.md` beside the honesty evals.
 - The honesty evals still pass with the new prompt. The craft section must
   not loosen "you cannot hear it".
 - Prompt growth is under a third of the current prompt.
