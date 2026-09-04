@@ -1,6 +1,6 @@
 # Roadmap
 
-Date: 2026-09-02
+Date: 2026-09-04
 
 What ships next and why, in one place. The specs under `docs/superpowers/specs`
 hold the detail. This file is the index. Update it when a spec is approved or a
@@ -35,8 +35,9 @@ App 0.2.2, wire version 11. Shipped:
 - Prompt guardrails and six honesty evals (`src-tauri/tests/evals.rs`), plus
   the craft layer: the "What a good answer is" prompt section and five
   judge-scored craft evals (`src-tauri/tests/craft.rs`). The honesty evals
-  have not yet run against a real model. Craft scenario five ran three times
-  on 2026-09-03 (see item 6).
+  and craft scenarios one to four have not yet run against a real model.
+  Scenario five ran five times on 2026-09-03 and 2026-09-04 and is parked
+  red (see item 6).
 - The arrangement view: section names in the context block, the arrangement
   map with end times, per-placement mute and MIDI type, bar numbers,
   arrangement notes, loop regions and source lengths, and Live's note names.
@@ -102,14 +103,34 @@ Ordered. Each item says what, why, size, and what it waits on.
    `docs/superpowers/specs/2026-09-02-craft-ontology-design.md`. Shipped
    2026-09-02 (c095d72..ea9bc34): the prompt's "What a good answer is"
    section, a clean fixture, and five judge-scored craft scenarios beside
-   the tool-call evals. The loop started 2026-09-03: scenario five ran three
-   times against the release model and stayed red, because it graded a hedge
-   and demanded stability from a sampler. The fix (plan
-   `docs/superpowers/plans/2026-09-03-goal-gate.md`) makes a choice question
-   a choice in the prompt, grades the stated decision, gates at temperature 0,
-   and reports the app's sampling separately. Next: scenarios one to four
-   against the release model, then fixtures for the goals the waitlist names.
-   Size open-ended. Waits on nothing; the key is the app's own.
+   the tool-call evals. The value landed with the prompt section: answers
+   got crisper by ear. The eval loop is regression cover for when the prompt
+   or the model changes, and it ran once, on scenario five, across five paid
+   sessions on 2026-09-03 and 2026-09-04 (plan
+   `docs/superpowers/plans/2026-09-03-goal-gate.md`, record in
+   `docs/manual-verification.md`). Parked red 2026-09-04. It found no prompt
+   defect. It found three facts about the release model through OpenRouter:
+   it can outlast the app's 180-second limit; it is not deterministic at
+   temperature 0; and it headlines "keep" over a move that changes the
+   chords. It also showed the goal line works: every graded answer tied its
+   reasoning to the goal and the move changed with it. What did not change
+   was the keep-or-change verdict, which the rule above says is the model's
+   to hold. A gate on the verdict is therefore the wrong instrument; a gate
+   on whether the move differs would be the right one, and it needs a
+   majority design because the model does not hold still at 0. Not building
+   that now: nobody on the waitlist feels it. Unpark when the prompt's
+   craft section or the default model changes, and run scenarios one to
+   four first. Judge with a model that does not reason
+   (`MIXINGPAL_JUDGE_MODEL`, checklist has the one used).
+
+7. **Default model and latency.** The same slowness that broke the judge is
+   what a producer waits on every turn: the release model through OpenRouter
+   took over 180 seconds on some turns and needs three minutes of timeout
+   to be safe. Why: this is the only item here a producer feels on every
+   question, so it may jump the queue. What it is: measure turn latency per
+   candidate model on the eval fixtures, pick a default that answers a
+   two-tool question in under a minute, and only then re-open the craft
+   evals against it. Size M. Waits on nothing.
 
 ## When the waitlist says go
 
