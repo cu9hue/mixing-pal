@@ -696,10 +696,18 @@ tied to its goal; report did not finish, the judge outlasted the 180 s
 limit on the techno arm (the judge now has twice that). The three techno
 answers that were judged read Keep, Keep, and a Keep headline over a move
 that deletes the F chord.
+Second run the same day with `MIXINGPAL_JUDGE_MODEL=anthropic/claude-sonnet-5`,
+a judge that does not reason unless asked: the whole goal run took 9 minutes
+against 14, and no judge call timed out. Gate red again, garage Change and
+techno Change at temperature 0, so the model under test is not
+deterministic at 0 through this provider (the previous run read Keep and
+Keep on different answers). Both answers headlined "keep the progression"
+over a move that deletes the F chord; the judge graded the move. The
+report stopped on the model under test outlasting its own 180 s limit.
 
 - [ ] why does the drop fall flat
 - [ ] what should I do next
 - [ ] is the pad too busy
 - [ ] is the mix okay
-- [ ] the goal changes the advice (gate, temperature 0): garage Keep  techno Keep (2026-09-04, red)
-- [ ] goal report at the app's sampling: `goal report:` line not reached (judge timeout, 2026-09-04)
+- [ ] the goal changes the advice (gate, temperature 0): garage Keep  techno Keep (2026-09-04, kimi judge, red); garage Change  techno Change (2026-09-04, sonnet judge, red)
+- [ ] goal report at the app's sampling: `goal report:` line not reached twice on 2026-09-04 (judge timeout; then model timeout)
