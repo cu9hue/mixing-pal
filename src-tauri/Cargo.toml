@@ -1,6 +1,6 @@
 [package]
 name = "mixing-pal"
-version = "0.2.2"
+version = "0.2.3"
 description = "A copilot for producers working in Ableton Live"
 authors = ["Polina Guseva <p.guseva00@gmail.com>"]
 edition = "2021"
