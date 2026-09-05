@@ -117,6 +117,104 @@ describe("parseMarkdown fenced code blocks", () => {
   });
 });
 
+describe("parseMarkdown tables", () => {
+  const text = (t: string) => [{ type: "text", text: t }];
+
+  it("parses a header row, a delimiter row, and body rows into one table", () => {
+    const md = "| Axis | Gabber | Bouncy |\n|---|---|---|\n| Kick | every beat | syncopated |\n| Bass | 16ths | sustained |";
+    expect(parseMarkdown(md)).toEqual([
+      {
+        type: "table",
+        header: [text("Axis"), text("Gabber"), text("Bouncy")],
+        rows: [
+          [text("Kick"), text("every beat"), text("syncopated")],
+          [text("Bass"), text("16ths"), text("sustained")],
+        ],
+      },
+    ]);
+  });
+
+  it("parses inline spans inside a cell", () => {
+    const md = "| a | b |\n| --- | :-: |\n| **Kick** | «808 Sub» |";
+    expect(parseMarkdown(md)).toEqual([
+      {
+        type: "table",
+        header: [text("a"), text("b")],
+        rows: [[[{ type: "bold", children: text("Kick") }], [{ type: "fence", name: "808 Sub" }]]],
+      },
+    ]);
+  });
+
+  // The delimiter row is what makes it a table. Without it a line with pipes
+  // is prose that happens to contain pipes.
+  it("leaves a pipe line with no delimiter row as a paragraph", () => {
+    expect(parseMarkdown("| not | a table |")).toEqual([
+      { type: "paragraph", children: text("| not | a table |") },
+    ]);
+  });
+
+  // A short row is padded and a long row is cut to the header's width, so
+  // the renderer never sees a ragged table.
+  it("squares a ragged row to the header's column count", () => {
+    const md = "| a | b |\n|---|---|\n| only |\n| x | y | extra |";
+    expect(parseMarkdown(md)).toEqual([
+      {
+        type: "table",
+        header: [text("a"), text("b")],
+        rows: [
+          [text("only"), []],
+          [text("x"), text("y")],
+        ],
+      },
+    ]);
+  });
+
+  it("ends the table at the first line without pipes", () => {
+    const blocks = parseMarkdown("| a |\n|---|\n| 1 |\nthen prose");
+    expect(blocks.map((b) => b.type)).toEqual(["table", "paragraph"]);
+  });
+
+  // A producer can name a track "Bass|Sub". The fence around it, or a code
+  // span, keeps that pipe inside one cell.
+  it("keeps a pipe inside a fenced name or a code span in one cell", () => {
+    const md = "| Track | Note |\n|---|---|\n| «Bass|Sub» | `a|b` |";
+    expect(parseMarkdown(md)).toEqual([
+      {
+        type: "table",
+        header: [text("Track"), text("Note")],
+        rows: [[[{ type: "fence", name: "Bass|Sub" }], [{ type: "code", text: "a|b" }]]],
+      },
+    ]);
+  });
+
+  it("unescapes a backslash-pipe into a literal pipe", () => {
+    expect(parseMarkdown("| a |\n|---|\n| x \\| y |")).toEqual([
+      { type: "table", header: [text("a")], rows: [[text("x | y")]] },
+    ]);
+  });
+
+  it("accepts a table without outer pipes", () => {
+    expect(parseMarkdown("a | b\n--- | ---\n1 | 2")).toEqual([
+      { type: "table", header: [text("a"), text("b")], rows: [[text("1"), text("2")]] },
+    ]);
+  });
+
+  it("does not start a table when the delimiter row has a different column count", () => {
+    const blocks = parseMarkdown("| A | B |\n|---|\n| 1 | 2 |");
+    expect(blocks.every((b) => b.type === "paragraph")).toBe(true);
+  });
+
+  // The prompt's budget is three columns; eight is the parser's hard stop,
+  // past which padding short rows to the header's width would have no bound
+  // but the model's output. Such a table is unreadable at 380px anyway.
+  it("leaves a table wider than eight columns as prose", () => {
+    const cells = (n: number) => "| " + Array.from({ length: n }, (_, i) => `c${i}`).join(" | ") + " |";
+    const delim = (n: number) => "|" + "---|".repeat(n);
+    expect(parseMarkdown(`${cells(8)}\n${delim(8)}`)[0].type).toBe("table");
+    expect(parseMarkdown(`${cells(9)}\n${delim(9)}`)[0].type).toBe("paragraph");
+  });
+});
+
 describe("parseMarkdown paragraphs", () => {
   it("splits on blank lines", () => {
     const blocks = parseMarkdown("first idea\n\nsecond idea");
@@ -184,10 +282,16 @@ describe("parseMarkdown and raw HTML", () => {
     const blocks = parseMarkdown(hostile);
     expect(blocks).toEqual([{ type: "paragraph", children: [{ type: "text", text: hostile }] }]);
 
+    // The same string inside a table cell is still one text leaf.
+    const inCell = parseMarkdown(`| a |\n|---|\n| ${hostile} |`);
+    expect(inCell).toEqual([
+      { type: "table", header: [[{ type: "text", text: "a" }]], rows: [[[{ type: "text", text: hostile }]]] },
+    ]);
+
     // No node anywhere in the tree is anything but text/bold/italic/code/fence/
-    // paragraph/heading/list/code_block -- there is no "html" or "raw" node
-    // type this parser could produce, so there is no path from this string
-    // to markup.
+    // paragraph/heading/list/code_block/table -- there is no "html" or "raw"
+    // node type this parser could produce, so there is no path from this
+    // string to markup.
     const allowedTypes = new Set([
       "text",
       "bold",
@@ -198,17 +302,23 @@ describe("parseMarkdown and raw HTML", () => {
       "heading",
       "list",
       "code_block",
+      "table",
     ]);
     function walk(node: BlockNode | InlineNode) {
       expect(allowedTypes.has(node.type)).toBe(true);
       if (node.type === "paragraph" || node.type === "heading") walk_all(node.children);
       if (node.type === "bold" || node.type === "italic") walk_all(node.children);
       if (node.type === "list") node.items.forEach(walk_all);
+      if (node.type === "table") {
+        node.header.forEach(walk_all);
+        node.rows.forEach((row) => row.forEach(walk_all));
+      }
     }
     function walk_all(nodes: InlineNode[]) {
       nodes.forEach(walk);
     }
     blocks.forEach(walk);
+    inCell.forEach(walk);
   });
 });
 

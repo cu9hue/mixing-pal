@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
@@ -6,6 +6,7 @@ import { buildContext } from "../digest/build";
 import { BlockNode, InlineNode, parseMarkdown } from "./markdown";
 import { progressLabel } from "./progressLabel";
 import { waitingLabel } from "./waitingLabel";
+import { Exchange, begin, complete, fail } from "./thread";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -74,15 +75,54 @@ function renderBlocks(blocks: BlockNode[]): ReactNode {
             {b.text}
           </pre>
         );
+      // Cells wrap first; past a floor per cell the wrapper scrolls sideways
+      // instead, so a wide table never breaks the card's width.
+      case "table":
+        return (
+          <div key={i} className="card__table-wrap">
+            <table className="card__table">
+              <thead>
+                <tr>
+                  {b.header.map((cell, j) => (
+                    <th key={j}>{renderInline(cell)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {b.rows.map((row, r) => (
+                  <tr key={r}>
+                    {row.map((cell, j) => (
+                      <td key={j}>{renderInline(cell)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
     }
   });
 }
 
+// Memoised because the component below re-renders once a second while a
+// turn runs, and an Exchange never changes once settled: without this every
+// tick would reparse every answer of the session.
+const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
+  return (
+    <>
+      <div className="card__question">{x.question}</div>
+      {x.answer !== null && (
+        <div className="card__answer selectable">{renderBlocks(parseMarkdown(x.answer))}</div>
+      )}
+      {x.error !== null && <div className="card__error selectable">{x.error}</div>}
+    </>
+  );
+});
+
 /**
- * Reading model 2: only the current exchange is on screen.
- *
- * `history` keeps a short recent context window for the model. The session
- * reader that surfaces older exchanges is a later plan.
+ * The whole session is on screen, newest exchange last. She reads the
+ * thread; the model is sent `history`, a short recent window. The two are
+ * different budgets and neither one caps the other.
  */
 export function Conversation({
   state,
@@ -96,12 +136,22 @@ export function Conversation({
   onAnswer: () => void;
 }) {
   const [history, setHistory] = useState<ChatMessage[]>([]);
-  const [question, setQuestion] = useState<string | null>(null);
-  const [answer, setAnswer] = useState<string | null>(null);
+  const [thread, setThread] = useState<Exchange[]>([]);
   const [input, setInput] = useState("");
   const [progress, setProgress] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // The newest question goes to the top of the body, which is where the
+  // card has always put the question she is about to read the answer to.
+  // Sending always scrolls. A fresh question has nothing below it yet, so
+  // it may stop short of the top; the answer arriving scrolls again to
+  // finish the job, but only while she is still at the bottom. Scrolling
+  // up to an older answer unpins her, and nothing then pulls her away.
+  const newest = useRef<HTMLDivElement>(null);
+  const pinned = useRef(true);
+  useEffect(() => {
+    if (pinned.current) newest.current?.scrollIntoView({ block: "start" });
+  }, [thread]);
 
   // When the current turn started, and a clock to re-read it against. The
   // elapsed figure only appears once a turn is slow, but nothing else
@@ -119,9 +169,8 @@ export function Conversation({
     const asked = input.trim();
     if (asked === "" || busy) return;
     setInput("");
-    setError(null);
-    setAnswer(null);
-    setQuestion(asked);
+    pinned.current = true;
+    setThread((t) => begin(t, asked));
     startedAt.current = Date.now();
     setElapsedMs(0);
     setBusy(true);
@@ -162,11 +211,11 @@ export function Conversation({
         ...h,
         { role: "assistant" as const, content: out.text },
       ].slice(-MAX_HISTORY_MESSAGES));
-      setAnswer(out.text);
+      setThread((t) => complete(t, out.text));
       onAnswer();
     } catch (e) {
       // Provider errors surface as text and the app keeps running.
-      setError(String(e));
+      setThread((t) => fail(t, String(e)));
     } finally {
       setProgress(null);
       setBusy(false);
@@ -178,11 +227,22 @@ export function Conversation({
 
   return (
     <>
-      <div className="card__body">
-        {question !== null && <div className="card__question">{question}</div>}
-        {answer !== null && (
-          <div className="card__answer selectable">{renderBlocks(parseMarkdown(answer))}</div>
-        )}
+      <div
+        className="card__body"
+        onScroll={(e) => {
+          const b = e.currentTarget;
+          pinned.current = b.scrollHeight - b.scrollTop - b.clientHeight <= 1;
+        }}
+      >
+        {thread.map((x, i) => (
+          <div
+            key={i}
+            className="card__exchange"
+            ref={i === thread.length - 1 ? newest : undefined}
+          >
+            <ExchangeView x={x} />
+          </div>
+        ))}
         {waiting !== null && (
           <div
             className={`card__progress${progress === null ? " card__progress--thinking" : ""}`}
@@ -190,7 +250,6 @@ export function Conversation({
             {waiting}
           </div>
         )}
-        {error !== null && <div className="card__error selectable">{error}</div>}
       </div>
       <div className="card__footer">
         <input

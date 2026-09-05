@@ -1,6 +1,6 @@
 # Roadmap
 
-Date: 2026-09-04
+Date: 2026-09-05
 
 What ships next and why, in one place. The specs under `docs/superpowers/specs`
 hold the detail. This file is the index. Update it when a spec is approved or a
@@ -22,14 +22,14 @@ no server.
 
 ## Where we are
 
-App 0.2.2, wire version 11. Shipped:
+App 0.2.3, wire version 11. Shipped:
 
 - The set mirror over OSC, a vendored AbletonOSC fork, and a connector the app
   installs itself.
 - Chat with eight read tools: track detail, clips, clip notes, arrangement,
   arrangement notes, device chains, device params, rack contents.
-- The product shell: pill and card, first run, the goal, and one nudge rule
-  (unnamed tracks).
+- The product shell: pill and card, first run, the goal, one nudge rule
+  (unnamed tracks), and the thread view.
 - An unsigned `.dmg`, with `docs/opening-an-unsigned-build.md` for getting past
   Gatekeeper.
 - Prompt guardrails and six honesty evals (`src-tauri/tests/evals.rs`), plus
@@ -72,11 +72,10 @@ Ordered. Each item says what, why, size, and what it waits on.
 
 1. **Land the arrangement view.** Done 2026-09-02 (ba5c78e).
 
-2. **Thread view.** Earlier exchanges scroll above the current one inside the
-   card. The latest exchange stays the anchor at the bottom, so the window
-   geometry does not change. Why: a follow-up erases the answer she was acting
-   on, and asking again costs a round trip. Size S. Waits on nothing; the
-   history is already in `Conversation.tsx` state.
+2. **Thread view.** Done 2026-09-05. Earlier exchanges scroll above the
+   current one inside the card; the newest question is scrolled to the top
+   of the body on send. The thread is the session and dies with the app
+   until item 4.
 
 3. **Set identity.** The connector writes a random id into the set with
    `Song.set_data` on first contact and reads it back with `Song.get_data` on

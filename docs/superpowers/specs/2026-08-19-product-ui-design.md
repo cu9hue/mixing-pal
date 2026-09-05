@@ -32,8 +32,7 @@ and failure states, the nudge surface plus one rule, the Advanced pane, design
 tokens, and the `install_connector` command that onboarding step 1 calls.
 
 **Out:** the rename sweep itself (A — see The name), signing and notarization (A),
-the proxy and real accounts (B), the reader panel (designed here, built after the
-card is in use), `off_scale_notes` (blocked on `PollKind::FocusedNotes`, still
+the proxy and real accounts (B), `off_scale_notes` (blocked on `PollKind::FocusedNotes`, still
 unwired at `lib.rs:974`).
 
 ## Principles
@@ -52,7 +51,7 @@ advises on. It reads settings. So facts the app measured are small, dim, and
 letterspaced; the model's prose is the largest and lightest text on screen. The
 separation is carried by size, weight, and space, in one type family. An earlier
 draft carried it with a serif for the model's prose; that was withdrawn — at
-14px on a dark background in a 320px panel a serif loses to a good sans on every
+14px on a dark background in a 380px panel a serif loses to a good sans on every
 measure that matters.
 
 **3. Quiet by default, words only on failure.** Three of the pill's four states
@@ -90,7 +89,7 @@ a webview reload that has to reconstruct which one is real.
 | --- | --- | --- | --- | --- |
 | `setup` | 600 × 680 | centred | off | no |
 | `pill` | 44 × 44 | remembered | on | yes |
-| `card` | 320 × content, max 520 | remembered | on | yes |
+| `card` | 380 × content, max 520 | remembered | on | yes |
 
 - The pill window is 44×44 so the 26px dot has room for its glow. Transparency is
   required or the glow renders on a black square.
@@ -145,9 +144,21 @@ stays quiet because she wrote it and does not need to read it back.
 left, the label `Noticed` above the sentence. Dismissible; dismissal persists for
 the session. Never more than one at a time.
 
-**Answer area.** The current exchange only — reading model 2. The question sits
-above the answer in dim 13px so the answer has something to attach to. Previous
-turns are not on screen; the model still receives full history.
+**Answer area.** The whole session, newest exchange last, with a hairline rule
+between exchanges. Each question sits above its answer in dim 13px so the answer
+has something to attach to. Sending scrolls the new question to the top of the
+body, so a long answer still reads from its first line; earlier exchanges are
+reachable by scrolling up. The window geometry does not change for this: the
+card grows to its ceiling and the body scrolls inside it. A failed turn keeps its
+place as its question plus the error. Since 2026-09-05 a pipe table renders as a
+table: cells wrap first, and past a 72px floor per cell the table scrolls
+sideways inside the answer rather than widening the card. The prompt gives the
+model a budget of three columns; the card is 380 wide for the same reason. The
+thread is the session, separate from
+the history window the model is sent, and it dies with the app until per-set
+persistence gives it a longer life. (Until 2026-09-05 the card showed the current
+exchange only, with a separate reader panel designed for the rest. The thread
+replaced both; see The reader.)
 
 **Progress.** While a turn is running, one dim line that names the thing, not the
 function: `reading Pad Wide…`, not `reading get_track_detail({"index":3})…`. When
@@ -178,21 +189,19 @@ and its one job is proof that the app really reads the set.
 
 Only the failure state has words.
 
-## The reader — designed here, built later
+## The reader — not being built
 
 "I want to see the thing it said twenty minutes ago" is a real need, and paging
-back with arrows is a poor answer to it. The reader is a taller panel listing the
-whole session — every question, every answer, every nudge — with the current one
-marked.
-
-It is deliberately not in the first build. The card is reading model 2 and that
-is the correct permanent state; building the reader second means the card never
-grows navigation it will later throw away, and no one carries two layouts before
-the first has been used in anger.
+back with arrows is a poor answer to it. The first version of this spec answered
+it with a reader: a taller panel listing the whole session, built once the card
+had been used in anger. In use, the sharper need turned out to be smaller: a
+follow-up erased the answer she was still acting on. The thread in the answer
+area fixes that and answers the twenty-minutes-ago question in the same layout,
+so the reader is dropped. Nudges are not in the thread; a dismissed nudge is gone.
 
 ## First run
 
-A setup window, because Live's preferences cannot be taught in a 320px card. It
+A setup window, because Live's preferences cannot be taught in a 380px card. It
 shrinks into the card when setup completes.
 
 ### The steps

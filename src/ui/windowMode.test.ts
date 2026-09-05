@@ -90,7 +90,7 @@ describe("MODE_GEOMETRY", () => {
   it("gives the card a content-following height with a ceiling", () => {
     expect(MODE_GEOMETRY.card.height).toBeNull();
     expect(MODE_GEOMETRY.card.maxHeight).toBe(520);
-    expect(MODE_GEOMETRY.card.width).toBe(320);
+    expect(MODE_GEOMETRY.card.width).toBe(380);
   });
 
   it("keeps setup off the top of every other window", () => {
@@ -114,7 +114,7 @@ describe("geometryApply", () => {
   // The bug this exists to prevent: the measuring effect and the applying
   // effect ran in the same commit, so a mode change applied the OUTGOING
   // mode's height to the incoming mode's window -- setup→card sent
-  // {320, 680} and only then {320, 400}. Two native resizes, one of them
+  // {380, 680} and only then {380, 400}. Two native resizes, one of them
   // visibly wrong, on every single transition.
   it("applies nothing while the measurement belongs to the mode we just left", () => {
     expect(geometryApply("pill", CARD_MEASURED, null)).toBeNull();
@@ -122,7 +122,7 @@ describe("geometryApply", () => {
 
   it("applies the measured height once the measurement catches up", () => {
     expect(geometryApply("card", CARD_MEASURED, null)).toEqual({
-      width: 320,
+      width: 380,
       height: 400,
       alwaysOnTop: true,
       center: false,

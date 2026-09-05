@@ -144,6 +144,15 @@
   min-height: 0;
 }
 
+/* Exchanges stack oldest to newest. The rule is the only thing between
+   them: an older answer is still the same text at the same weight, just
+   further up. */
+.card__exchange + .card__exchange {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
 .card__question {
   font-size: 13px;
   line-height: 1.5;
@@ -193,6 +202,35 @@
   overflow-x: auto;
 }
 
+/* A table wraps its cells first. Each cell has a floor, so past about four
+   columns the wrapper scrolls sideways rather than squeezing text to one
+   word a line. The window never grows to fit a table. */
+.card__table-wrap {
+  overflow-x: auto;
+  margin: 0 0 10px;
+}
+
+.card__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.card__table th,
+.card__table td {
+  min-width: 72px;
+  padding: 5px 8px 5px 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.card__table th {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .card__fence {
   background: var(--surface-overlay);
   border-radius: 5px;
@@ -226,6 +264,8 @@
   border: 1px solid rgba(224, 108, 92, 0.28);
   border-radius: var(--radius-control);
   padding: 10px 12px;
+  /* Transport errors quote a URL, which has no break points of its own. */
+  overflow-wrap: anywhere;
 }
 
 .card__footer {

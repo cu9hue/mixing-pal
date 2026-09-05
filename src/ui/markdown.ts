@@ -29,11 +29,90 @@ export type BlockNode =
   | { type: "paragraph"; children: InlineNode[] }
   | { type: "heading"; level: 1 | 2 | 3; children: InlineNode[] }
   | { type: "list"; ordered: boolean; items: InlineNode[][] }
-  | { type: "code_block"; text: string };
+  | { type: "code_block"; text: string }
+  // Every row has exactly header.length cells; see collectTable.
+  | { type: "table"; header: InlineNode[][]; rows: InlineNode[][][] };
 
 const HEADING_RE = /^(#{1,3}) (.*)$/;
 const UNORDERED_RE = /^[-*] /;
 const ORDERED_RE = /^(\d+)\. (.*)$/;
+// One cell of the delimiter row under a table's header: dashes with optional
+// alignment colons. That row is what makes the lines around it a table.
+const TABLE_DELIMITER_CELL_RE = /^:?-+:?$/;
+// The prompt asks for at most three columns. Eight is the hard stop: past it
+// padding every short row to the header's width has no bound but the model's
+// output, and such a table is unreadable at the card's width anyway.
+const MAX_TABLE_COLUMNS = 8;
+
+/**
+ * Splits one table row into its trimmed cells. Outer pipes are optional. A
+ * pipe inside a code span or a «fenced» name stays in its cell -- a producer
+ * can name a track "Bass|Sub" -- and `\|` is a literal pipe.
+ */
+function tableCells(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|") && !s.endsWith("\\|")) s = s.slice(0, -1);
+  const cells: string[] = [];
+  let cell = "";
+  let closer: string | null = null;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (closer !== null) {
+      if (ch === closer) closer = null;
+      cell += ch;
+    } else if (ch === "\\" && s[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (ch === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      if (ch === "`") closer = "`";
+      else if (ch === "«") closer = "»";
+      cell += ch;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function isTableRow(line: string): boolean {
+  return line.includes("|") && line.trim() !== "";
+}
+
+/** A header row over a delimiter row of the same width, within the cap. */
+function startsTable(lines: string[], i: number): boolean {
+  if (!isTableRow(lines[i]) || i + 1 >= lines.length || !isTableRow(lines[i + 1])) return false;
+  const delimiter = tableCells(lines[i + 1]);
+  return (
+    delimiter.every((c) => TABLE_DELIMITER_CELL_RE.test(c)) &&
+    delimiter.length === tableCells(lines[i]).length &&
+    delimiter.length <= MAX_TABLE_COLUMNS
+  );
+}
+
+/**
+ * Gathers one pipe table starting at `start`, which `startsTable` has
+ * accepted. Ends at the first line that is not a row. Rows are squared to
+ * the header's width: a short row gets empty cells and a long row loses its
+ * extras, so the renderer never meets a ragged table.
+ */
+function collectTable(
+  lines: string[],
+  start: number,
+): { header: InlineNode[][]; rows: InlineNode[][][]; next: number } {
+  const header = tableCells(lines[start]).map(parseInline);
+  const rows: InlineNode[][][] = [];
+  let i = start + 2;
+  while (i < lines.length && isTableRow(lines[i])) {
+    const cells = tableCells(lines[i]).slice(0, header.length);
+    while (cells.length < header.length) cells.push("");
+    rows.push(cells.map(parseInline));
+    i++;
+  }
+  return { header, rows, next: i };
+}
 
 /**
  * Gathers one list's items, starting at `start`.
@@ -148,6 +227,13 @@ function parseBlocks(markdown: string): BlockNode[] {
         i = list.next;
         continue;
       }
+
+      if (startsTable(lines, i)) {
+        const table = collectTable(lines, i);
+        blocks.push({ type: "table", header: table.header, rows: table.rows });
+        i = table.next;
+        continue;
+      }
     }
 
     const paraLines: string[] = [];
@@ -157,7 +243,8 @@ function parseBlocks(markdown: string): BlockNode[] {
       !lines[i].trim().startsWith("```") &&
       !HEADING_RE.test(lines[i]) &&
       !UNORDERED_RE.test(lines[i]) &&
-      !ORDERED_RE.test(lines[i])
+      !ORDERED_RE.test(lines[i]) &&
+      !startsTable(lines, i)
     ) {
       paraLines.push(lines[i]);
       i++;
