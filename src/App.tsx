@@ -277,9 +277,8 @@ export default function App() {
         />
       )}
       {/* Mounted whether or not it is showing. The conversation lives in
-          here, and the spec's "previous turns are not on screen; the model
-          still receives full history" only holds if collapsing to the pill
-          does not throw the history away with the component. */}
+          here: the thread she reads and the history the model is sent both
+          survive a collapse to the pill only if the component does. */}
       <div className={view === "card" ? undefined : "card-slot--hidden"}>
         <Card
           state={state}

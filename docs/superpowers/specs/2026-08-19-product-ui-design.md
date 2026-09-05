@@ -149,6 +149,16 @@ the session. Never more than one at a time.
 above the answer in dim 13px so the answer has something to attach to. Previous
 turns are not on screen; the model still receives full history.
 
+*Amended 2026-09-05.* The card now holds the whole session, newest exchange last,
+with a hairline rule between exchanges. Sending scrolls the new question to the
+top of the body, so a long answer still reads from its first line; earlier
+exchanges are reachable by scrolling up. The window geometry is unchanged: the
+card grows to its ceiling and the body scrolls inside it. A failed turn keeps its
+place as its question plus the error. The thread is the session, separate from
+the history window the model is sent, and it dies with the app until per-set
+persistence gives it a longer life. This replaces the reader below, which is not
+being built: the thread already answers "the thing it said twenty minutes ago".
+
 **Progress.** While a turn is running, one dim line that names the thing, not the
 function: `reading Pad Wide…`, not `reading get_track_detail({"index":3})…`. When
 the tool's arguments resolve to a track in the mirror, name that track; when they
