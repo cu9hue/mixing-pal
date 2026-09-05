@@ -32,8 +32,7 @@ and failure states, the nudge surface plus one rule, the Advanced pane, design
 tokens, and the `install_connector` command that onboarding step 1 calls.
 
 **Out:** the rename sweep itself (A — see The name), signing and notarization (A),
-the proxy and real accounts (B), the reader panel (designed here, built after the
-card is in use), `off_scale_notes` (blocked on `PollKind::FocusedNotes`, still
+the proxy and real accounts (B), `off_scale_notes` (blocked on `PollKind::FocusedNotes`, still
 unwired at `lib.rs:974`).
 
 ## Principles
@@ -145,19 +144,17 @@ stays quiet because she wrote it and does not need to read it back.
 left, the label `Noticed` above the sentence. Dismissible; dismissal persists for
 the session. Never more than one at a time.
 
-**Answer area.** The current exchange only — reading model 2. The question sits
-above the answer in dim 13px so the answer has something to attach to. Previous
-turns are not on screen; the model still receives full history.
-
-*Amended 2026-09-05.* The card now holds the whole session, newest exchange last,
-with a hairline rule between exchanges. Sending scrolls the new question to the
-top of the body, so a long answer still reads from its first line; earlier
-exchanges are reachable by scrolling up. The window geometry is unchanged: the
+**Answer area.** The whole session, newest exchange last, with a hairline rule
+between exchanges. Each question sits above its answer in dim 13px so the answer
+has something to attach to. Sending scrolls the new question to the top of the
+body, so a long answer still reads from its first line; earlier exchanges are
+reachable by scrolling up. The window geometry does not change for this: the
 card grows to its ceiling and the body scrolls inside it. A failed turn keeps its
 place as its question plus the error. The thread is the session, separate from
 the history window the model is sent, and it dies with the app until per-set
-persistence gives it a longer life. This replaces the reader below, which is not
-being built: the thread already answers "the thing it said twenty minutes ago".
+persistence gives it a longer life. (Until 2026-09-05 the card showed the current
+exchange only, with a separate reader panel designed for the rest. The thread
+replaced both; see The reader.)
 
 **Progress.** While a turn is running, one dim line that names the thing, not the
 function: `reading Pad Wide…`, not `reading get_track_detail({"index":3})…`. When
@@ -188,17 +185,15 @@ and its one job is proof that the app really reads the set.
 
 Only the failure state has words.
 
-## The reader — designed here, built later
+## The reader — not being built
 
 "I want to see the thing it said twenty minutes ago" is a real need, and paging
-back with arrows is a poor answer to it. The reader is a taller panel listing the
-whole session — every question, every answer, every nudge — with the current one
-marked.
-
-It is deliberately not in the first build. The card is reading model 2 and that
-is the correct permanent state; building the reader second means the card never
-grows navigation it will later throw away, and no one carries two layouts before
-the first has been used in anger.
+back with arrows is a poor answer to it. The first version of this spec answered
+it with a reader: a taller panel listing the whole session, built once the card
+had been used in anger. In use, the sharper need turned out to be smaller: a
+follow-up erased the answer she was still acting on. The thread in the answer
+area fixes that and answers the twenty-minutes-ago question in the same layout,
+so the reader is dropped. Nudges are not in the thread; a dismissed nudge is gone.
 
 ## First run
 

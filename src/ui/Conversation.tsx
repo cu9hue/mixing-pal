@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
@@ -78,6 +78,21 @@ function renderBlocks(blocks: BlockNode[]): ReactNode {
     }
   });
 }
+
+// Memoised because the component below re-renders once a second while a
+// turn runs, and an Exchange never changes once settled: without this every
+// tick would reparse every answer of the session.
+const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
+  return (
+    <>
+      <div className="card__question">{x.question}</div>
+      {x.answer !== null && (
+        <div className="card__answer selectable">{renderBlocks(parseMarkdown(x.answer))}</div>
+      )}
+      {x.error !== null && <div className="card__error selectable">{x.error}</div>}
+    </>
+  );
+});
 
 /**
  * The whole session is on screen, newest exchange last. She reads the
@@ -200,11 +215,7 @@ export function Conversation({
             className="card__exchange"
             ref={i === thread.length - 1 ? newest : undefined}
           >
-            <div className="card__question">{x.question}</div>
-            {x.answer !== null && (
-              <div className="card__answer selectable">{renderBlocks(parseMarkdown(x.answer))}</div>
-            )}
-            {x.error !== null && <div className="card__error selectable">{x.error}</div>}
+            <ExchangeView x={x} />
           </div>
         ))}
         {waiting !== null && (
