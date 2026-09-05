@@ -382,7 +382,7 @@ pub async fn complete_with_body(
 /// conversation causes it.
 ///
 /// 4096 is a ceiling, not a budget: the prompt asks for brief answers and the
-/// card is 320px wide. It sits far under every cap this app has seen, so a
+/// card is 380px wide. It sits far under every cap this app has seen, so a
 /// provider changing its own limit cannot take the app down.
 pub const MAX_OUTPUT_TOKENS: u32 = 4096;
 

@@ -14,7 +14,7 @@
     "windows": [
       {
         "title": "Mixing Pal",
-        "width": 320,
+        "width": 380,
         "height": 480,
         "decorations": false,
         "transparent": true,
