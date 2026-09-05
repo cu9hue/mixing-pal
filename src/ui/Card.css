@@ -235,6 +235,8 @@
   border: 1px solid rgba(224, 108, 92, 0.28);
   border-radius: var(--radius-control);
   padding: 10px 12px;
+  /* Transport errors quote a URL, which has no break points of its own. */
+  overflow-wrap: anywhere;
 }
 
 .card__footer {
