@@ -3,6 +3,7 @@ import { SetState } from "../live/model";
 import { Nudge } from "../rules/nudges";
 import { SetupStep } from "../setup/step";
 import { Header } from "./Header";
+import { GoalRow } from "./GoalRow";
 import { Noticed } from "./Noticed";
 import { Conversation } from "./Conversation";
 import { WhatICanSee } from "./WhatICanSee";
@@ -33,9 +34,15 @@ export function Card({
   onCollapse: () => void;
   onShowSetup: (step: SetupStep) => void;
 }) {
+  // One drag mechanism for the whole card: everything inside drags the
+  // window, except buttons, inputs, and summaries (Tauri blocks those
+  // itself), the answer and error text she may want to select, and the
+  // scrollable body's own box, so the scrollbar thumb still scrolls. Each
+  // exchange opts back in. See dragRegions.test.ts.
   return (
-    <div className="card">
-      <Header connected={connected} goal={goal} onGoalChange={onGoalChange} onCollapse={onCollapse} />
+    <div className="card" data-tauri-drag-region="deep">
+      <Header connected={connected} onCollapse={onCollapse} />
+      <GoalRow goal={goal} onGoalChange={onGoalChange} />
       <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />
       {nudge !== null && connected && (
         <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />

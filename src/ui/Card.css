@@ -69,7 +69,35 @@
   background: var(--error);
 }
 
-/* The goal is dim because she wrote it -- it needs to be visible, not read. */
+/* Which connection, and whether it holds. The word is the same measured-
+   fact style as every other label; the dot carries the state. */
+.card__live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.card__live--error {
+  color: var(--error-label);
+}
+
+/* The goal has its own row so it reads as a field she owns, not as the
+   window's title: a label, her words, and a pencil that says it is
+   editable. Her words stay dim because she wrote them; she needs to see
+   that they are there, not read them back. */
+.card__goal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 15px;
+  border-bottom: 1px solid var(--border);
+}
+
+.card__goal-label {
+  flex: none;
+}
+
 .card__goal,
 .card__goal-input {
   flex: 1;
@@ -78,13 +106,45 @@
   border: none;
   padding: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-muted);
   text-align: left;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  white-space: nowrap;
+}
+
+.card__goal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   cursor: pointer;
+  border-radius: 4px;
+}
+
+.card__goal:focus-visible {
+  outline: 1px solid var(--border-strong);
+  outline-offset: 3px;
+}
+
+.card__goal-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card__goal--empty .card__goal-text {
+  color: var(--text-faint);
+}
+
+.card__goal-pencil {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.card__goal:hover .card__goal-pencil,
+.card__goal:focus-visible .card__goal-pencil {
+  color: var(--text-secondary);
 }
 
 .card__goal-input {
@@ -134,6 +194,9 @@
   font-size: 11px;
   letter-spacing: 0.4px;
   color: var(--text-muted);
+}
+
+.card__noticed-body .card__label {
   margin-bottom: 5px;
 }
 
