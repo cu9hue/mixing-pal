@@ -95,8 +95,15 @@ a webview reload that has to reconstruct which one is real.
   required or the glow renders on a black square.
 - Card height follows content and clamps at 520. Past that the answer body
   scrolls inside the card; the header, input, and disclaimer never scroll away.
-- The whole card is a drag region (`data-tauri-drag-region`) except the input,
-  buttons, chevron, and goal text.
+- The whole card is a drag region except the controls and the text worth
+  selecting. The card root carries `data-tauri-drag-region="deep"`, so any
+  click inside it drags; Tauri itself refuses the drag on buttons, inputs, and
+  `summary`. The answer and the error box opt out with `"false"` so a drag
+  there selects text. The scrollable body opts out too, so the scrollbar thumb
+  scrolls, and each exchange and the progress line opt back in with `"deep"`.
+  The first shell put a bare attribute on the header alone, which drags only
+  from the element itself, and the goal button filled that header, so the
+  window moved only from the gaps. (Since 2026-09-05.)
 - Position is remembered and restored. Store it keyed by the current screen
   layout, so plugging in a monitor does not place the card off-screen. On
   restore, clamp to the visible area of some current monitor.
@@ -115,7 +122,9 @@ Top to bottom:
 
 ```
 ┌──────────────────────────────────────┐
-│ ● │ dark garage, 2am            ⌄   │   header
+│ ▣  ● Live                       ⌄   │   header
+├──────────────────────────────────────┤
+│ GOAL  dark garage, 2am          ✎   │   goal row
 ├──────────────────────────────────────┤
 │ ▍ Noticed                            │   nudge slot (only when present)
 │ ▍ Seven tracks are still named       │
@@ -133,12 +142,22 @@ Top to bottom:
 └──────────────────────────────────────┘
 ```
 
-**Header.** Status dot, the goal text, a chevron. Nothing else. The goal is the
-persistent free-text field the original spec calls "probably the highest leverage"
-thing in the design — it cannot be a permanent input box in this chrome, so it
-becomes the header's one line of text: dim, click to edit, `maxLength` 500,
-persisted as today. It stays visible because it makes answers specific, and it
-stays quiet because she wrote it and does not need to read it back.
+**Header.** The mark, the connection, a chevron. The connection is the status
+dot with the word `Live` beside it in the measured-fact label style, and a title
+that says "Connected to Live" or "Not connected to Live". The dot alone, which is
+what the first shell had, asked her to guess what it measured. The word costs
+one label and settles it. The words on failure still belong to the banner under
+the header.
+
+**Goal row.** The goal is the persistent free-text field the original spec calls
+"probably the highest leverage" thing in the design. Until 2026-09-05 it was the
+header's one line of dim text, and it read as a window title: nothing said what
+it was or that a click would edit it. It now has its own row under the header:
+the label `Goal`, her words, and a pencil at the right. Click anywhere on the
+words or the pencil to edit; `maxLength` 500, persisted as today. Her words stay
+dim because she wrote them and does not need to read them back. Empty, the row
+reads "What are you making?" in the faintest text, as a placeholder and not as
+content.
 
 **Noticed slot.** Present only when a nudge is live. A 2px accent rule on the
 left, the label `Noticed` above the sentence. Dismissible; dismissal persists for

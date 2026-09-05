@@ -112,9 +112,15 @@ const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
     <>
       <div className="card__question">{x.question}</div>
       {x.answer !== null && (
-        <div className="card__answer selectable">{renderBlocks(parseMarkdown(x.answer))}</div>
+        <div className="card__answer selectable" data-tauri-drag-region="false">
+          {renderBlocks(parseMarkdown(x.answer))}
+        </div>
       )}
-      {x.error !== null && <div className="card__error selectable">{x.error}</div>}
+      {x.error !== null && (
+        <div className="card__error selectable" data-tauri-drag-region="false">
+          {x.error}
+        </div>
+      )}
     </>
   );
 });
@@ -229,6 +235,7 @@ export function Conversation({
     <>
       <div
         className="card__body"
+        data-tauri-drag-region="false"
         onScroll={(e) => {
           const b = e.currentTarget;
           pinned.current = b.scrollHeight - b.scrollTop - b.clientHeight <= 1;
@@ -238,6 +245,7 @@ export function Conversation({
           <div
             key={i}
             className="card__exchange"
+            data-tauri-drag-region="deep"
             ref={i === thread.length - 1 ? newest : undefined}
           >
             <ExchangeView x={x} />
@@ -246,6 +254,7 @@ export function Conversation({
         {waiting !== null && (
           <div
             className={`card__progress${progress === null ? " card__progress--thinking" : ""}`}
+            data-tauri-drag-region="deep"
           >
             {waiting}
           </div>
