@@ -31,7 +31,7 @@ export interface Geometry {
 export const CARD_MAX_HEIGHT = 520;
 
 export const MODE_GEOMETRY: Record<WindowMode, Geometry> = {
-  // Live's preferences cannot be taught in a 320px card, so setup is a
+  // Live's preferences cannot be taught in a 380px card, so setup is a
   // real window. Not on top: it is a task she completes, not a companion.
   setup: { width: 600, height: 680, maxHeight: null, alwaysOnTop: false, centered: true },
   // 52 square so the 34px body has room for its shadow and its unread
@@ -40,7 +40,8 @@ export const MODE_GEOMETRY: Record<WindowMode, Geometry> = {
   // dark rectangle around the pill. The margin here and the shadow radii
   // in Pill.css are one budget; widen either and check the other.
   pill: { width: 52, height: 52, maxHeight: null, alwaysOnTop: true, centered: false },
-  card: { width: 320, height: null, maxHeight: CARD_MAX_HEIGHT, alwaysOnTop: true, centered: false },
+  // 380 so a three-column table gets about 110px a column; see Card.css.
+  card: { width: 380, height: null, maxHeight: CARD_MAX_HEIGHT, alwaysOnTop: true, centered: false },
 };
 
 /** A height, and the mode it was measured for. The pairing is the point. */
@@ -69,7 +70,7 @@ export type GeometryApply = {
  * Measuring and applying happen in two different effects, and on a mode
  * change the applying one runs first -- with a height measured for the mode
  * we just left. Applying it sized the incoming window to the outgoing
- * content: setup→card sent {320, 680} and only then {320, 400}, so every
+ * content: setup→card sent {380, 680} and only then {380, 400}, so every
  * transition pushed one visibly wrong frame through a native resize the
  * compositor does not batch. Pairing the height with the mode it was
  * measured for turns that into a check this function can make.

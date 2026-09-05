@@ -29,11 +29,51 @@ export type BlockNode =
   | { type: "paragraph"; children: InlineNode[] }
   | { type: "heading"; level: 1 | 2 | 3; children: InlineNode[] }
   | { type: "list"; ordered: boolean; items: InlineNode[][] }
-  | { type: "code_block"; text: string };
+  | { type: "code_block"; text: string }
+  // Every row has exactly header.length cells; see collectTable.
+  | { type: "table"; header: InlineNode[][]; rows: InlineNode[][][] };
 
 const HEADING_RE = /^(#{1,3}) (.*)$/;
 const UNORDERED_RE = /^[-*] /;
 const ORDERED_RE = /^(\d+)\. (.*)$/;
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
+// The row of dashes under a header, with optional alignment colons. Its
+// presence is what makes the lines above and below a table at all.
+const TABLE_DELIMITER_RE = /^\s*\|(\s*:?-+:?\s*\|)+\s*$/;
+
+/** Splits `| a | b |` into its cells, trimmed. */
+function tableCells(line: string): string[] {
+  const inner = line.trim().slice(1, -1);
+  return inner.split("|").map((c) => c.trim());
+}
+
+/**
+ * Gathers one pipe table starting at `start`, which must be a header row
+ * followed by a delimiter row. Ends at the first line that is not a row.
+ * Rows are squared to the header's width: a short row gets empty cells and
+ * a long row loses its extras, so the renderer never meets a ragged table.
+ */
+function collectTable(
+  lines: string[],
+  start: number,
+): { header: InlineNode[][]; rows: InlineNode[][][]; next: number } {
+  const header = tableCells(lines[start]).map(parseInline);
+  const rows: InlineNode[][][] = [];
+  let i = start + 2;
+  while (i < lines.length && TABLE_ROW_RE.test(lines[i])) {
+    const cells = tableCells(lines[i]).slice(0, header.length);
+    while (cells.length < header.length) cells.push("");
+    rows.push(cells.map(parseInline));
+    i++;
+  }
+  return { header, rows, next: i };
+}
+
+function startsTable(lines: string[], i: number): boolean {
+  return (
+    TABLE_ROW_RE.test(lines[i]) && i + 1 < lines.length && TABLE_DELIMITER_RE.test(lines[i + 1])
+  );
+}
 
 /**
  * Gathers one list's items, starting at `start`.
@@ -148,6 +188,13 @@ function parseBlocks(markdown: string): BlockNode[] {
         i = list.next;
         continue;
       }
+
+      if (startsTable(lines, i)) {
+        const table = collectTable(lines, i);
+        blocks.push({ type: "table", header: table.header, rows: table.rows });
+        i = table.next;
+        continue;
+      }
     }
 
     const paraLines: string[] = [];
@@ -157,7 +204,8 @@ function parseBlocks(markdown: string): BlockNode[] {
       !lines[i].trim().startsWith("```") &&
       !HEADING_RE.test(lines[i]) &&
       !UNORDERED_RE.test(lines[i]) &&
-      !ORDERED_RE.test(lines[i])
+      !ORDERED_RE.test(lines[i]) &&
+      !startsTable(lines, i)
     ) {
       paraLines.push(lines[i]);
       i++;

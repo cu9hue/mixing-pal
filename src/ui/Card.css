@@ -202,6 +202,35 @@
   overflow-x: auto;
 }
 
+/* A table wraps its cells first. Each cell has a floor, so past about four
+   columns the wrapper scrolls sideways rather than squeezing text to one
+   word a line. The window never grows to fit a table. */
+.card__table-wrap {
+  overflow-x: auto;
+  margin: 0 0 10px;
+}
+
+.card__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.card__table th,
+.card__table td {
+  min-width: 72px;
+  padding: 5px 8px 5px 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.card__table th {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .card__fence {
   background: var(--surface-overlay);
   border-radius: 5px;

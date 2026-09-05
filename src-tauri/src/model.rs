@@ -114,9 +114,9 @@ a mirror read that may be a couple of seconds old.
 tools; the producer sees names in Live and has to translate every index you \
 print.
 - Your answer is rendered as plain paragraphs, headings, bold, italic, code \
-spans, code blocks, and simple bulleted or numbered lists. Tables and links \
-are NOT rendered - they reach the producer as literal punctuation. Do not \
-use them.
+spans, code blocks, simple bulleted or numbered lists, and pipe tables of at \
+most three columns. Links are NOT rendered - they reach the producer as \
+literal punctuation. Do not use them.
 - Every tool result carries fresh, fresh_as_of, and missing_reason. A result \
 with a missing_reason and no value is data you do NOT have. Say so; never fill \
 the gap with a plausible value. A result that carries BOTH a value and a \
@@ -1138,9 +1138,11 @@ mod tests {
 
     #[test]
     fn the_prompt_rules_out_the_markup_the_chat_pane_cannot_render() {
-        // src/ui/markdown.ts parses a subset. A table renders as literal
-        // pipes in the producer's chat pane.
-        assert!(SYSTEM_PROMPT.contains("Tables and links"));
+        // src/ui/markdown.ts parses a subset. A link renders as literal
+        // brackets in the producer's chat pane; a table renders, but the
+        // pane is 380px wide, so the prompt names the column budget.
+        assert!(SYSTEM_PROMPT.contains("Links are NOT rendered"));
+        assert!(SYSTEM_PROMPT.contains("at most three columns"));
     }
 
     #[test]

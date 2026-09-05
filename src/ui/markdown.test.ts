@@ -117,6 +117,64 @@ describe("parseMarkdown fenced code blocks", () => {
   });
 });
 
+describe("parseMarkdown tables", () => {
+  const text = (t: string) => [{ type: "text", text: t }];
+
+  it("parses a header row, a delimiter row, and body rows into one table", () => {
+    const md = "| Axis | Gabber | Bouncy |\n|---|---|---|\n| Kick | every beat | syncopated |\n| Bass | 16ths | sustained |";
+    expect(parseMarkdown(md)).toEqual([
+      {
+        type: "table",
+        header: [text("Axis"), text("Gabber"), text("Bouncy")],
+        rows: [
+          [text("Kick"), text("every beat"), text("syncopated")],
+          [text("Bass"), text("16ths"), text("sustained")],
+        ],
+      },
+    ]);
+  });
+
+  it("parses inline spans inside a cell", () => {
+    const md = "| a | b |\n| --- | :-: |\n| **Kick** | «808 Sub» |";
+    expect(parseMarkdown(md)).toEqual([
+      {
+        type: "table",
+        header: [text("a"), text("b")],
+        rows: [[[{ type: "bold", children: text("Kick") }], [{ type: "fence", name: "808 Sub" }]]],
+      },
+    ]);
+  });
+
+  // The delimiter row is what makes it a table. Without it a line with pipes
+  // is prose that happens to contain pipes.
+  it("leaves a pipe line with no delimiter row as a paragraph", () => {
+    expect(parseMarkdown("| not | a table |")).toEqual([
+      { type: "paragraph", children: text("| not | a table |") },
+    ]);
+  });
+
+  // A short row is padded and a long row is cut to the header's width, so
+  // the renderer never sees a ragged table.
+  it("squares a ragged row to the header's column count", () => {
+    const md = "| a | b |\n|---|---|\n| only |\n| x | y | extra |";
+    expect(parseMarkdown(md)).toEqual([
+      {
+        type: "table",
+        header: [text("a"), text("b")],
+        rows: [
+          [text("only"), []],
+          [text("x"), text("y")],
+        ],
+      },
+    ]);
+  });
+
+  it("ends the table at the first line without pipes", () => {
+    const blocks = parseMarkdown("| a |\n|---|\n| 1 |\nthen prose");
+    expect(blocks.map((b) => b.type)).toEqual(["table", "paragraph"]);
+  });
+});
+
 describe("parseMarkdown paragraphs", () => {
   it("splits on blank lines", () => {
     const blocks = parseMarkdown("first idea\n\nsecond idea");

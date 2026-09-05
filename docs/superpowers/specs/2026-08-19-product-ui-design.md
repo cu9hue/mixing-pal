@@ -51,7 +51,7 @@ advises on. It reads settings. So facts the app measured are small, dim, and
 letterspaced; the model's prose is the largest and lightest text on screen. The
 separation is carried by size, weight, and space, in one type family. An earlier
 draft carried it with a serif for the model's prose; that was withdrawn — at
-14px on a dark background in a 320px panel a serif loses to a good sans on every
+14px on a dark background in a 380px panel a serif loses to a good sans on every
 measure that matters.
 
 **3. Quiet by default, words only on failure.** Three of the pill's four states
@@ -89,7 +89,7 @@ a webview reload that has to reconstruct which one is real.
 | --- | --- | --- | --- | --- |
 | `setup` | 600 × 680 | centred | off | no |
 | `pill` | 44 × 44 | remembered | on | yes |
-| `card` | 320 × content, max 520 | remembered | on | yes |
+| `card` | 380 × content, max 520 | remembered | on | yes |
 
 - The pill window is 44×44 so the 26px dot has room for its glow. Transparency is
   required or the glow renders on a black square.
@@ -150,7 +150,11 @@ has something to attach to. Sending scrolls the new question to the top of the
 body, so a long answer still reads from its first line; earlier exchanges are
 reachable by scrolling up. The window geometry does not change for this: the
 card grows to its ceiling and the body scrolls inside it. A failed turn keeps its
-place as its question plus the error. The thread is the session, separate from
+place as its question plus the error. Since 2026-09-05 a pipe table renders as a
+table: cells wrap first, and past a 72px floor per cell the table scrolls
+sideways inside the answer rather than widening the card. The prompt gives the
+model a budget of three columns; the card is 380 wide for the same reason. The
+thread is the session, separate from
 the history window the model is sent, and it dies with the app until per-set
 persistence gives it a longer life. (Until 2026-09-05 the card showed the current
 exchange only, with a separate reader panel designed for the rest. The thread
@@ -197,7 +201,7 @@ so the reader is dropped. Nudges are not in the thread; a dismissed nudge is gon
 
 ## First run
 
-A setup window, because Live's preferences cannot be taught in a 320px card. It
+A setup window, because Live's preferences cannot be taught in a 380px card. It
 shrinks into the card when setup completes.
 
 ### The steps

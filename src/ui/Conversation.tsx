@@ -75,6 +75,31 @@ function renderBlocks(blocks: BlockNode[]): ReactNode {
             {b.text}
           </pre>
         );
+      // Cells wrap first; past a floor per cell the wrapper scrolls sideways
+      // instead, so a wide table never breaks the card's width.
+      case "table":
+        return (
+          <div key={i} className="card__table-wrap">
+            <table className="card__table">
+              <thead>
+                <tr>
+                  {b.header.map((cell, j) => (
+                    <th key={j}>{renderInline(cell)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {b.rows.map((row, r) => (
+                  <tr key={r}>
+                    {row.map((cell, j) => (
+                      <td key={j}>{renderInline(cell)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
     }
   });
 }
