@@ -1,6 +1,6 @@
 # Roadmap
 
-Date: 2026-09-06
+Date: 2026-09-07
 
 What ships next and why, in one place. The specs under `docs/superpowers/specs`
 hold the detail. This file is the index. Update it when a spec is approved or a
@@ -157,8 +157,16 @@ All specced or named already. The order is fixed by the gate.
 
 ## Not doing
 
-From the first spec, still standing: no writes to the set, no screen capture,
-no music theory engine.
+From the first spec, still standing: no writes to the set's contents, no
+screen capture, no music theory engine.
+
+"No writes to the set" was reworded on 2026-09-07 to "no writes to the set's
+contents", and one exception was carved out: the identity key that item 3
+stores with `Song.set_data`, one key, written once, never visible in Live.
+Nothing the app does changes a note, clip, device, fader, name, or locator.
+The exception's conditions are in
+`docs/superpowers/specs/2026-09-07-set-identity-design.md`; any further write
+needs a spec of its own that names itself there.
 
 Audio analysis moved off this list on 2026-09-05. It is not off the table; it
 is the expensive layer, and the settings-only version ships first. Build it when
