@@ -1,6 +1,6 @@
 # Roadmap
 
-Date: 2026-09-05
+Date: 2026-09-06
 
 What ships next and why, in one place. The specs under `docs/superpowers/specs`
 hold the detail. This file is the index. Update it when a spec is approved or a
@@ -28,8 +28,9 @@ App 0.2.3, wire version 11. Shipped:
   installs itself.
 - Chat with eight read tools: track detail, clips, clip notes, arrangement,
   arrangement notes, device chains, device params, rack contents.
-- The product shell: pill and card, first run, the goal, one nudge rule
-  (unnamed tracks), and the thread view.
+- The product shell: pill and card, first run, the goal in its own labelled
+  row, the connection named beside its dot, a card that drags from anywhere,
+  one nudge rule (unnamed tracks), and the thread view.
 - An unsigned `.dmg`, with `docs/opening-an-unsigned-build.md` for getting past
   Gatekeeper.
 - Prompt guardrails and six honesty evals (`src-tauri/tests/evals.rs`), plus
@@ -156,5 +157,11 @@ All specced or named already. The order is fixed by the gate.
 
 ## Not doing
 
-From the first spec, still standing: no writes to the set, no audio analysis,
-no screen capture, no music theory engine.
+From the first spec, still standing: no writes to the set, no screen capture,
+no music theory engine.
+
+Audio analysis moved off this list on 2026-09-05. It is not off the table; it
+is the expensive layer, and the settings-only version ships first. Build it when
+the settings-only advice has a producer using it and the questions she asks are
+the ones only a listener can answer. Until then the app says it cannot hear,
+because it cannot.
