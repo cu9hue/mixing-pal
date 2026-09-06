@@ -6,6 +6,8 @@ export function emptySet(): SetState {
     isPlaying: false,
     scaleName: null,
     rootNote: null,
+    signatureNumerator: null,
+    signatureDenominator: null,
     selectedTrack: null,
     tracks: {},
     scriptVersion: null,
@@ -22,6 +24,8 @@ export const SONG_FIELDS: Record<string, keyof SetState> = {
   "/live/song/get/is_playing": "isPlaying",
   "/live/song/get/scale_name": "scaleName",
   "/live/song/get/root_note": "rootNote",
+  "/live/song/get/signature_numerator": "signatureNumerator",
+  "/live/song/get/signature_denominator": "signatureDenominator",
   "/live/view/get/selected_track": "selectedTrack",
   "/live/mixingpal/get/version": "scriptVersion",
 };

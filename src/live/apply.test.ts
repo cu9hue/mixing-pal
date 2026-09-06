@@ -10,6 +10,19 @@ describe("applyDelta", () => {
     expect(s.tempo).toBe(128.0);
   });
 
+  it("stores the current time signature", () => {
+    let s = applyDelta(emptySet(), {
+      addr: "/live/song/get/signature_numerator",
+      args: [4],
+    });
+    s = applyDelta(s, {
+      addr: "/live/song/get/signature_denominator",
+      args: [4],
+    });
+    expect(s.signatureNumerator).toBe(4);
+    expect(s.signatureDenominator).toBe(4);
+  });
+
   it("routes indexed track properties to the right track", () => {
     let s = emptySet();
     s = applyDelta(s, { addr: "/live/track/get/name", args: [0, "Kick"] });

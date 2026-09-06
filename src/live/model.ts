@@ -19,6 +19,8 @@ export interface SetState {
   isPlaying: boolean;
   scaleName: string | null;
   rootNote: number | null;
+  signatureNumerator: number | null;
+  signatureDenominator: number | null;
   selectedTrack: number | null;
   tracks: Record<number, TrackState>;
   scriptVersion: number | null;

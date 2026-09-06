@@ -14,6 +14,16 @@ export function keyName(rootNote: number | null, scaleName: string | null): stri
   return pitch === undefined ? null : `${pitch} ${scaleName}`;
 }
 
+function currentBeatsPerBar(state: SetState): number | null {
+  const numerator = state.signatureNumerator;
+  const denominator = state.signatureDenominator;
+  if (numerator === null || denominator === null || numerator <= 0 || denominator <= 0) {
+    return null;
+  }
+  const beats = (numerator * 4) / denominator;
+  return Number.isFinite(beats) && beats > 0 ? beats : null;
+}
+
 /**
  * The context block sent as an ordinary user turn ahead of the producer's
  * question.
@@ -42,9 +52,13 @@ export function buildContext(state: SetState, goal: string): string {
     // the structure of the set while looking perfectly well-formed. It is
     // rendered into every prompt, so it does not depend on an unverified
     // upstream guarantee.
+    const beatsPerBar = currentBeatsPerBar(state);
     const sections = [...state.cuePoints]
       .sort((a, b) => a.time - b.time)
-      .map((c) => `${fence(c.name)} ${c.time}`)
+      .map((c) => {
+        if (beatsPerBar === null) return `${fence(c.name)} ${c.time}`;
+        return `${fence(c.name)} bar ${Math.floor(c.time / beatsPerBar) + 1}`;
+      })
       .join(", ");
     // The connector cuts the locator reply to one datagram and sends the
     // true count beside it. Saying nothing here would present a prefix as
@@ -54,7 +68,10 @@ export function buildContext(state: SetState, goal: string): string {
       total !== null && total > state.cuePoints.length
         ? ` (first ${state.cuePoints.length} of ${total}; the rest did not fit one reply)`
         : "";
-    lines.push(`SECTIONS (beats)  ${sections}${cut}`);
+    const unit = beatsPerBar === null
+      ? "beats"
+      : `bars, ${state.signatureNumerator}/${state.signatureDenominator}`;
+    lines.push(`SECTIONS (${unit})  ${sections}${cut}`);
   }
 
   const trimmedGoal = goal.trim();

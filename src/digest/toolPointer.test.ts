@@ -18,6 +18,8 @@ const EMPTY: SetState = {
   isPlaying: false,
   scaleName: null,
   rootNote: null,
+  signatureNumerator: null,
+  signatureDenominator: null,
   selectedTrack: null,
   tracks: {},
   scriptVersion: 4,

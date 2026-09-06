@@ -12,6 +12,8 @@ function setOf(names: Array<string | null>): SetState {
     isPlaying: false,
     scaleName: null,
     rootNote: null,
+    signatureNumerator: null,
+    signatureDenominator: null,
     selectedTrack: null,
     scriptVersion: 2,
     cuePoints: [],

@@ -8,6 +8,8 @@ const STATE: SetState = {
   isPlaying: false,
   scaleName: "Minor",
   rootNote: 9,
+  signatureNumerator: null,
+  signatureDenominator: null,
   selectedTrack: 1,
   scriptVersion: 2,
   cuePoints: [],

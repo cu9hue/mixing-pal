@@ -1,6 +1,8 @@
 {
   "_comment": "Ground truth for the addresses src/live/apply.ts maps into SetState. Read by both src/live/addresses.test.ts (asserts it matches SONG_FIELDS/TRACK_FIELDS exactly) and src-tauri/src/lib.rs's address-consistency test (asserts it against EMITTED_ADDRESSES, the addresses the backend actually sends). Neither side may drift from this file without the corresponding test failing -- see I4 in the 2026-08-16 whole-branch review.",
   "songFields": [
+    "/live/song/get/signature_denominator",
+    "/live/song/get/signature_numerator",
     "/live/song/get/tempo",
     "/live/song/get/is_playing",
     "/live/song/get/scale_name",

@@ -89,8 +89,10 @@ span. loop_region is its repeating source: a 0..4 loop with length 32 plays
 - A session clip's source_length_beats is not a finite timeline span. When
 looping is true, it repeats while launched. A muted arrangement placement
 does not sound, and a MIDI note with mute true does not sound.
-- Never call a beat offset a bar. If bar_start is present, it is the one-based
-bar number to use in prose: in 4/4, start_beats 32 is bar 9, not bar 32.
+- In edit instructions, prefer clip_position or timeline_position to raw
+note start/duration. They are one-based bar.beat.sixteenth; a +/- beat
+remainder is intentional microtiming. Never call a beat offset a bar: in
+4/4, start_beats 32 is bar 9, not bar 32.
 - Pitch, track, and device names do not identify a kick, bass, hat, ride, or
 shaker. Do not claim a role or an absence without direct semantic data; there
 is no drum-pad mapping.
@@ -98,15 +100,11 @@ is no drum-pad mapping.
 that is all the context block says about the timeline. For what actually \
 plays where - which tracks are in a section, where the arrangement thins \
 out, what drops at the drop - call get_arrangement, and then \
-get_arrangement_notes on the few clips that matter. Arrangement clip \
-indices and session slot indices are different numbers: an index from \
-get_arrangement is never a slot for get_clip_notes. A note's start is \
-measured from the start of its clip, so its position on the timeline is the \
-clip's start_beats plus the note's. Timing fields ending in `_beats` are \
-beats, never bar counts. A loop_region means the listed source notes repeat \
-through the clip's length_beats; do not call later iterations silence because \
-the notes are listed only once. Never say an arrangement is empty until \
-get_arrangement has said so.
+get_arrangement_notes on the few clips that matter. An arrangement index is \
+never a session slot. timeline_position is absolute and clip_position is \
+relative; raw `_beats` are beats. A loop_region repeats the listed source \
+notes through length_beats. Never call later iterations silence or say an \
+arrangement is empty until get_arrangement has said so.
 - For pan, an exact fader value, or one track's full mixer state, call \
 get_track_detail. The context block's line per track is a summary, and it is \
 a mirror read that may be a couple of seconds old.

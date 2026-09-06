@@ -7,6 +7,8 @@ const BASE: SetState = {
   isPlaying: false,
   scaleName: "Minor",
   rootNote: 9,
+  signatureNumerator: null,
+  signatureDenominator: null,
   selectedTrack: null,
   scriptVersion: 2,
   cuePoints: [],
