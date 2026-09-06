@@ -1,7 +1,7 @@
 # Set identity — Design
 
 Date: 2026-09-07
-Status: draft, revised after a Codex review of the first draft; awaiting review
+Status: draft, revised after two Codex reviews; awaiting review
 Roadmap item 3. Items 4 (per-set persistence) and 5 (per-set notes) build on it.
 Carves one exception out of the first spec's "No write access" non-goal; see
 The exception below.
@@ -52,14 +52,21 @@ may write is its own identity key, under these conditions and no others:
 - **One key.** `data["mixingpal"]`, holding exactly `{"set_id": <32 hex>}`.
   Nothing else is ever written to the set, by this item or a later one, without
   a spec of its own that names it here.
-- **Written once.** Only when the slot has no valid key of ours. A set that has
-  one is never written to again, by any poll, ever.
+- **Written only when absent.** Only when the slot has no valid key of ours,
+  and only after two consecutive polls have read the same slot without one. A
+  set that has our key is never written to again. If another script removes
+  the key, the next two polls see it gone and the connector writes a new one;
+  that is the reminting the no-CAS note below accepts, and it is the one case
+  where a set is written twice.
 - **Invisible.** It must not mark a clean set as modified, and it must not
   change anything she can see in Live. If the spike shows it does either, the
   write is dropped and identity is B. There is no version of this that asks her
   to save a set she did not touch.
-- **Read back before use.** The app trusts only what the connector reads from
-  the slot, never what it intended to write.
+- **Read back before use.** After a write the connector calls `get_data`
+  again and reports only what the slot now holds, validated by the same rule
+  as any other read. A write Live rejected, normalised, or dropped reports
+  `""`, never the id the connector meant to store. A `set_data` that raises
+  is caught, logged, and reported as `""`.
 
 The reword lands in `docs/ROADMAP.md` in the same commit as this spec, so the
 rule and its exception are one change.
@@ -95,6 +102,15 @@ either way the app falls back to the path for that set and the connector log
 says why. The pure function that implements this table takes the slot's value
 and an id generator, and the generator is called only on the two writing rows.
 
+The two writing rows carry two more conditions, enforced by the handler around
+the pure function. **Two reads agree:** the handler keeps the previous poll's
+slot value and writes only when this poll and the last both landed on a
+writing row with equal slot values; a slot read once is never written to, so a
+transient `None` while Live is still restoring a document's data cannot be
+written over. **Read back:** the value reported after a write is the slot's
+content read again after `set_data`, put through the table, not the id that
+was written.
+
 **No compare-and-swap.** Another script can read the slot, drop our key, and
 write it back, and the next poll cannot tell that from a set that never had
 one. It mints a new id and the thread splits at that moment. The alternative,
@@ -106,14 +122,19 @@ happens.
 ### The spike
 
 Before the app side is built, the connector side is installed and Live
-answers four questions. The handler logs what `get_data` returned, what it
-wrote, and what `file_path` and `name` returned, so the connector log answers
-the last three. The first is read off Live's window.
+answers the questions below, on a **disposable copy** of a real set, never on
+one she is working on: the dirtying probe writes to whatever set is open, and
+fallback can only be chosen after the write has happened once. The handler
+logs what `get_data` returned, what it wrote, what it read back, and what
+`file_path` and `name` returned.
 
 | Question | How to see it | Gate |
 | --- | --- | --- |
 | Does the write mark a clean set as modified? | Open a saved set, wait ten seconds, look for the asterisk in the title bar; close the set and see whether Live asks to save. | If yes, the write is dropped, identity is B, and `set_data` is never called. The pure function keeps the table above minus its two writing rows. |
-| Does the id survive save, close, and reopen? | Save the set once, close it, reopen it, read the log: same id, and `get_data` returned our dict, not `None`. | If no, same outcome as the row above: a write that does not persist is a write for nothing. |
+| Does the id survive save, close, and reopen? | Save the copy once, close it, reopen it, read the log: same id, and `get_data` returned our dict, not `None`. | If no, same outcome as the row above: a write that does not persist is a write for nothing. |
+| Does a dict with more than our key survive the same round trip? | The spike build of the handler, and only that build, seeds `{"probe": 1}` beside our key on the first write when a file named `identity_probe` exists in the connector's `logs/` folder (Live launched from the Dock sees no shell environment, so a file, not a variable). Reopen and read the log: both keys back, `probe` unchanged. The seed is removed before the branch is final. | If no, `set_data` cannot be trusted with a shared slot; the write is dropped and identity is B. |
+| Does the first poll after reopening read the stored dict, not a transient `None`? | The same reopen; the log's first identity read on the new instance already shows our key. | If no, the two-reads-agree condition is what stands between a transient and a write, and its window is widened to three polls. |
+| What happens when she closes a saved set without saving after the write? | Open the copy fresh so it gets an id, close, choose Don't Save, reopen, read the log. | Expected: a new id, since the write never reached disk. Item 4's lookup by id then path is the answer; see Failure modes. |
 | What does `get_data` return on a set that has never held data? | The connector log on a fresh set. | Nothing to decide; the table handles `None` and `{}`. |
 | What does `file_path` return on an unsaved set? | The connector log after File → New Live Set. | Expected: an empty string. The app maps it to `null`. |
 
@@ -121,7 +142,8 @@ Also read off the log: the first identity poll after a set opens must land
 after Live has finished loading it. Live creates the Control Surface for a
 document after the document exists, so the handler never runs mid-load. The
 spike confirms it by opening a set and checking that the first logged read
-already shows that set's `name`.
+already shows that set's `name` and, on a set that has one, our key. The name
+alone does not prove the data slot is restored; the key does.
 
 The spike is the implementation's first commit, not a throwaway. Its results go
 in `docs/manual-verification.md`.
@@ -132,8 +154,12 @@ in `docs/manual-verification.md`.
   one shares the old track's thread. Item 4 gives the thread a visible
   identity in the card so she can see it happened, and item 5's note can be
   cleared. Not solved here.
-- **An unsaved set's id lives in memory.** If she closes without saving, the
-  id is gone and anything item 4 stored under it is orphaned. Item 4's 30-day
+- **An id that never reached disk.** A set she opens and closes without
+  saving, saved before or not, loses the id the connector gave it, and the
+  next open mints another. This is why `setPath` travels with `setId`: item
+  4 looks a thread up by id first and by path second, and when the path
+  matches a thread whose id does not, it adopts that thread under the new id.
+  A set she never saves and never reopens leaves an orphan; item 4's 30-day
   drop collects it.
 - **Two scripts, one slot.** Covered by the slot rule and the no-CAS note
   above.
@@ -182,11 +208,13 @@ first is a panic on the first poll, not a silent gap.
   and the matching row in its table test. `Requests::register` panics on
   `KeyArity::Unknown` (`osc/requests.rs:83`), and the startup poll fires
   immediately.
-- `osc/pollers.rs`: `PollKind::SetIdentity`, interval 5 seconds, beside
-  `ScriptVersion`, in `PollKind::all()`, and a case in
-  `each_poll_kind_fires_at_its_own_rate`. The same reasoning as the version:
-  the value never changes minute to minute, but Live re-creates the Control
-  Surface when a set loads, and that is how a set switch is seen.
+- `osc/pollers.rs`: `PollKind::SetIdentity`, interval 1 second, the same as
+  `Selection`, in `PollKind::all()`, and a case in
+  `each_poll_kind_fires_at_its_own_rate`. Not 5 seconds like the version:
+  the value changes only when a set loads, but that is the moment the
+  frontend most needs it, and the poll is one small keyless message. Live
+  re-creates the Control Surface when a set loads, and this poll is how the
+  switch is seen.
 - `lib.rs`: the address joins `EMITTED_ADDRESSES` under the observed-raw
   comment block, and `POLL_LOOP_SENT_ADDRESSES`. It is **not** resolve-only:
   the frontend reads it from the mirror, exactly like the locators.
@@ -231,9 +259,10 @@ changes.
 ### The switch window
 
 When she opens a different set, the mirror keeps the old set's three fields
-until the new set's first identity reply lands, up to five seconds. Nothing
-in this item acts on identity, so nothing in this item is wrong during that
-window. The rule for what does act on it, binding on items 4 and 5:
+until the new set's first identity reply lands: about a second at the 1s
+poll, longer if a reply is lost, since UDP promises nothing. Nothing in this
+item acts on identity, so nothing in this item is wrong during that window.
+The rule for what does act on it, binding on items 4 and 5:
 
 - **Act on change, not on presence.** A consumer restores or switches when
   `setId` changes from one value to another, never because a value is there.
@@ -243,9 +272,17 @@ window. The rule for what does act on it, binding on items 4 and 5:
   current when it was created, and is saved under that tag, not under
   whatever `setId` is current when the save runs.
 
-The residual: a question she sends inside the window, seconds after opening a
-new set, is filed under the old set. That is one exchange, visible in the
-card, and item 4 says what she can do about it.
+Two residuals, both accepted here and owned by item 4.
+
+- A question she sends inside the window, within about a second of the
+  connector coming up on the new set and before the card shows that set's
+  tracks, is filed under the old set. One exchange, visible in the card.
+- A late reply from the old set arriving after the new set's first reply
+  would flip identity back for one poll. Replies are mirrored in arrival
+  order (`lib.rs`, the observe-then-resolve path), and on localhost a
+  one-second cadence does not reorder in practice, but item 4 must treat an
+  A→B→A→B flap as one switch, not three: act on a change only once it has
+  held for two consecutive polls.
 
 ## What consumes it
 
@@ -259,7 +296,10 @@ card, and item 4 says what she can do about it.
 - `test_set_identity_slot.py`, one case per row of the slot table, plus: a
   dict with a foreign key keeps that key byte for byte after the write; the
   generator is called only on the two writing rows; a `"set_id"` that is not
-  32 lowercase hex is the "anything else" row.
+  32 lowercase hex is the "anything else" row. The two-reads-agree and
+  read-back conditions are the handler's, and the handler cannot load
+  outside Live, so they are checked in the spike and stated in the handler's
+  docstring.
 - `apply.test.ts`: the three-row table above, a later reply replacing an
   earlier one, and a malformed reply leaving the fields alone.
 - `arity.rs`'s table test and `pollers.rs`'s rate test, each with the new
