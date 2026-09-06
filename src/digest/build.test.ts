@@ -107,6 +107,17 @@ describe("buildContext", () => {
     expect(out).toContain("«Drop» 64");
   });
 
+  it("uses bars for sections when the current signature is known", () => {
+    const state = { ...emptySet(), signatureNumerator: 4, signatureDenominator: 4, cuePoints: [
+      { name: "Intro", time: 0 },
+      { name: "Drop", time: 32 },
+    ] };
+    const out = buildContext(state, "");
+    expect(out).toContain("SECTIONS (bars, 4/4)");
+    expect(out).toContain("«Intro» bar 1");
+    expect(out).toContain("«Drop» bar 9");
+  });
+
   it("omits the sections line entirely when the set has no locators", () => {
     // An empty "SECTIONS" line would read as "this set has no structure"
     // rather than "nobody dropped a locator".
@@ -125,6 +136,11 @@ describe("buildContext", () => {
     ] };
     const out = buildContext(state, "");
     expect(out).toContain("SECTIONS (beats)  «Intro» 0, «Break» 32, «Drop» 64");
+  });
+
+  it("keeps beat offsets when the signature is unknown", () => {
+    const state = { ...emptySet(), cuePoints: [{ name: "Drop", time: 32 }] };
+    expect(buildContext(state, "")).toContain("SECTIONS (beats)  «Drop» 32");
   });
 
   it("says so when the locator reply carried only a prefix", () => {

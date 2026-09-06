@@ -109,7 +109,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clip_notes",
-                "description": "Every MIDI note in one session-view clip, as note, pitch, start, duration, velocity, mute, plus source_length_beats and loop_region. A note with mute true does not sound and must be excluded from rhythm or harmony claims. source_length_beats is the source clip length, not a finite playback span: when looping is true, its source notes repeat while the clip is launched. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read.",
+                "description": "Every MIDI note in one session-view clip. start and duration are raw beats; when the current signature is known, use each note's clip_position (one-based Ableton bar.beat.sixteenth) and duration_notation in producer-facing instructions. A position with a +/- beat remainder is intentional microtiming, not a rounded grid value. The result also gives source_length_beats and loop_region, with readable start_position/end_position when possible. A note with mute true does not sound and must be excluded from rhythm or harmony claims. source_length_beats is the source clip length, not a finite playback span: when looping is true, its source notes repeat while the clip is launched. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -148,7 +148,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "Every MIDI note in one arrangement-view clip, as note, pitch, start, duration, velocity, mute. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes one-based bar_start and length_bars. Each note's start is measured from the start of the clip, not from the start of the song: its position on the timeline is result.start_beats + note.start. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip.",
+                "description": "Every MIDI note in one arrangement-view clip. start and duration are raw beats; when the current signature is known, use clip_position (relative) or timeline_position (absolute), both one-based Ableton bar.beat.sixteenth, and duration_notation in producer-facing instructions. A position with a +/- beat remainder is intentional microtiming, not a rounded grid value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes one-based bar_start and length_bars. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -291,6 +291,112 @@ fn bar_position(beat: f64, beats_per_bar: f64) -> f64 {
     (beat / beats_per_bar).floor() + 1.0
 }
 
+fn beats_per_bar(signature: (i64, i64)) -> Option<f64> {
+    let (numerator, denominator) = signature;
+    let beats = numerator as f64 * 4.0 / denominator as f64;
+    (beats.is_finite() && beats > 0.0).then_some(beats)
+}
+
+/// Formats a beat offset as the bar.beat.sixteenth position producers see in
+/// Live. The raw beat value stays in the payload; an off-grid remainder is
+/// made explicit instead of being silently rounded onto the sixteenth grid.
+fn musical_position(beat: f64, beats_per_bar: f64) -> Option<String> {
+    if !beat.is_finite() || beat < 0.0 {
+        return None;
+    }
+    let sixteenths_per_bar = (beats_per_bar * 4.0).round() as i64;
+    if sixteenths_per_bar <= 0 || (beats_per_bar * 4.0 - sixteenths_per_bar as f64).abs() > 1e-6 {
+        return None;
+    }
+    let nearest_sixteenth = (beat * 4.0).round() as i64;
+    let grid_beat = nearest_sixteenth as f64 / 4.0;
+    let remainder = beat - grid_beat;
+    let bar = nearest_sixteenth.div_euclid(sixteenths_per_bar) + 1;
+    let in_bar = nearest_sixteenth.rem_euclid(sixteenths_per_bar);
+    let position = format!("{}.{}.{}", bar, in_bar / 4 + 1, in_bar % 4 + 1);
+    if remainder.abs() <= 0.0001 {
+        return Some(position);
+    }
+    let sign = if remainder.is_sign_negative() {
+        "-"
+    } else {
+        "+"
+    };
+    let amount = format!("{:.6}", remainder.abs())
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned();
+    Some(format!("{position} {sign} {amount} beats"))
+}
+
+fn duration_notation(duration: f64) -> Option<String> {
+    if !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+    let sixteenths = (duration * 4.0).round() as i64;
+    if sixteenths <= 0 || (duration - sixteenths as f64 / 4.0).abs() > 0.0001 {
+        return None;
+    }
+    let divisor = gcd(sixteenths, 16);
+    Some(format!("{}/{} note", sixteenths / divisor, 16 / divisor))
+}
+
+fn gcd(mut left: i64, mut right: i64) -> i64 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left.abs()
+}
+
+fn notes_payload(
+    notes: &[clip_notes::Note],
+    signature: Option<(i64, i64)>,
+    timeline_start: Option<f64>,
+) -> serde_json::Value {
+    let mut payload = serde_json::to_value(notes).unwrap_or(serde_json::Value::Null);
+    let Some(beats_per_bar) = signature.and_then(beats_per_bar) else {
+        return payload;
+    };
+    let Some(items) = payload.as_array_mut() else {
+        return payload;
+    };
+    for (item, note) in items.iter_mut().zip(notes) {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        if let Some(position) = musical_position(note.start, beats_per_bar) {
+            object.insert("clip_position".into(), json!(position));
+        }
+        if let Some(position) =
+            timeline_start.and_then(|start| musical_position(start + note.start, beats_per_bar))
+        {
+            object.insert("timeline_position".into(), json!(position));
+        }
+        if let Some(notation) = duration_notation(note.duration) {
+            object.insert("duration_notation".into(), json!(notation));
+        }
+    }
+    payload
+}
+
+fn loop_region_payload(
+    start_beats: f64,
+    end_beats: f64,
+    signature: Option<(i64, i64)>,
+) -> serde_json::Value {
+    let mut payload = json!({ "start_beats": start_beats, "end_beats": end_beats });
+    let Some(beats_per_bar) = signature.and_then(beats_per_bar) else {
+        return payload;
+    };
+    if let Some(position) = musical_position(start_beats, beats_per_bar) {
+        payload["start_position"] = json!(position);
+    }
+    if let Some(position) = musical_position(end_beats, beats_per_bar) {
+        payload["end_position"] = json!(position);
+    }
+    payload
+}
+
 /// Adds producer-facing bar labels without replacing the unambiguous beat
 /// values the OSC protocol carries.
 fn arrangement_payload(
@@ -301,10 +407,9 @@ fn arrangement_payload(
     let Some((numerator, denominator)) = signature else {
         return payload;
     };
-    let beats_per_bar = numerator as f64 * 4.0 / denominator as f64;
-    if !beats_per_bar.is_finite() || beats_per_bar <= 0.0 {
+    let Some(beats_per_bar) = beats_per_bar((numerator, denominator)) else {
         return payload;
-    }
+    };
     payload["time_signature"] = json!({ "numerator": numerator, "denominator": denominator });
     payload["bar_positions_assume_current_signature"] = json!(true);
     let Some(tracks) = payload["tracks"].as_array_mut() else {
@@ -336,10 +441,9 @@ fn add_bar_timing(
     let Some((numerator, denominator)) = signature else {
         return;
     };
-    let beats_per_bar = numerator as f64 * 4.0 / denominator as f64;
-    if !beats_per_bar.is_finite() || beats_per_bar <= 0.0 {
+    let Some(beats_per_bar) = beats_per_bar((numerator, denominator)) else {
         return;
-    }
+    };
     payload["time_signature"] = json!({ "numerator": numerator, "denominator": denominator });
     payload["bar_positions_assume_current_signature"] = json!(true);
     payload["bar_start"] = json!(bar_position(start_beats, beats_per_bar));
@@ -669,17 +773,24 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             }
 
             match outcome {
-                Ok(notes) => ToolResult::live(
-                    json!({
-                        "notes": notes.notes,
+                Ok(notes) => {
+                    let signature = time_signature(&ctx.coalescer);
+                    let mut payload = json!({
+                        "notes": notes_payload(&notes.notes, signature, None),
                         "count": notes.notes.len(),
                         "source_length_beats": notes.length_beats,
                         "looping": notes.loop_state_known.then_some(notes.loop_region.is_some()),
-                        "loop_region": notes.loop_region,
+                        "loop_region": notes.loop_region.map(|region| {
+                            loop_region_payload(region.start_beats, region.end_beats, signature)
+                        }),
                         "loop_state_known": notes.loop_state_known,
-                    }),
-                    notes.missing_reason,
-                ),
+                    });
+                    if let Some((numerator, denominator)) = signature {
+                        payload["time_signature"] =
+                            json!({ "numerator": numerator, "denominator": denominator });
+                    }
+                    ToolResult::live(payload, notes.missing_reason)
+                }
                 Err(QueryError::NoReply) => ToolResult::missing("no_reply"),
                 Err(QueryError::Busy) => ToolResult::missing("busy"),
                 Err(QueryError::Transport(e)) => {
@@ -827,22 +938,20 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
 
             match outcome {
                 Ok(result) => {
+                    let signature = time_signature(&ctx.coalescer);
                     let mut payload = json!({
-                        "notes": result.notes.notes,
+                        "notes": notes_payload(&result.notes.notes, signature, Some(result.start)),
                         "count": result.notes.notes.len(),
                         "name": result.name,
                         "start_beats": result.start,
                         "length_beats": result.length,
                         "muted": result.muted,
                         "is_midi": result.is_midi,
-                        "loop_region": result.loop_region,
+                        "loop_region": result.loop_region.map(|region| {
+                            loop_region_payload(region.start_beats, region.end_beats, signature)
+                        }),
                     });
-                    add_bar_timing(
-                        &mut payload,
-                        result.start,
-                        result.length,
-                        time_signature(&ctx.coalescer),
-                    );
+                    add_bar_timing(&mut payload, result.start, result.length, signature);
                     ToolResult::live(payload, result.notes.missing_reason)
                 }
                 Err(arrangement::ArrangementNotesError::NotMidi) => {
@@ -1410,6 +1519,57 @@ mod tests {
         assert_eq!(bar_position(0.0, 4.0), 1.0);
         assert_eq!(bar_position(28.0, 4.0), 8.0);
         assert_eq!(bar_position(32.0, 4.0), 9.0);
+    }
+
+    #[test]
+    fn note_payload_uses_musical_positions_without_rounding_microtiming() {
+        let notes = vec![clip_notes::Note {
+            pitch: 40,
+            note: "E1".into(),
+            start: 2.005_472,
+            duration: 0.494_528_1,
+            velocity: 100.0,
+            mute: false,
+        }];
+        let payload = notes_payload(&notes, Some((4, 4)), Some(28.0));
+        assert_eq!(payload[0]["start"], json!(2.005_472));
+        assert_eq!(payload[0]["duration"], json!(0.494_528_1));
+        assert_eq!(payload[0]["clip_position"], json!("1.3.1 + 0.005472 beats"));
+        assert_eq!(
+            payload[0]["timeline_position"],
+            json!("8.3.1 + 0.005472 beats")
+        );
+        assert!(payload[0].get("duration_notation").is_none());
+    }
+
+    #[test]
+    fn note_and_loop_payloads_use_one_based_sixteenths_on_grid() {
+        let notes = vec![clip_notes::Note {
+            pitch: 40,
+            note: "E1".into(),
+            start: 0.25,
+            duration: 0.5,
+            velocity: 100.0,
+            mute: false,
+        }];
+        let payload = notes_payload(&notes, Some((4, 4)), Some(32.0));
+        assert_eq!(payload[0]["clip_position"], json!("1.1.2"));
+        assert_eq!(payload[0]["timeline_position"], json!("9.1.2"));
+        assert_eq!(payload[0]["duration_notation"], json!("1/8 note"));
+        let loop_region = loop_region_payload(0.0, 4.0, Some((4, 4)));
+        assert_eq!(loop_region["start_position"], json!("1.1.1"));
+        assert_eq!(loop_region["end_position"], json!("2.1.1"));
+    }
+
+    #[test]
+    fn note_tool_descriptions_require_readable_positions_for_editing() {
+        for name in ["get_clip_notes", "get_arrangement_notes"] {
+            let description = description_of(name);
+            assert!(description.contains("duration_notation"), "{name}");
+            assert!(description.contains("microtiming"), "{name}");
+        }
+        assert!(description_of("get_clip_notes").contains("clip_position"));
+        assert!(description_of("get_arrangement_notes").contains("timeline_position"));
     }
 
     #[test]
