@@ -1,5 +1,5 @@
 SET  132 BPM · A Minor · stopped
-SECTIONS (beats)  «Intro» 0, «Drop» 64
+SECTIONS (beats; bars assume 4/4)  «Intro» 0 (bar 1), «Drop» 64 (bar 17)
 GOAL  dark garage, 2am
 
 TRACKS  (4)

@@ -12,8 +12,7 @@ import craftContext from "../../shared/craft-context.txt?raw";
 // shared/wire-version.json already uses.
 interface EvalFixture {
   goal: string;
-  song: Omit<SetState, "tracks" | "signatureNumerator" | "signatureDenominator"> &
-    Partial<Pick<SetState, "signatureNumerator" | "signatureDenominator">>;
+  song: Omit<SetState, "tracks">;
   tracks: Array<{ name: string; mute: boolean; solo: boolean; volumeDb: string }>;
 }
 
@@ -30,12 +29,7 @@ function fixtureState(fixture: EvalFixture): SetState {
       meter: null,
     };
   });
-  return {
-    signatureNumerator: null,
-    signatureDenominator: null,
-    ...fixture.song,
-    tracks,
-  };
+  return { ...fixture.song, tracks };
 }
 
 describe.each([

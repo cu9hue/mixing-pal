@@ -107,15 +107,16 @@ describe("buildContext", () => {
     expect(out).toContain("«Drop» 64");
   });
 
-  it("uses bars for sections when the current signature is known", () => {
+  it("adds a bar reading beside each beat when the current signature is known", () => {
     const state = { ...emptySet(), signatureNumerator: 4, signatureDenominator: 4, cuePoints: [
       { name: "Intro", time: 0 },
       { name: "Drop", time: 32 },
+      // A hair before bar 10: the nearest sixteenth is the bar line.
+      { name: "Fill", time: 35.9 },
     ] };
     const out = buildContext(state, "");
-    expect(out).toContain("SECTIONS (bars, 4/4)");
-    expect(out).toContain("«Intro» bar 1");
-    expect(out).toContain("«Drop» bar 9");
+    expect(out).toContain("SECTIONS (beats; bars assume 4/4)");
+    expect(out).toContain("«Intro» 0 (bar 1), «Drop» 32 (bar 9), «Fill» 35.9 (bar 10)");
   });
 
   it("omits the sections line entirely when the set has no locators", () => {
