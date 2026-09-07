@@ -711,3 +711,38 @@ report stopped on the model under test outlasting its own 180 s limit.
 - [ ] is the mix okay
 - [ ] the goal changes the advice (gate, temperature 0): garage Keep  techno Keep (2026-09-04, kimi judge, red); garage Change  techno Change (2026-09-04, sonnet judge, red)
 - [ ] goal report at the app's sampling: `goal report:` line not reached twice on 2026-09-04 (judge timeout; then model timeout)
+
+## Set identity spike (wire 12)
+
+Run on a **disposable copy** of a real set, never on one being worked on:
+the first row writes to whatever set is open. The connector log is the
+newest `abletonosc.log*` under `~/Music/Ableton/User Library/Remote Scripts/MixingPal/logs/`;
+identity lines start with `MixingPal set identity`.
+
+Install with `scripts/install-remote-script.sh`, then restart Live.
+
+Date: ___________  Live version: ___________  Tester: ___________
+
+- [ ] Modified flag. Open the copy, wait ten seconds, look at the title
+      bar for the modified asterisk. Close the set: does Live ask to save?
+      Pass: no asterisk, no prompt. Fail: either one. On a fail, the write
+      is dropped: `decide` keeps only its first and third rows, and
+      identity is the path.
+- [ ] Survives a save. Save the copy once, close it, reopen it. The first
+      `MixingPal set identity` line after reopening shows the same id.
+      Pass: same id. Fail: a new id, or `id=''`; same outcome as a modified
+      flag fail.
+- [ ] First read is the stored value. In the same reopen, the first
+      identity line already carries the id; no `wrote` line follows it.
+      Pass: no second write. Fail: a `wrote` line after reopening; widen the
+      two-read gate to three reads in `decide`.
+- [ ] Unsaved set. File → New Live Set, wait, read the log. Pass:
+      `path=''` and `name=''` (or the placeholder name Live gives an unsaved
+      set; record what it says). Record the value either way.
+- [ ] Close without saving. Open the copy fresh so it gets an id, close,
+      choose Don't Save, reopen. Expected and accepted: a new id, since the
+      write never reached disk. Record both ids.
+- [ ] The handler runs after load. Open a set that has an id; the first
+      identity line already shows it. Pass: yes.
+
+Result: ___________ (write kept / write dropped)
