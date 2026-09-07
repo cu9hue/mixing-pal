@@ -15,7 +15,10 @@
       { "name": "Break", "time": 96 },
       { "name": "Drop 2", "time": 128 }
     ],
-    "cuePointsTotal": 4
+    "cuePointsTotal": 4,
+    "setId": null,
+    "setName": null,
+    "setPath": null
   },
   "tracks": [
     {

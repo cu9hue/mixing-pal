@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { emptySet, applyDelta, CUE_POINTS_ADDR } from "./apply";
+import {
+  emptySet,
+  applyDelta,
+  CUE_POINTS_ADDR,
+  SET_IDENTITY_ADDR,
+  setIdentityFrom,
+} from "./apply";
 
 describe("applyDelta", () => {
   it("stores song properties that carry no index", () => {
@@ -164,5 +170,54 @@ describe("applyDelta", () => {
       args: ["Intro", 0, "Drop", 64],
     });
     expect(after.cuePoints).toEqual(before.cuePoints);
+  });
+});
+
+describe("set identity", () => {
+  const id = "0123456789abcdef0123456789abcdef";
+
+  it("keeps the stored id, the name, and the path", () => {
+    expect(setIdentityFrom([id, "Track", "/x/Track.als"])).toEqual({
+      setId: id,
+      setName: "Track",
+      setPath: "/x/Track.als",
+    });
+  });
+
+  // The frontend is the one owner of the fallback: the connector reports
+  // only what it read from the set.
+  it("falls back to the path when the set holds no id", () => {
+    expect(setIdentityFrom(["", "Track", "/x/Track.als"])).toEqual({
+      setId: "/x/Track.als",
+      setName: "Track",
+      setPath: "/x/Track.als",
+    });
+  });
+
+  it("is all null for an unsaved set with no id", () => {
+    expect(setIdentityFrom(["", "", ""])).toEqual({ setId: null, setName: null, setPath: null });
+  });
+
+  it("rejects a reply that is not three strings", () => {
+    expect(setIdentityFrom([id, "Track"])).toBeNull();
+    expect(setIdentityFrom([id, 7, "/x/Track.als"])).toBeNull();
+  });
+
+  it("applies a reply wholesale and a later one over it", () => {
+    let s = applyDelta(emptySet(), { addr: SET_IDENTITY_ADDR, args: [id, "Track", "/x/Track.als"] });
+    expect(s.setId).toBe(id);
+    s = applyDelta(s, { addr: SET_IDENTITY_ADDR, args: ["", "", ""] });
+    expect(s.setId).toBeNull();
+    expect(s.setName).toBeNull();
+    expect(s.setPath).toBeNull();
+  });
+
+  it("leaves the fields alone on a malformed reply", () => {
+    const before = applyDelta(emptySet(), {
+      addr: SET_IDENTITY_ADDR,
+      args: [id, "Track", "/x/Track.als"],
+    });
+    const after = applyDelta(before, { addr: SET_IDENTITY_ADDR, args: [id] });
+    expect(after).toBe(before);
   });
 });

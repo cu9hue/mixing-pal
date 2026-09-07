@@ -30,6 +30,12 @@ export interface SetState {
   /// the true count the digest would present that prefix as the whole
   /// structure. Null until a reply arrives.
   cuePointsTotal: number | null;
+  /// The set's identity, from /live/mixingpal/get/set_identity. setId is
+  /// the id stored in the set, else its path, else null; the choice is
+  /// made in apply.ts's setIdentityFrom. All null until the first reply.
+  setId: string | null;
+  setName: string | null;
+  setPath: string | null;
 }
 
 export interface Delta {
