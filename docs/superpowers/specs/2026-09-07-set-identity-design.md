@@ -1,7 +1,7 @@
 # Set identity — Design
 
 Date: 2026-09-07
-Status: draft, revised after two Codex reviews and a review panel; awaiting review
+Status: approved for planning 2026-09-07, after two Codex reviews and a review panel
 Roadmap item 3. Items 4 (per-set persistence) and 5 (per-set notes) build on it.
 Carves one exception out of the first spec's "No write access" non-goal; see
 The exception below.
@@ -110,14 +110,18 @@ in both cases the app falls back to the path and the connector log says why.
 | Previous read | This read | Action |
 | --- | --- | --- |
 | any | valid id `s` | report `s`; no write |
-| no valid id, equal to this read | no valid id | write `{"set_id": new}`, read back, report what the value rule says of the read-back |
+| `None` | `None` | write `{"set_id": new}`, read back, report what the value rule says of the read-back |
 | anything else | no valid id | report `""`; no write |
 
-Two consecutive reads without a valid id, and equal to each other, are what
-stands between a transient default during a document load and a write. The
-read-back goes through the value rule only, never the write decision, so a
-write that did not take reports `""` and the next poll starts the two-read
-count again. `set_data` raising is caught, logged, and reported as `""`.
+`None` is `get_data`'s default: the key is absent. Only an absent key is
+ever written; a value under our key with no valid id is never repaired,
+which is what the value rule promises. Two consecutive absent reads are what
+stands between a transient default during a document load and a write; the
+first poll after the handler is created has no previous read and never
+writes. The read-back goes through the value rule only, never the write
+decision, so a write that did not take reports `""` and the next poll starts
+the two-read count again. `set_data` raising is caught, logged, and reported
+as `""`.
 
 ### The spike
 
@@ -325,8 +329,8 @@ exchange, visible in the card.
   `None`; a non-dict; a dict without `set_id`; a `set_id` that is not 32
   lowercase hex; a valid `set_id` beside extra keys, which stays valid) and
   one per row of the write decision, plus: the generator is called only on
-  the writing row; a read-back with no valid id reports `""` and asks for no
-  second write.
+  the writing row; the first poll, with no previous read, never writes; a
+  dict without our id is never written over.
 - `apply.test.ts`: the three-row table above, a later reply replacing an
   earlier one, and a malformed reply leaving the fields alone.
 - `arity.rs`'s table test and `pollers.rs`'s rate test, each with the new
