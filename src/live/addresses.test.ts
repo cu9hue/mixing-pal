@@ -9,11 +9,12 @@ import {
 import manifest from "../../shared/handled-addresses.json";
 
 // num_tracks, cue_points, and set_identity are handled directly in applyDelta
-// (num_tracks prunes state.tracks; cue_points decodes a flat name/time list)
-// rather than through SONG_FIELDS's generic field-copy map -- see apply.ts's
-// comments on NUM_TRACKS_ADDR and CUE_POINTS_ADDR. Listed here, separately
-// from SONG_FIELDS, so the equality check below still holds for every field
-// that IS a plain SONG_FIELDS copy.
+// (num_tracks prunes state.tracks; cue_points decodes a flat name/time list;
+// set_identity decodes three strings into three fields) rather than through
+// SONG_FIELDS's generic field-copy map -- see apply.ts's comments on
+// NUM_TRACKS_ADDR, CUE_POINTS_ADDR, and SET_IDENTITY_ADDR. Listed here,
+// separately from SONG_FIELDS, so the equality check below still holds for
+// every field that IS a plain SONG_FIELDS copy.
 const handledOutsideFieldMaps = [NUM_TRACKS_ADDR, CUE_POINTS_ADDR, SET_IDENTITY_ADDR];
 
 // This file is one half of the address-consistency tripwire from I4 in the

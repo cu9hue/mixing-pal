@@ -1121,7 +1121,15 @@ async fn poll_kind(
             // know this address, logs it at ERROR, and forwards the error
             // to the app once a poll. Nothing goes out until a version
             // reply says 12 or more.
-            let version = counts.lock().map(|c| c.script_version).unwrap_or(None);
+            let version = match counts.lock() {
+                Ok(c) => c.script_version,
+                Err(_) => {
+                    eprintln!(
+                        "track counts lock poisoned; skipping the set identity poll this tick"
+                    );
+                    return;
+                }
+            };
             if version.is_some_and(|v| v >= SET_IDENTITY_WIRE_VERSION) {
                 register_and_send(
                     table,
@@ -1425,6 +1433,55 @@ mod tests {
                 "{addr} was retained in the mirror; add it to is_resolve_only"
             );
         }
+    }
+
+    #[test]
+    fn a_version_reply_fills_the_shared_script_version() {
+        // IMPORTANT 3 (2026-09-07 whole-branch review): the identity poll is
+        // gated on this field, and nothing else exercised the arm that fills
+        // it. A mistyped address here would leave the gate shut forever with
+        // every other test green.
+        let coalescer = Mutex::new(Coalescer::new());
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
+        let msg = rosc::OscMessage {
+            addr: "/live/mixingpal/get/version".to_string(),
+            args: vec![OscType::Int(12)],
+        };
+        handle_inbound(&msg, &coalescer, &table, &counts);
+        assert_eq!(counts.lock().unwrap().script_version, Some(12));
+    }
+
+    #[test]
+    fn an_identity_reply_lands_in_the_mirror() {
+        // The twin of `a_tool_reply_never_lands_in_the_mirror`: the frontend
+        // reads set_identity from the mirror, like the locators, so this
+        // reply must be retained and replayed on a reload.
+        let coalescer = Mutex::new(Coalescer::new());
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
+        let msg = rosc::OscMessage {
+            addr: "/live/mixingpal/get/set_identity".to_string(),
+            args: vec![
+                OscType::String("0123456789abcdef0123456789abcdef".into()),
+                OscType::String("Track".into()),
+                OscType::String("/x/Track.als".into()),
+            ],
+        };
+        handle_inbound(&msg, &coalescer, &table, &counts);
+        let snapshot = coalescer.lock().unwrap().snapshot();
+        let delta = snapshot
+            .iter()
+            .find(|d| d.addr == "/live/mixingpal/get/set_identity")
+            .expect("the identity reply must be retained in the mirror");
+        assert_eq!(
+            delta.args,
+            vec![
+                serde_json::json!("0123456789abcdef0123456789abcdef"),
+                serde_json::json!("Track"),
+                serde_json::json!("/x/Track.als"),
+            ]
+        );
     }
 
     #[test]
