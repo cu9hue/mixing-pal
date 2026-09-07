@@ -1,7 +1,7 @@
 import { useState } from "react";
 import "./WhatICanSee.css";
 import { SetState } from "../live/model";
-import { summaryLine } from "./summaryLine";
+import { summaryLine, setLine } from "./summaryLine";
 import { Advanced } from "./Advanced";
 import wireVersion from "../../shared/wire-version.json";
 
@@ -62,6 +62,7 @@ export function WhatICanSee({ state }: { state: SetState }) {
         ) : (
           <>
             <div className="wics__line">{summaryLine(state, indices.length)}</div>
+            {setLine(state) !== null && <div className="wics__line">{setLine(state)}</div>}
             <div className="wics__line">
               connector v{state.scriptVersion ?? "—"} · this app expects v{wireVersion.version}
             </div>

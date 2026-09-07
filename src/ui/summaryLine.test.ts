@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summaryLine } from "./summaryLine";
+import { summaryLine, setLine } from "./summaryLine";
 import { SetState } from "../live/model";
 
 const BASE: SetState = {
@@ -40,5 +40,30 @@ describe("summaryLine", () => {
 
   it("says no key set when the scale name is empty", () => {
     expect(summaryLine({ ...BASE, scaleName: "" }, 12)).toBe("12 tracks · 128 BPM · no key set");
+  });
+});
+
+describe("setLine", () => {
+  const id = "0123456789abcdef0123456789abcdef";
+
+  it("names the set", () => {
+    expect(setLine({ ...BASE, setId: id, setName: "Track", setPath: "/x/Track.als" })).toBe(
+      "Set  Track",
+    );
+  });
+
+  // The one place she can see that a thread for this set will not follow a
+  // rename: the id is the path, or there is none.
+  it("says when the set has no stored id", () => {
+    expect(
+      setLine({ ...BASE, setId: "/x/Track.als", setName: "Track", setPath: "/x/Track.als" }),
+    ).toBe("Set  Track · no stored id");
+    expect(setLine({ ...BASE, setId: null, setName: "Track", setPath: null })).toBe(
+      "Set  Track · no stored id",
+    );
+  });
+
+  it("is absent until the first reply names the set", () => {
+    expect(setLine(BASE)).toBeNull();
   });
 });
