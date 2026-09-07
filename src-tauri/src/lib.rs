@@ -134,6 +134,9 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
     // above, this one is mirrored on purpose (NOT in is_resolve_only): the
     // digest reads the producer's locators from SetState on every turn.
     "/live/mixingpal/get/cue_points",
+    // PollKind::SetIdentity, observed raw and mirrored like cue_points:
+    // the frontend reads the set's id, name, and path from SetState.
+    "/live/mixingpal/get/set_identity",
 ];
 
 /// Every literal address the poll loop sends on the wire, outside of
@@ -179,6 +182,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/mixingpal/get/arrangement/identity",
     "/live/arrangement_clip/get/notes_window",
     "/live/mixingpal/get/cue_points",
+    "/live/mixingpal/get/set_identity",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -218,6 +222,11 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
 /// address -- see `SINGLETON_SUBSCRIPTIONS`.
 const SUBSCRIPTION_RESEND_INTERVAL: Duration = Duration::from_secs(10);
 
+/// The first wire version whose connector answers
+/// `/live/mixingpal/get/set_identity`. Polled only once the handshake has
+/// said so; see `poll_kind`.
+const SET_IDENTITY_WIRE_VERSION: i64 = 12;
+
 /// Same window `RequestTable::expire` uses to free a single-flight slot.
 /// Reused here so `inflight_track_data`/`inflight_mixer_data` (below) can
 /// never outlive the request they describe -- see
@@ -243,6 +252,9 @@ const UNKEYED_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 struct TrackCounts {
     num_tracks: Option<usize>,
     num_scenes: Option<usize>,
+    /// The last wire-version reply, so the poll loop, which cannot see the
+    /// mirror, can hold back an address a stale connector does not know.
+    script_version: Option<i64>,
     inflight_track_data: Option<(u32, u32)>,
     inflight_mixer_data: Option<(u32, u32)>,
     track_data_sent_at: Option<Instant>,
@@ -414,6 +426,11 @@ fn handle_inbound(
         ("/live/song/get/num_scenes", Some(OscType::Int(n))) => {
             if let Ok(mut c) = counts.lock() {
                 c.num_scenes = Some((*n).max(0) as usize);
+            }
+        }
+        ("/live/mixingpal/get/version", Some(OscType::Int(v))) => {
+            if let Ok(mut c) = counts.lock() {
+                c.script_version = Some(i64::from(*v));
             }
         }
         _ => {}
@@ -1098,6 +1115,23 @@ async fn poll_kind(
         PollKind::CuePoints => {
             register_and_send(table, poll_socket, now, "/live/mixingpal/get/cue_points", vec![])
                 .await;
+        }
+        PollKind::SetIdentity => {
+            // Gated on the handshake: a connector older than 12 does not
+            // know this address, logs it at ERROR, and forwards the error
+            // to the app once a poll. Nothing goes out until a version
+            // reply says 12 or more.
+            let version = counts.lock().map(|c| c.script_version).unwrap_or(None);
+            if version.is_some_and(|v| v >= SET_IDENTITY_WIRE_VERSION) {
+                register_and_send(
+                    table,
+                    poll_socket,
+                    now,
+                    "/live/mixingpal/get/set_identity",
+                    vec![],
+                )
+                .await;
+            }
         }
     }
 }
@@ -1918,6 +1952,59 @@ mod tests {
         assert!(nothing.is_err(), "a chunked sweep must wait for a real track count");
         assert!(mixer_queue.is_empty());
         assert_eq!(mixer_built_for, None);
+    }
+
+    #[tokio::test]
+    async fn poll_kind_set_identity_waits_for_a_connector_that_knows_the_address() {
+        // A connector older than wire 12 logs an unknown address at ERROR
+        // and forwards it to the app as /live/error, once per poll. At one
+        // poll a second that would fill its log and our error stream until
+        // she reinstalls, so nothing goes out until the handshake says 12+.
+        let listener = OscSocket::bind_to(0, 0).await.unwrap();
+        let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
+        let mut track_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut track_built_for: Option<(usize, usize)> = None;
+        let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut mixer_built_for: Option<usize> = None;
+
+        for version in [None, Some(11)] {
+            counts.lock().unwrap().script_version = version;
+            poll_kind(
+                PollKind::SetIdentity,
+                Instant::now(),
+                &table,
+                &poll_socket,
+                &counts,
+                &mut track_queue,
+                &mut track_built_for,
+                &mut mixer_queue,
+                &mut mixer_built_for,
+            )
+            .await;
+            let nothing =
+                tokio::time::timeout(Duration::from_millis(50), recv_message(&listener)).await;
+            assert!(nothing.is_err(), "version {version:?} must not be asked for set_identity");
+        }
+
+        counts.lock().unwrap().script_version = Some(12);
+        poll_kind(
+            PollKind::SetIdentity,
+            Instant::now(),
+            &table,
+            &poll_socket,
+            &counts,
+            &mut track_queue,
+            &mut track_built_for,
+            &mut mixer_queue,
+            &mut mixer_built_for,
+        )
+        .await;
+        let msg = tokio::time::timeout(Duration::from_millis(500), recv_message(&listener))
+            .await
+            .expect("a wire-12 connector is asked for set_identity");
+        assert_eq!(msg.addr, "/live/mixingpal/get/set_identity");
     }
 
     #[tokio::test]
