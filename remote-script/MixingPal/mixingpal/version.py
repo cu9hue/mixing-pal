@@ -33,8 +33,12 @@ from ..abletonosc.handler import AbletonOSCHandler
 # clip's end_time rather than its source-loop length. Version 9 adds each
 # arrangement placement's mute and MIDI type. Version 10 adds a Drum Rack
 # pad's loaded sample-file name when Live exposes one. Version 11 marks Rack
-# devices inside a Rack listing, so nested Drum Racks can be opened.
-WIRE_VERSION = 11
+# devices inside a Rack listing, so nested Drum Racks can be opened. Version
+# 12 adds /live/mixingpal/get/set_identity: the set's stored id, name, and
+# path. A stale script knows no such address, so the app never learns which
+# set is open and nothing per-set can be saved; the banner asks for the
+# reinstall.
+WIRE_VERSION = 12
 
 
 class VersionHandler(AbletonOSCHandler):

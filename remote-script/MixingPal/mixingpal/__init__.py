@@ -5,9 +5,10 @@ from .device_range import DeviceRangeHandler
 from .rack import RackHandler
 from .view import ViewOverrideHandler
 from .version import VersionHandler
+from .set_identity import SetIdentityHandler
 
 __all__ = [
     "MasterHandler", "ReturnHandler", "MixerHandler", "ClipNotesHandler",
     "DeviceRangeHandler", "ViewOverrideHandler", "VersionHandler",
-    "RackHandler",
+    "RackHandler", "SetIdentityHandler",
 ]

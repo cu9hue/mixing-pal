@@ -7,6 +7,7 @@ from .device_range import DeviceRangeHandler
 from .rack import RackHandler
 from .view import ViewOverrideHandler
 from .version import VersionHandler
+from .set_identity import SetIdentityHandler
 
 
 class MixingPalManager(Manager):
@@ -28,4 +29,5 @@ class MixingPalManager(Manager):
                 # None-safe get_selected_device wins the address.
                 ViewOverrideHandler(self),
                 VersionHandler(self),
+                SetIdentityHandler(self),
             ]

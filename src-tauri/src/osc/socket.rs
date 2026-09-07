@@ -15,6 +15,11 @@ pub const CLIENT_PORT: u16 = 11001;
 /// process, so this one check on every datagram is the entire enforcement
 /// surface for that promise. `send_to` panics if this returns false; see its
 /// doc comment.
+///
+/// One thing this guard does not see: the connector itself writes the set's
+/// identity key on a `/live/mixingpal/get/set_identity` poll, the single
+/// exception carved out in docs/superpowers/specs/2026-09-07-set-identity-
+/// design.md. The app still sends nothing but reads.
 pub(crate) fn is_read_only_address(addr: &str) -> bool {
     addr.contains("/get/") || addr.contains("/start_listen/")
 }
