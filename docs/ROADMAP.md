@@ -162,7 +162,8 @@ screen capture, no music theory engine.
 
 "No writes to the set" was reworded on 2026-09-07 to "no writes to the set's
 contents", and one exception was carved out: the identity key that item 3
-stores with `Song.set_data`, one key, written once, never visible in Live.
+stores with `Song.set_data`, one key, written only when absent, never
+visible in Live.
 Nothing the app does changes a note, clip, device, fader, name, or locator.
 The exception's conditions are in
 `docs/superpowers/specs/2026-09-07-set-identity-design.md`; any further write
