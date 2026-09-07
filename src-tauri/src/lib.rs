@@ -1278,12 +1278,12 @@ mod tests {
             "/live/view/get/selected_device",
             "/live/master/get/output_meter_level",
             // Subscribed via SINGLETON_SUBSCRIPTIONS but not modelled in
-            // SetState -- seven properties, deliberately unmodelled.
+            // SetState -- five properties, deliberately unmodelled. The two
+            // signature properties left this list when apply.ts started
+            // mapping them, so a dropped mapping fails the build.
             "/live/song/get/loop",
             "/live/song/get/loop_start",
             "/live/song/get/loop_length",
-            "/live/song/get/signature_numerator",
-            "/live/song/get/signature_denominator",
             "/live/song/get/beat",
             "/live/view/get/selected_scene",
             // Cached internally for track_chunks' byte-budget math; observed

@@ -90,9 +90,11 @@ span. loop_region is its repeating source: a 0..4 loop with length 32 plays
 looping is true, it repeats while launched. A muted arrangement placement
 does not sound, and a MIDI note with mute true does not sound.
 - In edit instructions, prefer clip_position or timeline_position to raw
-note start/duration. They are one-based bar.beat.sixteenth; a +/- beat
-remainder is intentional microtiming. Never call a beat offset a bar: in
-4/4, start_beats 32 is bar 9, not bar 32.
+note start/duration. They are one-based bar.beat.sixteenth as Live shows
+them; a +/- beats remainder is how far the note sits off the sixteenth grid,
+a nudge, a triplet, or swing. A note's start is measured from its clip's
+start, so its timeline beat is start_beats + start. Never call a beat offset
+a bar: in 4/4, start_beats 32 is bar 9, not bar 32.
 - Pitch, track, and device names do not identify a kick, bass, hat, ride, or
 shaker. Do not claim a role or an absence without direct semantic data; there
 is no drum-pad mapping.

@@ -55,9 +55,16 @@ export function buildContext(state: SetState, goal: string): string {
     const beatsPerBar = currentBeatsPerBar(state);
     const sections = [...state.cuePoints]
       .sort((a, b) => a.time - b.time)
+      // The beat is the fact and stays first: it is right whatever the
+      // signature is. The bar is a reading of it under the signature the
+      // mirror holds now, which can be stale for a few seconds after a set
+      // switch, so it rides in parentheses and the header says what it
+      // assumes. Snapped to the nearest sixteenth first, the way the Rust
+      // tools do, so a locator a hair before a bar line is that bar.
       .map((c) => {
         if (beatsPerBar === null) return `${fence(c.name)} ${c.time}`;
-        return `${fence(c.name)} bar ${Math.floor(c.time / beatsPerBar) + 1}`;
+        const snapped = Math.round(c.time * 4) / 4;
+        return `${fence(c.name)} ${c.time} (bar ${Math.floor(snapped / beatsPerBar) + 1})`;
       })
       .join(", ");
     // The connector cuts the locator reply to one datagram and sends the
@@ -70,7 +77,7 @@ export function buildContext(state: SetState, goal: string): string {
         : "";
     const unit = beatsPerBar === null
       ? "beats"
-      : `bars, ${state.signatureNumerator}/${state.signatureDenominator}`;
+      : `beats; bars assume ${state.signatureNumerator}/${state.signatureDenominator}`;
     lines.push(`SECTIONS (${unit})  ${sections}${cut}`);
   }
 

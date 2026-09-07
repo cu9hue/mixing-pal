@@ -79,6 +79,16 @@ pub fn mirror(f: &Value) -> Arc<Mutex<Coalescer>> {
         addr: "/live/song/get/num_tracks".into(),
         args: vec![json!(tracks.len())],
     });
+    // The signature, when the fixture carries one, so the note and
+    // arrangement tools render the bar positions production renders.
+    for (addr, key) in [
+        ("/live/song/get/signature_numerator", "signatureNumerator"),
+        ("/live/song/get/signature_denominator", "signatureDenominator"),
+    ] {
+        if !f["song"][key].is_null() {
+            c.observe_delta(Delta { addr: addr.into(), args: vec![f["song"][key].clone()] });
+        }
+    }
     // Each field is observed only when the fixture carries it: the honesty
     // fixture has no `volume` or `panning`, and `get_track_detail` reports
     // an absent field as absent rather than as a failed read.

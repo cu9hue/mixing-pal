@@ -5,6 +5,8 @@
     "isPlaying": false,
     "rootNote": 9,
     "scaleName": "Minor",
+    "signatureNumerator": 4,
+    "signatureDenominator": 4,
     "selectedTrack": 0,
     "scriptVersion": 5,
     "cuePoints": [
