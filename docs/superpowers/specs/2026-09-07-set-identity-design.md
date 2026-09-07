@@ -121,7 +121,9 @@ first poll after the handler is created has no previous read and never
 writes. The read-back goes through the value rule only, never the write
 decision, so a write that did not take reports `""` and the next poll starts
 the two-read count again. `set_data` raising is caught, logged, and reported
-as `""`.
+as `""`. A write that raises or reads back without a valid id is not retried
+in this handler's lifetime; the next set load (a new handler) may try once
+again.
 
 ### The spike
 
@@ -199,15 +201,17 @@ plumbing, the other file holds the logic that can be wrong.
 - `remote-script/MixingPal/mixingpal/set_identity_rules.py`, no Live
   imports: `valid_id(value) -> str` (the value rule, `""` for none) and
   `decide(previous, current, generate) -> (report, write)` (the write
-  decision; `write` is the value to store or `None`). Both tables above are
-  its tests, in `remote-script/tests/test_set_identity_rules.py`, loaded by
-  path the way `test_rack_paths.py` does.
+  decision; `write` is the value to store or `None`), plus what the handler
+  remembers between polls -- the previous read and the one-write latch -- as
+  `after_read`, `after_write`, and `after_failed_read` over an immutable
+  `State`. Both tables above are its tests, in
+  `remote-script/tests/test_set_identity_rules.py`, loaded by path the way
+  `test_rack_paths.py` does.
 - `remote-script/MixingPal/mixingpal/set_identity.py`: `SetIdentityHandler`,
-  an `AbletonOSCHandler` that keeps the previous read, calls `decide`, calls
-  `set_data` and then `get_data` when told to write, runs the read-back
-  through `valid_id`, and answers the address with the three strings. Its
-  own logic is the three try/excepts and the previous-read memory, nothing
-  else. Registered in `MixingPalManager.init_api` in `manager.py`, after
+  an `AbletonOSCHandler` that holds the state, calls `after_read`, calls
+  `set_data` and then `get_data` when told to write, hands the read-back to
+  `after_write`, and answers the address with the three strings. Its own
+  logic is the three try/excepts and the logging, nothing else. Registered in `MixingPalManager.init_api` in `manager.py`, after
   `VersionHandler`; a handler that is not in that list serves nothing.
 
 Logging is on change and on write only: a read that equals the previous one

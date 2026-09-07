@@ -3,10 +3,11 @@ outside Live: `set_identity.py` holds the OSC plumbing, this file holds the
 logic that can be wrong, the way `rack.py` and `rack_paths.py` split.
 
 Spec: docs/superpowers/specs/2026-09-07-set-identity-design.md. This is the
-one write this connector ever makes to a set, and these two functions are
-the whole decision.
+one write this connector ever makes to a set, and these functions are the
+whole decision, including what the handler remembers between polls.
 """
 import re
+from collections import namedtuple
 
 KEY = "mixingpal"
 
@@ -15,6 +16,15 @@ KEY = "mixingpal"
 UNREAD = object()
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
+
+# The handler's whole memory between polls: the previous read (UNREAD before
+# the first one) and whether a write has been attempted in this handler's
+# lifetime. The transitions live here, not in the handler, so they can be
+# tested outside Live.
+State = namedtuple("State", ("previous", "write_attempted"))
+
+# What a new handler starts with: no previous read, no write attempted.
+INITIAL = State(previous=UNREAD, write_attempted=False)
 
 
 def valid_id(value):
@@ -52,3 +62,39 @@ def decide(previous, current, generate):
     if current is None and previous is None:
         return "", {"set_id": generate()}
     return "", None
+
+
+def after_read(state, current, generate):
+    """One poll's read of the key. Returns (state, report, write).
+
+    `write` is the value to store with Song.set_data, or None. This wraps
+    `decide` with the one-write latch: once a write has been attempted in
+    this handler's lifetime, no second one is ever attempted, whether the
+    first raised or read back without a valid id. A write that took needs
+    no second attempt -- the next read finds the id -- and a write that
+    failed would otherwise be retried once a second, forever, against her
+    open set. The next attempt waits for the next set load, which is a new
+    handler with a fresh state.
+    """
+    if state.write_attempted:
+        return state._replace(previous=current), valid_id(current), None
+    report, write = decide(state.previous, current, generate)
+    return State(previous=current, write_attempted=write is not None), report, write
+
+
+def after_write(state, read_back):
+    """The read-back after a write. Returns (state, report).
+
+    The read-back goes through the value rule only, never the write
+    decision, so a write that did not take reports "".
+    """
+    return State(previous=read_back, write_attempted=True), valid_id(read_back)
+
+
+def after_failed_read(state):
+    """get_data raised: the state with no previous read.
+
+    Two consecutive absent reads are what licenses a write, and a read that
+    raised is not an absent read, so the count starts again.
+    """
+    return state._replace(previous=UNREAD)
