@@ -2,7 +2,7 @@
 outside Live: `set_identity.py` holds the OSC plumbing, this file holds the
 logic that can be wrong, the way `rack.py` and `rack_paths.py` split.
 
-Spec: docs/superpowers/specs/2026-09-07-set-identity-design.md. This is the
+The 2026-09-07 set identity design (git history) is the spec. This is the
 one write this connector ever makes to a set, and these functions are the
 whole decision, including what the handler remembers between polls.
 """

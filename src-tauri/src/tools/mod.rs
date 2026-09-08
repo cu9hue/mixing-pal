@@ -1837,8 +1837,8 @@ mod tests {
     ///
     /// `arrangement.rs` owns the wire behaviour of the bracket; this fake
     /// exists so the STRING the arm maps that outcome to can be pinned.
-    /// `docs/manual-verification.md` and the tool description both quote
-    /// `arrangement_clip_identity_changed` verbatim.
+    /// The tool description quotes `arrangement_clip_identity_changed`
+    /// verbatim.
     async fn moving_clip_ctx(first: f32, second: f32) -> ToolContext {
         use crate::osc::requests::RequestTable;
         use crate::osc::socket::OscSocket;

@@ -5,8 +5,8 @@
  * not a panel that lost its window. That means a surface deeper than
  * Live's grey, one warm accent used sparingly, and soft depth.
  *
- * Every value here is from docs/superpowers/specs/2026-08-19-product-ui-design.md.
- * Change the spec first.
+ * Every value here came from the 2026-08-19 product UI design, which now
+ * lives only in git history. Change a value here with intent, and say why.
  */
 :root {
   --surface: #151619;

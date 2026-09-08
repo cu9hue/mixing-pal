@@ -2,7 +2,7 @@
 //!
 //! Not run by `cargo test`: the target needs `--features evals`, and every
 //! run costs the operator money. Run it before a release and record the
-//! result in `docs/manual-verification.md`.
+//! result in the PR that cuts the release.
 //!
 //!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
 //!     cargo test --features evals --test evals -- --test-threads=1

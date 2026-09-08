@@ -984,7 +984,7 @@ mod tests {
     }
 
     /// The axes come from the craft spec's "Layer 2: the axes" table
-    /// (docs/superpowers/specs/2026-09-02-craft-ontology-design.md). That
+    /// (the 2026-09-02 craft ontology design, in git history). That
     /// table is the source and the prompt is derived from it; this list is
     /// the join. Change the table, change this list, and the prompt has to
     /// follow. The two ear-only axes are here too: the prompt must name

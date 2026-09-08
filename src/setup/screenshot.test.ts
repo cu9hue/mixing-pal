@@ -12,9 +12,8 @@ import { fileURLToPath } from "node:url";
  * barber pole on the one screen whose whole job is letting someone compare
  * what is in front of them in Live to what is on screen.
  *
- * docs/manual-verification.md had a checklist item for exactly this and it
- * did not help, because a document marked PENDING-USER fails nothing. This
- * does.
+ * A manual checklist once had an item for exactly this and it did not help,
+ * because a document marked PENDING-USER fails nothing. This does.
  *
  * Pinning the placeholder rather than the real file is deliberate. The
  * screenshot is meant to be re-captured whenever Live's layout changes, so

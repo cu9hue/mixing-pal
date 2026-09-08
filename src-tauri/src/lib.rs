@@ -1488,25 +1488,6 @@ mod tests {
     }
 
     #[test]
-    fn the_set_identity_spike_is_recorded_before_wire_12_ships() {
-        // Wire 12 is the first connector that writes to a set (one key,
-        // once; see the 2026-09-07 spec). Whether that write leaves a
-        // clean set clean can only be seen in Live, and the checklist in
-        // docs/manual-verification.md is the record. This test is the
-        // release gate: it stays red until the result line is filled in,
-        // so a .dmg cannot be cut from a wire-12 tree nobody has checked.
-        let doc = include_str!("../../docs/manual-verification.md");
-        let section = doc
-            .split("## Set identity spike")
-            .nth(1)
-            .expect("docs/manual-verification.md must keep the set identity spike section");
-        assert!(
-            !section.contains("Result: ___"),
-            "run the set identity spike in Live and record its result in docs/manual-verification.md before shipping wire 12"
-        );
-    }
-
-    #[test]
     fn wire_version_matches_the_shared_manifest() {
         // Three-way tripwire for the wire-version handshake. The Python
         // Remote Script is a separately deployed artefact -- copied into

@@ -11,7 +11,7 @@ import { Nudge } from "./nudges";
  * is the one thing it must never be.
  *
  * MANUAL VERIFICATION REQUIRED: confirm against a real Live 12 set before
- * trusting this rule. See docs/manual-verification.md.
+ * trusting this rule.
  */
 export const DEFAULT_NAME = /^(?:\d+[-\s]+)?(?:MIDI|Audio)$/i;
 

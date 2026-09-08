@@ -10,8 +10,8 @@ class SetIdentityHandler(AbletonOSCHandler):
     file_path), empty strings meaning none.
 
     The one write this connector ever makes to a set: the identity key,
-    under the conditions in docs/superpowers/specs/2026-09-07-set-identity-
-    design.md. The decision and the state transitions live in
+    under the conditions in the 2026-09-07 set identity design (git history;
+    the rule is in docs/ROADMAP.md, "Not doing"). The decision and the state transitions live in
     set_identity_rules.py, where they can be tested outside Live; this class
     holds the try/excepts, the read-back, and the logging. Each of the three
     reads is guarded on its own, so one property raising never takes the
