@@ -24,15 +24,28 @@ export function keyFor(state: SetState): ThreadKey | null {
 }
 
 /**
- * Whether the card should switch from the thread it shows to the set's.
- * Only on a change to a real identity, never on a change to none (the
- * connector gone, or an unsaved set: nothing on screen changes and nothing
- * is saved), and never while a turn is running, so an answer can only
- * ever land in the thread its question was asked in.
+ * What the card does when the mirror's identity differs from the key its
+ * thread is filed under.
+ *
+ * "switch": another set is open; load its thread. "rekey": the same set
+ * under a new name, so keep the thread on screen and file it under the
+ * new key. Two cases are the same set: the promotion from a path-derived
+ * id to a stored one that every new set goes through (same path, new id),
+ * and a Save As or move (same stored id, new path). "none" on a change to
+ * no identity (the connector gone, or an unsaved set: nothing on screen
+ * changes and nothing is saved) and while a turn is running, so an answer
+ * can only ever land in the thread its question was asked in.
  */
-export function shouldSwitch(current: ThreadKey | null, next: ThreadKey | null, busy: boolean): boolean {
-  if (next === null || busy) return false;
-  return current === null || current.id !== next.id;
+export function classify(
+  current: ThreadKey | null,
+  next: ThreadKey | null,
+  busy: boolean,
+): "none" | "switch" | "rekey" {
+  if (next === null || busy) return "none";
+  if (current === null) return "switch";
+  if (current.id === next.id) return current.path === next.path ? "none" : "rekey";
+  if (current.path !== null && current.path === next.path) return "rekey";
+  return "switch";
 }
 
 /**

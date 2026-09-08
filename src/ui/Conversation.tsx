@@ -8,7 +8,7 @@ import { progressLabel } from "./progressLabel";
 import { waitingLabel } from "./waitingLabel";
 import { Exchange, begin, complete, fail } from "./thread";
 import { loadThread, saveThread } from "../model/threads";
-import { SWITCH_HOLD_MS, ThreadKey, historyFrom, keyFor, recapLine, shouldSwitch } from "./threadStore";
+import { SWITCH_HOLD_MS, ThreadKey, classify, historyFrom, keyFor, recapLine } from "./threadStore";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -164,15 +164,27 @@ export function Conversation({
   const nextPath = next?.path ?? null;
   useEffect(() => {
     const target = nextId === null ? null : { id: nextId, path: nextPath };
-    if (!shouldSwitch(key, target, busy)) return;
+    const action = classify(key, target, busy);
+    if (action === "none" || target === null) return;
+    if (action === "rekey") {
+      // Same set, new name: the thread stays, the file follows. Saving
+      // under the new key is what makes the Rust index adopt it.
+      setKey(target);
+      persist(target, threadRef.current);
+      return;
+    }
     let cancelled = false;
     const timer = setTimeout(async () => {
-      if (cancelled || target === null) return;
-      let saved: Awaited<ReturnType<typeof loadThread>> = null;
+      if (cancelled) return;
+      let saved: Awaited<ReturnType<typeof loadThread>>;
       try {
         saved = await loadThread(target);
       } catch (e) {
+        // The file could not be read. Keep what is on screen rather than
+        // start that set over on top of a thread nobody has seen; the
+        // next identity change tries again.
         console.error("failed to load the set's thread", e);
+        return;
       }
       if (cancelled) return;
       const restored = saved?.exchanges ?? [];
@@ -231,7 +243,11 @@ export function Conversation({
     // Saved under the key current when the question was asked. A switch
     // waits for the turn, so this is the key the answer lands under too.
     const askedUnder = key;
-    setThread((t) => begin(t, asked));
+    const begun = begin(threadRef.current, asked);
+    setThread(begun);
+    // Saved now, not only when the answer lands: a quit mid-turn keeps the
+    // question, and the restored thread shows it with no answer.
+    persist(askedUnder, begun);
     startedAt.current = Date.now();
     setElapsedMs(0);
     setBusy(true);

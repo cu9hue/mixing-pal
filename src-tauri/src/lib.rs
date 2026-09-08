@@ -605,19 +605,21 @@ fn unix_now() -> u64 {
 }
 
 /// The saved thread for a set, by its stored id and then by its path. None
-/// when there is none; the card starts that set's thread empty.
+/// when there is none, and the card starts that set's thread empty. An
+/// error when the file could not be read, and the card keeps what it shows.
 #[tauri::command]
 fn load_thread(
     set_id: String,
     set_path: Option<String>,
     state: tauri::State<'_, Arc<ModelState>>,
-) -> Option<threads::Thread> {
+) -> Result<Option<threads::Thread>, String> {
     threads::load(
         &state.config_dir.join(threads::THREADS_DIR),
         &set_id,
         set_path.as_deref(),
         unix_now(),
     )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

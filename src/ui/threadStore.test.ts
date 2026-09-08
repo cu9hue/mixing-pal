@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { emptySet } from "../live/apply";
-import { keyFor, shouldSwitch, historyFrom, recapLine, ThreadKey } from "./threadStore";
+import { keyFor, classify, historyFrom, recapLine, ThreadKey } from "./threadStore";
 
 const a: ThreadKey = { id: "aaaa", path: "/x/a.als" };
 const b: ThreadKey = { id: "bbbb", path: "/x/b.als" };
@@ -15,29 +15,47 @@ describe("keyFor", () => {
   });
 });
 
-describe("shouldSwitch", () => {
+describe("classify", () => {
   it("switches from nothing to a set", () => {
-    expect(shouldSwitch(null, a, false)).toBe(true);
+    expect(classify(null, a, false)).toBe("switch");
   });
 
   it("switches from one set to another", () => {
-    expect(shouldSwitch(a, b, false)).toBe(true);
+    expect(classify(a, b, false)).toBe("switch");
   });
 
-  it("does not switch to the set it already shows", () => {
-    expect(shouldSwitch(a, { ...a }, false)).toBe(false);
+  it("does nothing for the set it already shows", () => {
+    expect(classify(a, { ...a }, false)).toBe("none");
+  });
+
+  // Every new set goes from its path to a stored id a poll or two after
+  // it opens. Same set, same thread, new key.
+  it("rekeys the promotion from path to stored id", () => {
+    const byPath: ThreadKey = { id: "/x/a.als", path: "/x/a.als" };
+    expect(classify(byPath, a, false)).toBe("rekey");
+  });
+
+  // Save As or a move keeps the stored id and changes the path.
+  it("rekeys a save-as under the same id", () => {
+    expect(classify(a, { id: "aaaa", path: "/y/a v2.als" }, false)).toBe("rekey");
+  });
+
+  // Two unsaved sets have no path; a new id with no path in common is
+  // another set, not a promotion.
+  it("does not treat two pathless sets as one", () => {
+    expect(classify({ id: "x", path: null }, { id: "y", path: null }, false)).toBe("switch");
   });
 
   // The connector gone, or an unsaved set: nothing on screen changes.
   it("never switches to no identity", () => {
-    expect(shouldSwitch(a, null, false)).toBe(false);
-    expect(shouldSwitch(null, null, false)).toBe(false);
+    expect(classify(a, null, false)).toBe("none");
+    expect(classify(null, null, false)).toBe("none");
   });
 
   // An answer can only land in the thread its question was asked in.
   it("waits for a running turn to finish", () => {
-    expect(shouldSwitch(a, b, true)).toBe(false);
-    expect(shouldSwitch(null, a, true)).toBe(false);
+    expect(classify(a, b, true)).toBe("none");
+    expect(classify(null, a, true)).toBe("none");
   });
 });
 

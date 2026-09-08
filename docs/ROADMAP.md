@@ -87,9 +87,13 @@ Ordered. Each item says what, why, size, and what it waits on.
    in one session gets its own. The one exception to the no-write rule; see
    "Not doing".
 
-4. **Per-set persistence.** The raw thread saved in the app data directory,
-   keyed by set id, restored on open, dropped 30 days after last open. Why: she
-   closes the app and comes back to the track. Size S. Waits on 3.
+4. **Per-set persistence.** Done 2026-09-08. Each set's thread is saved
+   beside `settings.json`, under `threads/`, looked up by the stored id and
+   then by the path so it follows a set whose id was minted again, and
+   dropped thirty days after its last open. The card switches threads only
+   when the identity has changed to another set and held, never mid-turn;
+   a restored thread carries a recap line. A quit mid-turn keeps the
+   question and loses the answer.
 
 5. **Per-set notes.** A short note the model writes per set: what was
    discussed, what she decided, what she was going to try. Shown in the card,

@@ -75,26 +75,62 @@ fn read_index(dir: &Path) -> Index {
         .unwrap_or_default()
 }
 
+/// Writes through a temporary file and a rename, so a quit or a power cut
+/// mid-write leaves the old file whole rather than a torn one.
+fn write_atomically(path: &Path, body: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, path)
+}
+
 fn write_index(dir: &Path, index: &Index) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let body = serde_json::to_string_pretty(index)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(dir.join(INDEX_FILE), body)
+    write_atomically(&dir.join(INDEX_FILE), &body)
 }
 
-/// The thread for this set, or None when there is none or its file no
-/// longer reads. Marks the entry opened now, so `prune` keeps it.
-pub fn load(dir: &Path, id: &str, path: Option<&str>, now: u64) -> Option<Thread> {
+/// A file name no thread on disk already uses. The index's counter is the
+/// first guess; a counter reset by a corrupt index must not hand out a
+/// name that still holds someone's transcript.
+fn fresh_file(dir: &Path, index: &mut Index) -> String {
+    loop {
+        let name = format!("thread-{}.json", index.next);
+        index.next += 1;
+        if !dir.join(&name).exists() {
+            return name;
+        }
+    }
+}
+
+/// The thread for this set. `Ok(None)` when there is none: no entry, or
+/// an entry whose file is gone. A file that exists but does not parse is
+/// moved aside as `<file>.corrupt` and reads as none, so the transcript is
+/// kept for a person and the set starts fresh. Any other read failure is
+/// an error, so the caller keeps what it shows rather than start over on
+/// top of a thread it could not read. Marks the entry opened now, so
+/// `prune` keeps it.
+pub fn load(dir: &Path, id: &str, path: Option<&str>, now: u64) -> std::io::Result<Option<Thread>> {
     let mut index = read_index(dir);
-    let i = index.find(id, path)?;
+    let Some(i) = index.find(id, path) else {
+        return Ok(None);
+    };
     index.entries[i].last_opened = now;
     let file: PathBuf = dir.join(&index.entries[i].file);
-    if let Err(e) = write_index(dir, &index) {
-        eprintln!("threads: could not update the index: {e}");
+    write_index(dir, &index)?;
+    let raw = match std::fs::read_to_string(&file) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    match serde_json::from_str(&raw) {
+        Ok(thread) => Ok(Some(thread)),
+        Err(e) => {
+            eprintln!("threads: {} does not parse ({e}); moving it aside", file.display());
+            std::fs::rename(&file, file.with_extension("json.corrupt"))?;
+            Ok(None)
+        }
     }
-    std::fs::read_to_string(file)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
 /// Writes the whole thread. Small files, one write; no partial appends.
@@ -104,13 +140,13 @@ pub fn save(dir: &Path, id: &str, path: Option<&str>, thread: &Thread) -> std::i
     let i = match index.find(id, path) {
         Some(i) => i,
         None => {
+            let file = fresh_file(dir, &mut index);
             index.entries.push(Entry {
                 id: id.to_string(),
                 path: path.filter(|p| !p.is_empty()).map(str::to_string),
-                file: format!("thread-{}.json", index.next),
+                file,
                 last_opened: thread.saved_at,
             });
-            index.next += 1;
             index.entries.len() - 1
         }
     };
@@ -120,26 +156,42 @@ pub fn save(dir: &Path, id: &str, path: Option<&str>, thread: &Thread) -> std::i
     }
     let body = serde_json::to_string_pretty(thread)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(dir.join(&index.entries[i].file), body)?;
+    write_atomically(&dir.join(&index.entries[i].file), &body)?;
     write_index(dir, &index)
 }
 
-/// Deletes every thread not opened within `RETENTION` of `now`. Returns
-/// how many went.
+/// Deletes every thread whose last open is more than `RETENTION` before
+/// `now`. Returns how many went. An entry whose file could not be deleted
+/// stays in the index, so the next startup tries again rather than
+/// leaving a transcript on disk that nothing points at.
 pub fn prune(dir: &Path, now: u64) -> std::io::Result<usize> {
     let mut index = read_index(dir);
-    let cutoff = now.saturating_sub(RETENTION.as_secs());
-    let (keep, drop): (Vec<Entry>, Vec<Entry>) =
-        index.entries.drain(..).partition(|e| e.last_opened >= cutoff);
-    index.entries = keep;
-    for e in &drop {
-        // A file already gone is the outcome wanted, not an error.
-        let _ = std::fs::remove_file(dir.join(&e.file));
+    let mut kept = Vec::new();
+    let mut dropped = 0usize;
+    for e in index.entries.drain(..) {
+        // Age, not a cutoff: a cutoff computed from `now` saturates at zero
+        // when the clock is young and would drop everything opened at the
+        // epoch, which is what a test clock looks like.
+        if now.saturating_sub(e.last_opened) < RETENTION.as_secs() {
+            kept.push(e);
+            continue;
+        }
+        match std::fs::remove_file(dir.join(&e.file)) {
+            // A file already gone is the outcome wanted.
+            Ok(()) => dropped += 1,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => dropped += 1,
+            Err(err) => {
+                eprintln!("threads: could not delete {} ({err}); keeping its entry", e.file);
+                kept.push(e);
+            }
+        }
     }
-    if !drop.is_empty() {
+    let changed = dropped > 0;
+    index.entries = kept;
+    if changed {
         write_index(dir, &index)?;
     }
-    Ok(drop.len())
+    Ok(dropped)
 }
 
 #[cfg(test)]
@@ -175,14 +227,17 @@ mod tests {
     #[test]
     fn a_set_with_no_thread_loads_nothing() {
         let dir = scratch();
-        assert_eq!(load(&dir, ID, Some(PATH), 100), None);
+        assert_eq!(load(&dir, ID, Some(PATH), 100).unwrap(), None);
     }
 
     #[test]
     fn a_saved_thread_loads_by_id() {
         let dir = scratch();
         save(&dir, ID, Some(PATH), &thread("why is the pad muddy", 100)).unwrap();
-        assert_eq!(load(&dir, ID, Some(PATH), 200), Some(thread("why is the pad muddy", 100)));
+        assert_eq!(
+            load(&dir, ID, Some(PATH), 200).unwrap(),
+            Some(thread("why is the pad muddy", 100))
+        );
     }
 
     // The set was closed without saving, so its id was minted again on the
@@ -191,10 +246,10 @@ mod tests {
     fn a_thread_found_by_path_is_adopted_under_the_new_id() {
         let dir = scratch();
         save(&dir, "old-id", Some(PATH), &thread("first", 100)).unwrap();
-        assert_eq!(load(&dir, "new-id", Some(PATH), 200), Some(thread("first", 100)));
+        assert_eq!(load(&dir, "new-id", Some(PATH), 200).unwrap(), Some(thread("first", 100)));
         // Adopted: the old id no longer finds it, the new one does without a path.
-        assert_eq!(load(&dir, "old-id", None, 300), None);
-        assert_eq!(load(&dir, "new-id", None, 300), Some(thread("first", 100)));
+        assert_eq!(load(&dir, "old-id", None, 300).unwrap(), None);
+        assert_eq!(load(&dir, "new-id", None, 300).unwrap(), Some(thread("first", 100)));
     }
 
     // A set that has no path yet (unsaved) is keyed on its stored id alone,
@@ -203,8 +258,8 @@ mod tests {
     fn an_empty_path_matches_nothing() {
         let dir = scratch();
         save(&dir, "a", Some(""), &thread("a", 100)).unwrap();
-        assert_eq!(load(&dir, "b", Some(""), 200), None);
-        assert_eq!(load(&dir, "b", None, 200), None);
+        assert_eq!(load(&dir, "b", Some(""), 200).unwrap(), None);
+        assert_eq!(load(&dir, "b", None, 200).unwrap(), None);
     }
 
     #[test]
@@ -212,7 +267,7 @@ mod tests {
         let dir = scratch();
         save(&dir, ID, Some(PATH), &thread("first", 100)).unwrap();
         save(&dir, ID, Some(PATH), &thread("second", 200)).unwrap();
-        assert_eq!(load(&dir, ID, Some(PATH), 300), Some(thread("second", 200)));
+        assert_eq!(load(&dir, ID, Some(PATH), 300).unwrap(), Some(thread("second", 200)));
         let files: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
@@ -228,9 +283,37 @@ mod tests {
         save(&dir, "old", Some("/old.als"), &thread("old", 0)).unwrap();
         save(&dir, "recent", Some("/recent.als"), &thread("recent", 20 * day)).unwrap();
         assert_eq!(prune(&dir, 31 * day).unwrap(), 1);
-        assert_eq!(load(&dir, "old", None, 31 * day), None);
-        assert_eq!(load(&dir, "recent", None, 31 * day), Some(thread("recent", 20 * day)));
+        assert_eq!(load(&dir, "old", None, 31 * day).unwrap(), None);
+        assert_eq!(
+            load(&dir, "recent", None, 31 * day).unwrap(),
+            Some(thread("recent", 20 * day))
+        );
         assert!(!dir.join("thread-0.json").exists());
+    }
+
+    // "Dropped thirty days after its last open": kept one second short of
+    // thirty days, gone at thirty.
+    #[test]
+    fn prune_drops_a_thread_at_exactly_thirty_days() {
+        let dir = scratch();
+        let day = 24 * 60 * 60;
+        save(&dir, ID, Some(PATH), &thread("q", 0)).unwrap();
+        assert_eq!(prune(&dir, 30 * day - 1).unwrap(), 0);
+        assert_eq!(prune(&dir, 30 * day).unwrap(), 1);
+    }
+
+    // A corrupt index resets the counter; the next save must not reuse a
+    // file name that still holds a transcript.
+    #[test]
+    fn a_reset_counter_never_overwrites_a_thread_on_disk() {
+        let dir = scratch();
+        save(&dir, "a", Some("/a.als"), &thread("a", 100)).unwrap();
+        std::fs::write(dir.join(INDEX_FILE), "{not json").unwrap();
+        save(&dir, "b", Some("/b.als"), &thread("b", 200)).unwrap();
+        let a: Thread =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("thread-0.json")).unwrap()).unwrap();
+        assert_eq!(a, thread("a", 100));
+        assert_eq!(load(&dir, "b", None, 300).unwrap(), Some(thread("b", 200)));
     }
 
     #[test]
@@ -238,7 +321,7 @@ mod tests {
         let dir = scratch();
         let day = 24 * 60 * 60;
         save(&dir, ID, Some(PATH), &thread("q", 0)).unwrap();
-        load(&dir, ID, Some(PATH), 20 * day);
+        load(&dir, ID, Some(PATH), 20 * day).unwrap();
         assert_eq!(prune(&dir, 40 * day).unwrap(), 0);
     }
 
@@ -246,9 +329,20 @@ mod tests {
     fn a_corrupt_index_or_file_reads_as_nothing_and_saving_still_works() {
         let dir = scratch();
         std::fs::write(dir.join(INDEX_FILE), "{not json").unwrap();
-        assert_eq!(load(&dir, ID, Some(PATH), 100), None);
+        assert_eq!(load(&dir, ID, Some(PATH), 100).unwrap(), None);
         save(&dir, ID, Some(PATH), &thread("q", 100)).unwrap();
         std::fs::write(dir.join("thread-0.json"), "{not json").unwrap();
-        assert_eq!(load(&dir, ID, Some(PATH), 200), None);
+        // The transcript is moved aside for a person, not thrown away.
+        assert_eq!(load(&dir, ID, Some(PATH), 200).unwrap(), None);
+        assert!(dir.join("thread-0.json.corrupt").exists());
+        assert!(!dir.join("thread-0.json").exists());
+    }
+
+    #[test]
+    fn a_missing_file_behind_an_entry_reads_as_nothing() {
+        let dir = scratch();
+        save(&dir, ID, Some(PATH), &thread("q", 100)).unwrap();
+        std::fs::remove_file(dir.join("thread-0.json")).unwrap();
+        assert_eq!(load(&dir, ID, Some(PATH), 200).unwrap(), None);
     }
 }
