@@ -32,14 +32,11 @@ describe("noteDelta", () => {
 
   it("strips the block and reads adds and retires", () => {
     const out = noteDelta(
-      "Try a high-pass near 180 Hz.\n\n```note\n+ move low end: high-pass «Pad Wide» near 180 Hz\n+ heard the sub still masks the kick\n- b3\n```",
+      "Try a high-pass near 180 Hz.\n\n```note\n+ move low end: high-pass «Pad Wide» near 180 Hz\n- b3\n```",
     );
     expect(out.answer).toBe("Try a high-pass near 180 Hz.");
     expect(out.delta).toEqual({
-      adds: [
-        { kind: "move", text: "low end: high-pass «Pad Wide» near 180 Hz" },
-        { kind: "heard", text: "the sub still masks the kick" },
-      ],
+      adds: [{ kind: "move", text: "low end: high-pass «Pad Wide» near 180 Hz" }],
       retires: ["b3"],
     });
   });
@@ -60,6 +57,29 @@ describe("noteDelta", () => {
   it("treats an unclosed block as text", () => {
     const text = "a\n```note\n+ move first";
     expect(noteDelta(text)).toEqual({ answer: text, delta: { adds: [], retires: [] } });
+  });
+
+  it("parses and strips a CRLF block", () => {
+    const out = noteDelta("y\r\n```note\r\n+ move a\r\n```");
+    expect(out.answer).toBe("y");
+    expect(out.delta).toEqual({ adds: [{ kind: "move", text: "a" }], retires: [] });
+  });
+
+  it("strips an empty block with an empty delta", () => {
+    const out = noteDelta("y\n```note\n```");
+    expect(out.answer).toBe("y");
+    expect(out.delta).toEqual({ adds: [], retires: [] });
+  });
+
+  it("keeps only the first two accepted changes, adds and retires sharing one budget", () => {
+    const three = noteDelta("x\n```note\n+ move a\n+ move b\n+ move c\n```");
+    expect(three.delta.adds).toEqual([
+      { kind: "move", text: "a" },
+      { kind: "move", text: "b" },
+    ]);
+
+    const mixed = noteDelta("x\n```note\n+ move a\n- b0\n- b1\n```");
+    expect(mixed.delta).toEqual({ adds: [{ kind: "move", text: "a" }], retires: ["b0"] });
   });
 });
 
@@ -108,10 +128,50 @@ describe("mergeNote", () => {
   });
 });
 
+describe("addBullet", () => {
+  it("splits on code points, not UTF-16 units, so a trailing surrogate pair survives the cap", () => {
+    const n = addBullet(emptyNote(), "move", "a".repeat(159) + "🔥", false, NOW);
+    expect(Array.from(n.bullets[0].text)).toHaveLength(BULLET_MAX_CHARS);
+    expect(n.bullets[0].text.endsWith("🔥")).toBe(true);
+  });
+
+  it("caps at NOTE_MAX_BULLETS, keeping hers and dropping the oldest model bullet", () => {
+    let n = emptyNote();
+    for (let i = 0; i < NOTE_MAX_BULLETS; i++) n = addBullet(n, "move", `m${i}`, false, NOW - (NOTE_MAX_BULLETS - i) * DAY);
+    n = addBullet(n, "heard", "hers", true, NOW);
+    expect(n.bullets).toHaveLength(NOTE_MAX_BULLETS);
+    expect(n.bullets.some((b) => b.text === "hers")).toBe(true);
+    expect(n.bullets.some((b) => b.text === "m0")).toBe(false);
+  });
+
+  it("a her add that duplicates a model bullet promotes it to hers, keeping id, kind, text, and at", () => {
+    let n = addBullet(emptyNote(), "move", "high-pass the pad", false, NOW);
+    n = addBullet(n, "move", "High-pass the pad.", true, NOW + 5);
+    expect(n.bullets).toEqual([{ id: "b0", kind: "move", text: "high-pass the pad", at: NOW, hers: true }]);
+  });
+
+  it("a model add that duplicates a model bullet leaves it unchanged", () => {
+    let n = addBullet(emptyNote(), "move", "high-pass the pad", false, NOW);
+    n = addBullet(n, "move", "High-pass the pad.", false, NOW + 5);
+    expect(n.bullets).toEqual([{ id: "b0", kind: "move", text: "high-pass the pad", at: NOW, hers: false }]);
+  });
+});
+
 describe("her edits", () => {
   it("her edit marks the bullet hers and moves its time", () => {
     const n = editBullet(noteWith("a"), "b0", "a, revised", NOW + 5);
     expect(n.bullets[0]).toEqual({ id: "b0", kind: "move", text: "a, revised", at: NOW + 5, hers: true });
+  });
+
+  it("her edit splits on code points, not UTF-16 units, so a trailing surrogate pair survives the cap", () => {
+    const n = editBullet(noteWith("a"), "b0", "a".repeat(159) + "🔥", NOW + 5);
+    expect(Array.from(n.bullets[0].text)).toHaveLength(BULLET_MAX_CHARS);
+    expect(n.bullets[0].text.endsWith("🔥")).toBe(true);
+  });
+
+  it("her edit with emptied text deletes the bullet", () => {
+    const n = editBullet(noteWith("a"), "b0", "   ", NOW + 5);
+    expect(n.bullets).toEqual([]);
   });
 
   it("her delete removes any bullet", () => {

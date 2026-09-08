@@ -51,8 +51,12 @@ export function normalise(text: string): string {
     .trim();
 }
 
-const BLOCK = /```note[ \t]*\n([\s\S]*?)\n[ \t]*```/g;
+const BLOCK = /```note[ \t]*\r?\n([\s\S]*?)\r?\n?[ \t]*```/g;
 const ID = /^b\d+$/;
+
+/** The prompt's "at most two changes" per answer: adds and retires share one
+ *  budget, spent in order of appearance. */
+const MAX_CHANGES_PER_ANSWER = 2;
 
 /**
  * Splits a model answer into the text she reads and the note changes it
@@ -65,7 +69,8 @@ export function noteDelta(answer: string): { answer: string; delta: NoteDelta } 
   let last: string | null = null;
   for (const m of answer.matchAll(BLOCK)) last = m[1];
   if (last === null) return { answer, delta };
-  for (const raw of last.split("\n")) {
+  for (const raw of last.split(/\r?\n/)) {
+    if (delta.adds.length + delta.retires.length >= MAX_CHANGES_PER_ANSWER) break;
     const line = raw.trim();
     if (line.startsWith("+ ")) {
       const [kind, ...rest] = line.slice(2).trim().split(/\s+/);
@@ -86,17 +91,26 @@ function isKind(s: string): s is BulletKind {
 
 /**
  * One bullet in, unless its normalised text is already there. Hers or the
- * model's, by `hers`.
+ * model's, by `hers`. Recording something the model already wrote is a
+ * touch: a duplicate her add promotes that bullet to hers, keeping its id,
+ * kind, text, and `at`. Capped at NOTE_MAX_BULLETS; hers never drops.
  */
 export function addBullet(note: Note, kind: BulletKind, text: string, hers: boolean, now: number): Note {
-  const clean = text.trim().slice(0, BULLET_MAX_CHARS);
+  const clean = Array.from(text.trim()).slice(0, BULLET_MAX_CHARS).join("");
   if (clean === "") return note;
   const key = normalise(clean);
-  if (key === "" || note.bullets.some((b) => normalise(b.text) === key)) return note;
-  return {
+  if (key === "") return note;
+  const dup = note.bullets.find((b) => normalise(b.text) === key);
+  if (dup !== undefined) {
+    if (hers && !dup.hers) {
+      return { ...note, bullets: note.bullets.map((b) => (b.id === dup.id ? { ...b, hers: true } : b)) };
+    }
+    return note;
+  }
+  return capped({
     bullets: [...note.bullets, { id: `b${note.next}`, kind, text: clean, at: now, hers }],
     next: note.next + 1,
-  };
+  });
 }
 
 /** The model's changes, applied in order: adds, then retires, then the cap. */
@@ -125,7 +139,7 @@ function capped(note: Note): Note {
 
 /** Her edit: the text changes, the bullet becomes hers, and its time moves. */
 export function editBullet(note: Note, id: string, text: string, now: number): Note {
-  const clean = text.trim().slice(0, BULLET_MAX_CHARS);
+  const clean = Array.from(text.trim()).slice(0, BULLET_MAX_CHARS).join("");
   if (clean === "") return deleteBullet(note, id);
   return {
     ...note,
