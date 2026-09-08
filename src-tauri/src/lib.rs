@@ -5,6 +5,7 @@ mod install;
 mod model;
 mod osc;
 mod settings;
+mod threads;
 mod tools;
 mod trace;
 mod window;
@@ -596,6 +597,46 @@ struct ModelState {
     client: reqwest::Client,
 }
 
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// The saved thread for a set, by its stored id and then by its path. None
+/// when there is none; the card starts that set's thread empty.
+#[tauri::command]
+fn load_thread(
+    set_id: String,
+    set_path: Option<String>,
+    state: tauri::State<'_, Arc<ModelState>>,
+) -> Option<threads::Thread> {
+    threads::load(
+        &state.config_dir.join(threads::THREADS_DIR),
+        &set_id,
+        set_path.as_deref(),
+        unix_now(),
+    )
+}
+
+#[tauri::command]
+fn save_thread(
+    set_id: String,
+    set_path: Option<String>,
+    exchanges: Vec<threads::Exchange>,
+    state: tauri::State<'_, Arc<ModelState>>,
+) -> Result<(), String> {
+    let thread = threads::Thread { exchanges, saved_at: unix_now() };
+    threads::save(
+        &state.config_dir.join(threads::THREADS_DIR),
+        &set_id,
+        set_path.as_deref(),
+        &thread,
+    )
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_settings(state: tauri::State<'_, Arc<ModelState>>) -> SettingsView {
     match state.settings.lock() {
@@ -728,6 +769,8 @@ pub fn run() {
             execute_tool,
             get_settings,
             save_settings,
+            load_thread,
+            save_thread,
             model_complete,
             trace,
             clear_trace,
@@ -774,6 +817,12 @@ pub fn run() {
             // bind attempt for the same reason everything else here is: a
             // failed socket must not take the chat pane down with it.
             let config_dir = app.path().app_config_dir().unwrap_or_else(|_| PathBuf::from("."));
+            // Threads nobody has opened in thirty days go at startup, once.
+            match threads::prune(&config_dir.join(threads::THREADS_DIR), unix_now()) {
+                Ok(0) => {}
+                Ok(n) => eprintln!("threads: dropped {n} not opened in thirty days"),
+                Err(e) => eprintln!("threads: prune failed: {e}"),
+            }
             app.manage(Arc::new(ModelState {
                 settings: Mutex::new(settings::load(&config_dir)),
                 config_dir,

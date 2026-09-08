@@ -216,6 +216,15 @@
   border-top: 1px solid var(--border);
 }
 
+/* Above a restored thread: how much came back and how old it is. As dim
+   as the disclaimer; it is a fact about the file, not part of the thread. */
+.card__recap {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+  margin-bottom: 12px;
+}
+
 .card__question {
   font-size: 13px;
   line-height: 1.5;
