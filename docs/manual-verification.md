@@ -721,18 +721,21 @@ identity lines start with `MixingPal set identity`.
 
 Install with `scripts/install-remote-script.sh`, then restart Live.
 
-Date: ___________  Live version: ___________  Tester: ___________
+Date: 2026-09-08  Live version: 12.2.5 (2025-08-18)  Tester: polina b, on real sets rather than copies (the first row passed before the save rows ran, so nothing on disk changed until the deliberate save)
 
-- [ ] Modified flag. Open the copy, wait ten seconds, look at the title
+- [x] Modified flag. PASS: no asterisk, no prompt, on Song One (large), bouncy-techno-1, and hip-hop-beat.
+      Original row: Open the copy, wait ten seconds, look at the title
       bar for the modified asterisk. Close the set: does Live ask to save?
       Pass: no asterisk, no prompt. Fail: either one. On a fail, the write
       is dropped: `decide` keeps only its first and third rows, and
       identity is the path.
-- [ ] Survives a save. Save the copy once, close it, reopen it. The first
+- [x] Survives a save. PASS: Song One got 6396f220… at 17:11, was saved, closed, reopened at 17:13:51; the first identity line carried the same id.
+      Original row: Save the copy once, close it, reopen it. The first
       `MixingPal set identity` line after reopening shows the same id.
       Pass: same id. Fail: a new id, or `id=''`; same outcome as a modified
       flag fail.
-- [ ] First read is the stored value, on a large set. Make the copy from
+- [x] First read is the stored value, on a large set. PASS: same reopen of Song One, the biggest set to hand; the stored id on the first line, no `wrote` line after it.
+      Original row: Make the copy from
       the biggest set to hand, so its load takes longer than two polls. In
       the same reopen, the first identity line already carries the id; no
       `wrote` line follows it. Pass: no second write. Fail: a `wrote` line
@@ -740,15 +743,19 @@ Date: ___________  Live version: ___________  Tester: ___________
       document was still restoring and the two-read gate counted polls
       instead of load completion; the write must then wait for a load
       signal, not a poll count, before it can ship.
-- [ ] Unsaved set. File → New Live Set, wait, read the log. Pass:
+- [x] Unsaved set. PASS: File → New Live Set at 16:48:31 read `name='' path=''`; Live gives an unsaved set no name.
+      Original row: File → New Live Set, wait, read the log. Pass:
       `path=''` and `name=''` (or the placeholder name Live gives an unsaved
       set; record what it says). Record the value either way.
-- [ ] Close without saving. Open the copy fresh so it gets an id, close,
+- [x] Close without saving. PASS as expected: Song One got da1cf68a… at 16:43, was closed without saving, and got 6396f220… on the 17:11 reopen.
+      Original row: Open the copy fresh so it gets an id, close,
       choose Don't Save, reopen. Expected and accepted: a new id, since the
       write never reached disk. Record both ids.
-- [ ] The handler runs after load. Open a set that has an id; the first
+- [x] The handler runs after load. PASS: every first identity line after a load already carried the set's name, and the 17:13:51 line carried its stored id.
+      Original row: Open a set that has an id; the first
       identity line already shows it. Pass: yes.
-- [ ] A second set in the same Live session. With the copy open and
+- [x] A second set in the same Live session. PASS: bouncy-techno-1 and hip-hop-beat each got their own sequence and their own `wrote` line seconds after the previous set, without quitting Live; the handler is re-created per set.
+      Original row: With the copy open and
       holding its id, open a second disposable copy of a different set
       (File → Open, without quitting Live). The log shows a fresh
       `MixingPal set identity` sequence for the new set: its own name, and
@@ -757,4 +764,4 @@ Date: ___________  Live version: ___________  Tester: ___________
       handler alive across the document change and the one-write latch
       blocked every later set; the latch must then reset on a set change.
 
-Result: ___________ (write kept / write dropped)
+Result: write kept (2026-09-08). The connector log lines cited above are in the installed connector's logs/abletonosc.log from that afternoon.
