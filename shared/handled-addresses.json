@@ -10,7 +10,8 @@
     "/live/view/get/selected_track",
     "/live/song/get/num_tracks",
     "/live/mixingpal/get/version",
-    "/live/mixingpal/get/cue_points"
+    "/live/mixingpal/get/cue_points",
+    "/live/mixingpal/get/set_identity"
   ],
   "trackFields": [
     "/live/track/get/name",

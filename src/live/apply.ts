@@ -13,6 +13,9 @@ export function emptySet(): SetState {
     scriptVersion: null,
     cuePoints: [],
     cuePointsTotal: null,
+    setId: null,
+    setName: null,
+    setPath: null,
   };
 }
 
@@ -64,6 +67,31 @@ export const NUM_TRACKS_ADDR = "/live/song/get/num_tracks";
 // mixingpal/arrangement_replies.py's cue_points_reply.
 export const CUE_POINTS_ADDR = "/live/mixingpal/get/cue_points";
 
+// Handled directly for the same reason CUE_POINTS_ADDR is: three strings
+// that become three fields, with the id-else-path choice made here. The
+// connector reports only what it read from the set; the frontend is the
+// one owner of the fallback. See the 2026-09-07 set identity spec.
+export const SET_IDENTITY_ADDR = "/live/mixingpal/get/set_identity";
+
+/**
+ * Decodes one identity reply. Empty strings mean "none" on the wire and
+ * become null here. Anything that is not three strings is a reply this
+ * version does not understand, and null tells applyDelta to keep what it
+ * had rather than half-apply it.
+ */
+export function setIdentityFrom(
+  args: unknown[],
+): Pick<SetState, "setId" | "setName" | "setPath"> | null {
+  if (args.length !== 3 || !args.every((a) => typeof a === "string")) return null;
+  const [stored, name, path] = args as [string, string, string];
+  const setPath = path === "" ? null : path;
+  return {
+    setId: stored === "" ? setPath : stored,
+    setName: name === "" ? null : name,
+    setPath,
+  };
+}
+
 export function applyDelta(state: SetState, delta: Delta): SetState {
   if (delta.addr === NUM_TRACKS_ADDR) {
     const n = delta.args[0];
@@ -95,6 +123,22 @@ export function applyDelta(state: SetState, delta: Delta): SetState {
       cuePoints.push({ name, time });
     }
     return { ...state, cuePoints, cuePointsTotal: total };
+  }
+
+  if (delta.addr === SET_IDENTITY_ADDR) {
+    const identity = setIdentityFrom(delta.args);
+    if (identity === null) return state;
+    // The reply arrives once a second and almost always repeats the last
+    // one; a fresh state object for an unchanged identity re-renders the
+    // card for nothing.
+    if (
+      identity.setId === state.setId &&
+      identity.setName === state.setName &&
+      identity.setPath === state.setPath
+    ) {
+      return state;
+    }
+    return { ...state, ...identity };
   }
 
   const songField = SONG_FIELDS[delta.addr];

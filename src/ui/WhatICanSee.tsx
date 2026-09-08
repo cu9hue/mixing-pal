@@ -1,7 +1,7 @@
 import { useState } from "react";
 import "./WhatICanSee.css";
 import { SetState } from "../live/model";
-import { summaryLine } from "./summaryLine";
+import { summaryLine, setLine } from "./summaryLine";
 import { Advanced } from "./Advanced";
 import wireVersion from "../../shared/wire-version.json";
 
@@ -44,6 +44,7 @@ export function WhatICanSee({ state }: { state: SetState }) {
   const indices = Object.keys(state.tracks)
     .map(Number)
     .sort((a, b) => a - b);
+  const set = setLine(state);
 
   return (
     <details
@@ -62,6 +63,7 @@ export function WhatICanSee({ state }: { state: SetState }) {
         ) : (
           <>
             <div className="wics__line">{summaryLine(state, indices.length)}</div>
+            {set !== null && <div className="wics__line">{set}</div>}
             <div className="wics__line">
               connector v{state.scriptVersion ?? "—"} · this app expects v{wireVersion.version}
             </div>

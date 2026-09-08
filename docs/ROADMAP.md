@@ -1,6 +1,6 @@
 # Roadmap
 
-Date: 2026-09-05
+Date: 2026-09-07
 
 What ships next and why, in one place. The specs under `docs/superpowers/specs`
 hold the detail. This file is the index. Update it when a spec is approved or a
@@ -22,14 +22,15 @@ no server.
 
 ## Where we are
 
-App 0.2.3, wire version 11. Shipped:
+App 0.2.4, wire version 12. Shipped:
 
 - The set mirror over OSC, a vendored AbletonOSC fork, and a connector the app
   installs itself.
 - Chat with eight read tools: track detail, clips, clip notes, arrangement,
   arrangement notes, device chains, device params, rack contents.
-- The product shell: pill and card, first run, the goal, one nudge rule
-  (unnamed tracks), and the thread view.
+- The product shell: pill and card, first run, the goal in its own labelled
+  row, the connection named beside its dot, a card that drags from anywhere,
+  one nudge rule (unnamed tracks), and the thread view.
 - An unsigned `.dmg`, with `docs/opening-an-unsigned-build.md` for getting past
   Gatekeeper.
 - Prompt guardrails and six honesty evals (`src-tauri/tests/evals.rs`), plus
@@ -77,13 +78,12 @@ Ordered. Each item says what, why, size, and what it waits on.
    of the body on send. The thread is the session and dies with the app
    until item 4.
 
-3. **Set identity.** The connector writes a random id into the set with
-   `Song.set_data` on first contact and reads it back with `Song.get_data` on
-   every load. The app receives it in the mirror. Why: everything per-set needs
-   to know which set is open, and the mirror has no name or path today. A
-   fingerprint from track names breaks the moment she adds a track. Size M,
-   wire bump. Open question to settle first: what `set_data` does on a set
-   that has never been saved.
+3. **Set identity.** Done 2026-09-08. The connector stores an id in the set
+   with `Song.set_data` under one key, written only when absent, and
+   answers `/live/mixingpal/get/set_identity` with the id, the set's name,
+   and its path. `SetState` carries all three; `setId` falls back to the
+   path. The spike's record is in `docs/manual-verification.md`. The one
+   exception to the no-write rule; see "Not doing".
 
 4. **Per-set persistence.** The raw thread saved in the app data directory,
    keyed by set id, restored on open, dropped 30 days after last open. Why: she
@@ -156,5 +156,20 @@ All specced or named already. The order is fixed by the gate.
 
 ## Not doing
 
-From the first spec, still standing: no writes to the set, no audio analysis,
-no screen capture, no music theory engine.
+From the first spec, still standing: no writes to the set's contents, no
+screen capture, no music theory engine.
+
+"No writes to the set" was reworded on 2026-09-07 to "no writes to the set's
+contents", and one exception was carved out: the identity key that item 3
+stores with `Song.set_data`, one key, written only when absent, never
+visible in Live.
+Nothing the app does changes a note, clip, device, fader, name, or locator.
+The exception's conditions are in
+`docs/superpowers/specs/2026-09-07-set-identity-design.md`; any further write
+needs a spec of its own that names itself there.
+
+Audio analysis moved off this list on 2026-09-05. It is not off the table; it
+is the expensive layer, and the settings-only version ships first. Build it when
+the settings-only advice has a producer using it and the questions she asks are
+the ones only a listener can answer. Until then the app says it cannot hear,
+because it cannot.

@@ -134,6 +134,9 @@ pub const EMITTED_ADDRESSES: &[&str] = &[
     // above, this one is mirrored on purpose (NOT in is_resolve_only): the
     // digest reads the producer's locators from SetState on every turn.
     "/live/mixingpal/get/cue_points",
+    // PollKind::SetIdentity, observed raw and mirrored like cue_points:
+    // the frontend reads the set's id, name, and path from SetState.
+    "/live/mixingpal/get/set_identity",
 ];
 
 /// Every literal address the poll loop sends on the wire, outside of
@@ -179,6 +182,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/mixingpal/get/arrangement/identity",
     "/live/arrangement_clip/get/notes_window",
     "/live/mixingpal/get/cue_points",
+    "/live/mixingpal/get/set_identity",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -218,6 +222,11 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
 /// address -- see `SINGLETON_SUBSCRIPTIONS`.
 const SUBSCRIPTION_RESEND_INTERVAL: Duration = Duration::from_secs(10);
 
+/// The first wire version whose connector answers
+/// `/live/mixingpal/get/set_identity`. Polled only once the handshake has
+/// said so; see `poll_kind`.
+const SET_IDENTITY_WIRE_VERSION: i64 = 12;
+
 /// Same window `RequestTable::expire` uses to free a single-flight slot.
 /// Reused here so `inflight_track_data`/`inflight_mixer_data` (below) can
 /// never outlive the request they describe -- see
@@ -243,6 +252,9 @@ const UNKEYED_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 struct TrackCounts {
     num_tracks: Option<usize>,
     num_scenes: Option<usize>,
+    /// The last wire-version reply, so the poll loop, which cannot see the
+    /// mirror, can hold back an address a stale connector does not know.
+    script_version: Option<i64>,
     inflight_track_data: Option<(u32, u32)>,
     inflight_mixer_data: Option<(u32, u32)>,
     track_data_sent_at: Option<Instant>,
@@ -414,6 +426,11 @@ fn handle_inbound(
         ("/live/song/get/num_scenes", Some(OscType::Int(n))) => {
             if let Ok(mut c) = counts.lock() {
                 c.num_scenes = Some((*n).max(0) as usize);
+            }
+        }
+        ("/live/mixingpal/get/version", Some(OscType::Int(v))) => {
+            if let Ok(mut c) = counts.lock() {
+                c.script_version = Some(i64::from(*v));
             }
         }
         _ => {}
@@ -1099,6 +1116,34 @@ async fn poll_kind(
             register_and_send(table, poll_socket, now, "/live/mixingpal/get/cue_points", vec![])
                 .await;
         }
+        PollKind::SetIdentity => {
+            // Gated on the handshake: a connector older than 12 does not
+            // know this address, logs it at ERROR, and forwards the error
+            // to the app once a poll. Nothing goes out until a version
+            // reply says 12 or more. The cached reply is replaced only by
+            // the next one, so a connector downgraded while the app is
+            // open is asked for up to five polls before the 5s version
+            // poll shuts the gate again; bounded, and accepted.
+            let version = match counts.lock() {
+                Ok(c) => c.script_version,
+                Err(_) => {
+                    eprintln!(
+                        "track counts lock poisoned; skipping the set identity poll this tick"
+                    );
+                    return;
+                }
+            };
+            if version.is_some_and(|v| v >= SET_IDENTITY_WIRE_VERSION) {
+                register_and_send(
+                    table,
+                    poll_socket,
+                    now,
+                    "/live/mixingpal/get/set_identity",
+                    vec![],
+                )
+                .await;
+            }
+        }
     }
 }
 
@@ -1391,6 +1436,74 @@ mod tests {
                 "{addr} was retained in the mirror; add it to is_resolve_only"
             );
         }
+    }
+
+    #[test]
+    fn a_version_reply_fills_the_shared_script_version() {
+        // IMPORTANT 3 (2026-09-07 whole-branch review): the identity poll is
+        // gated on this field, and nothing else exercised the arm that fills
+        // it. A mistyped address here would leave the gate shut forever with
+        // every other test green.
+        let coalescer = Mutex::new(Coalescer::new());
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
+        let msg = rosc::OscMessage {
+            addr: "/live/mixingpal/get/version".to_string(),
+            args: vec![OscType::Int(12)],
+        };
+        handle_inbound(&msg, &coalescer, &table, &counts);
+        assert_eq!(counts.lock().unwrap().script_version, Some(12));
+    }
+
+    #[test]
+    fn an_identity_reply_lands_in_the_mirror() {
+        // The twin of `a_tool_reply_never_lands_in_the_mirror`: the frontend
+        // reads set_identity from the mirror, like the locators, so this
+        // reply must be retained and replayed on a reload.
+        let coalescer = Mutex::new(Coalescer::new());
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
+        let msg = rosc::OscMessage {
+            addr: "/live/mixingpal/get/set_identity".to_string(),
+            args: vec![
+                OscType::String("0123456789abcdef0123456789abcdef".into()),
+                OscType::String("Track".into()),
+                OscType::String("/x/Track.als".into()),
+            ],
+        };
+        handle_inbound(&msg, &coalescer, &table, &counts);
+        let snapshot = coalescer.lock().unwrap().snapshot();
+        let delta = snapshot
+            .iter()
+            .find(|d| d.addr == "/live/mixingpal/get/set_identity")
+            .expect("the identity reply must be retained in the mirror");
+        assert_eq!(
+            delta.args,
+            vec![
+                serde_json::json!("0123456789abcdef0123456789abcdef"),
+                serde_json::json!("Track"),
+                serde_json::json!("/x/Track.als"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_set_identity_spike_is_recorded_before_wire_12_ships() {
+        // Wire 12 is the first connector that writes to a set (one key,
+        // once; see the 2026-09-07 spec). Whether that write leaves a
+        // clean set clean can only be seen in Live, and the checklist in
+        // docs/manual-verification.md is the record. This test is the
+        // release gate: it stays red until the result line is filled in,
+        // so a .dmg cannot be cut from a wire-12 tree nobody has checked.
+        let doc = include_str!("../../docs/manual-verification.md");
+        let section = doc
+            .split("## Set identity spike")
+            .nth(1)
+            .expect("docs/manual-verification.md must keep the set identity spike section");
+        assert!(
+            !section.contains("Result: ___"),
+            "run the set identity spike in Live and record its result in docs/manual-verification.md before shipping wire 12"
+        );
     }
 
     #[test]
@@ -1918,6 +2031,59 @@ mod tests {
         assert!(nothing.is_err(), "a chunked sweep must wait for a real track count");
         assert!(mixer_queue.is_empty());
         assert_eq!(mixer_built_for, None);
+    }
+
+    #[tokio::test]
+    async fn poll_kind_set_identity_waits_for_a_connector_that_knows_the_address() {
+        // A connector older than wire 12 logs an unknown address at ERROR
+        // and forwards it to the app as /live/error, once per poll. At one
+        // poll a second that would fill its log and our error stream until
+        // she reinstalls, so nothing goes out until the handshake says 12+.
+        let listener = OscSocket::bind_to(0, 0).await.unwrap();
+        let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
+        let table = Mutex::new(RequestTable::new());
+        let counts = Mutex::new(TrackCounts::default());
+        let mut track_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut track_built_for: Option<(usize, usize)> = None;
+        let mut mixer_queue: VecDeque<(usize, usize)> = VecDeque::new();
+        let mut mixer_built_for: Option<usize> = None;
+
+        for version in [None, Some(11)] {
+            counts.lock().unwrap().script_version = version;
+            poll_kind(
+                PollKind::SetIdentity,
+                Instant::now(),
+                &table,
+                &poll_socket,
+                &counts,
+                &mut track_queue,
+                &mut track_built_for,
+                &mut mixer_queue,
+                &mut mixer_built_for,
+            )
+            .await;
+            let nothing =
+                tokio::time::timeout(Duration::from_millis(50), recv_message(&listener)).await;
+            assert!(nothing.is_err(), "version {version:?} must not be asked for set_identity");
+        }
+
+        counts.lock().unwrap().script_version = Some(12);
+        poll_kind(
+            PollKind::SetIdentity,
+            Instant::now(),
+            &table,
+            &poll_socket,
+            &counts,
+            &mut track_queue,
+            &mut track_built_for,
+            &mut mixer_queue,
+            &mut mixer_built_for,
+        )
+        .await;
+        let msg = tokio::time::timeout(Duration::from_millis(500), recv_message(&listener))
+            .await
+            .expect("a wire-12 connector is asked for set_identity");
+        assert_eq!(msg.addr, "/live/mixingpal/get/set_identity");
     }
 
     #[tokio::test]

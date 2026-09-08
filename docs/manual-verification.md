@@ -711,3 +711,57 @@ report stopped on the model under test outlasting its own 180 s limit.
 - [ ] is the mix okay
 - [ ] the goal changes the advice (gate, temperature 0): garage Keep  techno Keep (2026-09-04, kimi judge, red); garage Change  techno Change (2026-09-04, sonnet judge, red)
 - [ ] goal report at the app's sampling: `goal report:` line not reached twice on 2026-09-04 (judge timeout; then model timeout)
+
+## Set identity spike (wire 12)
+
+Run on a **disposable copy** of a real set, never on one being worked on:
+the first row writes to whatever set is open. The connector log is the
+newest `abletonosc.log*` under `~/Music/Ableton/User Library/Remote Scripts/MixingPal/logs/`;
+identity lines start with `MixingPal set identity`.
+
+Install with `scripts/install-remote-script.sh`, then restart Live.
+
+Date: 2026-09-08  Live version: 12.2.5 (2025-08-18)  Tester: polina b, on real sets rather than copies (the first row passed before the save rows ran, so nothing on disk changed until the deliberate save)
+
+- [x] Modified flag. PASS: no asterisk, no prompt, on Song One (large), bouncy-techno-1, and hip-hop-beat.
+      Original row: Open the copy, wait ten seconds, look at the title
+      bar for the modified asterisk. Close the set: does Live ask to save?
+      Pass: no asterisk, no prompt. Fail: either one. On a fail, the write
+      is dropped: `decide` keeps only its first and third rows, and
+      identity is the path.
+- [x] Survives a save. PASS: Song One got 6396f220… at 17:11, was saved, closed, reopened at 17:13:51; the first identity line carried the same id.
+      Original row: Save the copy once, close it, reopen it. The first
+      `MixingPal set identity` line after reopening shows the same id.
+      Pass: same id. Fail: a new id, or `id=''`; same outcome as a modified
+      flag fail.
+- [x] First read is the stored value, on a large set. PASS: same reopen of Song One, the biggest set to hand; the stored id on the first line, no `wrote` line after it.
+      Original row: Make the copy from
+      the biggest set to hand, so its load takes longer than two polls. In
+      the same reopen, the first identity line already carries the id; no
+      `wrote` line follows it. Pass: no second write. Fail: a `wrote` line
+      after reopening, which means `get_data` answered `None` while the
+      document was still restoring and the two-read gate counted polls
+      instead of load completion; the write must then wait for a load
+      signal, not a poll count, before it can ship.
+- [x] Unsaved set. PASS: File → New Live Set at 16:48:31 read `name='' path=''`; Live gives an unsaved set no name.
+      Original row: File → New Live Set, wait, read the log. Pass:
+      `path=''` and `name=''` (or the placeholder name Live gives an unsaved
+      set; record what it says). Record the value either way.
+- [x] Close without saving. PASS as expected: Song One got da1cf68a… at 16:43, was closed without saving, and got 6396f220… on the 17:11 reopen.
+      Original row: Open the copy fresh so it gets an id, close,
+      choose Don't Save, reopen. Expected and accepted: a new id, since the
+      write never reached disk. Record both ids.
+- [x] The handler runs after load. PASS: every first identity line after a load already carried the set's name, and the 17:13:51 line carried its stored id.
+      Original row: Open a set that has an id; the first
+      identity line already shows it. Pass: yes.
+- [x] A second set in the same Live session. PASS: bouncy-techno-1 and hip-hop-beat each got their own sequence and their own `wrote` line seconds after the previous set, without quitting Live; the handler is re-created per set.
+      Original row: With the copy open and
+      holding its id, open a second disposable copy of a different set
+      (File → Open, without quitting Live). The log shows a fresh
+      `MixingPal set identity` sequence for the new set: its own name, and
+      its own `wrote` line or its own stored id. Pass: yes. Fail: the new
+      set reports `id=''` with no `wrote` line, which means Live kept the
+      handler alive across the document change and the one-write latch
+      blocked every later set; the latch must then reset on a set change.
+
+Result: write kept (2026-09-08). The connector log lines cited above are in the installed connector's logs/abletonosc.log from that afternoon.

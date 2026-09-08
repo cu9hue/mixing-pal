@@ -50,7 +50,10 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // flat (name, time, name, time, ...) list, not a keyed value -- but
         // it is still one reply to one request, so the request itself is
         // keyless.
-        | "/live/mixingpal/get/cue_points" => KeyArity::None,
+        | "/live/mixingpal/get/cue_points"
+        // The set's stored id, name, and path -- three strings, no key.
+        // See mixingpal/set_identity.py and the 2026-09-07 spec.
+        | "/live/mixingpal/get/set_identity" => KeyArity::None,
 
         "/live/track/get/name"
         | "/live/track/get/mute"
@@ -197,6 +200,7 @@ mod tests {
             ("/live/song/get/beat", KeyArity::None),
             ("/live/mixingpal/get/version", KeyArity::None),
             ("/live/mixingpal/get/cue_points", KeyArity::None),
+            ("/live/mixingpal/get/set_identity", KeyArity::None),
             ("/live/clip/get/notes", KeyArity::Args(2)),
             ("/live/clip/get/notes_window", KeyArity::Args(3)),
             ("/live/clip/get/num_notes", KeyArity::Args(2)),

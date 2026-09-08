@@ -10,6 +10,7 @@ pub enum PollKind {
     Meters,
     ScriptVersion,
     CuePoints,
+    SetIdentity,
 }
 
 impl PollKind {
@@ -22,6 +23,7 @@ impl PollKind {
             PollKind::Meters,
             PollKind::ScriptVersion,
             PollKind::CuePoints,
+            PollKind::SetIdentity,
         ]
     }
 
@@ -42,6 +44,11 @@ impl PollKind {
             // Locators change when the producer drops one, which is rare --
             // no need to poll them at fader/track-state rates.
             PollKind::CuePoints => Duration::from_secs(5),
+            // The set's identity changes only when a set loads, but that is
+            // the moment the frontend most needs it, and the poll is one
+            // small keyless message. Live re-creates the Control Surface
+            // when a set loads; this poll is how the switch is seen.
+            PollKind::SetIdentity => Duration::from_secs(1),
         }
     }
 
@@ -56,6 +63,7 @@ impl PollKind {
             PollKind::Meters => 4,
             PollKind::ScriptVersion => 5,
             PollKind::CuePoints => 6,
+            PollKind::SetIdentity => 7,
         }
     }
 }
@@ -108,9 +116,9 @@ mod tests {
         }
         assert!(s.due(start).is_empty());
 
-        // Selection is 1s, notes 1.5s, track state and meters 2s.
+        // Selection and set identity are 1s, notes 1.5s, track state and meters 2s.
         let at_1s = start + Duration::from_millis(1_050);
-        assert_eq!(s.due(at_1s), vec![PollKind::Selection]);
+        assert_eq!(s.due(at_1s), vec![PollKind::Selection, PollKind::SetIdentity]);
 
         let at_1_5s = start + Duration::from_millis(1_550);
         let due = s.due(at_1_5s);
@@ -144,6 +152,7 @@ mod tests {
                 PollKind::Selection,
                 PollKind::FocusedNotes,
                 PollKind::Meters,
+                PollKind::SetIdentity,
             ]
         );
     }
