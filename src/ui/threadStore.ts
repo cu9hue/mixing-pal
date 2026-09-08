@@ -1,6 +1,7 @@
 import { ChatMessage } from "../agent/loop";
 import { SetState } from "../live/model";
 import { Exchange } from "./thread";
+import { ageWords } from "../notes/note";
 
 /**
  * The identity a thread is filed under: the set's stored id, or its path
@@ -68,7 +69,5 @@ export function historyFrom(exchanges: Exchange[], max: number): ChatMessage[] {
  * since the epoch, the unit the Rust side saves.
  */
 export function recapLine(count: number, savedAt: number, now: number): string {
-  const days = Math.max(0, Math.floor((now - savedAt) / (24 * 60 * 60)));
-  const when = days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
-  return `Earlier on this set · ${count} exchange${count === 1 ? "" : "s"} · last ${when}`;
+  return `Earlier on this set · ${count} exchange${count === 1 ? "" : "s"} · last ${ageWords(savedAt, now)}`;
 }
