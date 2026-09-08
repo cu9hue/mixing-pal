@@ -27,12 +27,29 @@ pub struct Exchange {
     pub error: Option<String>,
 }
 
+/// One outcome bullet of a set's note; the same shape as the frontend's
+/// `Bullet` in `src/notes/note.ts`. Rust stores it and never reads it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bullet {
+    pub id: String,
+    pub kind: String,
+    pub text: String,
+    pub at: u64,
+    pub hers: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Thread {
     pub exchanges: Vec<Exchange>,
     /// Seconds since the epoch, set by the caller on save. The recap line
     /// in the card is derived from it.
     pub saved_at: u64,
+    /// The set's note. Files from before notes existed have neither field
+    /// and read as an empty note.
+    #[serde(default)]
+    pub note: Vec<Bullet>,
+    #[serde(default)]
+    pub next_bullet: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -218,6 +235,8 @@ mod tests {
                 error: None,
             }],
             saved_at,
+            note: vec![],
+            next_bullet: 0,
         }
     }
 
@@ -344,5 +363,41 @@ mod tests {
         save(&dir, ID, Some(PATH), &thread("q", 100)).unwrap();
         std::fs::remove_file(dir.join("thread-0.json")).unwrap();
         assert_eq!(load(&dir, ID, Some(PATH), 200).unwrap(), None);
+    }
+
+    // Threads written before notes existed have no note field.
+    #[test]
+    fn a_thread_saved_without_a_note_reads_with_an_empty_one() {
+        let dir = scratch();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(INDEX_FILE),
+            r#"{"next":1,"entries":[{"id":"id","path":"/x.als","file":"thread-0.json","last_opened":5}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("thread-0.json"),
+            r#"{"exchanges":[{"question":"q","answer":"a","error":null}],"saved_at":5}"#,
+        )
+        .unwrap();
+        let t = load(&dir, "id", None, 10).unwrap().unwrap();
+        assert_eq!(t.note, vec![]);
+        assert_eq!(t.next_bullet, 0);
+    }
+
+    #[test]
+    fn a_note_round_trips_with_its_counter() {
+        let dir = scratch();
+        let mut t = thread("q", 100);
+        t.note = vec![Bullet {
+            id: "b0".into(),
+            kind: "heard".into(),
+            text: "the sub still masks the kick".into(),
+            at: 90,
+            hers: true,
+        }];
+        t.next_bullet = 1;
+        save(&dir, ID, Some(PATH), &t).unwrap();
+        assert_eq!(load(&dir, ID, Some(PATH), 200).unwrap(), Some(t));
     }
 }
