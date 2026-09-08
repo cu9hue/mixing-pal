@@ -140,8 +140,8 @@ fn slot_is_filled(track: &Value, slot: Option<i32>) -> bool {
 /// alone is not enough to answer either address -- the track must be MIDI
 /// too. The claim comes from reading the connector, not from a run against
 /// Live, and `get_notes_extended` is Live's binary API, so nothing in this
-/// repo can settle it. The Clips checklist in `docs/manual-verification.md`
-/// is where it gets confirmed. If an audio clip does answer these
+/// repo can settle it; only a run against a real set can. If an audio clip
+/// does answer these
 /// addresses, this gate is wrong and
 /// `an_audio_track_is_not_reported_as_having_no_notes` rehearses a case
 /// production never produces.

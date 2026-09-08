@@ -7,7 +7,7 @@ does it: `mixingpal/__init__.py` imports every handler, and those reach
 
 What these pin is the one write this connector ever makes to a set, and the
 state the handler carries between polls, which the handler file itself
-cannot test. Spec: docs/superpowers/specs/2026-09-07-set-identity-design.md,
+cannot test. The 2026-09-07 set identity design (git history) names them
 "The value rule" and "The write decision".
 
 Run: python3 -m unittest discover -s remote-script/tests -v

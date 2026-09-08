@@ -34,8 +34,8 @@ class SingleWriteTests(unittest.TestCase):
         self.assertEqual(
             {name: n for name, n in calls.items() if n},
             {"set_identity.py": 1},
-            "a second Song.set_data call site needs a spec of its own; see "
-            "docs/superpowers/specs/2026-09-07-set-identity-design.md",
+            "a second Song.set_data call site needs a design of its own; see "
+            'docs/ROADMAP.md, "Not doing"',
         )
 
     def test_no_mixingpal_handler_registers_a_set_address(self):

@@ -1,5 +1,5 @@
 //! Craft scenarios: does the advice have the shape the craft ontology asks
-//! for? See docs/superpowers/specs/2026-09-02-craft-ontology-design.md.
+//! for? The 2026-09-02 craft ontology design (git history) sets that shape.
 //!
 //! Not run by `cargo test`: the target needs `--features evals`. Two tests
 //! cost nothing and need no credentials: one checks that the fake Live
@@ -582,8 +582,8 @@ fn decision(run: &Run) -> Stance {
 // The test asserts that the decisions differ, never which way: naming the
 // expected direction would be a genre fact, and this repo holds none. A
 // model that is still nondeterministic at 0 shows up here as a flaky gate;
-// record that as a fact about the model in docs/manual-verification.md
-// rather than loosen the assertion.
+// record that as a fact about the model in docs/ROADMAP.md, where item 6
+// holds the record so far, rather than loosen the assertion.
 #[tokio::test]
 async fn the_goal_changes_the_advice() {
     let garage = run_once(&CHORDS_GARAGE, Some(0.0)).await;
@@ -615,8 +615,8 @@ async fn the_goal_changes_the_advice() {
 // producer gets. It asserts only the shape: a majority of each arm decides
 // and ties the decision to the goal, the same bar the other scenarios use.
 // Whether the decisions differ between goals at this setting is a fact
-// about the model, printed here and recorded by hand
-// in docs/manual-verification.md, not a gate: a keep-or-change call on a
+// about the model, printed here and recorded by hand in docs/ROADMAP.md
+// (item 6), not a gate: a keep-or-change call on a
 // two-chord loop has sound arguments both ways, and demanding stability
 // from a sampler on it measured noise for three sessions.
 #[tokio::test]

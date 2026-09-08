@@ -1,10 +1,10 @@
 # Roadmap
 
-Date: 2026-09-07
+Date: 2026-09-08
 
-What ships next and why, in one place. The specs under `docs/superpowers/specs`
-hold the detail. This file is the index. Update it when a spec is approved or a
-milestone ships.
+What ships next and why, in one place. This file is the whole of the
+project's planning record; the design documents that used to sit beside it
+are in git history before 2026-09-08. Update it when a milestone ships.
 
 ## The gate
 
@@ -82,8 +82,10 @@ Ordered. Each item says what, why, size, and what it waits on.
    with `Song.set_data` under one key, written only when absent, and
    answers `/live/mixingpal/get/set_identity` with the id, the set's name,
    and its path. `SetState` carries all three; `setId` falls back to the
-   path. The spike's record is in `docs/manual-verification.md`. The one
-   exception to the no-write rule; see "Not doing".
+   path. The spike ran on Live 12.2.5 on 2026-09-08: the write leaves a clean
+   set clean, a saved id survives a reopen of a large set, and each set opened
+   in one session gets its own. The one exception to the no-write rule; see
+   "Not doing".
 
 4. **Per-set persistence.** The raw thread saved in the app data directory,
    keyed by set id, restored on open, dropped 30 days after last open. Why: she
@@ -98,16 +100,13 @@ Ordered. Each item says what, why, size, and what it waits on.
    carries a size cap, so it does not become a second prompt. Size M.
    Waits on 4.
 
-6. **Advice quality.** Spec:
-   `docs/superpowers/specs/2026-09-02-craft-ontology-design.md`. Shipped
+6. **Advice quality.** Shipped
    2026-09-02 (c095d72..ea9bc34): the prompt's "What a good answer is"
    section, a clean fixture, and five judge-scored craft scenarios beside
    the tool-call evals. The value landed with the prompt section: answers
    got crisper by ear. The eval loop is regression cover for when the prompt
    or the model changes, and it ran once, on scenario five, across five paid
-   sessions on 2026-09-03 and 2026-09-04 (plan
-   `docs/superpowers/plans/2026-09-03-goal-gate.md`, record in
-   `docs/manual-verification.md`). Parked red 2026-09-04. It found no prompt
+   sessions on 2026-09-03 and 2026-09-04. Parked red 2026-09-04. It found no prompt
    defect. It found three facts about the release model through OpenRouter:
    it can outlast the app's 180-second limit; it is not deterministic at
    temperature 0; and it headlines "keep" over a move that changes the
@@ -164,9 +163,10 @@ contents", and one exception was carved out: the identity key that item 3
 stores with `Song.set_data`, one key, written only when absent, never
 visible in Live.
 Nothing the app does changes a note, clip, device, fader, name, or locator.
-The exception's conditions are in
-`docs/superpowers/specs/2026-09-07-set-identity-design.md`; any further write
-needs a spec of its own that names itself there.
+The exception's conditions: one key, written only when the key is absent on
+two consecutive polls, at most one attempt per handler lifetime, read back
+before it is reported, never visible in Live. Any further write needs a
+design of its own, recorded here.
 
 Audio analysis moved off this list on 2026-09-05. It is not off the table; it
 is the expensive layer, and the settings-only version ships first. Build it when

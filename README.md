@@ -120,16 +120,15 @@ be restarted.
 
 ## Verifying against real Live
 
-`docs/manual-verification.md` is a living checklist of the things no automated
-test can reach — whether Live actually lists the control surface, whether deltas
-arrive, whether a fresh machine can install from a `.dmg`. Nothing in this
-repository proves the app works with Live. That checklist is the only thing that
-does, and it is run by a person.
+Nothing in this repository proves the app works with Live. Before a release a
+person opens a real set, checks that the control surface is listed, that deltas
+arrive, and that a fresh machine can install from the `.dmg`, and records what
+they saw in the PR that cuts the release.
 
 ## Where the design lives
 
-`docs/superpowers/specs/` holds the design documents and `docs/superpowers/plans/`
-the implementation plans built from them. The specs are the authority: when a
-plan and a spec disagree, the spec wins. Start with
-`2026-08-19-product-ui-design.md`, which sets out the product's principles and
-splits the work into three subsystems.
+`docs/` holds two files: `ROADMAP.md`, what ships next and why, and
+`opening-an-unsigned-build.md`. The design documents and implementation plans
+that used to sit under `docs/superpowers/` were removed on 2026-09-08; they are
+in git history before that date, and the code comments that cite one by date
+mean that history.
