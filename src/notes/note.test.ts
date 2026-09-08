@@ -71,6 +71,12 @@ describe("noteDelta", () => {
     expect(out.delta).toEqual({ adds: [], retires: [] });
   });
 
+  it("keeps a triple backtick inside a bullet line in the bullet, and strips the block whole", () => {
+    const out = noteDelta("x\n```note\n+ move do ```this``` now\n```");
+    expect(out.answer).toBe("x");
+    expect(out.delta).toEqual({ adds: [{ kind: "move", text: "do ```this``` now" }], retires: [] });
+  });
+
   it("keeps only the first two accepted changes, adds and retires sharing one budget", () => {
     const three = noteDelta("x\n```note\n+ move a\n+ move b\n+ move c\n```");
     expect(three.delta.adds).toEqual([
@@ -125,6 +131,20 @@ describe("mergeNote", () => {
     expect(n.bullets[0].text).toBe("hers first");
     expect(n.bullets.some((b) => b.text === "m0")).toBe(false);
     expect(n.bullets[n.bullets.length - 1].text).toBe("newest");
+  });
+
+  // A note already at the cap that both adds and retires in the same delta
+  // must lose only the retired bullet: one add plus one retire is a wash,
+  // not two evictions. Applying the cap inside the add step (rather than
+  // once, after the retires) used to evict an extra, unretired bullet here.
+  it("an add and a retire on a full note evict only the retired bullet", () => {
+    let n = emptyNote();
+    for (let i = 0; i < NOTE_MAX_BULLETS; i++) n = addBullet(n, "move", `m${i}`, false, NOW - (NOTE_MAX_BULLETS - i) * DAY);
+    n = mergeNote(n, { adds: [{ kind: "move", text: "newest" }], retires: ["b5"] }, NOW);
+    expect(n.bullets).toHaveLength(NOTE_MAX_BULLETS);
+    expect(n.bullets.some((b) => b.id === "b5")).toBe(false);
+    expect(n.bullets.some((b) => b.text === "m0")).toBe(true);
+    expect(n.bullets.some((b) => b.text === "newest")).toBe(true);
   });
 });
 

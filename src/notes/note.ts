@@ -51,7 +51,7 @@ export function normalise(text: string): string {
     .trim();
 }
 
-const BLOCK = /```note[ \t]*\r?\n([\s\S]*?)\r?\n?[ \t]*```/g;
+const BLOCK = /```note[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?[ \t]*```/g;
 const ID = /^b\d+$/;
 
 /** The prompt's "at most two changes" per answer: adds and retires share one
@@ -67,7 +67,7 @@ const MAX_CHANGES_PER_ANSWER = 2;
 export function noteDelta(answer: string): { answer: string; delta: NoteDelta } {
   const delta: NoteDelta = { adds: [], retires: [] };
   let last: string | null = null;
-  for (const m of answer.matchAll(BLOCK)) last = m[1];
+  for (const m of answer.matchAll(BLOCK)) last = m[1] ?? "";
   if (last === null) return { answer, delta };
   for (const raw of last.split(/\r?\n/)) {
     if (delta.adds.length + delta.retires.length >= MAX_CHANGES_PER_ANSWER) break;
@@ -93,9 +93,9 @@ function isKind(s: string): s is BulletKind {
  * One bullet in, unless its normalised text is already there. Hers or the
  * model's, by `hers`. Recording something the model already wrote is a
  * touch: a duplicate her add promotes that bullet to hers, keeping its id,
- * kind, text, and `at`. Capped at NOTE_MAX_BULLETS; hers never drops.
+ * kind, text, and `at`.
  */
-export function addBullet(note: Note, kind: BulletKind, text: string, hers: boolean, now: number): Note {
+function addBulletUncapped(note: Note, kind: BulletKind, text: string, hers: boolean, now: number): Note {
   const clean = Array.from(text.trim()).slice(0, BULLET_MAX_CHARS).join("");
   if (clean === "") return note;
   const key = normalise(clean);
@@ -107,16 +107,24 @@ export function addBullet(note: Note, kind: BulletKind, text: string, hers: bool
     }
     return note;
   }
-  return capped({
+  return {
     bullets: [...note.bullets, { id: `b${note.next}`, kind, text: clean, at: now, hers }],
     next: note.next + 1,
-  });
+  };
 }
 
-/** The model's changes, applied in order: adds, then retires, then the cap. */
+/** `addBulletUncapped`, then the cap. For direct callers: the Notes row and
+ *  the carry into a note restored across a set switch. `mergeNote` applies
+ *  the cap itself, once, after its own adds and retires, so it uses the
+ *  uncapped helper directly. */
+export function addBullet(note: Note, kind: BulletKind, text: string, hers: boolean, now: number): Note {
+  return capped(addBulletUncapped(note, kind, text, hers, now));
+}
+
+/** The model's changes, applied in order: adds, then retires, then one cap. */
 export function mergeNote(note: Note, delta: NoteDelta, now: number): Note {
   let n = note;
-  for (const a of delta.adds) n = addBullet(n, a.kind, a.text, false, now);
+  for (const a of delta.adds) n = addBulletUncapped(n, a.kind, a.text, false, now);
   const retire = new Set(delta.retires);
   n = { ...n, bullets: n.bullets.filter((b) => b.hers || !retire.has(b.id)) };
   return capped(n);
