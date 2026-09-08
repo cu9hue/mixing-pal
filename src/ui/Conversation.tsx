@@ -7,6 +7,8 @@ import { BlockNode, InlineNode, parseMarkdown } from "./markdown";
 import { progressLabel } from "./progressLabel";
 import { waitingLabel } from "./waitingLabel";
 import { Exchange, begin, complete, fail } from "./thread";
+import { loadThread, saveThread } from "../model/threads";
+import { SWITCH_HOLD_MS, ThreadKey, classify, historyFrom, keyFor, recapLine } from "./threadStore";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -147,6 +149,68 @@ export function Conversation({
   const [progress, setProgress] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // The identity the thread on screen is filed under, and the line above
+  // a thread that was restored. The thread follows the set: when the
+  // mirror's identity changes to another set and holds, this loads that
+  // set's thread, or an empty one, and every settled exchange is saved
+  // under the key it was asked in. Questions asked before the first
+  // identity arrives are carried into the first thread rather than lost.
+  const [key, setKey] = useState<ThreadKey | null>(null);
+  const [recap, setRecap] = useState<string | null>(null);
+  const threadRef = useRef<Exchange[]>([]);
+  threadRef.current = thread;
+  const next = keyFor(state);
+  const nextId = next?.id ?? null;
+  const nextPath = next?.path ?? null;
+  useEffect(() => {
+    const target = nextId === null ? null : { id: nextId, path: nextPath };
+    const action = classify(key, target, busy);
+    if (action === "none" || target === null) return;
+    if (action === "rekey") {
+      // Same set, new name: the thread stays, the file follows. Saving
+      // under the new key is what makes the Rust index adopt it.
+      setKey(target);
+      persist(target, threadRef.current);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      let saved: Awaited<ReturnType<typeof loadThread>>;
+      try {
+        saved = await loadThread(target);
+      } catch (e) {
+        // The file could not be read. Keep what is on screen rather than
+        // start that set over on top of a thread nobody has seen; the
+        // next identity change tries again.
+        console.error("failed to load the set's thread", e);
+        return;
+      }
+      if (cancelled) return;
+      const restored = saved?.exchanges ?? [];
+      const carried = key === null ? threadRef.current : [];
+      const merged = [...restored, ...carried];
+      setKey(target);
+      setThread(merged);
+      setHistory(historyFrom(merged, MAX_HISTORY_MESSAGES));
+      setRecap(
+        saved !== null && restored.length > 0
+          ? recapLine(restored.length, saved.saved_at, Math.floor(Date.now() / 1000))
+          : null,
+      );
+      if (carried.length > 0) persist(target, merged);
+    }, SWITCH_HOLD_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [key, nextId, nextPath, busy]);
+
+  function persist(under: ThreadKey | null, exchanges: Exchange[]) {
+    if (under === null) return;
+    saveThread(under, exchanges).catch((e) => console.error("failed to save the thread", e));
+  }
+
   // The newest question goes to the top of the body, which is where the
   // card has always put the question she is about to read the answer to.
   // Sending always scrolls. A fresh question has nothing below it yet, so
@@ -176,7 +240,14 @@ export function Conversation({
     if (asked === "" || busy) return;
     setInput("");
     pinned.current = true;
-    setThread((t) => begin(t, asked));
+    // Saved under the key current when the question was asked. A switch
+    // waits for the turn, so this is the key the answer lands under too.
+    const askedUnder = key;
+    const begun = begin(threadRef.current, asked);
+    setThread(begun);
+    // Saved now, not only when the answer lands: a quit mid-turn keeps the
+    // question, and the restored thread shows it with no answer.
+    persist(askedUnder, begun);
     startedAt.current = Date.now();
     setElapsedMs(0);
     setBusy(true);
@@ -217,11 +288,15 @@ export function Conversation({
         ...h,
         { role: "assistant" as const, content: out.text },
       ].slice(-MAX_HISTORY_MESSAGES));
-      setThread((t) => complete(t, out.text));
+      const settled = complete(threadRef.current, out.text);
+      setThread(settled);
+      persist(askedUnder, settled);
       onAnswer();
     } catch (e) {
       // Provider errors surface as text and the app keeps running.
-      setThread((t) => fail(t, String(e)));
+      const settled = fail(threadRef.current, String(e));
+      setThread(settled);
+      persist(askedUnder, settled);
     } finally {
       setProgress(null);
       setBusy(false);
@@ -241,6 +316,7 @@ export function Conversation({
           pinned.current = b.scrollHeight - b.scrollTop - b.clientHeight <= 1;
         }}
       >
+        {recap !== null && <div className="card__recap">{recap}</div>}
         {thread.map((x, i) => (
           <div
             key={i}
