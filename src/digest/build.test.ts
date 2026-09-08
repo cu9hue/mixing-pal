@@ -185,7 +185,8 @@ describe("buildContext", () => {
     const notes = out.indexOf("NOTES");
     expect(goal).toBeGreaterThan(-1);
     expect(notes).toBeGreaterThan(goal);
-    expect(out).toContain("- [b1] move  low end: high-pass «Pad Wide» near 180 Hz  (2 days ago)");
-    expect(out).toContain("- [b2] heard  the sub still masks the kick  (today, hers)");
+    // Fenced like set data: guillemets inside a bullet are stripped, not nested.
+    expect(out).toContain("- [b1] move  «low end: high-pass Pad Wide near 180 Hz»  (2 days ago)");
+    expect(out).toContain("- [b2] heard  «the sub still masks the kick»  (today, hers)");
   });
 });

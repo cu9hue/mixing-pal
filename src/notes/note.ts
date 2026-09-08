@@ -4,8 +4,8 @@
  * edit. Never a paragraph, never rewritten: the second brain's Context
  * Collapse note is why. Every change is a small edit this module applies
  * deterministically, growth is bounded by de-duplication and a cap, and a
- * bullet she has touched is hers: the model cannot retire it and the cap
- * cannot drop it.
+ * bullet she has touched is hers: the model cannot retire it, and the cap
+ * takes the model's bullets before it takes hers.
  */
 
 export type BulletKind = "move" | "heard" | "decided";
@@ -34,8 +34,12 @@ export interface NoteDelta {
 
 /** Past this the note is a second prompt. */
 export const NOTE_MAX_BULLETS = 12;
-/** One line in the card and one line in the context block. */
-export const BULLET_MAX_CHARS = 160;
+/**
+ * One line in the card and one line in the context block. Equal to the
+ * fence's MAX_FENCED_LEN in src/digest/fence.ts: a bullet is rendered fenced
+ * in the NOTES block, so a longer one would lose its tail there.
+ */
+export const BULLET_MAX_CHARS = 120;
 
 export function emptyNote(): Note {
   return { bullets: [], next: 0 };
@@ -118,7 +122,11 @@ function addBulletUncapped(note: Note, kind: BulletKind, text: string, hers: boo
  *  the cap itself, once, after its own adds and retires, so it uses the
  *  uncapped helper directly. */
 export function addBullet(note: Note, kind: BulletKind, text: string, hers: boolean, now: number): Note {
-  return capped(addBulletUncapped(note, kind, text, hers, now));
+  return capped(addBulletUncapped(note, kind, text, hers, now), idsOf(note));
+}
+
+function idsOf(note: Note): Set<string> {
+  return new Set(note.bullets.map((b) => b.id));
 }
 
 /** The model's changes, applied in order: adds, then retires, then one cap. */
@@ -127,22 +135,33 @@ export function mergeNote(note: Note, delta: NoteDelta, now: number): Note {
   for (const a of delta.adds) n = addBulletUncapped(n, a.kind, a.text, false, now);
   const retire = new Set(delta.retires);
   n = { ...n, bullets: n.bullets.filter((b) => b.hers || !retire.has(b.id)) };
-  return capped(n);
+  return capped(n, idsOf(note));
 }
 
-/** Drops the oldest model bullets until the note fits. Hers never go. */
-function capped(note: Note): Note {
+/**
+ * Drops bullets until the note fits: the oldest model bullet first, and
+ * only when none is left, the oldest of hers. The cap is on the whole note,
+ * or it is no cap; and it never takes a bullet this change just added
+ * (`before` holds the ids that existed first), so a note that is all hers
+ * still hears the model's next add rather than dropping it on arrival.
+ */
+function capped(note: Note, before: Set<string>): Note {
   const bullets = [...note.bullets];
   while (bullets.length > NOTE_MAX_BULLETS) {
-    let oldest = -1;
-    for (let i = 0; i < bullets.length; i++) {
-      if (bullets[i].hers) continue;
-      if (oldest === -1 || bullets[i].at < bullets[oldest].at) oldest = i;
-    }
-    if (oldest === -1) break;
+    const oldest = oldestIndex(bullets, (b) => before.has(b.id) && !b.hers) ?? oldestIndex(bullets, (b) => before.has(b.id));
+    if (oldest === null) break;
     bullets.splice(oldest, 1);
   }
   return { ...note, bullets };
+}
+
+function oldestIndex(bullets: Bullet[], eligible: (b: Bullet) => boolean): number | null {
+  let oldest: number | null = null;
+  for (let i = 0; i < bullets.length; i++) {
+    if (!eligible(bullets[i])) continue;
+    if (oldest === null || bullets[i].at < bullets[oldest].at) oldest = i;
+  }
+  return oldest;
 }
 
 /** Her edit: the text changes, the bullet becomes hers, and its time moves. */

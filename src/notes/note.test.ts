@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_FENCED_LEN } from "../digest/fence";
 import {
   BULLET_MAX_CHARS,
   NOTE_MAX_BULLETS,
@@ -123,13 +124,25 @@ describe("mergeNote", () => {
     expect(n.bullets).toHaveLength(1);
   });
 
-  it("caps at NOTE_MAX_BULLETS by dropping the oldest model bullet, never hers", () => {
+  it("caps at NOTE_MAX_BULLETS by dropping the oldest model bullet before hers", () => {
     let n = addBullet(emptyNote(), "decided", "hers first", true, NOW - 10 * DAY);
     for (let i = 0; i < NOTE_MAX_BULLETS; i++) n = addBullet(n, "move", `m${i}`, false, NOW - (NOTE_MAX_BULLETS - i) * DAY);
     n = mergeNote(n, { adds: [{ kind: "move", text: "newest" }], retires: [] }, NOW);
     expect(n.bullets).toHaveLength(NOTE_MAX_BULLETS);
     expect(n.bullets[0].text).toBe("hers first");
     expect(n.bullets.some((b) => b.text === "m0")).toBe(false);
+    expect(n.bullets[n.bullets.length - 1].text).toBe("newest");
+  });
+
+  // A note that is all hers must still hear the model: the cap takes the
+  // oldest of hers rather than the bullet that just arrived.
+  it("when every bullet is hers, a model add stays and the oldest hers goes", () => {
+    let n = emptyNote();
+    for (let i = 0; i < NOTE_MAX_BULLETS; i++) n = addBullet(n, "decided", `h${i}`, true, NOW - (NOTE_MAX_BULLETS - i) * DAY);
+    n = mergeNote(n, { adds: [{ kind: "move", text: "newest" }], retires: [] }, NOW);
+    expect(n.bullets).toHaveLength(NOTE_MAX_BULLETS);
+    expect(n.bullets.some((b) => b.text === "h0")).toBe(false);
+    expect(n.bullets.some((b) => b.text === "h1")).toBe(true);
     expect(n.bullets[n.bullets.length - 1].text).toBe("newest");
   });
 
@@ -150,7 +163,7 @@ describe("mergeNote", () => {
 
 describe("addBullet", () => {
   it("splits on code points, not UTF-16 units, so a trailing surrogate pair survives the cap", () => {
-    const n = addBullet(emptyNote(), "move", "a".repeat(159) + "🔥", false, NOW);
+    const n = addBullet(emptyNote(), "move", "a".repeat(BULLET_MAX_CHARS - 1) + "🔥", false, NOW);
     expect(Array.from(n.bullets[0].text)).toHaveLength(BULLET_MAX_CHARS);
     expect(n.bullets[0].text.endsWith("🔥")).toBe(true);
   });
@@ -162,6 +175,19 @@ describe("addBullet", () => {
     expect(n.bullets).toHaveLength(NOTE_MAX_BULLETS);
     expect(n.bullets.some((b) => b.text === "hers")).toBe(true);
     expect(n.bullets.some((b) => b.text === "m0")).toBe(false);
+  });
+
+  it("her add to a note that is all hers drops the oldest of hers, not the new one", () => {
+    let n = emptyNote();
+    for (let i = 0; i < NOTE_MAX_BULLETS; i++) n = addBullet(n, "decided", `h${i}`, true, NOW - (NOTE_MAX_BULLETS - i) * DAY);
+    n = addBullet(n, "heard", "newest", true, NOW);
+    expect(n.bullets).toHaveLength(NOTE_MAX_BULLETS);
+    expect(n.bullets.some((b) => b.text === "h0")).toBe(false);
+    expect(n.bullets.some((b) => b.text === "newest")).toBe(true);
+  });
+
+  it("a bullet is at most as long as a fenced value, so the NOTES block never cuts one", () => {
+    expect(BULLET_MAX_CHARS).toBe(MAX_FENCED_LEN);
   });
 
   it("a her add that duplicates a model bullet promotes it to hers, keeping id, kind, text, and at", () => {
@@ -184,7 +210,7 @@ describe("her edits", () => {
   });
 
   it("her edit splits on code points, not UTF-16 units, so a trailing surrogate pair survives the cap", () => {
-    const n = editBullet(noteWith("a"), "b0", "a".repeat(159) + "🔥", NOW + 5);
+    const n = editBullet(noteWith("a"), "b0", "a".repeat(BULLET_MAX_CHARS - 1) + "🔥", NOW + 5);
     expect(Array.from(n.bullets[0].text)).toHaveLength(BULLET_MAX_CHARS);
     expect(n.bullets[0].text.endsWith("🔥")).toBe(true);
   });

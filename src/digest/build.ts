@@ -92,13 +92,15 @@ export function buildContext(
 
   // The set's outcomes, hers and the model's. Ids so a retirement can name
   // one; ages in the recap line's words; "hers" so the model knows what it
-  // cannot retire. The model adds to this through a fenced note block and
-  // never rewrites it; see src/notes/note.ts.
+  // cannot retire. The text is fenced like every other string the model did
+  // not write this turn: a bullet is the model's own paraphrase of set data,
+  // or hers, and neither is an instruction. The model adds to this through a
+  // fenced note block and never rewrites it; see src/notes/note.ts.
   if (note.length > 0) {
     lines.push("NOTES");
     for (const b of note) {
       const hers = b.hers ? ", hers" : "";
-      lines.push(`- [${b.id}] ${b.kind}  ${b.text}  (${ageWords(b.at, now)}${hers})`);
+      lines.push(`- [${b.id}] ${b.kind}  ${fence(b.text)}  (${ageWords(b.at, now)}${hers})`);
     }
   }
 
