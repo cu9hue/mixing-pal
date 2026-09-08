@@ -1,7 +1,7 @@
 import { ChatMessage } from "../agent/loop";
 import { SetState } from "../live/model";
 import { Exchange } from "./thread";
-import { ageWords } from "../notes/note";
+import { Bullet, Note, addBullet, ageWords } from "../notes/note";
 
 /**
  * The identity a thread is filed under: the set's stored id, or its path
@@ -68,6 +68,24 @@ export function historyFrom(exchanges: Exchange[], max: number): ChatMessage[] {
  * The dim line above a restored thread. `savedAt` and `now` are seconds
  * since the epoch, the unit the Rust side saves.
  */
+/**
+ * The note a set switch lands on: what the file holds, plus, when this is
+ * the first identity of the session (`firstKey`), the bullets she added
+ * before it arrived, the way the exchanges are carried. `carried` says
+ * whether anything was folded in, which is what decides a save: a carried
+ * bullet with no carried exchange would otherwise live only on screen.
+ */
+export function carryNote(
+  saved: { note: Bullet[]; next_bullet: number } | null,
+  current: Note,
+  firstKey: boolean,
+): { note: Note; carried: boolean } {
+  let note: Note = { bullets: saved?.note ?? [], next: saved?.next_bullet ?? 0 };
+  if (!firstKey) return { note, carried: false };
+  for (const b of current.bullets) note = addBullet(note, b.kind, b.text, b.hers, b.at);
+  return { note, carried: current.bullets.length > 0 };
+}
+
 export function recapLine(count: number, savedAt: number, now: number): string {
   return `Earlier on this set · ${count} exchange${count === 1 ? "" : "s"} · last ${ageWords(savedAt, now)}`;
 }

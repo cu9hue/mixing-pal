@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BULLET_KINDS, BULLET_MAX_CHARS, BulletKind, Note, addBullet, deleteBullet, editBullet } from "../notes/note";
+import { BULLET_KINDS, BULLET_MAX_CHARS, Bullet, BulletKind, Note, addBullet, deleteBullet, editBullet } from "../notes/note";
 
 // Same persistence pattern as the disclosure: survive a webview reload, and
 // never let a storage failure take the component down with it.
@@ -38,8 +38,10 @@ export function NotesRow({ note, onChange }: { note: Note; onChange: (next: Note
   const [kind, setKind] = useState<BulletKind>("heard");
   const [adding, setAdding] = useState("");
 
-  function commitEdit(id: string) {
-    onChange(editBullet(note, id, draft, now()));
+  // Opening the editor and leaving is not an edit: only a changed text
+  // makes the bullet hers and moves its time.
+  function commitEdit(b: Bullet) {
+    if (draft.trim() !== b.text) onChange(editBullet(note, b.id, draft, now()));
     setEditing(null);
   }
 
@@ -71,8 +73,8 @@ export function NotesRow({ note, onChange }: { note: Note; onChange: (next: Note
                 value={draft}
                 maxLength={BULLET_MAX_CHARS}
                 onChange={(e) => setDraft(e.target.value)}
-                onBlur={() => commitEdit(b.id)}
-                onKeyDown={(e) => e.key === "Enter" && commitEdit(b.id)}
+                onBlur={() => commitEdit(b)}
+                onKeyDown={(e) => e.key === "Enter" && commitEdit(b)}
               />
             ) : (
               <button

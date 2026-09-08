@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { emptySet } from "../live/apply";
-import { keyFor, classify, historyFrom, recapLine, ThreadKey } from "./threadStore";
+import { keyFor, classify, historyFrom, recapLine, carryNote, ThreadKey } from "./threadStore";
+import { addBullet, emptyNote } from "../notes/note";
 
 const a: ThreadKey = { id: "aaaa", path: "/x/a.als" };
 const b: ThreadKey = { id: "bbbb", path: "/x/b.als" };
@@ -86,6 +87,30 @@ describe("historyFrom", () => {
     }));
     const history = historyFrom(exchanges, 4);
     expect(history.map((m) => m.content)).toEqual(["q8", "a8", "q9", "a9"]);
+  });
+});
+
+describe("carryNote", () => {
+  const saved = { note: [{ id: "b3", kind: "move" as const, text: "kept", at: 10, hers: false }], next_bullet: 4 };
+
+  it("restores the saved note untouched on an ordinary switch", () => {
+    const current = addBullet(emptyNote(), "heard", "mine", true, 20);
+    expect(carryNote(saved, current, false)).toEqual({ note: { bullets: saved.note, next: 4 }, carried: false });
+  });
+
+  it("folds pre-identity bullets into the first set's note, keeping stored ids and hers", () => {
+    const current = addBullet(emptyNote(), "heard", "mine", true, 20);
+    const out = carryNote(saved, current, true);
+    expect(out.carried).toBe(true);
+    expect(out.note.bullets).toEqual([
+      { id: "b3", kind: "move", text: "kept", at: 10, hers: false },
+      { id: "b4", kind: "heard", text: "mine", at: 20, hers: true },
+    ]);
+    expect(out.note.next).toBe(5);
+  });
+
+  it("carries nothing when there was nothing on screen, even on the first key", () => {
+    expect(carryNote(null, emptyNote(), true)).toEqual({ note: emptyNote(), carried: false });
   });
 });
 

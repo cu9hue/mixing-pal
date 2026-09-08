@@ -8,8 +8,8 @@ import { progressLabel } from "./progressLabel";
 import { waitingLabel } from "./waitingLabel";
 import { Exchange, begin, complete, fail } from "./thread";
 import { loadThread, saveThread } from "../model/threads";
-import { SWITCH_HOLD_MS, ThreadKey, classify, historyFrom, keyFor, recapLine } from "./threadStore";
-import { Note, addBullet, emptyNote, mergeNote, noteDelta } from "../notes/note";
+import { SWITCH_HOLD_MS, ThreadKey, carryNote, classify, historyFrom, keyFor, recapLine } from "./threadStore";
+import { Note, emptyNote, mergeNote, noteDelta } from "../notes/note";
 import { NotesRow } from "./NotesRow";
 
 const MAX_HISTORY_MESSAGES = 12;
@@ -167,6 +167,10 @@ export function Conversation({
   const [note, setNote] = useState<Note>(emptyNote());
   const noteRef = useRef<Note>(emptyNote());
   noteRef.current = note;
+  // A save that failed, shown above the thread until one succeeds. The
+  // note is hers by hand; a write that silently failed would lose it with
+  // the row still showing it applied.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const next = keyFor(state);
   const nextId = next?.id ?? null;
   const nextPath = next?.path ?? null;
@@ -198,14 +202,7 @@ export function Conversation({
       const restored = saved?.exchanges ?? [];
       const carried = key === null ? threadRef.current : [];
       const merged = [...restored, ...carried];
-      // Bullets added before the first identity arrived are carried into
-      // that set's note the way the exchanges are.
-      let restoredNote: Note = { bullets: saved?.note ?? [], next: saved?.next_bullet ?? 0 };
-      if (key === null) {
-        for (const b of noteRef.current.bullets) {
-          restoredNote = addBullet(restoredNote, b.kind, b.text, b.hers, b.at);
-        }
-      }
+      const { note: restoredNote, carried: noteCarried } = carryNote(saved, noteRef.current, key === null);
       setNote(restoredNote);
       setKey(target);
       setThread(merged);
@@ -215,9 +212,7 @@ export function Conversation({
           ? recapLine(restored.length, saved.saved_at, Math.floor(Date.now() / 1000))
           : null,
       );
-      if (carried.length > 0 || (key === null && noteRef.current.bullets.length > 0)) {
-        persist(target, merged, restoredNote);
-      }
+      if (carried.length > 0 || noteCarried) persist(target, merged, restoredNote);
     }, SWITCH_HOLD_MS);
     return () => {
       cancelled = true;
@@ -227,7 +222,13 @@ export function Conversation({
 
   function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note) {
     if (under === null) return;
-    saveThread(under, exchanges, withNote).catch((e) => console.error("failed to save the thread", e));
+    saveThread(under, exchanges, withNote).then(
+      () => setSaveError(null),
+      (e) => {
+        console.error("failed to save the thread", e);
+        setSaveError(`Could not save this set's thread and notes: ${String(e)}`);
+      },
+    );
   }
 
   function changeNote(next: Note) {
@@ -346,6 +347,11 @@ export function Conversation({
           pinned.current = b.scrollHeight - b.scrollTop - b.clientHeight <= 1;
         }}
       >
+        {saveError !== null && (
+          <div className="card__error selectable" data-tauri-drag-region="false">
+            {saveError}
+          </div>
+        )}
         {recap !== null && <div className="card__recap">{recap}</div>}
         {thread.map((x, i) => (
           <div
