@@ -99,8 +99,9 @@ Ordered. Each item says what, why, size, and what it waits on.
    `move`, `heard`, or `decided`, kept in the thread file and shown above the
    thread. The model reads them after the goal and may add or retire at most
    two per answer through a fenced `note` block the app merges
-   deterministically: exact de-duplication, a cap of twelve, and nothing
-   she has touched is ever retired or dropped. Never a summary and never
+   deterministically: exact de-duplication, a cap of twelve that takes the
+   model's bullets before hers, and nothing she has touched is ever retired.
+   The note outlives the transcript's 30-day prune. Never a summary and never
    rewritten, on the second brain's evidence that rewriting collapses.
 
 6. **Advice quality.** Shipped
