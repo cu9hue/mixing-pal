@@ -10,6 +10,7 @@ import { Exchange, begin, complete, fail } from "./thread";
 import { loadThread, saveThread } from "../model/threads";
 import { SWITCH_HOLD_MS, ThreadKey, classify, historyFrom, keyFor, recapLine } from "./threadStore";
 import { Note, addBullet, emptyNote, mergeNote, noteDelta } from "../notes/note";
+import { NotesRow } from "./NotesRow";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -231,7 +232,6 @@ export function Conversation({
     setNote(next);
     persist(key, threadRef.current, next);
   }
-  void changeNote;
 
   // The newest question goes to the top of the body, which is where the
   // card has always put the question she is about to read the answer to.
@@ -335,6 +335,7 @@ export function Conversation({
 
   return (
     <>
+      <NotesRow note={note} onChange={changeNote} />
       <div
         className="card__body"
         data-tauri-drag-region="false"
