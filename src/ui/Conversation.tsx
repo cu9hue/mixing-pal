@@ -9,6 +9,7 @@ import { waitingLabel } from "./waitingLabel";
 import { Exchange, begin, complete, fail } from "./thread";
 import { loadThread, saveThread } from "../model/threads";
 import { SWITCH_HOLD_MS, ThreadKey, classify, historyFrom, keyFor, recapLine } from "./threadStore";
+import { Note, addBullet, emptyNote, mergeNote, noteDelta } from "../notes/note";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -159,6 +160,12 @@ export function Conversation({
   const [recap, setRecap] = useState<string | null>(null);
   const threadRef = useRef<Exchange[]>([]);
   threadRef.current = thread;
+  // The set's note rides beside the thread: same key, same switch, same
+  // file. The model's changes are merged deterministically after each
+  // answer; hers arrive through the Notes row.
+  const [note, setNote] = useState<Note>(emptyNote());
+  const noteRef = useRef<Note>(emptyNote());
+  noteRef.current = note;
   const next = keyFor(state);
   const nextId = next?.id ?? null;
   const nextPath = next?.path ?? null;
@@ -170,7 +177,7 @@ export function Conversation({
       // Same set, new name: the thread stays, the file follows. Saving
       // under the new key is what makes the Rust index adopt it.
       setKey(target);
-      persist(target, threadRef.current);
+      persist(target, threadRef.current, noteRef.current);
       return;
     }
     let cancelled = false;
@@ -190,6 +197,15 @@ export function Conversation({
       const restored = saved?.exchanges ?? [];
       const carried = key === null ? threadRef.current : [];
       const merged = [...restored, ...carried];
+      // Bullets added before the first identity arrived are carried into
+      // that set's note the way the exchanges are.
+      let restoredNote: Note = { bullets: saved?.note ?? [], next: saved?.next_bullet ?? 0 };
+      if (key === null) {
+        for (const b of noteRef.current.bullets) {
+          restoredNote = addBullet(restoredNote, b.kind, b.text, b.hers, b.at);
+        }
+      }
+      setNote(restoredNote);
       setKey(target);
       setThread(merged);
       setHistory(historyFrom(merged, MAX_HISTORY_MESSAGES));
@@ -198,7 +214,7 @@ export function Conversation({
           ? recapLine(restored.length, saved.saved_at, Math.floor(Date.now() / 1000))
           : null,
       );
-      if (carried.length > 0) persist(target, merged);
+      if (carried.length > 0) persist(target, merged, restoredNote);
     }, SWITCH_HOLD_MS);
     return () => {
       cancelled = true;
@@ -206,10 +222,16 @@ export function Conversation({
     };
   }, [key, nextId, nextPath, busy]);
 
-  function persist(under: ThreadKey | null, exchanges: Exchange[]) {
+  function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note) {
     if (under === null) return;
-    saveThread(under, exchanges).catch((e) => console.error("failed to save the thread", e));
+    saveThread(under, exchanges, withNote).catch((e) => console.error("failed to save the thread", e));
   }
+
+  function changeNote(next: Note) {
+    setNote(next);
+    persist(key, threadRef.current, next);
+  }
+  void changeNote;
 
   // The newest question goes to the top of the body, which is where the
   // card has always put the question she is about to read the answer to.
@@ -247,7 +269,7 @@ export function Conversation({
     setThread(begun);
     // Saved now, not only when the answer lands: a quit mid-turn keeps the
     // question, and the restored thread shows it with no answer.
-    persist(askedUnder, begun);
+    persist(askedUnder, begun, noteRef.current);
     startedAt.current = Date.now();
     setElapsedMs(0);
     setBusy(true);
@@ -258,7 +280,7 @@ export function Conversation({
     // it was when the conversation started.
     const turn: ChatMessage[] = [
       ...history.slice(-MAX_HISTORY_MESSAGES),
-      { role: "user", content: `${buildContext(state, goal)}\n\n---\n\n${asked}` },
+      { role: "user", content: `${buildContext(state, goal, note.bullets)}\n\n---\n\n${asked}` },
     ];
     setHistory((h) => [
       ...h,
@@ -284,19 +306,24 @@ export function Conversation({
       const out = await runTurn(tauriProvider, tracked, turn, (name, args) =>
         setProgress(progressLabel(name, args, state)),
       );
+      // The model's note changes ride at the end of its answer and are not
+      // part of what she reads or what the history keeps.
+      const { answer, delta } = noteDelta(out.text);
+      const mergedNote = mergeNote(noteRef.current, delta, Math.floor(Date.now() / 1000));
+      setNote(mergedNote);
       setHistory((h) => [
         ...h,
-        { role: "assistant" as const, content: out.text },
+        { role: "assistant" as const, content: answer },
       ].slice(-MAX_HISTORY_MESSAGES));
-      const settled = complete(threadRef.current, out.text);
+      const settled = complete(threadRef.current, answer);
       setThread(settled);
-      persist(askedUnder, settled);
+      persist(askedUnder, settled, mergedNote);
       onAnswer();
     } catch (e) {
       // Provider errors surface as text and the app keeps running.
       const settled = fail(threadRef.current, String(e));
       setThread(settled);
-      persist(askedUnder, settled);
+      persist(askedUnder, settled, noteRef.current);
     } finally {
       setProgress(null);
       setBusy(false);
