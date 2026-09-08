@@ -128,6 +128,16 @@ export function applyDelta(state: SetState, delta: Delta): SetState {
   if (delta.addr === SET_IDENTITY_ADDR) {
     const identity = setIdentityFrom(delta.args);
     if (identity === null) return state;
+    // The reply arrives once a second and almost always repeats the last
+    // one; a fresh state object for an unchanged identity re-renders the
+    // card for nothing.
+    if (
+      identity.setId === state.setId &&
+      identity.setName === state.setName &&
+      identity.setPath === state.setPath
+    ) {
+      return state;
+    }
     return { ...state, ...identity };
   }
 

@@ -49,6 +49,8 @@ class ValidIdTests(unittest.TestCase):
         self.assertEqual(rules.valid_id({"set_id": VALID.upper()}), "")
         self.assertEqual(rules.valid_id({"set_id": VALID[:-1]}), "")
         self.assertEqual(rules.valid_id({"set_id": 42}), "")
+        # "$" matches before a trailing newline; the rule must not.
+        self.assertEqual(rules.valid_id({"set_id": VALID + "\n"}), "")
 
 
 class DecideTests(unittest.TestCase):

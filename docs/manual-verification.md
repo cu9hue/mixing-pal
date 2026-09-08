@@ -732,10 +732,14 @@ Date: ___________  Live version: ___________  Tester: ___________
       `MixingPal set identity` line after reopening shows the same id.
       Pass: same id. Fail: a new id, or `id=''`; same outcome as a modified
       flag fail.
-- [ ] First read is the stored value. In the same reopen, the first
-      identity line already carries the id; no `wrote` line follows it.
-      Pass: no second write. Fail: a `wrote` line after reopening; widen the
-      two-read gate to three reads in `decide`.
+- [ ] First read is the stored value, on a large set. Make the copy from
+      the biggest set to hand, so its load takes longer than two polls. In
+      the same reopen, the first identity line already carries the id; no
+      `wrote` line follows it. Pass: no second write. Fail: a `wrote` line
+      after reopening, which means `get_data` answered `None` while the
+      document was still restoring and the two-read gate counted polls
+      instead of load completion; the write must then wait for a load
+      signal, not a poll count, before it can ship.
 - [ ] Unsaved set. File → New Live Set, wait, read the log. Pass:
       `path=''` and `name=''` (or the placeholder name Live gives an unsaved
       set; record what it says). Record the value either way.
@@ -744,5 +748,13 @@ Date: ___________  Live version: ___________  Tester: ___________
       write never reached disk. Record both ids.
 - [ ] The handler runs after load. Open a set that has an id; the first
       identity line already shows it. Pass: yes.
+- [ ] A second set in the same Live session. With the copy open and
+      holding its id, open a second disposable copy of a different set
+      (File → Open, without quitting Live). The log shows a fresh
+      `MixingPal set identity` sequence for the new set: its own name, and
+      its own `wrote` line or its own stored id. Pass: yes. Fail: the new
+      set reports `id=''` with no `wrote` line, which means Live kept the
+      handler alive across the document change and the one-write latch
+      blocked every later set; the latch must then reset on a set change.
 
 Result: ___________ (write kept / write dropped)

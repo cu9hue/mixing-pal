@@ -38,7 +38,9 @@ def valid_id(value):
     if not isinstance(value, dict):
         return ""
     set_id = value.get("set_id")
-    if isinstance(set_id, str) and _HEX32.match(set_id):
+    # fullmatch, not match: "$" also matches before a trailing newline, so
+    # match() would call "<32 hex>\n" valid.
+    if isinstance(set_id, str) and _HEX32.fullmatch(set_id):
         return set_id
     return ""
 

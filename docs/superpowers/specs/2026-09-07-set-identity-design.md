@@ -238,7 +238,11 @@ first is a panic on the first poll, not a silent gap.
   re-creates the Control Surface when a set loads, and this poll is how the
   switch is seen.
 - **Gated on the handshake.** The arm sends nothing until the last version
-  reply is 12 or more. A stale connector logs every unknown address at
+  reply is 12 or more. The cached reply is replaced only by the next
+  version reply, so a connector downgraded below 12 while the app is open
+  is asked for the address for up to five polls, one per second, until the
+  five-second version poll corrects it. Accepted: bounded, self-correcting,
+  and a downgrade with the app open is a reinstall gone wrong, not a path. A stale connector logs every unknown address at
   ERROR and forwards it to the app as `/live/error`; at one a second that
   would fill the connector's log and the app's error stream until she
   reinstalls. The poll loop cannot see the mirror, so it keeps the last
@@ -309,6 +313,12 @@ The rules for what does act on it, binding on items 4 and 5:
 - **Tag at send time.** Anything filed per set is tagged with the `setId`
   current when it was created, and is saved under that tag, not under
   whatever `setId` is current when the save runs.
+- **The Set line leads the panel.** The identity poll lands about a second
+  after a switch; tempo, key, and the track table come from subscriptions
+  Live drops on load, which the app resends every ten seconds. For up to
+  ten seconds the disclosure names the new set above the old set's facts.
+  Accepted: the line is the freshest thing in the panel, and the panel's
+  other lines catch up on their own clock. Nothing acts on it.
 - **Debounce a flap.** A late reply from the old set arriving after the new
   set's first reply would flip identity back for one poll. Replies are
   mirrored in arrival order, and on localhost a one-second cadence does not

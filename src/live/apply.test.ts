@@ -212,6 +212,12 @@ describe("set identity", () => {
     expect(s.setPath).toBeNull();
   });
 
+  it("returns the same state for a reply that repeats the last one", () => {
+    const args = [id, "Track", "/x/Track.als"];
+    const once = applyDelta(emptySet(), { addr: SET_IDENTITY_ADDR, args });
+    expect(applyDelta(once, { addr: SET_IDENTITY_ADDR, args })).toBe(once);
+  });
+
   it("leaves the fields alone on a malformed reply", () => {
     const before = applyDelta(emptySet(), {
       addr: SET_IDENTITY_ADDR,
