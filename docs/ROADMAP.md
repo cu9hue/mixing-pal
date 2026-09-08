@@ -22,7 +22,7 @@ no server.
 
 ## Where we are
 
-App 0.2.3, wire version 11. Shipped:
+App 0.2.4, wire version 12. Shipped:
 
 - The set mirror over OSC, a vendored AbletonOSC fork, and a connector the app
   installs itself.
@@ -78,13 +78,12 @@ Ordered. Each item says what, why, size, and what it waits on.
    of the body on send. The thread is the session and dies with the app
    until item 4.
 
-3. **Set identity.** The connector writes a random id into the set with
-   `Song.set_data` on first contact and reads it back with `Song.get_data` on
-   every load. The app receives it in the mirror. Why: everything per-set needs
-   to know which set is open, and the mirror has no name or path today. A
-   fingerprint from track names breaks the moment she adds a track. Size M,
-   wire bump. Open question to settle first: what `set_data` does on a set
-   that has never been saved.
+3. **Set identity.** Done 2026-09-08. The connector stores an id in the set
+   with `Song.set_data` under one key, written only when absent, and
+   answers `/live/mixingpal/get/set_identity` with the id, the set's name,
+   and its path. `SetState` carries all three; `setId` falls back to the
+   path. The spike's record is in `docs/manual-verification.md`. The one
+   exception to the no-write rule; see "Not doing".
 
 4. **Per-set persistence.** The raw thread saved in the app data directory,
    keyed by set id, restored on open, dropped 30 days after last open. Why: she

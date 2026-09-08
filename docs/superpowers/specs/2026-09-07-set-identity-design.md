@@ -1,7 +1,7 @@
 # Set identity — Design
 
 Date: 2026-09-07
-Status: approved for planning 2026-09-07, after two Codex reviews and a review panel
+Status: built 2026-09-08; see docs/superpowers/plans/2026-09-07-set-identity.md
 Roadmap item 3. Items 4 (per-set persistence) and 5 (per-set notes) build on it.
 Carves one exception out of the first spec's "No write access" non-goal; see
 The exception below.
