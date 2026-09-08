@@ -7,7 +7,8 @@
 //! then by path, and a hit by path adopts the entry under the new id. That
 //! covers a set she closed without saving, whose id was minted again on the
 //! next open, and the promotion from path to stored id every new set goes
-//! through. A thread nobody has opened for `RETENTION` is deleted.
+//! through. A thread nobody has opened for `RETENTION` loses its transcript;
+//! its note, which is what she decided, stays.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -171,16 +172,30 @@ pub fn save(dir: &Path, id: &str, path: Option<&str>, thread: &Thread) -> std::i
     if let Some(p) = path.filter(|p| !p.is_empty()) {
         index.entries[i].path = Some(p.to_string());
     }
-    let body = serde_json::to_string_pretty(thread)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    write_atomically(&dir.join(&index.entries[i].file), &body)?;
+    write_thread(&dir.join(&index.entries[i].file), thread)?;
     write_index(dir, &index)
 }
 
-/// Deletes every thread whose last open is more than `RETENTION` before
-/// `now`. Returns how many went. An entry whose file could not be deleted
-/// stays in the index, so the next startup tries again rather than
-/// leaving a transcript on disk that nothing points at.
+fn write_thread(file: &Path, thread: &Thread) -> std::io::Result<()> {
+    let body = serde_json::to_string_pretty(thread)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    write_atomically(file, &body)
+}
+
+/// A thread file that is missing or does not parse reads as nothing here;
+/// `load` is where a corrupt file is moved aside and reported.
+fn read_thread(file: &Path) -> Option<Thread> {
+    let raw = std::fs::read_to_string(file).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Drops the transcript of every thread whose last open is more than
+/// `RETENTION` before `now`. A thread with a note keeps the note and its
+/// entry, with the exchanges cleared: the transcript is disposable, what
+/// she decided is not. A thread without one is deleted. Returns how many
+/// transcripts went. An entry whose file could not be rewritten or deleted
+/// stays in the index, so the next startup tries again rather than leaving
+/// a transcript on disk that nothing points at.
 pub fn prune(dir: &Path, now: u64) -> std::io::Result<usize> {
     let mut index = read_index(dir);
     let mut kept = Vec::new();
@@ -193,7 +208,22 @@ pub fn prune(dir: &Path, now: u64) -> std::io::Result<usize> {
             kept.push(e);
             continue;
         }
-        match std::fs::remove_file(dir.join(&e.file)) {
+        let file = dir.join(&e.file);
+        if let Some(thread) = read_thread(&file).filter(|t| !t.note.is_empty()) {
+            if thread.exchanges.is_empty() {
+                // Already pruned to its note on an earlier startup.
+                kept.push(e);
+                continue;
+            }
+            let note_only = Thread { exchanges: vec![], ..thread };
+            match write_thread(&file, &note_only) {
+                Ok(()) => dropped += 1,
+                Err(err) => eprintln!("threads: could not prune {} to its note ({err})", e.file),
+            }
+            kept.push(e);
+            continue;
+        }
+        match std::fs::remove_file(&file) {
             // A file already gone is the outcome wanted.
             Ok(()) => dropped += 1,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => dropped += 1,
@@ -312,6 +342,33 @@ mod tests {
 
     // "Dropped thirty days after its last open": kept one second short of
     // thirty days, gone at thirty.
+    // The transcript goes on the prune's schedule; the note does not. The
+    // second prune finds nothing left to drop and rewrites nothing.
+    #[test]
+    fn prune_keeps_a_note_and_drops_its_transcript() {
+        let dir = scratch();
+        let day = 24 * 60 * 60;
+        let noted = Thread {
+            note: vec![Bullet {
+                id: "b0".into(),
+                kind: "decided".into(),
+                text: "leave the sub".into(),
+                at: 0,
+                hers: true,
+            }],
+            next_bullet: 1,
+            ..thread("q", 0)
+        };
+        save(&dir, ID, Some(PATH), &noted).unwrap();
+        assert_eq!(prune(&dir, 31 * day).unwrap(), 1);
+        let after = load(&dir, ID, Some(PATH), 31 * day).unwrap().unwrap();
+        assert_eq!(after.exchanges, vec![]);
+        assert_eq!(after.note, noted.note);
+        assert_eq!(after.next_bullet, 1);
+        assert_eq!(prune(&dir, 62 * day).unwrap(), 0);
+        assert!(load(&dir, ID, Some(PATH), 62 * day).unwrap().is_some());
+    }
+
     #[test]
     fn prune_drops_a_thread_at_exactly_thirty_days() {
         let dir = scratch();
