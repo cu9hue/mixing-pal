@@ -215,7 +215,9 @@ export function Conversation({
           ? recapLine(restored.length, saved.saved_at, Math.floor(Date.now() / 1000))
           : null,
       );
-      if (carried.length > 0) persist(target, merged, restoredNote);
+      if (carried.length > 0 || (key === null && noteRef.current.bullets.length > 0)) {
+        persist(target, merged, restoredNote);
+      }
     }, SWITCH_HOLD_MS);
     return () => {
       cancelled = true;
@@ -335,7 +337,7 @@ export function Conversation({
 
   return (
     <>
-      <NotesRow note={note} onChange={changeNote} />
+      <NotesRow key={key === null ? "" : `${key.id ?? ""}:${key.path ?? ""}`} note={note} onChange={changeNote} />
       <div
         className="card__body"
         data-tauri-drag-region="false"

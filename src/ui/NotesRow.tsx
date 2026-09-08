@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BULLET_KINDS, BulletKind, Note, addBullet, deleteBullet, editBullet } from "../notes/note";
+import { BULLET_KINDS, BULLET_MAX_CHARS, BulletKind, Note, addBullet, deleteBullet, editBullet } from "../notes/note";
 
 // Same persistence pattern as the disclosure: survive a webview reload, and
 // never let a storage failure take the component down with it.
@@ -60,7 +60,7 @@ export function NotesRow({ note, onChange }: { note: Note; onChange: (next: Note
       }}
     >
       <summary className="notes__summary">Notes · {note.bullets.length}</summary>
-      <div className="notes__panel">
+      <div className="notes__panel" data-tauri-drag-region="false">
         {note.bullets.map((b) => (
           <div key={b.id} className={`notes__bullet${b.hers ? "" : " notes__bullet--model"}`}>
             <span className="notes__kind">{b.kind}</span>
@@ -69,6 +69,7 @@ export function NotesRow({ note, onChange }: { note: Note; onChange: (next: Note
                 className="notes__input"
                 autoFocus
                 value={draft}
+                maxLength={BULLET_MAX_CHARS}
                 onChange={(e) => setDraft(e.target.value)}
                 onBlur={() => commitEdit(b.id)}
                 onKeyDown={(e) => e.key === "Enter" && commitEdit(b.id)}
@@ -101,6 +102,7 @@ export function NotesRow({ note, onChange }: { note: Note; onChange: (next: Note
           <input
             className="notes__input"
             value={adding}
+            maxLength={BULLET_MAX_CHARS}
             placeholder="Add a note…"
             onChange={(e) => setAdding(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && add()}
