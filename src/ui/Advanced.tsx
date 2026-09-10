@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./Advanced.css";
-import { Trace } from "./Trace";
 import wireVersion from "../../shared/wire-version.json";
 import { version as appVersion } from "../../package.json";
 
@@ -17,11 +16,12 @@ interface ConnectorView {
 }
 
 /**
- * Everything the producer should never need to see.
- *
- * The bring-your-own-key fields live here rather than in setup because
- * they are a pressure valve for a technical minority and for the day the
- * proxy is down -- not a step anybody is asked to complete.
+ * Settings, reached from the app menu: the model the app calls and the
+ * harness inside Live. The bring-your-own-key fields live here rather than
+ * in setup because they are a pressure valve for a technical minority and
+ * for the day the proxy is down -- not a step anybody is asked to complete.
+ * Debug views (the trace, the tracks the model sees) are not settings and
+ * stay under "What I can see".
  */
 export function Advanced({
   scriptVersion,
@@ -107,10 +107,7 @@ export function Advanced({
 
   return (
     <div className="advanced">
-      <div className="advanced__note">
-        Mixing Pal normally handles this for you. These fields point it at your own
-        provider instead.
-      </div>
+      <h2 className="advanced__heading">Model settings</h2>
 
       <label className="advanced__field">
         <span className="advanced__label">Base URL</span>
@@ -151,6 +148,8 @@ export function Advanced({
 
       {error !== null && <div className="advanced__error">{error}</div>}
 
+      <h2 className="advanced__heading">Harness settings</h2>
+
       <div className="advanced__field">
         <span className="advanced__label">Connector</span>
         <div className="advanced__value">
@@ -169,8 +168,6 @@ export function Advanced({
       </div>
 
       <div className="advanced__note">Mixing Pal v{appVersion}</div>
-
-      <Trace />
     </div>
   );
 }

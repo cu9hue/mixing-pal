@@ -2,6 +2,7 @@ import { useState } from "react";
 import "./WhatICanSee.css";
 import { SetState } from "../live/model";
 import { summaryLine, setLine } from "./summaryLine";
+import { Trace } from "./Trace";
 import wireVersion from "../../shared/wire-version.json";
 
 // Same persistence pattern as the goal: survive a webview reload, and never
@@ -52,38 +53,41 @@ export function WhatICanSee({ state }: { state: SetState }) {
     >
       <summary className="wics__summary">What I can see</summary>
       <div className="wics__panel">
-            <div className="wics__line">{summaryLine(state, indices.length)}</div>
-            {set !== null && <div className="wics__line">{set}</div>}
-            <div className="wics__line">
-              connector v{state.scriptVersion ?? "—"} · this app expects v{wireVersion.version}
-            </div>
-            <table className="wics__table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>name</th>
-                  {/* The formatted dB string straight from Live's own fader
-                      readout, carried by mixer_data. */}
-                  <th>fader</th>
-                  <th>m</th>
-                  <th>s</th>
-                </tr>
-              </thead>
-              <tbody>
-                {indices.map((i) => (
-                  <tr
-                    key={i}
-                    className={state.selectedTrack === i ? "wics__row--selected" : undefined}
-                  >
-                    <td>{i}</td>
-                    <td>{state.tracks[i].name ?? "—"}</td>
-                    <td>{state.tracks[i].volumeDb ?? "—"}</td>
-                    <td>{state.tracks[i].mute ? "M" : ""}</td>
-                    <td>{state.tracks[i].solo ? "S" : ""}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="wics__line">{summaryLine(state, indices.length)}</div>
+        {set !== null && <div className="wics__line">{set}</div>}
+        <div className="wics__line">
+          connector v{state.scriptVersion ?? "—"} · this app expects v{wireVersion.version}
+        </div>
+        <table className="wics__table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>name</th>
+              {/* The formatted dB string straight from Live's own fader
+                  readout, carried by mixer_data. */}
+              <th>fader</th>
+              <th>m</th>
+              <th>s</th>
+            </tr>
+          </thead>
+          <tbody>
+            {indices.map((i) => (
+              <tr
+                key={i}
+                className={state.selectedTrack === i ? "wics__row--selected" : undefined}
+              >
+                <td>{i}</td>
+                <td>{state.tracks[i].name ?? "—"}</td>
+                <td>{state.tracks[i].volumeDb ?? "—"}</td>
+                <td>{state.tracks[i].mute ? "M" : ""}</td>
+                <td>{state.tracks[i].solo ? "S" : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {/* The other half of "what the model saw": every model and tool
+            call of the last turn. Debug, like the table above it. */}
+        <Trace />
       </div>
     </details>
   );
