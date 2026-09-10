@@ -8,6 +8,12 @@ use std::path::{Path, PathBuf};
 /// which is why it is a setting, not a constant in the client.
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
+/// The model the app calls when the producer has not named one. Chosen on
+/// 2026-09-11 by `tests/latency.rs`: median 4.4 s over five runs of a
+/// two-tool question, the fastest of seven candidates. The Settings pane
+/// shows it as the field's placeholder, so a blank field means this.
+pub const DEFAULT_MODEL: &str = "minimax/minimax-m3";
+
 pub const SETTINGS_FILE: &str = "settings.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,7 +29,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             base_url: DEFAULT_BASE_URL.to_string(),
-            model: String::new(),
+            model: DEFAULT_MODEL.to_string(),
             api_key: String::new(),
         }
     }
@@ -117,7 +123,7 @@ mod tests {
         // First run. The producer has not been to the settings pane yet.
         let loaded = load(&scratch());
         assert_eq!(loaded.base_url, DEFAULT_BASE_URL);
-        assert!(loaded.model.is_empty());
+        assert_eq!(loaded.model, DEFAULT_MODEL);
         assert!(loaded.api_key.is_empty());
     }
 

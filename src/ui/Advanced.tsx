@@ -133,7 +133,7 @@ export function Advanced({
         <span className="advanced__label">Model</span>
         <input
           className="advanced__input"
-          placeholder="moonshotai/kimi-k2"
+          placeholder="minimax/minimax-m3"
           value={view.model}
           onChange={(e) => setView({ ...view, model: e.target.value })}
         />
