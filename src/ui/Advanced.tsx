@@ -112,13 +112,13 @@ export function Advanced({
     <div className="advanced">
       {/* The one way back that is on screen. Escape is the other. */}
       <div className="advanced__titlebar">
-        <span className="advanced__title">Settings</span>
+        <h2 className="advanced__title">Settings</h2>
         <button className="advanced__button" onClick={onClose} title="Back to the set (Esc)">
           Done
         </button>
       </div>
 
-      <h2 className="advanced__heading">Model settings</h2>
+      <h3 className="advanced__heading">Model settings</h3>
 
       <label className="advanced__field">
         <span className="advanced__label">Base URL</span>
@@ -144,7 +144,8 @@ export function Advanced({
         <input
           className="advanced__input"
           type="password"
-          placeholder={view.has_key ? "stored — leave blank to keep" : "required"}
+          placeholder={view.has_key ? "stored, leave blank to keep" : "required"}
+          autoComplete="off"
           value={key}
           onChange={(e) => setKey(e.target.value)}
         />
@@ -153,11 +154,19 @@ export function Advanced({
       <button className="advanced__button" onClick={save} disabled={saving}>
         {saving ? "Checking the model…" : "Save"}
       </button>
-      {savedNote !== null && error === null && <span className="advanced__saved">{savedNote}</span>}
+      {savedNote !== null && error === null && (
+        <span className="advanced__saved" aria-live="polite">
+          {savedNote}
+        </span>
+      )}
 
-      {error !== null && <div className="advanced__error">{error}</div>}
+      {error !== null && (
+        <div className="advanced__error" role="alert">
+          {error}
+        </div>
+      )}
 
-      <h2 className="advanced__heading">Harness settings</h2>
+      <h3 className="advanced__heading">Harness settings</h3>
 
       <div className="advanced__field">
         <span className="advanced__label">Connector</span>
@@ -173,7 +182,11 @@ export function Advanced({
         <button className="advanced__button" onClick={reinstall} disabled={reinstalling}>
           {reinstalling ? "Reinstalling…" : "Reinstall"}
         </button>
-        {connectorNote !== null && <div className="advanced__note">{connectorNote}</div>}
+        {connectorNote !== null && (
+          <div className="advanced__hint" aria-live="polite">
+            {connectorNote}
+          </div>
+        )}
       </div>
 
       <div className="advanced__note">Mixing Pal v{appVersion}</div>

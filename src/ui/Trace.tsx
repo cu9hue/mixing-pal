@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import "./Trace.css";
 
 // Mirrors src-tauri/src/trace.rs's TraceStep. This is the whole IPC contract
 // for this pane -- the backend already truncated and redacted anything
@@ -40,39 +41,21 @@ function StepView({ step }: { step: TraceStep }) {
       : { args: step.args, result: step.result };
 
   return (
-    <div style={{ border: "1px solid #444", borderRadius: 4, padding: 8, marginBottom: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, opacity: 0.8 }}>
+    <div className="trace__step">
+      <div className="trace__step-head">
         <span>
           <b>{step.kind === "model" ? "model" : `tool: ${step.name}`}</b> · {formatTime(step.at)}
         </span>
         <span>{step.duration_ms} ms</span>
       </div>
       {flags && (
-        <div
-          style={{
-            fontSize: 12,
-            margin: "4px 0",
-            color: flags.missing_reason ? "#e08a8a" : "#8ac98a",
-          }}
-        >
+        <div className={`trace__flags${flags.missing_reason ? " trace__flags--missing" : ""}`}>
           fresh: {String(flags.fresh)} · fresh_as_of:{" "}
           {typeof flags.fresh_as_of === "number" ? formatTime(flags.fresh_as_of) : "—"}
           {flags.missing_reason ? ` · missing_reason: ${String(flags.missing_reason)}` : ""}
         </div>
       )}
-      <pre
-        style={{
-          maxHeight: 220,
-          overflow: "auto",
-          background: "#1a1a1a",
-          color: "#ddd",
-          padding: 6,
-          margin: 0,
-          fontSize: 11,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-        }}
-      >
+      <pre className="trace__body">
         {JSON.stringify(body, null, 2)}
       </pre>
     </div>
@@ -128,24 +111,28 @@ export function Trace() {
   }
 
   return (
-    <div style={{ borderTop: "1px solid #444" }}>
-      <button onClick={toggle} style={{ margin: 10 }}>
+    <div className="trace">
+      <button className="trace__button" onClick={toggle}>
         {open ? "Hide trace" : "Show trace"}
       </button>
       {open && (
-        <div style={{ padding: "0 10px 10px" }}>
-          <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 8 }}>
+        <div className="trace__panel">
+          <div className="trace__hint">
             A trace contains track names and MIDI from your project. Only copy or share it somewhere you trust.
           </div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-            <button onClick={refresh}>Refresh</button>
-            <button onClick={clear}>Clear</button>
-            <button onClick={copyAll} disabled={steps.length === 0}>
+          <div className="trace__toolbar">
+            <button className="trace__button" onClick={refresh}>
+              Refresh
+            </button>
+            <button className="trace__button" onClick={clear}>
+              Clear
+            </button>
+            <button className="trace__button" onClick={copyAll} disabled={steps.length === 0}>
               {copied ? "Copied" : "Copy trace"}
             </button>
           </div>
           {steps.length === 0 ? (
-            <div style={{ opacity: 0.6, fontSize: 12 }}>No steps recorded yet.</div>
+            <div className="trace__empty">No steps recorded yet.</div>
           ) : (
             [...steps].reverse().map((s, i) => <StepView key={i} step={s} />)
           )}
