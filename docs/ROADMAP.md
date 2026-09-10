@@ -144,9 +144,10 @@ Ordered. Each item says what, why, size, and what it waits on.
 
    `minimax/minimax-m3` is the default when the model field is blank. The
    model timeout stays at 180 s: the default's slowest single round trip
-   was 2.6 s, and the bound is there for a slower model she types herself.
-   Re-run the target when the default changes. Item 6's craft evals are
-   re-opened against it next: scenarios one to four first.
+   was 2.6 s, the bound is there for a slower model she types herself, and
+   60 s is the bound that cut off a real turn on 2026-09-02. Re-run the
+   target when the default changes. Item 6's craft evals are re-opened
+   against it next: scenarios one to four first.
 
 ## When the waitlist says go
 
