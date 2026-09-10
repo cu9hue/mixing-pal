@@ -607,6 +607,38 @@ pub struct ToolCallRecord {
     pub missing_reason: Option<String>,
 }
 
+/// What the card shows: the answer with every fenced `note` block removed,
+/// the way `noteDelta` in src/notes/note.ts strips it before she reads it.
+/// The judge and the wording assertions must score what she sees; the block
+/// is the model's bookkeeping, not part of the answer.
+pub fn strip_note_blocks(answer: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_block = false;
+    for line in answer.lines() {
+        let t = line.trim();
+        if !in_block && t == "```note" {
+            in_block = true;
+            continue;
+        }
+        if in_block {
+            if t == "```" {
+                in_block = false;
+            }
+            continue;
+        }
+        out.push(line);
+    }
+    out.join("\n").trim().to_string()
+}
+
+#[test]
+fn stripping_the_note_block_leaves_what_she_reads() {
+    let raw = "Try a high-pass.\n\n```note\n+ move low end: high-pass the pad\n```";
+    assert_eq!(strip_note_blocks(raw), "Try a high-pass.");
+    assert_eq!(strip_note_blocks("No block here."), "No block here.");
+    assert_eq!(strip_note_blocks("```note\n+ move a\n```"), "");
+}
+
 pub struct Turn {
     pub answer: String,
     pub called: Vec<String>,
@@ -694,7 +726,7 @@ pub async fn ask_with(
         };
         if completion.tool_calls.is_empty() {
             return Turn {
-                answer: completion.text,
+                answer: strip_note_blocks(&completion.text),
                 called,
                 calls,
                 truncated: false,

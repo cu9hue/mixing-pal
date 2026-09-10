@@ -164,4 +164,29 @@ describe("buildContext", () => {
     };
     expect(buildContext(state, "")).toContain("SECTIONS (beats)  «Intro» 0\n");
   });
+
+  it("says nothing about notes when there are none", () => {
+    expect(buildContext(setWith({}), "")).not.toContain("NOTES");
+  });
+
+  it("lists the note after the goal with ids, kinds, ages, and hers", () => {
+    const now = 1_000_000;
+    const day = 24 * 60 * 60;
+    const out = buildContext(
+      setWith({}),
+      "dark garage, 2am",
+      [
+        { id: "b1", kind: "move", text: "low end: high-pass «Pad Wide» near 180 Hz", at: now - 2 * day, hers: false },
+        { id: "b2", kind: "heard", text: "the sub still masks the kick", at: now, hers: true },
+      ],
+      now,
+    );
+    const goal = out.indexOf("GOAL  dark garage, 2am");
+    const notes = out.indexOf("NOTES");
+    expect(goal).toBeGreaterThan(-1);
+    expect(notes).toBeGreaterThan(goal);
+    // Fenced like set data: guillemets inside a bullet are stripped, not nested.
+    expect(out).toContain("- [b1] move  «low end: high-pass Pad Wide near 180 Hz»  (2 days ago)");
+    expect(out).toContain("- [b2] heard  «the sub still masks the kick»  (today, hers)");
+  });
 });

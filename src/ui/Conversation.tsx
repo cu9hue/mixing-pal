@@ -8,7 +8,9 @@ import { progressLabel } from "./progressLabel";
 import { waitingLabel } from "./waitingLabel";
 import { Exchange, begin, complete, fail } from "./thread";
 import { loadThread, saveThread } from "../model/threads";
-import { SWITCH_HOLD_MS, ThreadKey, classify, historyFrom, keyFor, recapLine } from "./threadStore";
+import { SWITCH_HOLD_MS, ThreadKey, carryNote, classify, historyFrom, keyFor, recapLine } from "./threadStore";
+import { Note, emptyNote, mergeNote, noteDelta } from "../notes/note";
+import { NotesRow } from "./NotesRow";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -159,6 +161,16 @@ export function Conversation({
   const [recap, setRecap] = useState<string | null>(null);
   const threadRef = useRef<Exchange[]>([]);
   threadRef.current = thread;
+  // The set's note rides beside the thread: same key, same switch, same
+  // file. The model's changes are merged deterministically after each
+  // answer; hers arrive through the Notes row.
+  const [note, setNote] = useState<Note>(emptyNote());
+  const noteRef = useRef<Note>(emptyNote());
+  noteRef.current = note;
+  // A save that failed, shown above the thread until one succeeds. The
+  // note is hers by hand; a write that silently failed would lose it with
+  // the row still showing it applied.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const next = keyFor(state);
   const nextId = next?.id ?? null;
   const nextPath = next?.path ?? null;
@@ -170,7 +182,7 @@ export function Conversation({
       // Same set, new name: the thread stays, the file follows. Saving
       // under the new key is what makes the Rust index adopt it.
       setKey(target);
-      persist(target, threadRef.current);
+      persist(target, threadRef.current, noteRef.current);
       return;
     }
     let cancelled = false;
@@ -190,6 +202,8 @@ export function Conversation({
       const restored = saved?.exchanges ?? [];
       const carried = key === null ? threadRef.current : [];
       const merged = [...restored, ...carried];
+      const { note: restoredNote, carried: noteCarried } = carryNote(saved, noteRef.current, key === null);
+      setNote(restoredNote);
       setKey(target);
       setThread(merged);
       setHistory(historyFrom(merged, MAX_HISTORY_MESSAGES));
@@ -198,7 +212,7 @@ export function Conversation({
           ? recapLine(restored.length, saved.saved_at, Math.floor(Date.now() / 1000))
           : null,
       );
-      if (carried.length > 0) persist(target, merged);
+      if (carried.length > 0 || noteCarried) persist(target, merged, restoredNote);
     }, SWITCH_HOLD_MS);
     return () => {
       cancelled = true;
@@ -206,9 +220,20 @@ export function Conversation({
     };
   }, [key, nextId, nextPath, busy]);
 
-  function persist(under: ThreadKey | null, exchanges: Exchange[]) {
+  function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note) {
     if (under === null) return;
-    saveThread(under, exchanges).catch((e) => console.error("failed to save the thread", e));
+    saveThread(under, exchanges, withNote).then(
+      () => setSaveError(null),
+      (e) => {
+        console.error("failed to save the thread", e);
+        setSaveError(`Could not save this set's thread and notes: ${String(e)}`);
+      },
+    );
+  }
+
+  function changeNote(next: Note) {
+    setNote(next);
+    persist(key, threadRef.current, next);
   }
 
   // The newest question goes to the top of the body, which is where the
@@ -247,7 +272,7 @@ export function Conversation({
     setThread(begun);
     // Saved now, not only when the answer lands: a quit mid-turn keeps the
     // question, and the restored thread shows it with no answer.
-    persist(askedUnder, begun);
+    persist(askedUnder, begun, noteRef.current);
     startedAt.current = Date.now();
     setElapsedMs(0);
     setBusy(true);
@@ -258,7 +283,7 @@ export function Conversation({
     // it was when the conversation started.
     const turn: ChatMessage[] = [
       ...history.slice(-MAX_HISTORY_MESSAGES),
-      { role: "user", content: `${buildContext(state, goal)}\n\n---\n\n${asked}` },
+      { role: "user", content: `${buildContext(state, goal, note.bullets)}\n\n---\n\n${asked}` },
     ];
     setHistory((h) => [
       ...h,
@@ -284,19 +309,24 @@ export function Conversation({
       const out = await runTurn(tauriProvider, tracked, turn, (name, args) =>
         setProgress(progressLabel(name, args, state)),
       );
+      // The model's note changes ride at the end of its answer and are not
+      // part of what she reads or what the history keeps.
+      const { answer, delta } = noteDelta(out.text);
+      const mergedNote = mergeNote(noteRef.current, delta, Math.floor(Date.now() / 1000));
+      setNote(mergedNote);
       setHistory((h) => [
         ...h,
-        { role: "assistant" as const, content: out.text },
+        { role: "assistant" as const, content: answer },
       ].slice(-MAX_HISTORY_MESSAGES));
-      const settled = complete(threadRef.current, out.text);
+      const settled = complete(threadRef.current, answer);
       setThread(settled);
-      persist(askedUnder, settled);
+      persist(askedUnder, settled, mergedNote);
       onAnswer();
     } catch (e) {
       // Provider errors surface as text and the app keeps running.
       const settled = fail(threadRef.current, String(e));
       setThread(settled);
-      persist(askedUnder, settled);
+      persist(askedUnder, settled, noteRef.current);
     } finally {
       setProgress(null);
       setBusy(false);
@@ -308,6 +338,7 @@ export function Conversation({
 
   return (
     <>
+      <NotesRow key={key === null ? "" : `${key.id ?? ""}:${key.path ?? ""}`} note={note} onChange={changeNote} />
       <div
         className="card__body"
         data-tauri-drag-region="false"
@@ -316,6 +347,11 @@ export function Conversation({
           pinned.current = b.scrollHeight - b.scrollTop - b.clientHeight <= 1;
         }}
       >
+        {saveError !== null && (
+          <div className="card__error selectable" data-tauri-drag-region="false">
+            {saveError}
+          </div>
+        )}
         {recap !== null && <div className="card__recap">{recap}</div>}
         {thread.map((x, i) => (
           <div

@@ -1,4 +1,5 @@
 import { SetState } from "../live/model";
+import { Bullet, ageWords } from "../notes/note";
 import { fence } from "./fence";
 
 const PITCH_CLASSES = [
@@ -35,7 +36,12 @@ function currentBeatsPerBar(state: SetState): number | null {
  *
  * Every set-derived string is fenced. See fence.ts.
  */
-export function buildContext(state: SetState, goal: string): string {
+export function buildContext(
+  state: SetState,
+  goal: string,
+  note: Bullet[] = [],
+  now: number = Math.floor(Date.now() / 1000),
+): string {
   const lines: string[] = [];
 
   const key = keyName(state.rootNote, state.scaleName);
@@ -83,6 +89,20 @@ export function buildContext(state: SetState, goal: string): string {
 
   const trimmedGoal = goal.trim();
   if (trimmedGoal !== "") lines.push(`GOAL  ${trimmedGoal}`);
+
+  // The set's outcomes, hers and the model's. Ids so a retirement can name
+  // one; ages in the recap line's words; "hers" so the model knows what it
+  // cannot retire. The text is fenced like every other string the model did
+  // not write this turn: a bullet is the model's own paraphrase of set data,
+  // or hers, and neither is an instruction. The model adds to this through a
+  // fenced note block and never rewrites it; see src/notes/note.ts.
+  if (note.length > 0) {
+    lines.push("NOTES");
+    for (const b of note) {
+      const hers = b.hers ? ", hers" : "";
+      lines.push(`- [${b.id}] ${b.kind}  ${fence(b.text)}  (${ageWords(b.at, now)}${hers})`);
+    }
+  }
 
   const indices = Object.keys(state.tracks)
     .map(Number)

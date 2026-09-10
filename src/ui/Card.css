@@ -372,3 +372,98 @@
   color: var(--text-faint);
   margin-top: 8px;
 }
+
+/* The set's note above the thread: the same closed-by-default disclosure
+   as "What I can see", with the count as the only thing that moves. */
+.notes {
+  border-bottom: 1px solid var(--border);
+}
+
+.notes__summary {
+  padding: 8px 15px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.notes__summary::-webkit-details-marker {
+  display: none;
+}
+
+.notes__panel {
+  padding: 0 15px 10px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.notes__bullet {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+/* The model's words until she touches them. */
+.notes__bullet--model {
+  color: var(--text-muted);
+}
+
+.notes__kind {
+  flex: none;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+  min-width: 48px;
+}
+
+.notes__text,
+.notes__delete,
+.notes__kind-pick {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.notes__text {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.notes__delete {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.notes__add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.notes__kind-pick {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.notes__input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  outline: none;
+}

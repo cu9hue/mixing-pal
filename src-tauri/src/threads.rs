@@ -7,7 +7,8 @@
 //! then by path, and a hit by path adopts the entry under the new id. That
 //! covers a set she closed without saving, whose id was minted again on the
 //! next open, and the promotion from path to stored id every new set goes
-//! through. A thread nobody has opened for `RETENTION` is deleted.
+//! through. A thread nobody has opened for `RETENTION` loses its transcript;
+//! its note, which is what she decided, stays.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -27,12 +28,29 @@ pub struct Exchange {
     pub error: Option<String>,
 }
 
+/// One outcome bullet of a set's note; the same shape as the frontend's
+/// `Bullet` in `src/notes/note.ts`. Rust stores it and never reads it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bullet {
+    pub id: String,
+    pub kind: String,
+    pub text: String,
+    pub at: u64,
+    pub hers: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Thread {
     pub exchanges: Vec<Exchange>,
     /// Seconds since the epoch, set by the caller on save. The recap line
     /// in the card is derived from it.
     pub saved_at: u64,
+    /// The set's note. Files from before notes existed have neither field
+    /// and read as an empty note.
+    #[serde(default)]
+    pub note: Vec<Bullet>,
+    #[serde(default)]
+    pub next_bullet: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -154,16 +172,30 @@ pub fn save(dir: &Path, id: &str, path: Option<&str>, thread: &Thread) -> std::i
     if let Some(p) = path.filter(|p| !p.is_empty()) {
         index.entries[i].path = Some(p.to_string());
     }
-    let body = serde_json::to_string_pretty(thread)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    write_atomically(&dir.join(&index.entries[i].file), &body)?;
+    write_thread(&dir.join(&index.entries[i].file), thread)?;
     write_index(dir, &index)
 }
 
-/// Deletes every thread whose last open is more than `RETENTION` before
-/// `now`. Returns how many went. An entry whose file could not be deleted
-/// stays in the index, so the next startup tries again rather than
-/// leaving a transcript on disk that nothing points at.
+fn write_thread(file: &Path, thread: &Thread) -> std::io::Result<()> {
+    let body = serde_json::to_string_pretty(thread)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    write_atomically(file, &body)
+}
+
+/// A thread file that is missing or does not parse reads as nothing here;
+/// `load` is where a corrupt file is moved aside and reported.
+fn read_thread(file: &Path) -> Option<Thread> {
+    let raw = std::fs::read_to_string(file).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Drops the transcript of every thread whose last open is more than
+/// `RETENTION` before `now`. A thread with a note keeps the note and its
+/// entry, with the exchanges cleared: the transcript is disposable, what
+/// she decided is not. A thread without one is deleted. Returns how many
+/// transcripts went. An entry whose file could not be rewritten or deleted
+/// stays in the index, so the next startup tries again rather than leaving
+/// a transcript on disk that nothing points at.
 pub fn prune(dir: &Path, now: u64) -> std::io::Result<usize> {
     let mut index = read_index(dir);
     let mut kept = Vec::new();
@@ -176,7 +208,22 @@ pub fn prune(dir: &Path, now: u64) -> std::io::Result<usize> {
             kept.push(e);
             continue;
         }
-        match std::fs::remove_file(dir.join(&e.file)) {
+        let file = dir.join(&e.file);
+        if let Some(thread) = read_thread(&file).filter(|t| !t.note.is_empty()) {
+            if thread.exchanges.is_empty() {
+                // Already pruned to its note on an earlier startup.
+                kept.push(e);
+                continue;
+            }
+            let note_only = Thread { exchanges: vec![], ..thread };
+            match write_thread(&file, &note_only) {
+                Ok(()) => dropped += 1,
+                Err(err) => eprintln!("threads: could not prune {} to its note ({err})", e.file),
+            }
+            kept.push(e);
+            continue;
+        }
+        match std::fs::remove_file(&file) {
             // A file already gone is the outcome wanted.
             Ok(()) => dropped += 1,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => dropped += 1,
@@ -218,6 +265,8 @@ mod tests {
                 error: None,
             }],
             saved_at,
+            note: vec![],
+            next_bullet: 0,
         }
     }
 
@@ -293,6 +342,33 @@ mod tests {
 
     // "Dropped thirty days after its last open": kept one second short of
     // thirty days, gone at thirty.
+    // The transcript goes on the prune's schedule; the note does not. The
+    // second prune finds nothing left to drop and rewrites nothing.
+    #[test]
+    fn prune_keeps_a_note_and_drops_its_transcript() {
+        let dir = scratch();
+        let day = 24 * 60 * 60;
+        let noted = Thread {
+            note: vec![Bullet {
+                id: "b0".into(),
+                kind: "decided".into(),
+                text: "leave the sub".into(),
+                at: 0,
+                hers: true,
+            }],
+            next_bullet: 1,
+            ..thread("q", 0)
+        };
+        save(&dir, ID, Some(PATH), &noted).unwrap();
+        assert_eq!(prune(&dir, 31 * day).unwrap(), 1);
+        let after = load(&dir, ID, Some(PATH), 31 * day).unwrap().unwrap();
+        assert_eq!(after.exchanges, vec![]);
+        assert_eq!(after.note, noted.note);
+        assert_eq!(after.next_bullet, 1);
+        assert_eq!(prune(&dir, 62 * day).unwrap(), 0);
+        assert!(load(&dir, ID, Some(PATH), 62 * day).unwrap().is_some());
+    }
+
     #[test]
     fn prune_drops_a_thread_at_exactly_thirty_days() {
         let dir = scratch();
@@ -344,5 +420,41 @@ mod tests {
         save(&dir, ID, Some(PATH), &thread("q", 100)).unwrap();
         std::fs::remove_file(dir.join("thread-0.json")).unwrap();
         assert_eq!(load(&dir, ID, Some(PATH), 200).unwrap(), None);
+    }
+
+    // Threads written before notes existed have no note field.
+    #[test]
+    fn a_thread_saved_without_a_note_reads_with_an_empty_one() {
+        let dir = scratch();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(INDEX_FILE),
+            r#"{"next":1,"entries":[{"id":"id","path":"/x.als","file":"thread-0.json","last_opened":5}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("thread-0.json"),
+            r#"{"exchanges":[{"question":"q","answer":"a","error":null}],"saved_at":5}"#,
+        )
+        .unwrap();
+        let t = load(&dir, "id", None, 10).unwrap().unwrap();
+        assert_eq!(t.note, vec![]);
+        assert_eq!(t.next_bullet, 0);
+    }
+
+    #[test]
+    fn a_note_round_trips_with_its_counter() {
+        let dir = scratch();
+        let mut t = thread("q", 100);
+        t.note = vec![Bullet {
+            id: "b0".into(),
+            kind: "heard".into(),
+            text: "the sub still masks the kick".into(),
+            at: 90,
+            hers: true,
+        }];
+        t.next_bullet = 1;
+        save(&dir, ID, Some(PATH), &t).unwrap();
+        assert_eq!(load(&dir, ID, Some(PATH), 200).unwrap(), Some(t));
     }
 }

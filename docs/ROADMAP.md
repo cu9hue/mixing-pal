@@ -95,14 +95,14 @@ Ordered. Each item says what, why, size, and what it waits on.
    a restored thread carries a recap line. A quit mid-turn keeps the
    question and loses the answer.
 
-5. **Per-set notes.** A short note the model writes per set: what was
-   discussed, what she decided, what she was going to try. Shown in the card,
-   editable, and sent ahead of the question as a user turn on return, the same
-   way the context block rides. Why: a note beats a transcript. The live
-   context corrects stale facts on every turn, and she can read it. A note
-   records outcomes (the axis, the move, what she heard), never advice, and
-   carries a size cap, so it does not become a second prompt. Size M.
-   Waits on 4.
+5. **Per-set notes.** Done 2026-09-08. A list of outcome bullets per set,
+   `move`, `heard`, or `decided`, kept in the thread file and shown above the
+   thread. The model reads them after the goal and may add or retire at most
+   two per answer through a fenced `note` block the app merges
+   deterministically: exact de-duplication, a cap of twelve that takes the
+   model's bullets before hers, and nothing she has touched is ever retired.
+   The note outlives the transcript's 30-day prune. Never a summary and never
+   rewritten, on the second brain's evidence that rewriting collapses.
 
 6. **Advice quality.** Shipped
    2026-09-02 (c095d72..ea9bc34): the prompt's "What a good answer is"
