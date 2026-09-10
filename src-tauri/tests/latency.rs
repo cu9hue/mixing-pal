@@ -9,8 +9,11 @@
 
 mod common;
 
+use std::time::Duration;
+
 use mixing_pal_lib::eval_api::Settings;
 use serde_json::{json, Value};
+use common::Turn;
 
 fn fixture() -> Value {
     common::load("eval-set.json")
@@ -79,4 +82,75 @@ async fn a_failed_round_trip_is_still_timed() {
 
     assert!(turn.error.is_some());
     assert_eq!(turn.round_trip_ms.len(), 1, "the failed round trip counts: {:?}", turn.round_trip_ms);
+}
+
+/// The question and the check. "Is there any compression on the drums?"
+/// reads the chain map, sees the rack marked [rack], and reads the rack:
+/// two tools, three round trips. A model that answers without the rack
+/// read has not done the work, however fast it was, so a run without that
+/// call fails outright rather than counting as a quick one.
+const QUESTION: &str = "is there any compression on the drums?";
+const REQUIRED_TOOL: &str = "get_rack_contents";
+const RUNS: usize = 5;
+/// Item 7's bar: a two-tool question in under a minute.
+const BUDGET: Duration = Duration::from_secs(60);
+
+fn seconds(ms: u64) -> f64 {
+    ms as f64 / 1000.0
+}
+
+fn line(i: usize, t: &Turn) -> String {
+    let mut s = format!(
+        "run {i}: {:.1}s  round trips {:?} ms  tools {:?}",
+        seconds(t.total_ms()),
+        t.round_trip_ms,
+        t.called
+    );
+    if t.truncated {
+        s.push_str("  TRUNCATED");
+    }
+    if let Some(e) = &t.error {
+        s.push_str(&format!("  ERROR {e}"));
+    }
+    s
+}
+
+#[tokio::test]
+async fn a_two_tool_question_answers_within_the_budget() {
+    let context = common::context("eval-context.txt");
+    let mut turns: Vec<Turn> = Vec::with_capacity(RUNS);
+    let mut report = String::new();
+    for i in 0..RUNS {
+        let t = common::ask(fixture(), &context, QUESTION).await;
+        let l = line(i, &t);
+        println!("{l}");
+        report.push_str(&l);
+        report.push('\n');
+        turns.push(t);
+    }
+
+    // A provider error is an infrastructure fault, reported after every
+    // run has finished so the report shows all five.
+    let errors: Vec<&str> = turns.iter().filter_map(|t| t.error.as_deref()).collect();
+    assert!(errors.is_empty(), "provider errors: {errors:?}\n{report}");
+
+    let mut totals: Vec<u64> = turns.iter().map(Turn::total_ms).collect();
+    totals.sort_unstable();
+    let median = totals[RUNS / 2];
+    let slowest = totals[RUNS - 1];
+    println!("median {:.1}s  slowest {:.1}s", seconds(median), seconds(slowest));
+
+    for (i, t) in turns.iter().enumerate() {
+        assert!(!t.truncated, "run {i} ran out of round trips\n{report}");
+        assert!(
+            t.called.iter().any(|c| c == REQUIRED_TOOL),
+            "run {i} answered without reading the rack\n{report}"
+        );
+    }
+    assert!(
+        median < BUDGET.as_millis() as u64,
+        "median {:.1}s is over the {}s budget\n{report}",
+        seconds(median),
+        BUDGET.as_secs()
+    );
 }
