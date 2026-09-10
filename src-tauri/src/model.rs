@@ -16,6 +16,12 @@ pub const MODEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// 2026-09-02. Sixty seconds cut that turn off and reported it as a broken
 /// reply. Both the shipped client (lib.rs) and the eval harness build from
 /// this constant, and the timeout message quotes it.
+///
+/// Measured on 2026-09-11 with `tests/latency.rs`: the default model's
+/// slowest single round trip over five runs of a two-tool question was
+/// 2.6 s, so this bound is nowhere near it. It stays at three minutes for
+/// the producer who types a slower model into Settings, which is the case
+/// the 2026-09-02 turn above was.
 pub const MODEL_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// What to tell the producer when a request to `url` failed at `stage`.
