@@ -58,3 +58,7 @@ required-features = ["evals"]
 name = "craft"
 required-features = ["evals"]
 
+[[test]]
+name = "latency"
+required-features = ["evals"]
+

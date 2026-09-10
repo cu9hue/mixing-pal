@@ -654,6 +654,10 @@ pub struct Turn {
     /// rather than the model answering. `answer` is empty and `called` holds
     /// whatever tool calls happened before the failure.
     pub error: Option<String>,
+    /// Wall-clock milliseconds of each provider round trip, in order, the
+    /// last one included when it failed. The latency target reads these;
+    /// the honesty and craft suites ignore them.
+    pub round_trip_ms: Vec<u64>,
 }
 
 impl Turn {
@@ -665,6 +669,10 @@ impl Turn {
             (Some(a), Some(b)) => a < b,
             _ => false,
         }
+    }
+
+    pub fn total_ms(&self) -> u64 {
+        self.round_trip_ms.iter().sum()
     }
 }
 
@@ -701,8 +709,10 @@ pub async fn ask_with(
     }];
     let mut called: Vec<String> = Vec::new();
     let mut calls: Vec<ToolCallRecord> = Vec::new();
+    let mut round_trip_ms: Vec<u64> = Vec::new();
 
     for _ in 0..MAX_ROUND_TRIPS {
+        let started = std::time::Instant::now();
         let completion = match build_body(s, &messages) {
             Ok(mut body) => {
                 if let Some(t) = temperature {
@@ -712,6 +722,7 @@ pub async fn ask_with(
             }
             Err(e) => Err(e),
         };
+        round_trip_ms.push(started.elapsed().as_millis() as u64);
         let completion = match completion {
             Ok(c) => c,
             Err(e) => {
@@ -721,6 +732,7 @@ pub async fn ask_with(
                     calls,
                     truncated: false,
                     error: Some(e),
+                    round_trip_ms,
                 };
             }
         };
@@ -731,6 +743,7 @@ pub async fn ask_with(
                 calls,
                 truncated: false,
                 error: None,
+                round_trip_ms,
             };
         }
         messages.push(ChatMessage {
@@ -765,5 +778,6 @@ pub async fn ask_with(
         calls,
         truncated: true,
         error: None,
+        round_trip_ms,
     }
 }
