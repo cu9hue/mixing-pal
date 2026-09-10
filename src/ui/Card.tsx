@@ -8,6 +8,7 @@ import { Noticed } from "./Noticed";
 import { Conversation } from "./Conversation";
 import { WhatICanSee } from "./WhatICanSee";
 import { Connection } from "./Connection";
+import { Advanced } from "./Advanced";
 
 export function Card({
   state,
@@ -21,6 +22,8 @@ export function Card({
   onAnswer,
   onCollapse,
   onShowSetup,
+  settingsOpen,
+  onCloseSettings,
 }: {
   state: SetState;
   lastSeen: number | null;
@@ -33,6 +36,8 @@ export function Card({
   onAnswer: () => void;
   onCollapse: () => void;
   onShowSetup: (step: SetupStep) => void;
+  settingsOpen: boolean;
+  onCloseSettings: () => void;
 }) {
   // One drag mechanism for the whole card: everything inside drags the
   // window, except buttons, inputs, and summaries (Tauri blocks those
@@ -42,6 +47,15 @@ export function Card({
   return (
     <div className="card" data-tauri-drag-region="deep">
       <Header connected={connected} onCollapse={onCollapse} />
+      {/* Settings replaces what is below the header, but hides it rather
+          than unmounting it: the conversation and any answer in flight live
+          in Conversation's state, the same reason App hides the card. */}
+      {settingsOpen && (
+        <div className="card__settings">
+          <Advanced scriptVersion={state.scriptVersion} onClose={onCloseSettings} />
+        </div>
+      )}
+      <div className={`card__main${settingsOpen ? " card__main--hidden" : ""}`}>
       <GoalRow goal={goal} onGoalChange={onGoalChange} />
       <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />
       {nudge !== null && connected && (
@@ -54,6 +68,7 @@ export function Card({
         onAnswer={onAnswer}
       />
       <WhatICanSee state={state} />
+      </div>
     </div>
   );
 }

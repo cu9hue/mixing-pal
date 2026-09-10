@@ -23,6 +23,11 @@ export default function App() {
   const [nudges, setNudges] = useState(EMPTY_NUDGE_STATE);
   const [turnRunning, setTurnRunning] = useState(false);
   const [unread, setUnread] = useState(false);
+  // Settings… from the app menu. The pane replaces the card's content and
+  // opens the card if she picked it from the pill.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpenRef = useRef(false);
+  settingsOpenRef.current = settingsOpen;
 
   const dispatch = useCallback((event: ModeEvent) => {
     setMode((current) => nextMode(current, event));
@@ -115,6 +120,8 @@ export default function App() {
   // forced setup used to leave the app rendering a pill into a 44px window
   // with no way out.
   const view: WindowMode = setupOpen ? "setup" : mode === "setup" ? "card" : mode;
+  const setupOpenRef = useRef(setupOpen);
+  setupOpenRef.current = setupOpen;
 
   const finishSetup = useCallback(() => {
     setGoalAnswered(true);
@@ -185,12 +192,29 @@ export default function App() {
   // answer left `unread` true forever, and the blur rule -- which requires
   // !unread -- never collapsed the card again.
   useEffect(() => {
-    if (view === "card") setUnread(false);
-  }, [view]);
+    if (view === "card" && !settingsOpen) setUnread(false);
+  }, [view, settingsOpen]);
+
+  useEffect(() => {
+    const stop = listen("menu://settings", () => {
+      // Setup owns the window until it finishes; a pane queued behind it
+      // would pop up the moment she gets past the last step.
+      if (setupOpenRef.current) return;
+      setSettingsOpen(true);
+      dispatch({ type: "settings_opened" });
+    });
+    return () => {
+      stop.then((unlisten) => unlisten());
+    };
+  }, [dispatch]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") dispatch({ type: "escape" });
+      if (e.key !== "Escape") return;
+      // One step back at a time: Escape leaves Settings before it leaves
+      // the card.
+      if (settingsOpenRef.current) setSettingsOpen(false);
+      else dispatch({ type: "escape" });
     };
     window.addEventListener("keydown", onKey);
     return () => {
@@ -299,6 +323,8 @@ export default function App() {
           }}
           onCollapse={() => dispatch({ type: "chevron_closed" })}
           onShowSetup={setForcedStep}
+          settingsOpen={settingsOpen}
+          onCloseSettings={() => setSettingsOpen(false)}
         />
       </div>
       {view === "pill" && (

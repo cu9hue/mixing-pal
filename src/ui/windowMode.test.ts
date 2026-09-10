@@ -11,6 +11,7 @@ const EVERY_EVENT: ModeEvent[] = [
   { type: "escape" },
   { type: "chevron_closed" },
   { type: "setup_finished" },
+  { type: "settings_opened" },
 ];
 
 describe("nextMode", () => {
@@ -25,12 +26,13 @@ describe("nextMode", () => {
   // window over Live, and a nudge is unprompted, which makes taking the
   // screen for it the most intrusive thing this app could do. The pill's
   // unread glow carries both instead.
-  it("opens the card on nothing but her own click", () => {
+  it("opens the card on nothing but her own click or her Settings pick", () => {
     for (const event of EVERY_EVENT) {
-      if (event.type === "pill_clicked") continue;
+      if (event.type === "pill_clicked" || event.type === "settings_opened") continue;
       expect(nextMode("pill", event)).toBe("pill");
     }
     expect(nextMode("pill", { type: "pill_clicked" })).toBe("card");
+    expect(nextMode("pill", { type: "settings_opened" })).toBe("card");
   });
 
   it("collapses to the pill on escape", () => {

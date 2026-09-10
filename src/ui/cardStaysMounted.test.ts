@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const SRC = fileURLToPath(new URL("..", import.meta.url));
 const app = readFileSync(SRC + "App.tsx", "utf8");
 const css = readFileSync(SRC + "ui/Card.css", "utf8");
+const card = readFileSync(SRC + "ui/Card.tsx", "utf8");
 
 /**
  * The conversation lives in `Conversation`'s own state, and `App` swaps
@@ -42,5 +43,20 @@ describe("the card stays mounted across a collapse", () => {
   it("never renders Card behind a view check", () => {
     const guarded = /(\?|&&)\s*\(?\s*<Card\b/;
     expect(app).not.toMatch(guarded);
+  });
+});
+
+/**
+ * Settings replaces the card's content the same way: the conversation is
+ * hidden with a class, never rendered behind the settings check.
+ */
+describe("the conversation stays mounted while Settings is open", () => {
+  it("hides the card's main column with CSS", () => {
+    expect(css).toMatch(/\.card__main--hidden\s*\{[^}]*display:\s*none/);
+    expect(card).toContain("card__main--hidden");
+  });
+
+  it("never renders Conversation behind the settings check", () => {
+    expect(card).not.toMatch(/settingsOpen[^<]*<Conversation\b/);
   });
 });
