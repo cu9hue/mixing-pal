@@ -10,16 +10,28 @@ import { SetState } from "../live/model";
  * is where a debugger belongs.
  *
  * Argument names come from the tool schema in src-tauri/src/tools/mod.rs.
- * Both tools take `track`; get_clip_notes also takes `clip`.
+ * Every tool that takes `track` gets a phrase with the track's name and a
+ * fallback without it; the set-wide tools have one phrase each. One verb
+ * per tool, all of them about reading the set: the app hears no audio, so
+ * nothing here may say it is listening.
  */
 const PHRASE: Record<string, (trackName: string) => string> = {
   get_track_detail: (t) => `reading ${t}…`,
   get_clip_notes: (t) => `reading the notes in ${t}…`,
+  get_arrangement_notes: (t) => `reading the arrangement notes in ${t}…`,
+  get_device_params: (t) => `looking at a device on ${t}…`,
+  get_rack_contents: (t) => `opening the rack on ${t}…`,
 };
 
 const FALLBACK: Record<string, string> = {
   get_track_detail: "reading a track…",
   get_clip_notes: "reading the clip…",
+  get_arrangement_notes: "reading an arrangement clip…",
+  get_device_params: "looking at a device…",
+  get_rack_contents: "opening a rack…",
+  get_clips: "listing the clips…",
+  get_arrangement: "mapping the arrangement…",
+  get_device_chains: "listing the devices…",
 };
 
 function trackName(args: unknown, state: SetState): string | null {

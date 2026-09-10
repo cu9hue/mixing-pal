@@ -149,6 +149,8 @@ export function Conversation({
   const [thread, setThread] = useState<Exchange[]>([]);
   const [input, setInput] = useState("");
   const [progress, setProgress] = useState<string | null>(null);
+  // Reads this turn, for the waiting line. Reset when a turn starts.
+  const [toolsCalled, setToolsCalled] = useState(0);
   const [busy, setBusy] = useState(false);
 
   // The identity the thread on screen is filed under, and the line above
@@ -276,6 +278,7 @@ export function Conversation({
     startedAt.current = Date.now();
     setElapsedMs(0);
     setBusy(true);
+    setToolsCalled(0);
     onTurnRunningChange(true);
 
     // The context block rides ahead of the question as an ordinary user
@@ -306,9 +309,10 @@ export function Conversation({
         },
       };
 
-      const out = await runTurn(tauriProvider, tracked, turn, (name, args) =>
-        setProgress(progressLabel(name, args, state)),
-      );
+      const out = await runTurn(tauriProvider, tracked, turn, (name, args) => {
+        setToolsCalled((n) => n + 1);
+        setProgress(progressLabel(name, args, state));
+      });
       // The model's note changes ride at the end of its answer and are not
       // part of what she reads or what the history keeps.
       const { answer, delta } = noteDelta(out.text);
@@ -334,7 +338,7 @@ export function Conversation({
     }
   }
 
-  const waiting = waitingLabel({ busy, toolProgress: progress, elapsedMs });
+  const waiting = waitingLabel({ busy, toolProgress: progress, toolsCalled, elapsedMs });
 
   return (
     <>
