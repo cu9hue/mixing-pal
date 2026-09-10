@@ -22,25 +22,6 @@
   overflow-y: auto;
 }
 
-/* Advanced brings its own padding and surface. */
-.wics__panel--advanced {
-  padding: 0;
-  max-height: 320px;
-}
-
-/* Quiet on purpose: nothing in Advanced is part of anyone's day. */
-.wics__advanced {
-  margin-top: 12px;
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  font-size: 11px;
-  letter-spacing: 0.4px;
-  color: var(--text-faint);
-  cursor: pointer;
-}
-
 .wics__line {
   font-size: 12px;
   line-height: 1.6;

@@ -98,7 +98,9 @@ export type ModeEvent =
   | { type: "pill_clicked" }
   | { type: "escape" }
   | { type: "chevron_closed" }
-  | { type: "setup_finished" };
+  | { type: "setup_finished" }
+  // She picked Settings… from the app menu. Hers as much as a click.
+  | { type: "settings_opened" };
 
 /**
  * The card closes only when she closes it.
@@ -136,6 +138,7 @@ export function nextMode(mode: WindowMode, event: ModeEvent): WindowMode {
     // can do. The pill's unread glow carries both instead, and it only has a
     // job if the card can stay shut.
     case "pill_clicked":
+    case "settings_opened":
       return "card";
     case "escape":
     case "chevron_closed":

@@ -765,6 +765,37 @@ fn clear_trace(state: tauri::State<Arc<Mutex<Trace>>>) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// The macOS app menu with one addition: Settings…, ⌘, which opens the
+/// pane of model-calling fields that used to hide behind "What I can see".
+/// Those fields are not part of anyone's day, so they live where every Mac
+/// app keeps its preferences and nowhere on the card. The default menu is
+/// kept whole: it carries the Edit menu, without which ⌘C and ⌘V do
+/// nothing in a text field.
+const SETTINGS_MENU_ID: &str = "settings";
+/// Emitted to the window when she picks Settings…; App opens the pane.
+const SETTINGS_EVENT: &str = "menu://settings";
+
+fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    let menu = Menu::default(app)?;
+    let settings = MenuItem::with_id(app, SETTINGS_MENU_ID, "Settings…", true, Some("CmdOrCtrl+,"))?;
+    // The first submenu is the app's own: About, a separator, then Services
+    // and the rest. Settings goes under About, where macOS puts it.
+    if let Some(app_menu) = menu.items()?.first().and_then(|i| i.as_submenu().cloned()) {
+        app_menu.insert(&settings, 2)?;
+        app_menu.insert(&PredefinedMenuItem::separator(app)?, 3)?;
+    }
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() == SETTINGS_MENU_ID {
+            if let Err(e) = app.emit(SETTINGS_EVENT, ()) {
+                eprintln!("menu: could not announce Settings ({e})");
+            }
+        }
+    });
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -785,6 +816,7 @@ pub fn run() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+            install_menu(&handle)?;
             let coalescer = Arc::new(Mutex::new(Coalescer::new()));
             // Managed state so the `snapshot` command can reach the same
             // coalescer the receive loop feeds.

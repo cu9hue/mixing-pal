@@ -2,7 +2,6 @@ import { useState } from "react";
 import "./WhatICanSee.css";
 import { SetState } from "../live/model";
 import { summaryLine, setLine } from "./summaryLine";
-import { Advanced } from "./Advanced";
 import wireVersion from "../../shared/wire-version.json";
 
 // Same persistence pattern as the goal: survive a webview reload, and never
@@ -35,11 +34,6 @@ function saveExpanded(expanded: boolean): void {
  */
 export function WhatICanSee({ state }: { state: SetState }) {
   const [expanded, setExpanded] = useState(loadExpanded);
-  // The one door to Advanced, and the only way to enter an API key. It is
-  // deliberately not persisted: this pane is a pressure valve, not a place
-  // to leave open. Advanced replaces the panel rather than sitting under
-  // it, because the card is 520px tall at the very most.
-  const [advanced, setAdvanced] = useState(false);
 
   const indices = Object.keys(state.tracks)
     .map(Number)
@@ -57,11 +51,7 @@ export function WhatICanSee({ state }: { state: SetState }) {
       }}
     >
       <summary className="wics__summary">What I can see</summary>
-      <div className={`wics__panel${advanced ? " wics__panel--advanced" : ""}`}>
-        {advanced ? (
-          <Advanced scriptVersion={state.scriptVersion} onClose={() => setAdvanced(false)} />
-        ) : (
-          <>
+      <div className="wics__panel">
             <div className="wics__line">{summaryLine(state, indices.length)}</div>
             {set !== null && <div className="wics__line">{set}</div>}
             <div className="wics__line">
@@ -94,11 +84,6 @@ export function WhatICanSee({ state }: { state: SetState }) {
                 ))}
               </tbody>
             </table>
-            <button className="wics__advanced" onClick={() => setAdvanced(true)}>
-              Advanced…
-            </button>
-          </>
-        )}
       </div>
     </details>
   );

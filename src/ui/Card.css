@@ -200,6 +200,26 @@
   margin-bottom: 5px;
 }
 
+/* Everything under the header, as one flex column so the body can still
+   take the remaining height, and one class that hides it while Settings
+   is up. See cardStaysMounted.test.ts for why it hides rather than goes. */
+.card__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.card__main--hidden {
+  display: none;
+}
+
+.card__settings {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
 .card__body {
   padding: 15px;
   overflow-y: auto;
