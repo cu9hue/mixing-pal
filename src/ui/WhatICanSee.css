@@ -4,8 +4,8 @@
 }
 
 .wics__summary {
-  padding: 10px 15px;
-  font-size: 11px;
+  padding: var(--space-2-5) var(--space-4);
+  font-size: var(--text-xs);
   letter-spacing: 0.4px;
   color: var(--text-muted);
   cursor: pointer;
@@ -17,22 +17,22 @@
 }
 
 .wics__panel {
-  padding: 0 15px 13px;
+  padding: 0 var(--space-4) var(--space-3);
   max-height: 220px;
   overflow-y: auto;
 }
 
 .wics__line {
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.6;
   color: var(--text-muted);
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
 .wics__table {
   width: 100%;
   border-collapse: collapse;
-  font: 12px ui-monospace, monospace;
+  font: var(--text-sm) ui-monospace, monospace;
   color: var(--text-secondary);
 }
 
@@ -40,11 +40,11 @@
   text-align: left;
   font-weight: 400;
   color: var(--text-faint);
-  padding-bottom: 4px;
+  padding-bottom: var(--space-1);
 }
 
 .wics__table td {
-  padding-right: 10px;
+  padding-right: var(--space-2-5);
   white-space: nowrap;
 }
 

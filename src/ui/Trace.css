@@ -2,35 +2,35 @@
    than the inline greys it shipped with. Same button as Settings; the app
    has no shared button yet, and two copies is where one would start. */
 .trace {
-  margin-top: 12px;
+  margin-top: var(--space-3);
   border-top: 1px solid var(--border);
-  padding-top: 10px;
+  padding-top: var(--space-2-5);
 }
 
 .trace__panel {
-  padding-top: 8px;
+  padding-top: var(--space-2);
 }
 
 .trace__hint {
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--text-muted);
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
 .trace__toolbar {
   display: flex;
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: var(--space-1-5);
+  margin-bottom: var(--space-2);
 }
 
 .trace__button {
   background: var(--surface-sunken);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
-  padding: 5px 10px;
+  padding: var(--space-1) var(--space-2-5);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text);
   cursor: pointer;
 }
@@ -50,27 +50,27 @@
 }
 
 .trace__empty {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
 .trace__step {
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
-  padding: 8px;
-  margin-bottom: 8px;
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 .trace__step-head {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
 .trace__flags {
-  font-size: 12px;
-  margin: 4px 0;
+  font-size: var(--text-sm);
+  margin: var(--space-1) 0;
   color: var(--ok);
 }
 
@@ -83,9 +83,9 @@
   overflow: auto;
   background: var(--surface-sunken);
   color: var(--text-secondary);
-  padding: 6px;
+  padding: var(--space-1-5);
   margin: 0;
-  font-size: 11px;
+  font-size: var(--text-xs);
   white-space: pre-wrap;
   word-break: break-word;
 }

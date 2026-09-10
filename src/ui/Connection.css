@@ -1,7 +1,7 @@
 .banner {
-  padding: 12px 15px;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
-  font-size: 13.5px;
+  font-size: var(--text-md);
   line-height: 1.6;
   color: var(--text-secondary);
 }
@@ -9,11 +9,11 @@
 .banner__label {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
   letter-spacing: 0.5px;
   text-transform: uppercase;
-  margin-bottom: 7px;
+  margin-bottom: var(--space-2);
 }
 
 .banner__dot {
@@ -46,18 +46,18 @@
 /* The port number, the two version numbers -- available, never leading.
    Nobody reads a port number and works out what to do with it. */
 .banner__detail {
-  font: 11px ui-monospace, monospace;
+  font: var(--text-xs) ui-monospace, monospace;
   color: var(--text-faint);
-  margin-top: 7px;
+  margin-top: var(--space-2);
 }
 
 .banner__action {
   display: block;
   background: none;
   border: none;
-  padding: 8px 0 0;
+  padding: var(--space-2) 0 0;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
   color: var(--accent);
   cursor: pointer;
 }

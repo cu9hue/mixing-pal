@@ -1,5 +1,5 @@
 /*
- * The one place colour, radius, and type scale live.
+ * The one place colour, radius, type, and spacing live.
  *
  * Direction is "Composed": the card is its own object sitting above Live,
  * not a panel that lost its window. That means a surface deeper than
@@ -52,6 +52,31 @@
   --shadow-card: 0 10px 34px rgba(0, 0, 0, 0.6);
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+
+  /* Type, in rem so her system text size reaches the card. Five sizes,
+     11 to 15px at the default 16px root, which is the ladder the card
+     already used; a wider ratio would reshape a 380px card that is read
+     from the corner of an eye. A stylesheet never writes a size in px:
+     theme.test.ts holds that. */
+  --text-xs: 0.6875rem;
+  --text-sm: 0.75rem;
+  --text-md: 0.8125rem;
+  --text-lg: 0.875rem;
+  --text-xl: 0.9375rem;
+
+  /* Spacing, in 2px steps to 16 and 4px past it. Padding, margin, and gap
+     come from here and nowhere else; the odd values the card had (5, 7, 9,
+     11, 13, 15) each moved one pixel to the nearest step. */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-3-5: 14px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
 }
 
 /*

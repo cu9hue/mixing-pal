@@ -23,8 +23,8 @@
 .card__header {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 11px 15px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
 }
 
@@ -74,7 +74,7 @@
 .card__live {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex: 1;
 }
 
@@ -94,8 +94,8 @@
 .card__goal-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 15px;
+  gap: var(--space-2-5);
+  padding: var(--space-2) var(--space-4);
 }
 
 .card__goal-label {
@@ -110,7 +110,7 @@
   border: none;
   padding: 0;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
   color: var(--text-muted);
   text-align: left;
 }
@@ -118,7 +118,7 @@
 .card__goal {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   cursor: pointer;
   border-radius: 4px;
 }
@@ -137,7 +137,7 @@
 
 .card__goal-pencil {
   flex: none;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--glyph-faint);
 }
 
@@ -157,13 +157,13 @@
    when the model adds a bullet. */
 .notes__chip {
   flex: none;
-  margin-left: 6px;
+  margin-left: var(--space-1-5);
   background: none;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
-  padding: 2px 8px;
+  padding: var(--space-0-5) var(--space-2);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 0.4px;
   color: var(--text-muted);
   cursor: pointer;
@@ -208,7 +208,7 @@
   background: none;
   border: none;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--glyph-faint);
   cursor: pointer;
 }
@@ -220,9 +220,9 @@
 
 .card__noticed {
   display: flex;
-  gap: 11px;
+  gap: var(--space-3);
   align-items: flex-start;
-  padding: 13px 15px;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
 }
 
@@ -240,19 +240,19 @@
 }
 
 .card__noticed-text {
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1.6;
   color: var(--text-secondary);
 }
 
 .card__label {
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 0.4px;
   color: var(--text-muted);
 }
 
 .card__noticed-body .card__label {
-  margin-bottom: 5px;
+  margin-bottom: var(--space-1);
 }
 
 /* Everything under the header, as one flex column so the body can still
@@ -276,7 +276,7 @@
 }
 
 .card__body {
-  padding: 15px;
+  padding: var(--space-4);
   overflow-y: auto;
   flex: 1;
   min-height: 0;
@@ -286,35 +286,35 @@
    them: an older answer is still the same text at the same weight, just
    further up. */
 .card__exchange + .card__exchange {
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: var(--space-3-5);
+  padding-top: var(--space-3-5);
   border-top: 1px solid var(--border);
 }
 
 /* Above a restored thread: how much came back and how old it is. As dim
    as the disclaimer; it is a fact about the file, not part of the thread. */
 .card__recap {
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 0.4px;
   color: var(--text-faint);
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
 .card__question {
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1.5;
   color: var(--text-muted);
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
 /* The empty card: one line of what to ask, and three questions dressed as
    questions she already asked, in the same step and size. Clicking one
    fills the input; nothing is sent on her behalf. */
 .card__empty-line {
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1.5;
   color: var(--text-faint);
-  margin-bottom: 10px;
+  margin-bottom: var(--space-2-5);
 }
 
 .card__example {
@@ -322,9 +322,9 @@
   background: none;
   border: none;
   padding: 0;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1.5;
   color: var(--text-muted);
   text-align: left;
@@ -340,13 +340,13 @@
    dimmer and smaller than this -- that contrast is how she can tell what
    was read from what was generated. */
 .card__answer {
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1.68;
   color: var(--text);
 }
 
 .card__paragraph {
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-2-5);
 }
 
 .card__paragraph:last-child {
@@ -356,25 +356,25 @@
 .card__subhead {
   font-weight: 600;
   opacity: 0.85;
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-1-5);
 }
 
 .card__list {
-  margin: 2px 0 10px;
-  padding-left: 20px;
+  margin: var(--space-0-5) 0 var(--space-2-5);
+  padding-left: var(--space-5);
 }
 
 .card__code,
 .card__code-block {
-  font: 12px ui-monospace, monospace;
+  font: var(--text-sm) ui-monospace, monospace;
   background: var(--surface-overlay);
   border-radius: 4px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
 }
 
 .card__code-block {
   display: block;
-  padding: 8px;
+  padding: var(--space-2);
   overflow-x: auto;
 }
 
@@ -383,20 +383,20 @@
    word a line. The window never grows to fit a table. */
 .card__table-wrap {
   overflow-x: auto;
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-2-5);
 }
 
 .card__table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1.5;
 }
 
 .card__table th,
 .card__table td {
   min-width: 72px;
-  padding: 5px 8px 5px 0;
+  padding: var(--space-1) var(--space-2) var(--space-1) 0;
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--border);
@@ -410,15 +410,15 @@
 .card__fence {
   background: var(--surface-overlay);
   border-radius: 5px;
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   color: var(--text-muted);
 }
 
 .card__progress {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: var(--space-2);
+  font-size: var(--text-md);
   color: var(--text-muted);
 }
 
@@ -445,19 +445,19 @@
 }
 
 .card__error {
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1.55;
   color: var(--text-secondary);
   background: rgba(224, 108, 92, 0.1);
   border: 1px solid rgba(224, 108, 92, 0.28);
   border-radius: var(--radius-control);
-  padding: 10px 12px;
+  padding: var(--space-2-5) var(--space-3);
   /* Transport errors quote a URL, which has no break points of its own. */
   overflow-wrap: anywhere;
 }
 
 .card__footer {
-  padding: 12px 15px;
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border);
 }
 
@@ -467,9 +467,9 @@
   background: var(--surface-sunken);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-2-5);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--text-lg);
   color: var(--text);
   outline: none;
 }
@@ -478,20 +478,25 @@
   color: var(--text-faint);
 }
 
+.card__input:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .card__input:focus {
   border-color: var(--border-strong);
 }
 
 .card__disclaimer {
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.5;
   color: var(--text-faint);
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 /* The note list, opened by the chip in the set's row and closed by default. */
 .notes__panel {
-  padding: 0 15px 10px;
+  padding: 0 var(--space-4) var(--space-2-5);
   max-height: 180px;
   overflow-y: auto;
 }
@@ -499,11 +504,11 @@
 .notes__bullet {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--text-secondary);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
 }
 
 /* The model's words until she touches them. */
@@ -513,7 +518,7 @@
 
 .notes__kind {
   flex: none;
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 0.4px;
   color: var(--text-faint);
   min-width: 48px;
@@ -545,7 +550,7 @@
   justify-content: center;
   min-width: 24px;
   min-height: 24px;
-  margin: -4px 0;
+  margin: calc(-1 * var(--space-1)) 0;
   align-self: center;
   color: var(--glyph-faint);
 }
@@ -557,13 +562,13 @@
 
 .notes__add {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
-  margin-top: 6px;
+  margin-top: var(--space-1-5);
 }
 
 .notes__kind-pick {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
@@ -573,9 +578,9 @@
   background: var(--surface-sunken);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 3px 6px;
+  padding: var(--space-1) var(--space-1-5);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text);
   outline: none;
 }

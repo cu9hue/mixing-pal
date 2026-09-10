@@ -415,7 +415,10 @@ export function Conversation({
           ref={inputRef}
           className="card__input"
           value={input}
-          placeholder="Ask about the set…"
+          // Enter during a turn used to do nothing, silently. One question at
+          // a time is the rule, so the field says so and stops taking one.
+          disabled={busy}
+          placeholder={busy ? "Answering. Ask the next one after." : "Ask about the set…"}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
         />
