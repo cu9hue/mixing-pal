@@ -10,7 +10,7 @@ import { Exchange, begin, complete, fail } from "./thread";
 import { loadThread, saveThread } from "../model/threads";
 import { SWITCH_HOLD_MS, ThreadKey, carryNote, classify, historyFrom, keyFor, recapLine } from "./threadStore";
 import { Note, emptyNote, mergeNote, noteDelta } from "../notes/note";
-import { NotesRow } from "./NotesRow";
+import { SetRow } from "./SetRow";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -137,11 +137,13 @@ const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
 export function Conversation({
   state,
   goal,
+  onGoalChange,
   onTurnRunningChange,
   onAnswer,
 }: {
   state: SetState;
   goal: string;
+  onGoalChange: (value: string) => void;
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
 }) {
@@ -342,7 +344,16 @@ export function Conversation({
 
   return (
     <>
-      <NotesRow key={key === null ? "" : `${key.id ?? ""}:${key.path ?? ""}`} note={note} onChange={changeNote} />
+      {/* The set's row lives here, not in Card, because the note is this
+          component's state. Keyed on the thread key so a half-typed edit
+          cannot land in another set. */}
+      <SetRow
+        key={key === null ? "" : `${key.id ?? ""}:${key.path ?? ""}`}
+        goal={goal}
+        onGoalChange={onGoalChange}
+        note={note}
+        onNoteChange={changeNote}
+      />
       <div
         className="card__body"
         data-tauri-drag-region="false"
