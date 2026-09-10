@@ -21,11 +21,18 @@
   --border-strong: rgba(255, 255, 255, 0.12);
 
   /* Four steps, brightest to faintest. The model's prose is the brightest
-     thing in the app; everything the app measured is dimmer than it. */
+     thing in the app; everything the app measured is dimmer than it. The
+     faint step is the floor for a sentence: 4.6:1 on the raised surface,
+     which is what WCAG asks of body text. It was #666c74, 3.2:1 there,
+     and used for eight kinds of sentence; theme.test.ts holds the floor. */
   --text: #e8e9ec;
   --text-secondary: #c3c7cd;
   --text-muted: #8b9099;
-  --text-faint: #666c74;
+  --text-faint: #80868f;
+  /* For glyphs only, never words: the pencil, the ×, the chevron. A
+     control's mark needs 3:1, and this clears it while staying quieter
+     than any sentence. */
+  --glyph-faint: #666c74;
 
   /* At most twice in any one view. A third use is decoration. */
   --accent: #f2b544;

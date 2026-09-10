@@ -98,3 +98,47 @@ describe("design tokens", () => {
     }
   });
 });
+
+/** WCAG relative luminance of a #rrggbb colour. */
+function luminance(hex: string): number {
+  const channel = (i: number) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+}
+
+function contrast(fg: string, bg: string): number {
+  const [a, b] = [luminance(fg), luminance(bg)].sort((x, y) => y - x);
+  return (a + 0.05) / (b + 0.05);
+}
+
+/** The hex value theme.css gives a token, or a failure naming it. */
+function token(name: string): string {
+  const theme = readFileSync(join(SRC, "ui/theme.css"), "utf8");
+  const m = theme.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`));
+  if (m === null) throw new Error(`${name} is not a plain hex token in theme.css`);
+  return m[1];
+}
+
+/**
+ * The text steps are used for sentences on both surfaces, so the faintest
+ * of them has to clear 4.5:1 on the raised one, the harder of the two. The
+ * glyph step is for marks, where 3:1 is the bar. A retune that drops
+ * either below its bar goes red here instead of in a producer's eyes.
+ */
+describe("text contrast", () => {
+  it("keeps every text step readable as body copy on both surfaces", () => {
+    for (const step of ["--text", "--text-secondary", "--text-muted", "--text-faint"]) {
+      for (const surface of ["--surface", "--surface-raised", "--surface-sunken"]) {
+        expect(contrast(token(step), token(surface)), `${step} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("keeps the glyph step visible as a control mark", () => {
+    for (const surface of ["--surface", "--surface-raised"]) {
+      expect(contrast(token("--glyph-faint"), token(surface)), surface).toBeGreaterThanOrEqual(3);
+    }
+  });
+});

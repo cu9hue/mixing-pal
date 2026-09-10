@@ -123,11 +123,6 @@
   border-radius: 4px;
 }
 
-.card__goal:focus-visible {
-  outline: 1px solid var(--border-strong);
-  outline-offset: 3px;
-}
-
 .card__goal-text {
   flex: 1;
   min-width: 0;
@@ -143,7 +138,7 @@
 .card__goal-pencil {
   flex: none;
   font-size: 12px;
-  color: var(--text-faint);
+  color: var(--glyph-faint);
 }
 
 .card__goal:hover .card__goal-pencil,
@@ -181,19 +176,45 @@
   color: var(--text-secondary);
 }
 
-.notes__chip:focus-visible {
+/* One focus ring for the whole card. There were three recipes and two
+   bare outline: none; a keyboard user met a different sign, or none, on
+   every second control. The accent is spent here on purpose: focus is one
+   element at a time, so it never breaks the two-per-view budget. */
+.card__input:focus-visible,
+.card__goal:focus-visible,
+.card__goal-input:focus-visible,
+.card__chevron:focus-visible,
+.card__dismiss:focus-visible,
+.notes__chip:focus-visible,
+.notes__text:focus-visible,
+.notes__delete:focus-visible,
+.notes__kind-pick:focus-visible,
+.notes__input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
+/* A 12px glyph is the sign, not the target: 24px square is the least a
+   pointer can be trusted to land on, and a miss here collapses the card
+   or drags the window. */
 .card__chevron,
 .card__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   background: none;
   border: none;
-  padding: 0 2px;
+  padding: 0;
   font-size: 12px;
-  color: var(--text-faint);
+  color: var(--glyph-faint);
   cursor: pointer;
+}
+
+.card__chevron:hover,
+.card__dismiss:hover {
+  color: var(--text-secondary);
 }
 
 .card__noticed {
@@ -364,18 +385,30 @@
 }
 
 .card__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
-/* Only the "Thinking…" form breathes. The tool line names a real track and
-   changes on its own as tools come and go, so it needs no sign of life. */
-.card__progress--thinking {
+/* Only the "Thinking…" form breathes, and only its dot: the words used to
+   fade with it, to 1.5:1 at the trough, so a slow turn's "3 reads so far
+   · 42s" was unreadable most of the time it was on screen. The tool line
+   names a real track and changes on its own as tools come and go, so it
+   needs no sign of life. */
+.card__progress--thinking::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
   animation: breathe 2s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .card__progress--thinking {
+  .card__progress--thinking::before {
     animation: none;
     opacity: 0.7;
   }
@@ -473,9 +506,23 @@
   text-align: left;
 }
 
+/* Same 24px floor as the chevron: a miss here deletes the wrong bullet.
+   Pulled in vertically so the row keeps its rhythm. */
 .notes__delete {
   flex: none;
-  color: var(--text-faint);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  margin: -4px 0;
+  align-self: center;
+  color: var(--glyph-faint);
+}
+
+.notes__delete:hover,
+.notes__text:hover {
+  color: var(--text);
 }
 
 .notes__add {
