@@ -61,4 +61,3 @@ required-features = ["evals"]
 [[test]]
 name = "latency"
 required-features = ["evals"]
-

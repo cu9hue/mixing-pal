@@ -658,6 +658,9 @@ pub struct Turn {
     /// last one included when it failed. The latency target reads these;
     /// the honesty and craft suites ignore them.
     pub round_trip_ms: Vec<u64>,
+    /// Wall-clock milliseconds from the start of `ask_with` to its return,
+    /// tool execution included. `round_trip_ms` is the provider share of it.
+    pub turn_ms: u64,
 }
 
 impl Turn {
@@ -695,6 +698,7 @@ pub async fn ask_with(
     context: &str,
     question: &str,
 ) -> Turn {
+    let turn_started = std::time::Instant::now();
     let ctx = ToolContext {
         coalescer: mirror(&f),
         query: Arc::new(Mutex::new(Some(fake_live(f).await))),
@@ -733,6 +737,7 @@ pub async fn ask_with(
                     truncated: false,
                     error: Some(e),
                     round_trip_ms,
+                    turn_ms: turn_started.elapsed().as_millis() as u64,
                 };
             }
         };
@@ -744,6 +749,7 @@ pub async fn ask_with(
                 truncated: false,
                 error: None,
                 round_trip_ms,
+                turn_ms: turn_started.elapsed().as_millis() as u64,
             };
         }
         messages.push(ChatMessage {
@@ -779,5 +785,6 @@ pub async fn ask_with(
         truncated: true,
         error: None,
         round_trip_ms,
+        turn_ms: turn_started.elapsed().as_millis() as u64,
     }
 }

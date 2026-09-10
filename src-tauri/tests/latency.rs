@@ -5,7 +5,12 @@
 //! mock provider and need no environment.
 //!
 //!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
-//!     cargo test --features evals --test latency -- --nocapture
+//!     cargo test --features evals --test latency a_two_tool -- --nocapture
+//!
+//! The run line's first number is the whole turn, tool execution against the
+//! fake Live included; `provider` is the model's share of it, and a
+//! `TRUNCATED` run means the model ran out of round trips, not that it was
+//! slow.
 
 mod common;
 
@@ -13,6 +18,7 @@ use std::time::Duration;
 
 use mixing_pal_lib::eval_api::Settings;
 use serde_json::{json, Value};
+
 use common::Turn;
 
 fn fixture() -> Value {
@@ -27,12 +33,16 @@ async fn mount_one_read_then_answer(server: &wiremock::MockServer) {
     use wiremock::{Mock, ResponseTemplate};
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "choices": [{ "message": { "role": "assistant", "tool_calls": [{
-                "id": "call_1", "type": "function",
-                "function": { "name": "get_track_detail", "arguments": "{\"track\":0}" }
-            }]}}]
-        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "choices": [{ "message": { "role": "assistant", "tool_calls": [{
+                        "id": "call_1", "type": "function",
+                        "function": { "name": "get_track_detail", "arguments": "{\"track\":0}" }
+                    }]}}]
+                }))
+                .set_delay(Duration::from_millis(150)),
+        )
         .up_to_n_times(1)
         .mount(server)
         .await;
@@ -63,7 +73,8 @@ async fn each_provider_round_trip_is_timed() {
 
     assert_eq!(turn.called, vec!["get_track_detail"]);
     assert_eq!(turn.round_trip_ms.len(), 2, "one reading per round trip: {:?}", turn.round_trip_ms);
-    assert_eq!(turn.total_ms(), turn.round_trip_ms.iter().sum::<u64>());
+    assert!(turn.round_trip_ms[0] >= 100, "{:?}", turn.round_trip_ms);
+    assert!(turn.turn_ms >= turn.total_ms(), "{:?}", (turn.turn_ms, turn.total_ms()));
 }
 
 #[tokio::test]
@@ -85,10 +96,10 @@ async fn a_failed_round_trip_is_still_timed() {
 }
 
 /// The question and the check. "Is there any compression on the drums?"
-/// reads the chain map, sees the rack marked [rack], and reads the rack:
-/// two tools, three round trips. A model that answers without the rack
-/// read has not done the work, however fast it was, so a run without that
-/// call fails outright rather than counting as a quick one.
+/// reads the chain map, sees the Drum Rack marked [rack], and reads the
+/// rack: two tools, three round trips. The rack read must come back whole,
+/// so a fast answer that guessed or hit a bad-arguments reply does not
+/// count, however fast it was.
 const QUESTION: &str = "is there any compression on the drums?";
 const REQUIRED_TOOL: &str = "get_rack_contents";
 const RUNS: usize = 5;
@@ -101,7 +112,8 @@ fn seconds(ms: u64) -> f64 {
 
 fn line(i: usize, t: &Turn) -> String {
     let mut s = format!(
-        "run {i}: {:.1}s  round trips {:?} ms  tools {:?}",
+        "run {i}: {:.1}s  provider {:.1}s  round trips {:?} ms  tools {:?}",
+        seconds(t.turn_ms),
         seconds(t.total_ms()),
         t.round_trip_ms,
         t.called
@@ -117,11 +129,12 @@ fn line(i: usize, t: &Turn) -> String {
 
 #[tokio::test]
 async fn a_two_tool_question_answers_within_the_budget() {
-    let context = common::context("eval-context.txt");
+    println!("model {}", common::settings().model);
+    let context = common::context("craft-context.txt");
     let mut turns: Vec<Turn> = Vec::with_capacity(RUNS);
     let mut report = String::new();
     for i in 0..RUNS {
-        let t = common::ask(fixture(), &context, QUESTION).await;
+        let t = common::ask(common::load("craft-set.json"), &context, QUESTION).await;
         let l = line(i, &t);
         println!("{l}");
         report.push_str(&l);
@@ -134,19 +147,19 @@ async fn a_two_tool_question_answers_within_the_budget() {
     let errors: Vec<&str> = turns.iter().filter_map(|t| t.error.as_deref()).collect();
     assert!(errors.is_empty(), "provider errors: {errors:?}\n{report}");
 
-    let mut totals: Vec<u64> = turns.iter().map(Turn::total_ms).collect();
+    let mut totals: Vec<u64> = turns.iter().map(|t| t.turn_ms).collect();
     totals.sort_unstable();
     let median = totals[RUNS / 2];
-    let slowest = totals[RUNS - 1];
-    println!("median {:.1}s  slowest {:.1}s", seconds(median), seconds(slowest));
 
     for (i, t) in turns.iter().enumerate() {
         assert!(!t.truncated, "run {i} ran out of round trips\n{report}");
+        assert!(!t.answer.trim().is_empty(), "run {i} answered nothing\n{report}");
         assert!(
-            t.called.iter().any(|c| c == REQUIRED_TOOL),
-            "run {i} answered without reading the rack\n{report}"
+            t.calls.iter().any(|c| c.name == REQUIRED_TOOL && c.missing_reason.is_none()),
+            "run {i} did not read the rack in full\n{report}"
         );
     }
+    println!("median {:.1}s  slowest {:.1}s", seconds(median), seconds(totals[RUNS - 1]));
     assert!(
         median < BUDGET.as_millis() as u64,
         "median {:.1}s is over the {}s budget\n{report}",
