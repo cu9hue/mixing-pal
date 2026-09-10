@@ -189,7 +189,8 @@
 .notes__text:focus-visible,
 .notes__delete:focus-visible,
 .notes__kind-pick:focus-visible,
-.notes__input:focus-visible {
+.notes__input:focus-visible,
+.card__example:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -304,6 +305,35 @@
   line-height: 1.5;
   color: var(--text-muted);
   margin-bottom: 12px;
+}
+
+/* The empty card: one line of what to ask, and three questions dressed as
+   questions she already asked, in the same step and size. Clicking one
+   fills the input; nothing is sent on her behalf. */
+.card__empty-line {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  margin-bottom: 10px;
+}
+
+.card__example {
+  display: block;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-bottom: 8px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.card__example:hover {
+  color: var(--text);
 }
 
 /* The largest and lightest text in the app. Everything the app measured is

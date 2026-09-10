@@ -11,6 +11,7 @@ import { loadThread, saveThread } from "../model/threads";
 import { SWITCH_HOLD_MS, ThreadKey, carryNote, classify, historyFrom, keyFor, recapLine } from "./threadStore";
 import { Note, emptyNote, mergeNote, noteDelta } from "../notes/note";
 import { SetRow } from "./SetRow";
+import { EXAMPLE_QUESTIONS } from "./examples";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -247,6 +248,8 @@ export function Conversation({
   // finish the job, but only while she is still at the bottom. Scrolling
   // up to an older answer unpins her, and nothing then pulls her away.
   const newest = useRef<HTMLDivElement>(null);
+  // So an example question can hand her the caret along with the words.
+  const inputRef = useRef<HTMLInputElement>(null);
   const pinned = useRef(true);
   useEffect(() => {
     if (pinned.current) newest.current?.scrollIntoView({ block: "start" });
@@ -368,6 +371,26 @@ export function Conversation({
           </div>
         )}
         {recap !== null && <div className="card__recap">{recap}</div>}
+        {/* First launch, and any set with no thread yet: a header, a goal,
+            and an input said nothing about what this thing answers. The
+            examples are questions it can, phrased the way she would. */}
+        {thread.length === 0 && recap === null && waiting === null && (
+          <div className="card__empty">
+            <div className="card__empty-line">Ask about the set you have open. For example:</div>
+            {EXAMPLE_QUESTIONS.map((q) => (
+              <button
+                key={q}
+                className="card__example"
+                onClick={() => {
+                  setInput(q);
+                  inputRef.current?.focus();
+                }}
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        )}
         {thread.map((x, i) => (
           <div
             key={i}
@@ -389,6 +412,7 @@ export function Conversation({
       </div>
       <div className="card__footer">
         <input
+          ref={inputRef}
           className="card__input"
           value={input}
           placeholder="Ask about the set…"
