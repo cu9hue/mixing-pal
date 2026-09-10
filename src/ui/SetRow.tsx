@@ -82,9 +82,12 @@ export function SetRow({
   return (
     <div className="set-row">
       <div className="card__goal-row">
-        <span className="card__label card__goal-label">Goal</span>
+        <label htmlFor="goal" className="card__label card__goal-label">
+          Goal
+        </label>
         {editingGoal ? (
           <input
+            id="goal"
             className="card__goal-input"
             autoFocus
             value={goal}
@@ -110,13 +113,14 @@ export function SetRow({
           className={`notes__chip${open ? " notes__chip--open" : ""}`}
           onClick={toggle}
           aria-expanded={open}
+          aria-controls="notes-panel"
           title={open ? "Hide the notes" : "Show the notes"}
         >
           Notes · {note.bullets.length}
         </button>
       </div>
       {open && (
-        <div className="notes__panel" data-tauri-drag-region="false">
+        <div id="notes-panel" className="notes__panel" data-tauri-drag-region="false">
           {note.bullets.map((b) => (
             <div key={b.id} className={`notes__bullet${b.hers ? "" : " notes__bullet--model"}`}>
               <span className="notes__kind">{b.kind}</span>
@@ -148,7 +152,12 @@ export function SetRow({
             </div>
           ))}
           <div className="notes__add">
-            <select className="notes__kind-pick" value={kind} onChange={(e) => setKind(e.target.value as BulletKind)}>
+            <select
+              className="notes__kind-pick"
+              aria-label="Note kind"
+              value={kind}
+              onChange={(e) => setKind(e.target.value as BulletKind)}
+            >
               {BULLET_KINDS.map((k) => (
                 <option key={k} value={k}>
                   {k}
