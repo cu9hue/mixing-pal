@@ -1,7 +1,9 @@
 /*
- * Three of the four states are a 34px disc in a 52px window. Only the
- * failure state has words -- a broken connection is the one thing Live
- * will never tell her.
+ * Every state is a 34px disc in a 52px window. The failure state used to
+ * carry the words "not connected" at auto width, and the 52px window cut
+ * them to "ot conne": the window never grew with the pill. A red dot and
+ * the tooltip say it now, and the card says it in full the moment she
+ * opens it.
  *
  * The window is transparent, so every shadow here has to FIT inside the
  * 9px of margin the window leaves around the disc. A shadow that reaches
@@ -71,9 +73,6 @@
 }
 
 .pill--disconnected .pill__body {
-  width: auto;
-  height: auto;
-  padding: 5px 12px;
   border-color: rgba(224, 108, 92, 0.35);
 }
 
@@ -81,8 +80,3 @@
   background: var(--error);
 }
 
-.pill__label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
