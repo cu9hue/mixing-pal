@@ -37,6 +37,9 @@ export function Advanced({
   // the two together is what left this pane blank with no way out.
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Saving used to close the pane, which was the only sign it had worked.
+  // The pane stays; the sign is a word.
+  const [savedNote, setSavedNote] = useState<string | null>(null);
   const [connector, setConnector] = useState<ConnectorView | null>(null);
   const [connectorNote, setConnectorNote] = useState<string | null>(null);
   const [reinstalling, setReinstalling] = useState(false);
@@ -97,7 +100,7 @@ export function Advanced({
       });
       setView(saved);
       setKey("");
-      onClose();
+      setSavedNote("Saved.");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -107,6 +110,14 @@ export function Advanced({
 
   return (
     <div className="advanced">
+      {/* The one way back that is on screen. Escape is the other. */}
+      <div className="advanced__titlebar">
+        <span className="advanced__title">Settings</span>
+        <button className="advanced__button" onClick={onClose} title="Back to the set (Esc)">
+          Done
+        </button>
+      </div>
+
       <h2 className="advanced__heading">Model settings</h2>
 
       <label className="advanced__field">
@@ -142,9 +153,7 @@ export function Advanced({
       <button className="advanced__button" onClick={save} disabled={saving}>
         {saving ? "Checking the model…" : "Save"}
       </button>
-      <button className="advanced__button" onClick={onClose} style={{ marginLeft: 6 }}>
-        Cancel
-      </button>
+      {savedNote !== null && error === null && <span className="advanced__saved">{savedNote}</span>}
 
       {error !== null && <div className="advanced__error">{error}</div>}
 
