@@ -16,7 +16,6 @@ export function Pill({ state, onClick }: { state: PillState; onClick: () => void
         title={state === "disconnected" ? "Not connected to Live" : "Mixing Pal"}
       >
         <span className="pill__dot" />
-        {state === "disconnected" && <span className="pill__label">not connected</span>}
       </div>
     </div>
   );
