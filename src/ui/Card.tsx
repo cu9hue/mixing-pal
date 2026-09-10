@@ -3,7 +3,6 @@ import { SetState } from "../live/model";
 import { Nudge } from "../rules/nudges";
 import { SetupStep } from "../setup/step";
 import { Header } from "./Header";
-import { GoalRow } from "./GoalRow";
 import { Noticed } from "./Noticed";
 import { Conversation } from "./Conversation";
 import { WhatICanSee } from "./WhatICanSee";
@@ -56,7 +55,6 @@ export function Card({
         </div>
       )}
       <div className={`card__main${settingsOpen ? " card__main--hidden" : ""}`}>
-      <GoalRow goal={goal} onGoalChange={onGoalChange} />
       <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />
       {nudge !== null && connected && (
         <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />
@@ -64,6 +62,7 @@ export function Card({
       <Conversation
         state={state}
         goal={goal}
+        onGoalChange={onGoalChange}
         onTurnRunningChange={onTurnRunningChange}
         onAnswer={onAnswer}
       />

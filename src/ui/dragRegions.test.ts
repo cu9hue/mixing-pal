@@ -63,7 +63,7 @@ describe("the card drags from everywhere she is likely to grab it", () => {
   // Nothing else needs its own attribute: a stray bare one would silently
   // narrow the deep region back to a single element.
   it("uses no bare attribute anywhere in the card", () => {
-    for (const file of ["Card.tsx", "Header.tsx", "GoalRow.tsx", "Noticed.tsx", "Conversation.tsx", "NotesRow.tsx"]) {
+    for (const file of ["Card.tsx", "Header.tsx", "SetRow.tsx", "Noticed.tsx", "Conversation.tsx"]) {
       expect(read(file)).not.toMatch(/\sdata-tauri-drag-region(?=[\s/>])/);
     }
   });

@@ -82,16 +82,20 @@
   color: var(--error-label);
 }
 
-/* The goal has its own row so it reads as a field she owns, not as the
-   window's title: a label, her words, and a pencil that says it is
-   editable. Her words stay dim because she wrote them; she needs to see
-   that they are there, not read them back. */
+/* The set's row: the goal on the left, the notes chip on the right. The
+   goal reads as a field she owns, not as the window's title: a label, her
+   words, and a pencil that says it is editable. Her words stay dim because
+   she wrote them; she needs to see that they are there, not read them
+   back. The border sits on the block, so the open list stays inside it. */
+.set-row {
+  border-bottom: 1px solid var(--border);
+}
+
 .card__goal-row {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 15px;
-  border-bottom: 1px solid var(--border);
 }
 
 .card__goal-label {
@@ -151,6 +155,35 @@
   color: var(--text-secondary);
   cursor: text;
   outline: none;
+}
+
+/* Sized to itself, never squeezed: the goal gives way first, and the gap
+   keeps its ellipsis off the count. The count is the one thing that moves
+   when the model adds a bullet. */
+.notes__chip {
+  flex: none;
+  margin-left: 6px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.notes__chip:hover,
+.notes__chip--open {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.notes__chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .card__chevron,
@@ -393,25 +426,7 @@
   margin-top: 8px;
 }
 
-/* The set's note above the thread: the same closed-by-default disclosure
-   as "What I can see", with the count as the only thing that moves. */
-.notes {
-  border-bottom: 1px solid var(--border);
-}
-
-.notes__summary {
-  padding: 8px 15px;
-  font-size: 11px;
-  letter-spacing: 0.4px;
-  color: var(--text-muted);
-  cursor: pointer;
-  list-style: none;
-}
-
-.notes__summary::-webkit-details-marker {
-  display: none;
-}
-
+/* The note list, opened by the chip in the set's row and closed by default. */
 .notes__panel {
   padding: 0 15px 10px;
   max-height: 180px;
