@@ -142,3 +142,29 @@ describe("text contrast", () => {
     }
   });
 });
+
+/**
+ * Type and spacing come from theme.css, so her system text size reaches
+ * the card and the rhythm is one scale. A literal px size or gap in a
+ * stylesheet is a hole in that: it neither resizes nor follows a retune.
+ * Borders (1px) and zero are not spacing.
+ */
+describe("type and spacing tokens", () => {
+  const sheets = cssFiles(join(SRC, "ui")).filter((f) => !f.endsWith("theme.css"));
+
+  it("has no font size written in px", () => {
+    for (const file of sheets) {
+      expect(readFileSync(file, "utf8"), file).not.toMatch(/font(-size)?:\s*[0-9.]+px/);
+    }
+  });
+
+  it("has no padding, margin, or gap written in px", () => {
+    const spacing = /^\s*(padding|margin|gap|row-gap|column-gap|padding-[a-z]+|margin-[a-z]+):\s*([^;]+);/gm;
+    for (const file of sheets) {
+      for (const m of readFileSync(file, "utf8").matchAll(spacing)) {
+        const literal = m[2].match(/(?<![0-9.])(?!1px)[0-9.]+px/);
+        expect(literal, `${file}: ${m[0].trim()}`).toBeNull();
+      }
+    }
+  });
+});
