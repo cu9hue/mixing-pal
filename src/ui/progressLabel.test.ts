@@ -42,6 +42,21 @@ describe("progressLabel", () => {
     );
   });
 
+  it("names the track for every per-track tool, and has a phrase for every set-wide one", () => {
+    expect(progressLabel("get_arrangement_notes", { track: 1, index: 0 }, STATE)).toBe(
+      "reading the arrangement notes in Pad Wide…",
+    );
+    expect(progressLabel("get_device_params", { track: 0, path: "0" }, STATE)).toBe(
+      "looking at a device on Kick…",
+    );
+    expect(progressLabel("get_rack_contents", { track: 0, path: "0" }, STATE)).toBe(
+      "opening the rack on Kick…",
+    );
+    expect(progressLabel("get_clips", {}, STATE)).toBe("listing the clips…");
+    expect(progressLabel("get_arrangement", {}, STATE)).toBe("mapping the arrangement…");
+    expect(progressLabel("get_device_chains", {}, STATE)).toBe("listing the devices…");
+  });
+
   it("falls back when the mirror has the track but not its name yet", () => {
     expect(progressLabel("get_track_detail", { track: 2 }, STATE)).toBe("reading a track…");
   });
@@ -63,6 +78,12 @@ describe("progressLabel", () => {
       ["get_track_detail", { track: 1 }],
       ["get_track_detail", { track: 99 }],
       ["get_clip_notes", { track: 0, clip: 2 }],
+      ["get_arrangement_notes", { track: 99, index: 0 }],
+      ["get_device_params", { track: 1, path: "0/1" }],
+      ["get_rack_contents", { track: 1, path: "0" }],
+      ["get_clips", {}],
+      ["get_arrangement", {}],
+      ["get_device_chains", {}],
       ["get_future_thing", { track: 1 }],
     ] as const) {
       const label = progressLabel(name, args, STATE);
