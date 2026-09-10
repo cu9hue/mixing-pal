@@ -120,6 +120,8 @@ export default function App() {
   // forced setup used to leave the app rendering a pill into a 44px window
   // with no way out.
   const view: WindowMode = setupOpen ? "setup" : mode === "setup" ? "card" : mode;
+  const setupOpenRef = useRef(setupOpen);
+  setupOpenRef.current = setupOpen;
 
   const finishSetup = useCallback(() => {
     setGoalAnswered(true);
@@ -190,11 +192,14 @@ export default function App() {
   // answer left `unread` true forever, and the blur rule -- which requires
   // !unread -- never collapsed the card again.
   useEffect(() => {
-    if (view === "card") setUnread(false);
-  }, [view]);
+    if (view === "card" && !settingsOpen) setUnread(false);
+  }, [view, settingsOpen]);
 
   useEffect(() => {
     const stop = listen("menu://settings", () => {
+      // Setup owns the window until it finishes; a pane queued behind it
+      // would pop up the moment she gets past the last step.
+      if (setupOpenRef.current) return;
       setSettingsOpen(true);
       dispatch({ type: "settings_opened" });
     });
