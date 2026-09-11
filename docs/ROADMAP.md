@@ -140,10 +140,23 @@ Ordered. Each item says what, why, size, and what it waits on.
    prompt and parked scenario five are unchanged. Local checks pass. Paid
    reruns returned MiniMax: pad and next-action green, drop red, mix invalid;
    Kimi: mix, next-action and drop red, pad invalid. Both invalid judge
-   replies put prose before complete JSON. The judge still accepted wrong
-   beat/bar units and an omitted leave-alone statement, so further judge
-   calibration is needed before drawing advice-quality conclusions or
-   changing the craft prompt.
+   replies put prose before complete JSON; the parser now accepts one closed,
+   validated JSON fence with surrounding prose. All four scenarios now gate
+   their automated majority on trust checks and successful required reads,
+   with answer shape scored separately. A judge-only replay of nine saved
+   answers and two hand-authored controls agreed with 39 of 48 frozen labels.
+   Leave-alone and one-intervention labels agreed throughout this sample.
+   Evidence support, ear-only restraint, conditional moves, listening tests
+   and section purpose still disagreed; reports require human review of those
+   properties and mark automated scores provisional. The judge both missed
+   wrong beat/bar units and rejected a grounded arrangement trial. The section
+   purpose control also leaves room for disagreement about how explicit the
+   purpose must be. This is a regression screen with known limits, not a
+   release verdict. The fixed sample and explicit judge-only replay live in
+   `shared/craft-calibration.json` and `tests/craft.rs`. All 380 application
+   tests and 13 local craft checks pass; all eval targets compile. Keep the
+   prompt and model fixed while collecting outcomes from real production
+   sessions, where the producer can say whether the suggestions helped.
 
 7. **Default model and latency.** Done 2026-09-11. `tests/latency.rs` runs
    one two-tool question five times against the model the environment

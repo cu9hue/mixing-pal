@@ -16,6 +16,8 @@
 //!     -- --ignored --nocapture
 //! Disagreements require human review of the affected properties. Agreement on
 //! this small sample does not establish general judge accuracy.
+//! The 2026-09-11 replay agreed on 39/48 labels. Scenario reports flag the five
+//! properties still needing review; their automated majority is provisional.
 //!
 //! The judge in use on 2026-09-11 is anthropic/claude-sonnet-4.6. Set it
 //! explicitly; omitting MIXINGPAL_JUDGE_MODEL uses the answer model. A judge
@@ -375,6 +377,7 @@ fn calibration() -> Calibration {
 #[test]
 fn the_calibration_labels_match_the_scenarios() {
     let sample = calibration();
+    assert!(!sample.cases.is_empty());
     assert_eq!(sample.context.trim(), context_for(None).trim());
     let mut ids = std::collections::BTreeSet::new();
     for case in sample.cases {
@@ -780,7 +783,13 @@ fn the_report_keeps_raw_notes_without_changing_verdicts() {
     require_valid_evaluation("question", &[run], &report);
 }
 
-/// Trust checks gate the majority; craft scores keep shape misses visible.
+// The Sonnet 4.6 calibration disagreed on these. Recalibrate and review
+// the reasons before removing a property from this list.
+const HUMAN_REVIEW_PROPERTIES: &[&str] = &[
+    "evidence_supports", "ear_only_handed_over", "conditional_move", "listen_for", "section_purpose",
+];
+
+/// Trust checks gate the automated majority; craft misses stay visible.
 fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, String) {
     require_valid_evaluation(sc.question, runs, "");
     let passes = runs.iter().filter(|r| {
@@ -789,6 +798,14 @@ fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, S
     let total = runs.len();
     let reads = runs.iter().filter(|r| extra(r)).count();
     let mut scores = format!("trust: {passes}/{total} runs; required reads: {reads}/{total}\n");
+    let review: Vec<&str> = HUMAN_REVIEW_PROPERTIES.iter().copied()
+        .filter(|key| sc.must.iter().chain(sc.craft).any(|p| p.key == *key)).collect();
+    if !review.is_empty() {
+        scores.push_str(&format!(
+            "HUMAN REVIEW REQUIRED: {}; automated scores are provisional until reviewed.\n",
+            review.join(", ")
+        ));
+    }
     for (kind, properties) in [("trust", sc.must), ("craft (report only)", sc.craft)] {
         for p in properties {
             let count = runs.iter().filter(|r| r.verdicts.get(p.key).is_some_and(|v| v.0)).count();
@@ -824,6 +841,7 @@ fn the_trust_majority_keeps_craft_misses_visible() {
     let (passes, scores) = tally(&WHAT_NEXT, &runs, |_| true);
     assert_eq!(passes, 3);
     assert!(scores.contains("trust: 3/3 runs; required reads: 3/3"), "{scores}");
+    assert!(scores.contains("HUMAN REVIEW REQUIRED: evidence_supports, ear_only_handed_over, conditional_move, listen_for;"), "{scores}");
     for key in ["one_move", "leave_it", "source_named"] {
         assert!(scores.contains(&format!("craft (report only) {key}: 0/3")), "{scores}");
     }
