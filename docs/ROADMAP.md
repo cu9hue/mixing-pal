@@ -137,9 +137,13 @@ Ordered. Each item says what, why, size, and what it waits on.
    finish reason and available reasoning usage. Use
    `MIXINGPAL_JUDGE_MODEL=anthropic/claude-sonnet-4.6`; the earlier Sonnet 5
    run exhausted the 4000-token cap twice with empty content. The craft
-   prompt and parked scenario five are unchanged. Local checks cover the
-   repair; a paid rerun of scenarios one to four is still needed before
-   drawing advice-quality conclusions about either model.
+   prompt and parked scenario five are unchanged. Local checks pass. Paid
+   reruns returned MiniMax: pad and next-action green, drop red, mix invalid;
+   Kimi: mix, next-action and drop red, pad invalid. Both invalid judge
+   replies put prose before complete JSON. The judge still accepted wrong
+   beat/bar units and an omitted leave-alone statement, so further judge
+   calibration is needed before drawing advice-quality conclusions or
+   changing the craft prompt.
 
 7. **Default model and latency.** Done 2026-09-11. `tests/latency.rs` runs
    one two-tool question five times against the model the environment
