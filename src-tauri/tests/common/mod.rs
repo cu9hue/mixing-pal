@@ -708,9 +708,12 @@ pub fn note_defects(raw: &str) -> NoteDefects {
         }
         has_note_lines = true;
         if matches!(kind, "heard" | "decided") {
-            let outcome = words.next().unwrap_or("").to_lowercase();
+            let outcome = words.next().unwrap_or("").trim().to_lowercase();
+            let placeholder = outcome.trim_start_matches(['(', '[']).trim_start();
             if (outcome.contains('<') && outcome.contains('>'))
-                || ["(pending)", "(not yet)", "(to be filled)"].iter().any(|p| outcome.contains(p))
+                || (placeholder != outcome
+                    && ["pending", "not yet", "to be filled", "waiting on ", "waiting for "]
+                        .iter().any(|p| placeholder.starts_with(p)))
             {
                 defects.outcome_placeholders += 1;
             }
@@ -731,6 +734,13 @@ fn note_defects_cover_bare_fences_and_hidden_placeholders() {
         });
     }
     assert_eq!(note_defects("```note\n+ heard the drop landed\n+ decided keep it\n```"), NoteDefects::default());
+    assert_eq!(note_defects("```note\n+ heard not yet muddy at this level\n```"), NoteDefects::default());
+    assert_eq!(note_defects("```\nnote\n+ heard [to be filled after trying]\n+ decided [to be filled after trying]\n```"), NoteDefects {
+        malformed_blocks: 1, outcome_placeholders: 2,
+    });
+    assert_eq!(note_defects("```\nnote\n+ heard (waiting on producer)\n+ decided (pending)\n```"), NoteDefects {
+        malformed_blocks: 1, outcome_placeholders: 2,
+    });
     assert_eq!(note_defects("```rust\nlet pending = true;\n```\nA pending decision."), NoteDefects::default());
     assert_eq!(note_defects("```note\n+ move try bass"), NoteDefects {
         malformed_blocks: 1, outcome_placeholders: 0,
