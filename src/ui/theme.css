@@ -88,6 +88,7 @@
 html,
 body {
   margin: 0;
+  overflow: hidden;
   background: transparent;
   font-family: var(--font);
   color: var(--text);
