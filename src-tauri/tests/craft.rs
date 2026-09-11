@@ -357,9 +357,18 @@ fn parse_judge_reply(raw: &Value, props: &[Property]) -> JudgeReply {
         if text.is_empty() {
             return Err("empty judge content".to_string());
         }
-        let text = text.strip_prefix("```json").or_else(|| text.strip_prefix("```"))
-            .and_then(|s| s.strip_suffix("```"))
-            .unwrap_or(text).trim();
+        let parts: Vec<&str> = text.split("```").collect();
+        let text = match parts.as_slice() {
+            [text] => *text,
+            [_, fenced, _] => {
+                let (language, body) = fenced.split_once('\n').ok_or("missing fence body")?;
+                if !matches!(language.trim(), "" | "json") {
+                    return Err("judge fence must contain JSON".to_string());
+                }
+                body.trim()
+            }
+            _ => return Err("judge must return one complete JSON block".to_string()),
+        };
         let parsed: Value = serde_json::from_str(text).map_err(|e| format!("invalid judge JSON: {e}"))?;
         if let Some(reason) = parsed["invalid_evaluation"].as_str() {
             return Err(format!("judge could not evaluate: {reason}"));
@@ -386,6 +395,9 @@ fn an_empty_or_incomplete_judge_reply_is_invalid() {
         ("", "length"),
         ("", "stop"),
         ("not JSON", "stop"),
+        ("Before\n```json\n{}", "stop"),
+        ("```json\n{}\n```\n```json\n{}\n```", "stop"),
+        ("```json\n{broken}\n```", "stop"),
         ("{}", "stop"),
         (r#"{"one_move":{"pass":true,"reason":"one intervention"}}"#, "stop"),
         (r#"{"one_move":{"pass":"true","reason":"one"},"listen_for":{"pass":true,"reason":"test"}}"#, "stop"),
@@ -406,7 +418,12 @@ fn an_empty_or_incomplete_judge_reply_is_invalid() {
 #[test]
 fn a_complete_judge_reply_keeps_passes_and_failures() {
     let content = r#"{"one_move":{"pass":false,"reason":"two changes"},"listen_for":{"pass":true,"reason":"ear test"}}"#;
-    for text in [content.to_string(), format!("```json\n{content}\n```")] {
+    for text in [
+        content.to_string(),
+        format!("```json\n{content}\n```"),
+        format!("I checked the evidence.\n```json\n{content}\n```\nThose are my verdicts."),
+        format!("Verdicts:\n```\n{content}\n```"),
+    ] {
         let reply = parse_judge_reply(&json!({
             "choices": [{ "message": { "content": text }, "finish_reason": "stop" }]
         }), &[ONE_MOVE, LISTEN_FOR]);
@@ -419,6 +436,15 @@ fn a_complete_judge_reply_keeps_passes_and_failures() {
         "choices": [{ "message": { "content": content }, "finish_reason": "length" }]
     }), &[ONE_MOVE, LISTEN_FOR]);
     assert!(cut_short.verdicts.is_err());
+    for text in [
+        format!("```json\n{content}"),
+        format!("```json\n{content}\n```\n```json\n{content}\n```"),
+    ] {
+        let reply = parse_judge_reply(&json!({
+            "choices": [{ "message": { "content": text }, "finish_reason": "stop" }]
+        }), &[ONE_MOVE, LISTEN_FOR]);
+        assert!(reply.verdicts.is_err());
+    }
 }
 
 async fn judge(
