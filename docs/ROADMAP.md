@@ -126,6 +126,38 @@ Ordered. Each item says what, why, size, and what it waits on.
    four first. Judge with a model that does not reason
    (`MIXINGPAL_JUDGE_MODEL`, checklist has the one used).
 
+   Repaired the craft evaluation on 2026-09-11 after scenarios one to four
+   ran red on MiniMax M3 and Kimi K2: the fake Live now preserves audio clip
+   type, mentors match the fixture's notes and beat/bar units, and the gates
+   allow an argued pad decision and one intervention with its implementation
+   details. The judge receives tool arguments/results and scores attribution
+   separately from evidence support; invalid judge replies stop majority
+   scoring instead of failing answers. Reports retain raw answers, count
+   mechanical note defects without gating on them, and name the judge,
+   finish reason and available reasoning usage. Use
+   `MIXINGPAL_JUDGE_MODEL=anthropic/claude-sonnet-4.6`; the earlier Sonnet 5
+   run exhausted the 4000-token cap twice with empty content. The craft
+   prompt and parked scenario five are unchanged. Local checks pass. Paid
+   reruns returned MiniMax: pad and next-action green, drop red, mix invalid;
+   Kimi: mix, next-action and drop red, pad invalid. Both invalid judge
+   replies put prose before complete JSON; the parser now accepts one closed,
+   validated JSON fence with surrounding prose. All four scenarios now gate
+   their automated majority on trust checks and successful required reads,
+   with answer shape scored separately. A judge-only replay of nine saved
+   answers and two hand-authored controls agreed with 39 of 48 frozen labels.
+   Leave-alone and one-intervention labels agreed throughout this sample.
+   Evidence support, ear-only restraint, conditional moves, listening tests
+   and section purpose still disagreed; reports require human review of those
+   properties and mark automated scores provisional. The judge both missed
+   wrong beat/bar units and rejected a grounded arrangement trial. The section
+   purpose control also leaves room for disagreement about how explicit the
+   purpose must be. This is a regression screen with known limits, not a
+   release verdict. The fixed sample and explicit judge-only replay live in
+   `shared/craft-calibration.json` and `tests/craft.rs`. All 380 application
+   tests and 13 local craft checks pass; all eval targets compile. Keep the
+   prompt and model fixed while collecting outcomes from real production
+   sessions, where the producer can say whether the suggestions helped.
+
 7. **Default model and latency.** Done 2026-09-11. `tests/latency.rs` runs
    one two-tool question five times against the model the environment
    names and asserts a median turn under a minute, a non-empty answer, and
