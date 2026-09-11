@@ -214,7 +214,7 @@ const EAR_ONLY_HANDED_OVER: Property = Property {
 };
 const CONDITIONAL_MOVE: Property = Property {
     key: "conditional_move",
-    description: "Any move it gives is stated as waiting on something not yet done, or it gives no move at all.",
+    description: "A move resting on an ear-only claim (tone, loudness, masking, groove or feel) must wait on the producer hearing that problem or on an explicit prerequisite not yet done; a listening test after an unconditional instruction is not a condition. A move on an established readable gap, such as an empty arrangement track, may be immediate. No change proposed also passes.",
 };
 const CHORDS_KEPT: Property = Property {
     key: "chords_kept",
