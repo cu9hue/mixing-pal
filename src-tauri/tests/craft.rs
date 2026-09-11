@@ -186,7 +186,7 @@ const WHY: Property = Property {
 };
 const LISTEN_FOR: Property = Property {
     key: "listen_for",
-    description: "Ends with a test the producer performs by ear: where to play from and what to notice.",
+    description: "Closes each proposed move with a test the producer performs by ear: where to play from and what to notice. A leave-alone statement or a source caveat may follow the test; it need not be the answer's last sentence. A later change still needs its own listening test. No move proposed needs no test.",
 };
 const LEAVE_IT: Property = Property {
     key: "leave_it",
