@@ -391,7 +391,7 @@ fn the_calibration_labels_match_the_scenarios() {
     }
 }
 
-/// Replays the production judge path; no answer model or fake Live turn runs.
+/// Saved answers isolate judge disagreements from answer-model variance.
 #[tokio::test]
 #[ignore = "paid judge-only calibration; run explicitly with --ignored --nocapture"]
 async fn the_judge_matches_the_saved_calibration() {
@@ -714,11 +714,8 @@ fn report_line(i: usize, run: &Run) -> String {
     )
 }
 
-/// Runs the scenario `RUNS` times and formats the same per-run report both
-/// `tally` and `stances` show on failure: the tools called, the answer, and
-/// the judge's verdicts. The pass/fail or stance meaning of a run is for the
-/// caller to compute from the returned `Run`s, since that differs between
-/// the two.
+/// Finish every run before rejecting an invalid evaluation so the report
+/// includes all answers and judge evidence.
 async fn run_all(sc: &Scenario) -> (Vec<Run>, String) {
     let mut runs = Vec::with_capacity(RUNS);
     let mut report = String::new();
@@ -783,8 +780,8 @@ fn the_report_keeps_raw_notes_without_changing_verdicts() {
     require_valid_evaluation("question", &[run], &report);
 }
 
-// The Sonnet 4.6 calibration disagreed on these. Recalibrate and review
-// the reasons before removing a property from this list.
+// Sonnet 4.6 scores for these properties require human review.
+// Recalibrate and review the reasons before removing a property.
 const HUMAN_REVIEW_PROPERTIES: &[&str] = &[
     "evidence_supports", "ear_only_handed_over", "conditional_move", "listen_for", "section_purpose",
 ];
