@@ -600,7 +600,7 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
 /// One tool call the loop made, with what it was asked and whether Live
 /// answered. `Turn::called` keeps the bare names for the honesty suite's
 /// order assertions; this is the record the craft suite grounds on.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ToolCallRecord {
     pub name: String,
     pub args: Value,

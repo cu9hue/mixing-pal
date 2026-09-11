@@ -11,6 +11,12 @@
 //!     cargo test --features evals --test craft -- --test-threads=1 --nocapture \
 //!       why_does_the_drop_fall_flat what_should_i_do_next is_the_pad_too_busy is_the_mix_okay
 //!
+//! With the same variables, replay only the judge on the fixed labelled sample:
+//!   cargo test --features evals --test craft the_judge_matches_the_saved_calibration \
+//!     -- --ignored --nocapture
+//! Disagreements require human review of the affected properties. Agreement on
+//! this small sample does not establish general judge accuracy.
+//!
 //! The judge in use on 2026-09-11 is anthropic/claude-sonnet-4.6. Set it
 //! explicitly; omitting MIXINGPAL_JUDGE_MODEL uses the answer model. A judge
 //! that reasons by default can spend the 4000-token cap before writing JSON.
@@ -22,8 +28,9 @@
 //! Unlike `evals.rs`, these assert on prose, through a judge. Wording is
 //! not stable across runs. Scenarios 1 to 4 pass on a majority of three
 //! runs of the trust checks and required reads. Craft properties are scored
-//! separately and do not gate that majority. Scenario 5 is a gate of one run per arm at temperature 0, plus a
-//! report of three runs per arm at the app's own sampling.
+//! separately and do not gate that majority. Scenario 5 is a gate of one run
+//! per arm at temperature 0, plus a report of three runs per arm at the app's
+//! own sampling.
 //!
 //! Mentors illustrate answer shape and possible choices for the GOAL, never
 //! musical rules. The judge checks set facts against the supplied reads and
@@ -330,6 +337,107 @@ impl Scenario {
     fn properties(&self) -> Vec<Property> {
         self.must.iter().chain(self.craft).copied().collect()
     }
+}
+
+#[derive(serde::Deserialize)]
+struct Calibration {
+    context: String,
+    cases: Vec<CalibrationCase>,
+}
+
+#[derive(serde::Deserialize)]
+struct CalibrationCase {
+    id: String,
+    source: String,
+    question: String,
+    answer: String,
+    calls: Vec<common::ToolCallRecord>,
+    expected: BTreeMap<String, CalibrationLabel>,
+}
+
+#[derive(serde::Deserialize)]
+struct CalibrationLabel {
+    pass: bool,
+    reason: String,
+}
+
+impl CalibrationCase {
+    fn scenario(&self) -> &Scenario {
+        [&DROP_FALLS_FLAT, &WHAT_NEXT, &PAD_TOO_BUSY, &MIX_OKAY].into_iter()
+            .find(|s| s.question == self.question).expect("unknown calibration question")
+    }
+}
+
+fn calibration() -> Calibration {
+    serde_json::from_value(common::load("craft-calibration.json")).unwrap()
+}
+
+#[test]
+fn the_calibration_labels_match_the_scenarios() {
+    let sample = calibration();
+    assert_eq!(sample.context.trim(), context_for(None).trim());
+    let mut ids = std::collections::BTreeSet::new();
+    for case in sample.cases {
+        assert!(ids.insert(case.id.clone()), "duplicate case {}", case.id);
+        assert!(!case.answer.trim().is_empty() && !case.expected.is_empty(), "{}", case.id);
+        let props = case.scenario().properties();
+        for (key, label) in case.expected {
+            assert!(props.iter().any(|p| p.key == key), "{}: unknown property {key}", case.id);
+            assert!(!label.reason.trim().is_empty(), "{}: unreasoned label {key}", case.id);
+        }
+    }
+}
+
+/// Replays the production judge path; no answer model or fake Live turn runs.
+#[tokio::test]
+#[ignore = "paid judge-only calibration; run explicitly with --ignored --nocapture"]
+async fn the_judge_matches_the_saved_calibration() {
+    let sample = calibration();
+    let mut totals: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut invalid = Vec::new();
+    for case in sample.cases {
+        let sc = case.scenario();
+        println!("\nCALIBRATION {}: {}", case.id, case.source);
+        let reply = match judge(
+            &case.question, &sample.context, &case.answer, &case.calls, sc.mentor, &sc.properties(),
+        ).await {
+            Ok(reply) => reply,
+            Err(e) => {
+                println!("infrastructure error: {e}");
+                invalid.push(case.id);
+                continue;
+            }
+        };
+        println!("judge: model {}; finish_reason {}; reasoning_tokens {}; content: {}",
+            reply.model, reply.finish_reason,
+            reply.reasoning_tokens.map(|n| n.to_string()).unwrap_or("unreported".into()),
+            reply.content);
+        let verdicts = match reply.verdicts {
+            Ok(verdicts) => verdicts,
+            Err(e) => {
+                println!("invalid evaluation: {e}");
+                invalid.push(case.id);
+                continue;
+            }
+        };
+        for (key, expected) in &case.expected {
+            let actual = &verdicts[key];
+            let agrees = actual.0 == expected.pass;
+            let total = totals.entry(key.clone()).or_default();
+            total.0 += usize::from(agrees);
+            total.1 += 1;
+            println!("{} {key}: expected {}, got {}; human: {}; judge: {}",
+                if agrees { "AGREE" } else { "DISAGREE" }, expected.pass, actual.0,
+                expected.reason, actual.1);
+        }
+    }
+    let mut review = Vec::new();
+    for (key, (agreed, total)) in &totals {
+        println!("calibration {key}: {agreed}/{total} labels agree");
+        if agreed != total { review.push(key.as_str()); }
+    }
+    assert!(invalid.is_empty(), "calibration invalid for {invalid:?}; do not score those cases");
+    assert!(review.is_empty(), "HUMAN REVIEW REQUIRED for {review:?}; judge scores are not reliable on this sample");
 }
 
 fn judge_settings() -> Settings {

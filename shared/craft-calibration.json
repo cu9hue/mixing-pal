@@ -1,0 +1,4240 @@
+{
+  "purpose": "Fixed calibration data, not musical rules. Saved answers are untrusted claims. Expected labels cover selected properties only; all scenario properties are still sent to the judge. Labels were written before replay.",
+  "context": "SET  132 BPM · A Minor · stopped\nSECTIONS (beats; bars assume 4/4)  «Intro» 0 (bar 1), «Drop» 64 (bar 17), «Break» 96 (bar 25), «Drop 2» 128 (bar 33)\nGOAL  dark garage, 2am\n\nTRACKS  (4)\n 0 «Pad» -6.0 dB — selected\n 1 «Drums» -3.0 dB\n 2 «Bass» -5.0 dB\n 3 «Vox» -8.0 dB\n\nThis is everything cached locally. For pan, exact fader values, or a track's full mixer state use get_track_detail; for which clips exist and which tracks are MIDI use get_clips; for the notes in a clip use get_clip_notes; for what devices are on each track use get_device_chains; for what is inside a Rack use get_rack_contents; for what plays where on the timeline use get_arrangement; for the notes in a timeline clip use get_arrangement_notes; for one device's parameter values use get_device_params.\n",
+  "cases": [
+    {
+      "id": "m-pad-0",
+      "source": "paid-20260911-144454-minimax_minimax-m3.txt:669 (zero-based run 0; original answer, unchanged)",
+      "question": "is the pad too busy?",
+      "answer": "The pad isn't busy at all — it's the opposite. In the 4-beat loop there are only **6 source notes**, and they form two short 1/8-note stabs per bar:\n\n| Position | Notes | Duration |\n|---|---|---|\n| bar 1.1.1 (loop beat 1) | A2 + C3 + E3 — Am triad | 1/8 note |\n| bar 1.3.1 (loop beat 3) | F2 + A2 + C3 — F major triad | 1/8 note |\n\nThat loops for the whole 16-bar Intro and 8-bar Break. So every bar you hear an Am stab on beat 1 and an F stab on beat 3, each lasting half a beat — roughly three seconds of silence per bar inside the loop region. The pad is also **silent across the Drop (bars 17–24) and Drop 2 (bar 33+)**, which leaves the bass and «Beat» to own that space.\n\nFor the dark garage / 2am brief, the pad is doing the right job — atmosphere and harmonic anchor with plenty of room. **Leave it.**\n\nOne thing worth noting on the readable side only: the same 2-chord pattern repeats unchanged through all 24 pad bars. If you want it to feel less like a static loop in the Break (bar 25 onward), a one-bar edit at bar 25.1.1 adding a third stab on beat 4 (e.g. a held C2 + E3) would shift the contour without adding density. Skip if the stillness is the point.\n\n> I can't speak to whether the chord voicings sit too high against the bass or whether the stabs are too short to read as \"pad\" — that's your ear.",
+      "calls": [
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138045651,
+            "missing_reason": null,
+            "queried_at": 1789138045651,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138046154,
+            "missing_reason": null,
+            "queried_at": 1789138046154,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "missing": [],
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "tracks": [
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 16.0,
+                      "length_beats": 64.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 0.0
+                    },
+                    {
+                      "bar_start": 25.0,
+                      "index": 1,
+                      "is_midi": true,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 96.0
+                    }
+                  ],
+                  "track": 0,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 40.0,
+                      "length_beats": 160.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Beat»",
+                      "start_beats": 0.0
+                    }
+                  ],
+                  "track": 1,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [],
+                  "track": 2,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 17.0,
+                      "index": 0,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 64.0
+                    },
+                    {
+                      "bar_start": 33.0,
+                      "index": 1,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 128.0
+                    }
+                  ],
+                  "track": 3,
+                  "truncated": false
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clip_notes",
+          "args": {
+            "clip": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138054594,
+            "missing_reason": null,
+            "queried_at": 1789138054594,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "count": 6,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "loop_state_known": true,
+              "looping": true,
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "velocity": 100.0
+                }
+              ],
+              "source_length_beats": 4.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement_notes",
+          "args": {
+            "index": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138054595,
+            "missing_reason": null,
+            "queried_at": 1789138054595,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "bar_start": 1.0,
+              "count": 6,
+              "is_midi": true,
+              "length_bars": 16.0,
+              "length_beats": 64.0,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "muted": false,
+              "name": "«Chords»",
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                }
+              ],
+              "start_beats": 0.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement_notes",
+          "args": {
+            "index": 1,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138054597,
+            "missing_reason": null,
+            "queried_at": 1789138054597,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "bar_start": 25.0,
+              "count": 6,
+              "is_midi": true,
+              "length_bars": 8.0,
+              "length_beats": 32.0,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "muted": false,
+              "name": "«Chords»",
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "timeline_position": "25.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "timeline_position": "25.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "timeline_position": "25.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "timeline_position": "25.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "timeline_position": "25.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "timeline_position": "25.3.1",
+                  "velocity": 100.0
+                }
+              ],
+              "start_beats": 96.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "evidence_supports": {
+          "pass": false,
+          "reason": "Three beats of MIDI rest at 132 BPM is about 1.36 seconds, not three seconds of audible silence; the timeline also has no Bass placements."
+        },
+        "readable_problem": {
+          "pass": true,
+          "reason": "The optional edit is tied to the explicitly named repetition concern; keeping the current density does not forbid a different readable diagnosis."
+        }
+      }
+    },
+    {
+      "id": "m-pad-2",
+      "source": "paid-20260911-144454-minimax_minimax-m3.txt:761 (zero-based run 2; original answer, unchanged)",
+      "question": "is the pad too busy?",
+      "answer": "Short answer: not from what I can read. The pad is rhythmically *sparse*.\n\n**What the notes show**\n\nBoth `«Chords»` clips are identical — 6 notes over a 1-bar loop, repeated through the clip:\n\n| Bar beat | Chord | Notes |\n|---|---|---|\n| 1.1.1 | Am | A2, C3, E3 |\n| 1.3.1 | F | F2, A2, C3 |\n\nThat's **2 stabs per bar** (beats 1 and 3, with silence on 2 and 4), 1/8 note duration, uniform velocity 100. Clip 0 runs bars 1–16 (Intro + head of Drop), Clip 1 runs bars 25–32 (Break). The pad is absent from Drop 1 and Drop 2 entirely.\n\n**Why it doesn't read as busy**\n\n- 2 hits per bar is half-time density at 132 BPM — that's a pulse, not a flurry.\n- The voicings are tight triads in a narrow A2–E3 register, so it's not spread across the keyboard.\n- Velocity is flat — no accents or layering pulling focus.\n\n**What I can flag instead (if the ear agrees)**\n\nThe *harmony* is the static thing: it's the same Am → F pair repeated identically for 24 bars of pad with no inversion, octave shift, or chord change. That's a sameness issue, not a density issue. If \"too busy\" was really a stand-in for \"it's sitting on top of the drums weirdly,\" the most readable move is variation, not thinning — e.g., move to a single Am stab on bar 1 of the second clip so the pad breathes into the Break.\n\n**What I can't tell you**\n\nThe pad track has no devices listed, so the timbre and release are unknown to me. A 1/8-note MIDI note on a long-release pad is a very different object than a 1/8-note pluck — that's where \"busy\" could actually live. Play the Intro solo and listen: are you hearing stabs-and-rest, or a wash that fills the bar? That decides whether anything needs changing.",
+      "calls": [
+        {
+          "name": "get_arrangement",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138136180,
+            "missing_reason": null,
+            "queried_at": 1789138136180,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "missing": [],
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "tracks": [
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 16.0,
+                      "length_beats": 64.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 0.0
+                    },
+                    {
+                      "bar_start": 25.0,
+                      "index": 1,
+                      "is_midi": true,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 96.0
+                    }
+                  ],
+                  "track": 0,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 40.0,
+                      "length_beats": 160.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Beat»",
+                      "start_beats": 0.0
+                    }
+                  ],
+                  "track": 1,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [],
+                  "track": 2,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 17.0,
+                      "index": 0,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 64.0
+                    },
+                    {
+                      "bar_start": 33.0,
+                      "index": 1,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 128.0
+                    }
+                  ],
+                  "track": 3,
+                  "truncated": false
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_chains",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138136183,
+            "missing_reason": null,
+            "queried_at": 1789138136183,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "devices": [],
+                  "track": 0
+                },
+                {
+                  "devices": [
+                    "«Drum Rack» [rack]"
+                  ],
+                  "track": 1
+                },
+                {
+                  "devices": [],
+                  "track": 2
+                },
+                {
+                  "devices": [
+                    "«Compressor»"
+                  ],
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement_notes",
+          "args": {
+            "index": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138142455,
+            "missing_reason": null,
+            "queried_at": 1789138142455,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "bar_start": 1.0,
+              "count": 6,
+              "is_midi": true,
+              "length_bars": 16.0,
+              "length_beats": 64.0,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "muted": false,
+              "name": "«Chords»",
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                }
+              ],
+              "start_beats": 0.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement_notes",
+          "args": {
+            "index": 1,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138142456,
+            "missing_reason": null,
+            "queried_at": 1789138142456,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "bar_start": 25.0,
+              "count": 6,
+              "is_midi": true,
+              "length_bars": 8.0,
+              "length_beats": 32.0,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "muted": false,
+              "name": "«Chords»",
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "timeline_position": "25.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "timeline_position": "25.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "timeline_position": "25.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "timeline_position": "25.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "timeline_position": "25.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "timeline_position": "25.3.1",
+                  "velocity": 100.0
+                }
+              ],
+              "start_beats": 96.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "evidence_supports": {
+          "pass": false,
+          "reason": "The lowest note is F2, not A2. Bars 1–16 are Intro only; Drop starts at bar 17."
+        },
+        "readable_problem": {
+          "pass": true,
+          "reason": "It names repeated identical harmony as the problem addressed by the proposed Break variation."
+        },
+        "no_invented_change": {
+          "pass": true,
+          "reason": "The notes support the stated sameness premise; the variation is conditional on the producer confirming a concern."
+        }
+      }
+    },
+    {
+      "id": "m-next-0",
+      "source": "paid-20260911-144454-minimax_minimax-m3.txt:862 (zero-based run 0; original answer, unchanged)",
+      "question": "what should I do next?",
+      "answer": "Now I can give a real move.\n\nWhat I can read:\n- **Drums**: Kick (C1), Clap (D#1), Hats (F#1) — three pads, one kit, plays the whole 40 bars unchanged. No sub, no perc, no snare variation.\n- **Pad**: a 4-bar loop of A-min → F-major stabs, voiced low (A2/C3/E3 → F2/A2/C3), 1/8 notes. It sits under the Intro and the Drop's first half, then a *different* 8-bar «Chords» clip takes over the Break.\n- **Bass**: empty on the timeline, no session clip — nothing plays.\n- **Vox**: audio, Compressor only, sits on Drop and Drop 2 only.\n\nFor 2am dark garage, the Drop's job is sub weight and lock with the kick. Right now there's no bass at all, and the Pad is running stabs an octave below where garage usually sits, which will fight any sub you add.\n\n**One move, biggest gap first — write a bassline.**\n\nCreate a 4-bar MIDI clip on Bass, loop it, drop it in from bar 17 (the «Drop» locator) through to the end. Mirror the Pad's harmonic rhythm but stay *above* it: root notes A1 and F1 on the 1 and 3 of each bar, short (1/8 or 1/4) so it leaves room for the kick's body. Pitch tracking from the Pad: A minor → F major, so A1 and F1 are the roots. Don't go lower than A1 — the kick's sub lives down there.\n\nListen for the kick and bass locking at the Drop's downbeat: if you hear a buzz or a smear between kick and bass, the bass note is too close in pitch to the kick's tail — raise the bass pitch by an octave before touching EQ.\n\n**What I can't weigh in on**: kick/hat tone, sub weight, and how the Vox sits against the kit — those are ears-only. I have no data on Drums' chain processing, the Pad's filter/envelope, or the Vox compressor's settings, so I'm naming them as questions, not verdicts.\n\n```\n+ move arrangement/energy: write a 4-bar bass loop (A1/F1 roots on 1 and 3, 1/8 notes), drop it at bar 17 through end\n```\n\n(I don't see any prior NOTES, so nothing to retire.)",
+      "calls": [
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138188081,
+            "missing_reason": null,
+            "queried_at": 1789138188081,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138188584,
+            "missing_reason": null,
+            "queried_at": 1789138188584,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "missing": [],
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "tracks": [
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 16.0,
+                      "length_beats": 64.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 0.0
+                    },
+                    {
+                      "bar_start": 25.0,
+                      "index": 1,
+                      "is_midi": true,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 96.0
+                    }
+                  ],
+                  "track": 0,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 40.0,
+                      "length_beats": 160.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Beat»",
+                      "start_beats": 0.0
+                    }
+                  ],
+                  "track": 1,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [],
+                  "track": 2,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 17.0,
+                      "index": 0,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 64.0
+                    },
+                    {
+                      "bar_start": 33.0,
+                      "index": 1,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 128.0
+                    }
+                  ],
+                  "track": 3,
+                  "truncated": false
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_chains",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138188586,
+            "missing_reason": null,
+            "queried_at": 1789138188586,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "devices": [],
+                  "track": 0
+                },
+                {
+                  "devices": [
+                    "«Drum Rack» [rack]"
+                  ],
+                  "track": 1
+                },
+                {
+                  "devices": [],
+                  "track": 2
+                },
+                {
+                  "devices": [
+                    "«Compressor»"
+                  ],
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_rack_contents",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138197067,
+            "missing_reason": null,
+            "queried_at": 1789138197067,
+            "value": {
+              "chains": [
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 0,
+                  "name": "«Kick»",
+                  "note": 36,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 1,
+                  "name": "«Clap»",
+                  "note": 39,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 2,
+                  "name": "«Hats»",
+                  "note": 42,
+                  "total_devices": 1
+                }
+              ],
+              "is_rack": true,
+              "total_chains": 3,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement_notes",
+          "args": {
+            "index": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138197069,
+            "missing_reason": null,
+            "queried_at": 1789138197069,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "bar_start": 1.0,
+              "count": 6,
+              "is_midi": true,
+              "length_bars": 16.0,
+              "length_beats": 64.0,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "muted": false,
+              "name": "«Chords»",
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                }
+              ],
+              "start_beats": 0.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "evidence_supports": {
+          "pass": false,
+          "reason": "Pad loop is four beats, not four bars, and stops before Drop. Rack/notes do not establish kick sub content or future masking."
+        },
+        "ear_only_handed_over": {
+          "pass": false,
+          "reason": "It asserts the Pad will fight any sub and that the kick owns a particular sub register."
+        },
+        "one_move": {
+          "pass": true,
+          "reason": "Clip creation, programming, placement and octave adjustment implement the same bass part."
+        },
+        "listen_for": {
+          "pass": true,
+          "reason": "The Drop downbeat supplies the playback location and kick/bass buzz or smear supplies what to notice."
+        },
+        "leave_it": {
+          "pass": false,
+          "reason": "No thing is explicitly named as fine and left alone; the disclaimer is not that instruction."
+        }
+      }
+    },
+    {
+      "id": "m-drop-2",
+      "source": "paid-20260911-144454-minimax_minimax-m3.txt:1296 (zero-based run 2; original answer, unchanged)",
+      "question": "why does the drop fall flat?",
+      "answer": "**Why the drop falls flat:**\n\nThe drop at bar 17 doesn't actually drop — the Beat is running from bar 1 through bar 40, so Drums is already fully active during the Intro. There's no contrast at the boundary. In a dark garage track, the drop's job is to land weight where there was space; here, weight arrives and nothing changes.\n\nThe Pad holds the same 4-beat loop from bar 1, also unchanged at the drop — so harmony isn't opening up either. The Bass track is empty on the timeline (`get_arrangement` shows no clips on track 2). For a \"2am dark garage\" track, that's the real hole: no sub to own the low end means the drop has no floor.\n\n**One move:** write a 4-bar Bass clip on track 2 starting at bar 17 (the Drop). Even a single root note on each chord change — A2, F2, G2, E2 — sitting on beats 1 and 3 with a small release, will give the drop weight without competing with the Beat. Drop it in session view first, then drag to arrangement at bar 17.\n\n**Listen for:** play from bar 16 (last bar of Intro) into bar 17. Does the bottom change when the drums are already full? If yes, the Bass is doing the work; if no, the Beat itself may need to thin during the Intro (mute hats or drop the snare for 4 bars) so the drop has somewhere to land.\n\n```\nnote\n+ move arrangement/contrast: add Bass on track 2 from bar 17\n+ heard (pending)\n+ decided (pending)\n```\n\nNote: track 2 is shown as MIDI-capable but has no clips; I haven't read any devices on it (the chain list was empty), so I can't confirm there's an instrument loaded — worth checking before recording.",
+      "calls": [
+        {
+          "name": "get_arrangement",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138513730,
+            "missing_reason": null,
+            "queried_at": 1789138513730,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "missing": [],
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "tracks": [
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 16.0,
+                      "length_beats": 64.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 0.0
+                    },
+                    {
+                      "bar_start": 25.0,
+                      "index": 1,
+                      "is_midi": true,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 96.0
+                    }
+                  ],
+                  "track": 0,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 40.0,
+                      "length_beats": 160.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Beat»",
+                      "start_beats": 0.0
+                    }
+                  ],
+                  "track": 1,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [],
+                  "track": 2,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 17.0,
+                      "index": 0,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 64.0
+                    },
+                    {
+                      "bar_start": 33.0,
+                      "index": 1,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 128.0
+                    }
+                  ],
+                  "track": 3,
+                  "truncated": false
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138513730,
+            "missing_reason": null,
+            "queried_at": 1789138513730,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_chains",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138513731,
+            "missing_reason": null,
+            "queried_at": 1789138513731,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "devices": [],
+                  "track": 0
+                },
+                {
+                  "devices": [
+                    "«Drum Rack» [rack]"
+                  ],
+                  "track": 1
+                },
+                {
+                  "devices": [],
+                  "track": 2
+                },
+                {
+                  "devices": [
+                    "«Compressor»"
+                  ],
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "evidence_supports": {
+          "pass": false,
+          "reason": "Pad leaves at the Drop while Vox arrives; the claims that Pad is unchanged at Drop and nothing changes contradict the map."
+        },
+        "ear_only_handed_over": {
+          "pass": false,
+          "reason": "It diagnoses the audible cause as a missing low-end floor without hearing the set."
+        },
+        "one_move": {
+          "pass": false,
+          "reason": "Adding Bass and thinning Intro drums are independent interventions."
+        },
+        "listen_for": {
+          "pass": false,
+          "reason": "The Intro drum edit comes after the bass test and has no listening test of its own."
+        },
+        "leave_it": {
+          "pass": false,
+          "reason": "It does not explicitly name something as enough and say to leave it."
+        }
+      }
+    },
+    {
+      "id": "m-mix-2",
+      "source": "paid-20260911-144454-minimax_minimax-m3.txt:218 (zero-based run 2; original answer, unchanged)",
+      "question": "is the mix okay?",
+      "answer": "Short answer: I can read the mix **on paper** (faders, pans, what's plugged in), but I can't say whether it sounds right — that's your ears. Here's what the settings actually show, and where the one readable gap is.\n\n**Mixer state (all four tracks)**\n\n| Track | Fader | Pan | Mute | Solo |\n|---|---|---|---|---|\n| Pad | -6.0 dB | C | – | – |\n| Drums | -3.0 dB | C | – | – |\n| Bass | -5.0 dB | C | – | – |\n| Vox | -8.0 dB | C | – | – |\n\nEverything is **centre-panned**. For a 2 a.m. dark garage tune that's defensible — width usually comes from delay/verb returns, not from the core channels — but it does mean the stereo image is entirely carried by whatever's *inside* Pad and Vox, which I can't see.\n\n**Devices on the channels**\n\n- Pad — *nothing on the insert chain.* No EQ, no compressor, no verb send visible. For a pad that needs to sit under a track at 132 BPM, that's a question I'd normally want a reverb or low-pass on.\n- Drums — **Drum Rack** (contents not yet read; pads/samples unknown).\n- Bass — *nothing on the insert chain.* No EQ, no compressor. For a dark garage bass, that's the channel most likely to need both.\n- Vox — **Compressor** (parameters not yet read).\n\n**Gain structure** sits in a tidy range: Drums highest at -3, then Bass -5, Pad -6, Vox -8. Vox 5 dB under the bass is on the quiet side for a featured element, but for a \"dark garage, 2 a.m.\" palette where the vocal floats *over* the bed rather than cutting through it, that's a defensible call.\n\n**What I'd ask you to listen for before changing anything**\n\n1. Solo the bass against the drum rack's kick — does it own the low end, or is it fighting? (The settings can't tell me; only your ear in the room can.)\n2. With everything playing, is the pad washing over the vocal, or sitting behind it?\n3. Does the vocal need more compression, or is the one Compressor on the chain already biting enough?\n\n**The one move I'd suggest, biggest readable gap first**\n\nAdd a **low-pass filter and a short reverb** to the Pad channel (Utility's Low-Pass at maybe 6–8 kHz, plus a dark hall on a return). For a \"dark, 2 a.m.\" brief, a pad with nothing on the chain tends to either sit too dry and forward or smear over the vocal — and right now Pad has *zero* shaping. **Listen for:** with the pad playing, whether it recedes behind the vocal and the hats instead of sitting on top of them.\n\nEverything else (fader balance, pans, the Vox compressor existing) reads fine on paper — leave those until your ear flags them.\n\nTell me what's actually bugging you when you listen and I can dig into the specific channel.",
+      "calls": [
+        {
+          "name": "get_device_chains",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138006910,
+            "missing_reason": null,
+            "queried_at": 1789138006910,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "devices": [],
+                  "track": 0
+                },
+                {
+                  "devices": [
+                    "«Drum Rack» [rack]"
+                  ],
+                  "track": 1
+                },
+                {
+                  "devices": [],
+                  "track": 2
+                },
+                {
+                  "devices": [
+                    "«Compressor»"
+                  ],
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138006911,
+            "missing_reason": null,
+            "queried_at": 1789138006911,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137998414,
+            "missing_reason": null,
+            "queried_at": 1789138006911,
+            "value": {
+              "fader": 0.72,
+              "fader_db": "-6.0 dB",
+              "index": 0,
+              "mute": false,
+              "name": "«Pad»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137998414,
+            "missing_reason": null,
+            "queried_at": 1789138006911,
+            "value": {
+              "fader": 0.8,
+              "fader_db": "-3.0 dB",
+              "index": 1,
+              "mute": false,
+              "name": "«Drums»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 2
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137998414,
+            "missing_reason": null,
+            "queried_at": 1789138006911,
+            "value": {
+              "fader": 0.75,
+              "fader_db": "-5.0 dB",
+              "index": 2,
+              "mute": false,
+              "name": "«Bass»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137998414,
+            "missing_reason": null,
+            "queried_at": 1789138006912,
+            "value": {
+              "fader": 0.68,
+              "fader_db": "-8.0 dB",
+              "index": 3,
+              "mute": false,
+              "name": "«Vox»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "evidence_supports": {
+          "pass": false,
+          "reason": "Vox fader is three dB below Bass, not five; centered pans do not establish the stereo image, and faders do not establish audible gain balance."
+        },
+        "ear_only_handed_over": {
+          "pass": false,
+          "reason": "It calls the vocal quiet and judges the gain structure from faders despite the opening disclaimer."
+        },
+        "no_invented_change": {
+          "pass": false,
+          "reason": "The empty Pad device chain does not establish excessive dryness, forwardness or masking to justify processing."
+        },
+        "conditional_move": {
+          "pass": false,
+          "reason": "It instructs Pad filtering and reverb before confirmation of the ear-only problem; a later listen test is not a prerequisite."
+        },
+        "source_named": {
+          "pass": true,
+          "reason": "Mixer state and device headings attribute the claims, even when those claims are not supported."
+        }
+      }
+    },
+    {
+      "id": "k-mix-0",
+      "source": "paid-20260911-144454-moonshotai_kimi-k2.txt:20 (zero-based run 0; original answer, unchanged)",
+      "question": "is the mix okay?",
+      "answer": "**What I can read:**\n\n**Arrangement & Energy**\n- Pad: 4-bar looped chords (Am → F) in Intro/Break only; **silent in both Drops**\n- Drums: 40-bar continuous beat; Kick, Clap, Hats in a Rack\n- Bass: **completely empty**—no clips, no session clips\n- Vox: audio only in Drops («Take 3»), compressed at «-18.0 dB» threshold, «4:1» ratio, +3 dB makeup\n\n**Mixer (all centered, no mutes)**\n| Track | Fader |\n|-------|-------|\n| Pad | -6.0 dB |\n| Drums | -3.0 dB |\n| Bass | -5.0 dB |\n| Vox | -8.0 dB |\n\n---\n\n**The gap:** For **dark garage, 2am**, the Drops have **no bass element**. The Bass track is empty. The Pad drops out, leaving only drums and compressed vocal—thin in the low-mid energy that defines the genre.\n\n**One move:** Add a bass element to the Bass track for the Drops. Copy the Pad's chord progression, drop it an octave or two, filter it dark, and place it in the Drops (bars 17-24 and 33-40). This restores the harmonic anchor and fills the frequency void the Pad leaves.\n\n**Listen:** Play from bar 16 into the first Drop. Notice the energy sink when the Pad cuts—your ear will tell you if the new bass fills it or needs more movement (try eighth-note pulse or sidechain duck to the kick).\n\n---\n\nNo NOTES to update.",
+      "calls": [
+        {
+          "name": "get_arrangement",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137908584,
+            "missing_reason": null,
+            "queried_at": 1789137908584,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "missing": [],
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "tracks": [
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 16.0,
+                      "length_beats": 64.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 0.0
+                    },
+                    {
+                      "bar_start": 25.0,
+                      "index": 1,
+                      "is_midi": true,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 96.0
+                    }
+                  ],
+                  "track": 0,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 40.0,
+                      "length_beats": 160.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Beat»",
+                      "start_beats": 0.0
+                    }
+                  ],
+                  "track": 1,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [],
+                  "track": 2,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 17.0,
+                      "index": 0,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 64.0
+                    },
+                    {
+                      "bar_start": 33.0,
+                      "index": 1,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 128.0
+                    }
+                  ],
+                  "track": 3,
+                  "truncated": false
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137908585,
+            "missing_reason": null,
+            "queried_at": 1789137908585,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_chains",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137908586,
+            "missing_reason": null,
+            "queried_at": 1789137908586,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "devices": [],
+                  "track": 0
+                },
+                {
+                  "devices": [
+                    "«Drum Rack» [rack]"
+                  ],
+                  "track": 1
+                },
+                {
+                  "devices": [],
+                  "track": 2
+                },
+                {
+                  "devices": [
+                    "«Compressor»"
+                  ],
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895758,
+            "missing_reason": null,
+            "queried_at": 1789137908586,
+            "value": {
+              "fader": 0.72,
+              "fader_db": "-6.0 dB",
+              "index": 0,
+              "mute": false,
+              "name": "«Pad»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895758,
+            "missing_reason": null,
+            "queried_at": 1789137908586,
+            "value": {
+              "fader": 0.8,
+              "fader_db": "-3.0 dB",
+              "index": 1,
+              "mute": false,
+              "name": "«Drums»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 2
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895759,
+            "missing_reason": null,
+            "queried_at": 1789137908587,
+            "value": {
+              "fader": 0.75,
+              "fader_db": "-5.0 dB",
+              "index": 2,
+              "mute": false,
+              "name": "«Bass»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895759,
+            "missing_reason": null,
+            "queried_at": 1789137908587,
+            "value": {
+              "fader": 0.68,
+              "fader_db": "-8.0 dB",
+              "index": 3,
+              "mute": false,
+              "name": "«Vox»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement_notes",
+          "args": {
+            "index": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137963305,
+            "missing_reason": null,
+            "queried_at": 1789137963305,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "bar_start": 1.0,
+              "count": 6,
+              "is_midi": true,
+              "length_bars": 16.0,
+              "length_beats": 64.0,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "muted": false,
+              "name": "«Chords»",
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                }
+              ],
+              "start_beats": 0.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_rack_contents",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137963307,
+            "missing_reason": null,
+            "queried_at": 1789137963307,
+            "value": {
+              "chains": [
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 0,
+                  "name": "«Kick»",
+                  "note": 36,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 1,
+                  "name": "«Clap»",
+                  "note": 39,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 2,
+                  "name": "«Hats»",
+                  "note": 42,
+                  "total_devices": 1
+                }
+              ],
+              "is_rack": true,
+              "total_chains": 3,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_params",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137963308,
+            "missing_reason": null,
+            "queried_at": 1789137963308,
+            "value": {
+              "device": "«Compressor»",
+              "params": [
+                {
+                  "index": 0,
+                  "name": "«Device On»",
+                  "value": "«On»"
+                },
+                {
+                  "index": 1,
+                  "name": "«Threshold»",
+                  "value": "«-18.0 dB»"
+                },
+                {
+                  "index": 2,
+                  "name": "«Ratio»",
+                  "value": "«4.00 : 1»"
+                },
+                {
+                  "index": 3,
+                  "name": "«Attack»",
+                  "value": "«10.0 ms»"
+                },
+                {
+                  "index": 4,
+                  "name": "«Release»",
+                  "value": "«100 ms»"
+                },
+                {
+                  "index": 5,
+                  "name": "«Output Gain»",
+                  "value": "«3.0 dB»"
+                }
+              ],
+              "total": 6,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "evidence_supports": {
+          "pass": false,
+          "reason": "The Pad loop is four beats, one bar, not four bars; occupied tracks do not establish a low-mid frequency void."
+        },
+        "ear_only_handed_over": {
+          "pass": false,
+          "reason": "It calls the Drop thin and asserts a frequency void in this set without hearing it."
+        }
+      }
+    },
+    {
+      "id": "k-pad-0",
+      "source": "paid-20260911-144454-moonshotai_kimi-k2.txt:484 (zero-based run 0; original answer, unchanged)",
+      "question": "is the pad too busy?",
+      "answer": "The Pad clip «Chords» is **not too busy** — it's actually quite minimal. Six notes total: two triads (A minor on beat 1, F major on beat 3), each held as eighth-notes, looping every bar. That's a classic garage pad skeleton — harmonic color without clutter.\n\nFor 2am dark garage, this density is appropriate. The space leaves room for the Bass and Drums to breathe, and the eighth-note duration keeps it from getting wash-y.\n\n**What I'd check next:** whether the pad's *sound* is too present in the upper-mids, which would make it *feel* busy even with sparse notes. I can't hear that — but I can see if there's processing that might be adding harmonics or length. Want me to check the device chain on «Pad»?",
+      "calls": [
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138167728,
+            "missing_reason": null,
+            "queried_at": 1789138167728,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clip_notes",
+          "args": {
+            "clip": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138170285,
+            "missing_reason": null,
+            "queried_at": 1789138170285,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "count": 6,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "loop_state_known": true,
+              "looping": true,
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "velocity": 100.0
+                }
+              ],
+              "source_length_beats": 4.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "readable_problem": {
+          "pass": true,
+          "reason": "It finds no density problem and only offers a further device read."
+        },
+        "no_invented_change": {
+          "pass": true,
+          "reason": "No set edit is proposed; investigating the device chain is not a change."
+        },
+        "conditional_move": {
+          "pass": true,
+          "reason": "There is no proposed edit that needs a prerequisite."
+        }
+      }
+    },
+    {
+      "id": "k-pad-2",
+      "source": "paid-20260911-144454-moonshotai_kimi-k2.txt:611 (zero-based run 2; original answer, unchanged)",
+      "question": "is the pad too busy?",
+      "answer": "The «Chords» clip is rhythmically sparse. Across its 1-bar loop it has only two hits: an Am triad on beat 1 and an F major triad on beat 3, each an eighth note long. That is two rhythmic events per bar with plenty of silence between them.\n\n**Readable verdict:** not busy. The density and harmonic movement are both low.\n\nIf the pad still feels cluttered, that lives in timbre and sustain — I cannot hear that. But the MIDI itself is giving a lot of space.\n\n**One move** if you want to open it up further: lengthen both chord stabs to full 2-beat durations (half notes) so they ring across the bar instead of re-triggering. Select the notes in the «Chords» clip and stretch the two groups to 1.1.1–1.3.1 and 1.3.1–2.1.1.\n\n**Listen for:** play from bar 1. Does the current short-stab re-triggering create motion that fights the 2am stillness? If the longer sustain makes it too washy, you can split the difference with quarter notes instead.",
+      "calls": [
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138213388,
+            "missing_reason": null,
+            "queried_at": 1789138213388,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138213891,
+            "missing_reason": null,
+            "queried_at": 1789138213891,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "missing": [],
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "tracks": [
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 16.0,
+                      "length_beats": 64.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 0.0
+                    },
+                    {
+                      "bar_start": 25.0,
+                      "index": 1,
+                      "is_midi": true,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 96.0
+                    }
+                  ],
+                  "track": 0,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 40.0,
+                      "length_beats": 160.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Beat»",
+                      "start_beats": 0.0
+                    }
+                  ],
+                  "track": 1,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [],
+                  "track": 2,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 17.0,
+                      "index": 0,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 64.0
+                    },
+                    {
+                      "bar_start": 33.0,
+                      "index": 1,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 128.0
+                    }
+                  ],
+                  "track": 3,
+                  "truncated": false
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement_notes",
+          "args": {
+            "index": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138215606,
+            "missing_reason": null,
+            "queried_at": 1789138215606,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "bar_start": 1.0,
+              "count": 6,
+              "is_midi": true,
+              "length_bars": 16.0,
+              "length_beats": 64.0,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "muted": false,
+              "name": "«Chords»",
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                }
+              ],
+              "start_beats": 0.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "readable_problem": {
+          "pass": false,
+          "reason": "It finds no readable problem but prescribes lengthening notes anyway."
+        },
+        "no_invented_change": {
+          "pass": false,
+          "reason": "The asserted need to open up the part has no established problem; listening happens after the change."
+        }
+      }
+    },
+    {
+      "id": "k-next-1",
+      "source": "paid-20260911-144454-moonshotai_kimi-k2.txt:944 (zero-based run 1; original answer, unchanged)",
+      "question": "what should I do next?",
+      "answer": "Now I see the picture. Your «Pad» track has an Am/F two-chord loop (A2-C3-E3 to F2-A2-C3) that runs Intro through Break, then drops out. Drums are a garage-style pattern with kick, clap, and hats. But **track 2 «Bass» has no clips at all** — session or arrangement.\n\nFor dark garage at 2am, the bass is the anchor. Without it, the low end is just kick drum hits with no sustained harmonic weight underneath.\n\n**The gap:** No bass content anywhere. This is the first priority.\n\n**One move:** Create a bass part that shadows the pad's root movement (A → F) but sits an octave lower, playing sustained or lightly pulsing notes that fill the space between kicks. In session view on «Bass», record or draw a clip with A1 (bar 1) and F1 (bar 2), each held for 2 bars to match the pad's harmonic rhythm. Keep velocities moderate (80-100) so it sits under the kick rather than fighting it.\n\n**What to listen for:** Play from bar 17 (Drop). Does the low end now feel like a foundation rather than just percussion? The bass should feel like a dark, continuous presence that the vocal can float over.\n\nThe arrangement structure is solid — pads and drums building, vocals hitting the drops. The chords and drums are fine; leave them. The only thing missing is the low-frequency anchor that defines the genre.\n\n```\nnote\n+ move bass: add A1/F1 sustained bass following pad roots on «Bass» track\n+ heard [to be filled after trying]\n+ decided [to be filled after trying]\n```",
+      "calls": [
+        {
+          "name": "get_arrangement",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138283555,
+            "missing_reason": null,
+            "queried_at": 1789138283555,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "missing": [],
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "tracks": [
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 16.0,
+                      "length_beats": 64.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 0.0
+                    },
+                    {
+                      "bar_start": 25.0,
+                      "index": 1,
+                      "is_midi": true,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 96.0
+                    }
+                  ],
+                  "track": 0,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 40.0,
+                      "length_beats": 160.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Beat»",
+                      "start_beats": 0.0
+                    }
+                  ],
+                  "track": 1,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [],
+                  "track": 2,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 17.0,
+                      "index": 0,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 64.0
+                    },
+                    {
+                      "bar_start": 33.0,
+                      "index": 1,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 128.0
+                    }
+                  ],
+                  "track": 3,
+                  "truncated": false
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138283557,
+            "missing_reason": null,
+            "queried_at": 1789138283557,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_chains",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138283558,
+            "missing_reason": null,
+            "queried_at": 1789138283558,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "devices": [],
+                  "track": 0
+                },
+                {
+                  "devices": [
+                    "«Drum Rack» [rack]"
+                  ],
+                  "track": 1
+                },
+                {
+                  "devices": [],
+                  "track": 2
+                },
+                {
+                  "devices": [
+                    "«Compressor»"
+                  ],
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clip_notes",
+          "args": {
+            "clip": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138288361,
+            "missing_reason": null,
+            "queried_at": 1789138288361,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "count": 6,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "loop_state_known": true,
+              "looping": true,
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "velocity": 100.0
+                }
+              ],
+              "source_length_beats": 4.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clip_notes",
+          "args": {
+            "clip": 0,
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138288364,
+            "missing_reason": null,
+            "queried_at": 1789138288364,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "count": 8,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "loop_state_known": true,
+              "looping": true,
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C1",
+                  "pitch": 36,
+                  "start": 0.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.3",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F#1",
+                  "pitch": 42,
+                  "start": 0.5,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.2.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "D#1",
+                  "pitch": 39,
+                  "start": 1.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.2.3",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F#1",
+                  "pitch": 42,
+                  "start": 1.5,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C1",
+                  "pitch": 36,
+                  "start": 2.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.3",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F#1",
+                  "pitch": 42,
+                  "start": 2.5,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.4.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "D#1",
+                  "pitch": 39,
+                  "start": 3.0,
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.4.3",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F#1",
+                  "pitch": 42,
+                  "start": 3.5,
+                  "velocity": 100.0
+                }
+              ],
+              "source_length_beats": 4.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_rack_contents",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789138288365,
+            "missing_reason": null,
+            "queried_at": 1789138288365,
+            "value": {
+              "chains": [
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 0,
+                  "name": "«Kick»",
+                  "note": 36,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 1,
+                  "name": "«Clap»",
+                  "note": 39,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 2,
+                  "name": "«Hats»",
+                  "note": 42,
+                  "total_devices": 1
+                }
+              ],
+              "is_rack": true,
+              "total_chains": 3,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "evidence_supports": {
+          "pass": false,
+          "reason": "Pad does not run continuously from Intro through Break; its harmony changes every two beats, not every two bars."
+        },
+        "one_move": {
+          "pass": true,
+          "reason": "Drawing or recording the bass clip and specifying its notes and velocities implement one intervention."
+        },
+        "listen_for": {
+          "pass": true,
+          "reason": "Play from bar 17 and notice the bass foundation supplies the ear test."
+        },
+        "leave_it": {
+          "pass": true,
+          "reason": "The chords and drums are explicitly called fine and left alone."
+        }
+      }
+    },
+    {
+      "id": "control-drop-drums",
+      "source": "Hand-authored positive control; tool evidence copied unchanged from Kimi mix run 0, line 20. Not a model response.",
+      "question": "why does the drop fall flat?",
+      "answer": "For the stated GOAL, I would try making the Drop arrival more distinct. The arrangement shows Drums occupying beats 0–160, Pad ending at beat 64 (bar 17), Vox entering there, and Bass with no placements. On contrast at section boundaries, I would first try delaying the existing Drums entrance: it currently begins at the start of Intro. One move: trim the Drums arrangement clip to start at beat 64 (bar 17). Keep its end at beat 160; undo the trim to restore the original. Play from beat 60 (bar 16) through beat 68 (bar 18) and listen for whether the drum entrance makes Drop feel more distinct. The Pad notes show two triads per four-beat loop; that repetition is enough for this trial, so leave its notes alone.",
+      "calls": [
+        {
+          "name": "get_arrangement",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137908584,
+            "missing_reason": null,
+            "queried_at": 1789137908584,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "missing": [],
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "tracks": [
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 16.0,
+                      "length_beats": 64.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 0.0
+                    },
+                    {
+                      "bar_start": 25.0,
+                      "index": 1,
+                      "is_midi": true,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 96.0
+                    }
+                  ],
+                  "track": 0,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 40.0,
+                      "length_beats": 160.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Beat»",
+                      "start_beats": 0.0
+                    }
+                  ],
+                  "track": 1,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [],
+                  "track": 2,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 17.0,
+                      "index": 0,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 64.0
+                    },
+                    {
+                      "bar_start": 33.0,
+                      "index": 1,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 128.0
+                    }
+                  ],
+                  "track": 3,
+                  "truncated": false
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137908585,
+            "missing_reason": null,
+            "queried_at": 1789137908585,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_chains",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137908586,
+            "missing_reason": null,
+            "queried_at": 1789137908586,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "devices": [],
+                  "track": 0
+                },
+                {
+                  "devices": [
+                    "«Drum Rack» [rack]"
+                  ],
+                  "track": 1
+                },
+                {
+                  "devices": [],
+                  "track": 2
+                },
+                {
+                  "devices": [
+                    "«Compressor»"
+                  ],
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895758,
+            "missing_reason": null,
+            "queried_at": 1789137908586,
+            "value": {
+              "fader": 0.72,
+              "fader_db": "-6.0 dB",
+              "index": 0,
+              "mute": false,
+              "name": "«Pad»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895758,
+            "missing_reason": null,
+            "queried_at": 1789137908586,
+            "value": {
+              "fader": 0.8,
+              "fader_db": "-3.0 dB",
+              "index": 1,
+              "mute": false,
+              "name": "«Drums»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 2
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895759,
+            "missing_reason": null,
+            "queried_at": 1789137908587,
+            "value": {
+              "fader": 0.75,
+              "fader_db": "-5.0 dB",
+              "index": 2,
+              "mute": false,
+              "name": "«Bass»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895759,
+            "missing_reason": null,
+            "queried_at": 1789137908587,
+            "value": {
+              "fader": 0.68,
+              "fader_db": "-8.0 dB",
+              "index": 3,
+              "mute": false,
+              "name": "«Vox»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement_notes",
+          "args": {
+            "index": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137963305,
+            "missing_reason": null,
+            "queried_at": 1789137963305,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "bar_start": 1.0,
+              "count": 6,
+              "is_midi": true,
+              "length_bars": 16.0,
+              "length_beats": 64.0,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "muted": false,
+              "name": "«Chords»",
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                }
+              ],
+              "start_beats": 0.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_rack_contents",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137963307,
+            "missing_reason": null,
+            "queried_at": 1789137963307,
+            "value": {
+              "chains": [
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 0,
+                  "name": "«Kick»",
+                  "note": 36,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 1,
+                  "name": "«Clap»",
+                  "note": 39,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 2,
+                  "name": "«Hats»",
+                  "note": 42,
+                  "total_devices": 1
+                }
+              ],
+              "is_rack": true,
+              "total_chains": 3,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_params",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137963308,
+            "missing_reason": null,
+            "queried_at": 1789137963308,
+            "value": {
+              "device": "«Compressor»",
+              "params": [
+                {
+                  "index": 0,
+                  "name": "«Device On»",
+                  "value": "«On»"
+                },
+                {
+                  "index": 1,
+                  "name": "«Threshold»",
+                  "value": "«-18.0 dB»"
+                },
+                {
+                  "index": 2,
+                  "name": "«Ratio»",
+                  "value": "«4.00 : 1»"
+                },
+                {
+                  "index": 3,
+                  "name": "«Attack»",
+                  "value": "«10.0 ms»"
+                },
+                {
+                  "index": 4,
+                  "name": "«Release»",
+                  "value": "«100 ms»"
+                },
+                {
+                  "index": 5,
+                  "name": "«Output Gain»",
+                  "value": "«3.0 dB»"
+                }
+              ],
+              "total": 6,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "evidence_supports": {
+          "pass": true,
+          "reason": "Placements and Pad loop claims match the supplied map and notes; the new start is a proposed trial."
+        },
+        "no_invented_change": {
+          "pass": true,
+          "reason": "The proposed trim addresses the established continuous drum placement on the contrast axis."
+        },
+        "ear_only_handed_over": {
+          "pass": true,
+          "reason": "It gives no audible verdict and hands the outcome to the producer."
+        },
+        "conditional_move": {
+          "pass": true,
+          "reason": "An established arrangement observation may motivate an immediate reversible trial."
+        },
+        "section_purpose": {
+          "pass": true,
+          "reason": "The opening ties the Drop arrival to the stated GOAL without asserting a genre rule."
+        },
+        "named_axis": {
+          "pass": true,
+          "reason": "It names contrast at section boundaries."
+        },
+        "one_move": {
+          "pass": true,
+          "reason": "Trimming one drum placement is one intervention; end and undo details implement it."
+        },
+        "why": {
+          "pass": true,
+          "reason": "The current Intro entrance motivates a later entrance to test contrast."
+        },
+        "listen_for": {
+          "pass": true,
+          "reason": "Beat 60 through 68 and whether Drop feels more distinct give location and observation."
+        },
+        "leave_it": {
+          "pass": true,
+          "reason": "The Pad repetition is explicitly enough and its notes are left alone."
+        },
+        "source_named": {
+          "pass": true,
+          "reason": "It names arrangement and Pad note sources."
+        }
+      }
+    },
+    {
+      "id": "control-pad-keep",
+      "source": "Hand-authored positive control; tool evidence copied unchanged from Kimi mix run 0, line 20. Not a model response.",
+      "question": "is the pad too busy?",
+      "answer": "The Pad notes show two triads in a four-beat, one-bar loop: A2/C3/E3 at clip beat 0 and F2/A2/C3 at clip beat 2, each note lasting half a beat. I find no readable density problem in those two attacks per bar. MIDI note length does not tell me the audible release. Whether the sound feels crowded is yours to hear. Leave the Pad as it is.",
+      "calls": [
+        {
+          "name": "get_arrangement",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137908584,
+            "missing_reason": null,
+            "queried_at": 1789137908584,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "missing": [],
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "tracks": [
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 16.0,
+                      "length_beats": 64.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 0.0
+                    },
+                    {
+                      "bar_start": 25.0,
+                      "index": 1,
+                      "is_midi": true,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Chords»",
+                      "start_beats": 96.0
+                    }
+                  ],
+                  "track": 0,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 1.0,
+                      "index": 0,
+                      "is_midi": true,
+                      "length_bars": 40.0,
+                      "length_beats": 160.0,
+                      "loop_region": {
+                        "end_beats": 4.0,
+                        "start_beats": 0.0
+                      },
+                      "muted": false,
+                      "name": "«Beat»",
+                      "start_beats": 0.0
+                    }
+                  ],
+                  "track": 1,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [],
+                  "track": 2,
+                  "truncated": false
+                },
+                {
+                  "changed": false,
+                  "clips": [
+                    {
+                      "bar_start": 17.0,
+                      "index": 0,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 64.0
+                    },
+                    {
+                      "bar_start": 33.0,
+                      "index": 1,
+                      "is_midi": false,
+                      "length_bars": 8.0,
+                      "length_beats": 32.0,
+                      "muted": false,
+                      "name": "«Take 3»",
+                      "start_beats": 128.0
+                    }
+                  ],
+                  "track": 3,
+                  "truncated": false
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_clips",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137908585,
+            "missing_reason": null,
+            "queried_at": 1789137908585,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "clips": [
+                    {
+                      "name": "«Chords»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 0
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Beat»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": true,
+                  "track": 1
+                },
+                {
+                  "clips": [],
+                  "midi": true,
+                  "track": 2
+                },
+                {
+                  "clips": [
+                    {
+                      "name": "«Take 3»",
+                      "slot": 0
+                    }
+                  ],
+                  "midi": false,
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_chains",
+          "args": {},
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137908586,
+            "missing_reason": null,
+            "queried_at": 1789137908586,
+            "value": {
+              "missing": [],
+              "tracks": [
+                {
+                  "devices": [],
+                  "track": 0
+                },
+                {
+                  "devices": [
+                    "«Drum Rack» [rack]"
+                  ],
+                  "track": 1
+                },
+                {
+                  "devices": [],
+                  "track": 2
+                },
+                {
+                  "devices": [
+                    "«Compressor»"
+                  ],
+                  "track": 3
+                }
+              ]
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895758,
+            "missing_reason": null,
+            "queried_at": 1789137908586,
+            "value": {
+              "fader": 0.72,
+              "fader_db": "-6.0 dB",
+              "index": 0,
+              "mute": false,
+              "name": "«Pad»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895758,
+            "missing_reason": null,
+            "queried_at": 1789137908586,
+            "value": {
+              "fader": 0.8,
+              "fader_db": "-3.0 dB",
+              "index": 1,
+              "mute": false,
+              "name": "«Drums»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 2
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895759,
+            "missing_reason": null,
+            "queried_at": 1789137908587,
+            "value": {
+              "fader": 0.75,
+              "fader_db": "-5.0 dB",
+              "index": 2,
+              "mute": false,
+              "name": "«Bass»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_track_detail",
+          "args": {
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": false,
+            "fresh_as_of": 1789137895759,
+            "missing_reason": null,
+            "queried_at": 1789137908587,
+            "value": {
+              "fader": 0.68,
+              "fader_db": "-8.0 dB",
+              "index": 3,
+              "mute": false,
+              "name": "«Vox»",
+              "pan": 0.0,
+              "solo": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_arrangement_notes",
+          "args": {
+            "index": 0,
+            "track": 0
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137963305,
+            "missing_reason": null,
+            "queried_at": 1789137963305,
+            "value": {
+              "bar_positions_assume_current_signature": true,
+              "bar_start": 1.0,
+              "count": 6,
+              "is_midi": true,
+              "length_bars": 16.0,
+              "length_beats": 64.0,
+              "loop_region": {
+                "end_beats": 4.0,
+                "end_position": "2.1.1",
+                "start_beats": 0.0,
+                "start_position": "1.1.1"
+              },
+              "muted": false,
+              "name": "«Chords»",
+              "notes": [
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.1.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "E3",
+                  "pitch": 64,
+                  "start": 0.0,
+                  "timeline_position": "1.1.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "F2",
+                  "pitch": 53,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "A2",
+                  "pitch": 57,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                },
+                {
+                  "clip_position": "1.3.1",
+                  "duration": 0.5,
+                  "duration_notation": "1/8 note",
+                  "mute": false,
+                  "note": "C3",
+                  "pitch": 60,
+                  "start": 2.0,
+                  "timeline_position": "1.3.1",
+                  "velocity": 100.0
+                }
+              ],
+              "start_beats": 0.0,
+              "time_signature": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_rack_contents",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 1
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137963307,
+            "missing_reason": null,
+            "queried_at": 1789137963307,
+            "value": {
+              "chains": [
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 0,
+                  "name": "«Kick»",
+                  "note": 36,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 1,
+                  "name": "«Clap»",
+                  "note": 39,
+                  "total_devices": 1
+                },
+                {
+                  "devices": [
+                    "«Simpler»"
+                  ],
+                  "index": 2,
+                  "name": "«Hats»",
+                  "note": 42,
+                  "total_devices": 1
+                }
+              ],
+              "is_rack": true,
+              "total_chains": 3,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        },
+        {
+          "name": "get_device_params",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1789137963308,
+            "missing_reason": null,
+            "queried_at": 1789137963308,
+            "value": {
+              "device": "«Compressor»",
+              "params": [
+                {
+                  "index": 0,
+                  "name": "«Device On»",
+                  "value": "«On»"
+                },
+                {
+                  "index": 1,
+                  "name": "«Threshold»",
+                  "value": "«-18.0 dB»"
+                },
+                {
+                  "index": 2,
+                  "name": "«Ratio»",
+                  "value": "«4.00 : 1»"
+                },
+                {
+                  "index": 3,
+                  "name": "«Attack»",
+                  "value": "«10.0 ms»"
+                },
+                {
+                  "index": 4,
+                  "name": "«Release»",
+                  "value": "«100 ms»"
+                },
+                {
+                  "index": 5,
+                  "name": "«Output Gain»",
+                  "value": "«3.0 dB»"
+                }
+              ],
+              "total": 6,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        }
+      ],
+      "expected": {
+        "readable_problem": {
+          "pass": true,
+          "reason": "It finds no readable problem and stops without an edit."
+        },
+        "evidence_supports": {
+          "pass": true,
+          "reason": "All pitch, timing and loop claims match the note result, with no audible inference."
+        },
+        "no_invented_change": {
+          "pass": true,
+          "reason": "No edit is proposed."
+        },
+        "ear_only_handed_over": {
+          "pass": true,
+          "reason": "It explicitly leaves audible crowding to the producer."
+        },
+        "conditional_move": {
+          "pass": true,
+          "reason": "No edit needs a prerequisite."
+        },
+        "source_named": {
+          "pass": true,
+          "reason": "The notes are named as the source."
+        }
+      }
+    }
+  ]
+}
