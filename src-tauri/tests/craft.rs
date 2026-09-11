@@ -1,25 +1,32 @@
 //! Craft scenarios: does the advice have the shape the craft ontology asks
 //! for? The 2026-09-02 craft ontology design (git history) sets that shape.
 //!
-//! Not run by `cargo test`: the target needs `--features evals`. Two tests
-//! cost nothing and need no credentials: one checks that the fake Live
-//! answers every read the craft fixture supports, so a red craft scenario
-//! is about the prompt and never about a missing read; the other checks
-//! that the harness sends a temperature only when asked. Every other test
-//! asks a real model, then a judge model, and costs money:
+//! Not run by `cargo test`: the target needs `--features evals`. Fixture,
+//! harness, parsing and reporting tests cost nothing and need no credentials.
+//! The six scenario tests ask a real model, then a judge, and cost money.
+//! Run only scenarios 1 to 4 while scenario 5 is parked:
 //!
 //!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
-//!     [MIXINGPAL_JUDGE_MODEL=...] \
-//!     cargo test --features evals --test craft -- --test-threads=1
+//!     MIXINGPAL_JUDGE_MODEL=anthropic/claude-sonnet-4.6 \
+//!     cargo test --features evals --test craft -- --test-threads=1 --nocapture \
+//!       why_does_the_drop_fall_flat what_should_i_do_next is_the_pad_too_busy is_the_mix_okay
+//!
+//! The judge in use on 2026-09-11 is anthropic/claude-sonnet-4.6. Set it
+//! explicitly; omitting MIXINGPAL_JUDGE_MODEL uses the answer model. A judge
+//! that reasons by default can spend the 4000-token cap before writing JSON.
+//! The earlier anthropic/claude-sonnet-5 run returned empty content with
+//! finish_reason length twice; usage was not logged, so reasoning as the
+//! cause remains unconfirmed. Those replies now invalidate the evaluation,
+//! with finish reason and reasoning-token usage (when supplied) in the report.
 //!
 //! Unlike `evals.rs`, these assert on prose, through a judge. Wording is
 //! not stable across runs. Scenarios 1 to 4 pass on a majority of three
 //! runs. Scenario 5 is a gate of one run per arm at temperature 0, plus a
 //! report of three runs per arm at the app's own sampling.
 //!
-//! Every mentor answer in this file illustrates the shape of a good answer.
-//! The claims they make about garage, techno, or any style are not facts
-//! this repo stands behind, and the judge is told not to grade them.
+//! Mentors illustrate answer shape and possible choices for the GOAL, never
+//! musical rules. The judge checks set facts against the supplied reads and
+//! does not grade genre/style claims.
 
 mod common;
 
@@ -335,6 +342,7 @@ struct JudgeReply {
     content: String,
     finish_reason: String,
     reasoning_tokens: Option<u64>,
+    model: String,
 }
 
 fn parse_judge_reply(raw: &Value, props: &[Property]) -> JudgeReply {
@@ -368,7 +376,8 @@ fn parse_judge_reply(raw: &Value, props: &[Property]) -> JudgeReply {
             Ok((p.key.to_string(), (pass, reason.to_string())))
         }).collect()
     })();
-    JudgeReply { verdicts, content, finish_reason, reasoning_tokens }
+    let model = raw["model"].as_str().unwrap_or("?").to_string();
+    JudgeReply { verdicts, content, finish_reason, reasoning_tokens, model }
 }
 
 #[test]
@@ -441,8 +450,7 @@ async fn judge(
     let body = json!({
         "model": s.model,
         "temperature": 0,
-        // Room for a judge that reasons before it writes: a 600-token cap
-        // returned empty content from one, the budget spent on thinking.
+        // Reasoning shares this cap; even 4000 has returned empty content.
         "max_tokens": 4000,
         "messages": [
             { "role": "system", "content": JUDGE_PROMPT },
@@ -451,9 +459,11 @@ async fn judge(
     });
     let raw = match post_chat(&common::judge_client(), &s, body).await {
         Ok(raw) => raw,
-        Err(e) => return Err(format!("judge call failed: {}", judge_error(e))),
+        Err(e) => return Err(format!("judge {} call failed: {}", s.model, judge_error(e))),
     };
-    Ok(parse_judge_reply(&raw, props))
+    let mut reply = parse_judge_reply(&raw, props);
+    reply.model = s.model;
+    Ok(reply)
 }
 
 fn context_for(goal: Option<&str>) -> String {
@@ -508,8 +518,10 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
     match judge(sc.question, &context, &turn.answer, &turn.calls, sc.mentor, sc.must).await {
         Ok(reply) => {
             let judge_report = Some(format!(
-                "finish_reason {}; reasoning_tokens {:?}; content: {}",
-                reply.finish_reason, reply.reasoning_tokens, reply.content
+                "model {}; finish_reason {}; reasoning_tokens {}; content: {}",
+                reply.model, reply.finish_reason,
+                reply.reasoning_tokens.map(|n| n.to_string()).unwrap_or("unreported".into()),
+                reply.content
             ));
             let (verdicts, invalid_evaluation) = match reply.verdicts {
                 Ok(verdicts) => (verdicts, None),

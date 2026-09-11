@@ -126,6 +126,21 @@ Ordered. Each item says what, why, size, and what it waits on.
    four first. Judge with a model that does not reason
    (`MIXINGPAL_JUDGE_MODEL`, checklist has the one used).
 
+   Repaired the craft evaluation on 2026-09-11 after scenarios one to four
+   ran red on MiniMax M3 and Kimi K2: the fake Live now preserves audio clip
+   type, mentors match the fixture's notes and beat/bar units, and the gates
+   allow an argued pad decision and one intervention with its implementation
+   details. The judge receives tool arguments/results and scores attribution
+   separately from evidence support; invalid judge replies stop majority
+   scoring instead of failing answers. Reports retain raw answers, count
+   mechanical note defects without gating on them, and name the judge,
+   finish reason and available reasoning usage. Use
+   `MIXINGPAL_JUDGE_MODEL=anthropic/claude-sonnet-4.6`; the earlier Sonnet 5
+   run exhausted the 4000-token cap twice with empty content. The craft
+   prompt and parked scenario five are unchanged. Local checks cover the
+   repair; a paid rerun of scenarios one to four is still needed before
+   drawing advice-quality conclusions about either model.
+
 7. **Default model and latency.** Done 2026-09-11. `tests/latency.rs` runs
    one two-tool question five times against the model the environment
    names and asserts a median turn under a minute, a non-empty answer, and
