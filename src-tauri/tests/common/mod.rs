@@ -600,11 +600,45 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
 /// One tool call the loop made, with what it was asked and whether Live
 /// answered. `Turn::called` keeps the bare names for the honesty suite's
 /// order assertions; this is the record the craft suite grounds on.
+#[derive(Debug, serde::Serialize)]
 pub struct ToolCallRecord {
     pub name: String,
     pub args: Value,
     /// The result's `missing_reason`, `None` when the read came back whole.
     pub missing_reason: Option<String>,
+    pub result: Value,
+    pub result_truncated: bool,
+}
+
+const TOOL_RESULT_BYTES: usize = 32 * 1024;
+
+impl ToolCallRecord {
+    pub fn new(name: String, args: Value, result: Value) -> Self {
+        let missing_reason = result["missing_reason"].as_str().map(str::to_string);
+        let raw = result.to_string();
+        let result_truncated = raw.len() > TOOL_RESULT_BYTES;
+        let result = if result_truncated {
+            // Leave room for escaping the JSON prefix inside a JSON string.
+            let mut end = TOOL_RESULT_BYTES / 4;
+            while !raw.is_char_boundary(end) {
+                end -= 1;
+            }
+            json!({ "json_prefix": &raw[..end], "original_bytes": raw.len() })
+        } else {
+            result
+        };
+        Self { name, args, missing_reason, result, result_truncated }
+    }
+}
+
+#[test]
+fn tool_evidence_is_bounded_and_marks_the_missing_tail() {
+    let result = json!({ "value": "🎹\"".repeat(TOOL_RESULT_BYTES), "missing_reason": "partial" });
+    let record = ToolCallRecord::new("read".into(), json!({}), result);
+    assert!(record.result_truncated);
+    assert!(record.result.to_string().len() <= TOOL_RESULT_BYTES);
+    assert_eq!(record.missing_reason.as_deref(), Some("partial"));
+    assert!(record.result["json_prefix"].as_str().unwrap().contains("🎹"));
 }
 
 /// What the card shows: the answer with every fenced `note` block removed,
@@ -762,14 +796,9 @@ pub async fn ask_with(
             called.push(call.function.name.clone());
             let args: Value = serde_json::from_str(&call.function.arguments).unwrap_or(json!({}));
             let result: ToolResult = execute(&ctx, &call.function.name, &args).await;
-            let missing_reason = serde_json::to_value(&result)
-                .ok()
-                .and_then(|v| v["missing_reason"].as_str().map(str::to_string));
-            calls.push(ToolCallRecord {
-                name: call.function.name.clone(),
-                args: args.clone(),
-                missing_reason,
-            });
+            calls.push(ToolCallRecord::new(
+                call.function.name.clone(), args.clone(), serde_json::to_value(&result).unwrap(),
+            ));
             messages.push(ChatMessage {
                 role: "tool".into(),
                 content: Some(serde_json::to_string(&result).unwrap()),
