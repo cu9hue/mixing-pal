@@ -318,12 +318,6 @@ fn judge_settings() -> Settings {
     }
 }
 
-/// `(pass, reason)` per property key. A judge reply that cannot be parsed
-/// fails every property, with the raw text as the reason, so a broken
-/// judge shows up as red runs with its output attached, never as green.
-/// The request caps output at 4000 tokens, room for a judge that reasons
-/// before it writes; `JUDGE_PROMPT` still holds every reason to one
-/// sentence so the JSON object closes well inside that.
 /// `post_chat`'s transport error names the app's limit, because it cannot
 /// see the client's. The judge client waits twice that, so rewrite the
 /// message for the judge's bound rather than report a number it did not use.
@@ -333,6 +327,88 @@ fn judge_error(e: String) -> String {
     e.replace(&app_limit, &judge_limit)
 }
 
+struct JudgeReply {
+    verdicts: Result<BTreeMap<String, (bool, String)>, String>,
+    content: String,
+    finish_reason: String,
+    reasoning_tokens: Option<u64>,
+}
+
+fn parse_judge_reply(raw: &Value, props: &[Property]) -> JudgeReply {
+    let content = raw["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+    let finish_reason = raw["choices"][0]["finish_reason"].as_str().unwrap_or("?").to_string();
+    let reasoning_tokens = raw["usage"]["completion_tokens_details"]["reasoning_tokens"].as_u64();
+    let verdicts = (|| {
+        if finish_reason == "length" {
+            return Err("judge exhausted its output budget".to_string());
+        }
+        let text = content.trim();
+        if text.is_empty() {
+            return Err("empty judge content".to_string());
+        }
+        let text = text.strip_prefix("```json").or_else(|| text.strip_prefix("```"))
+            .and_then(|s| s.strip_suffix("```"))
+            .unwrap_or(text).trim();
+        let parsed: Value = serde_json::from_str(text).map_err(|e| format!("invalid judge JSON: {e}"))?;
+        if let Some(reason) = parsed["invalid_evaluation"].as_str() {
+            return Err(format!("judge could not evaluate: {reason}"));
+        }
+        let object = parsed.as_object().ok_or("judge verdicts must be an object")?;
+        if object.len() != props.len() {
+            return Err("judge must return exactly the requested property keys".to_string());
+        }
+        props.iter().map(|p| {
+            let v = &parsed[p.key];
+            let pass = v["pass"].as_bool().ok_or_else(|| format!("{}: missing boolean pass", p.key))?;
+            let reason = v["reason"].as_str().filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| format!("{}: missing reason", p.key))?;
+            Ok((p.key.to_string(), (pass, reason.to_string())))
+        }).collect()
+    })();
+    JudgeReply { verdicts, content, finish_reason, reasoning_tokens }
+}
+
+#[test]
+fn an_empty_or_incomplete_judge_reply_is_invalid() {
+    for (content, finish) in [
+        ("", "length"),
+        ("", "stop"),
+        ("not JSON", "stop"),
+        ("{}", "stop"),
+        (r#"{"one_move":{"pass":true,"reason":"one intervention"}}"#, "stop"),
+        (r#"{"one_move":{"pass":"true","reason":"one"},"listen_for":{"pass":true,"reason":"test"}}"#, "stop"),
+        (r#"{"one_move":{"pass":true},"listen_for":{"pass":true,"reason":"test"}}"#, "stop"),
+        (r#"{"invalid_evaluation":"tool evidence tail needed"}"#, "stop"),
+    ] {
+        let reply = parse_judge_reply(&json!({
+            "choices": [{ "message": { "content": content }, "finish_reason": finish }],
+            "usage": { "completion_tokens_details": { "reasoning_tokens": 4000 } }
+        }), &[ONE_MOVE, LISTEN_FOR]);
+        assert!(reply.verdicts.is_err(), "accepted invalid judge content: {content}");
+        assert_eq!(reply.content, content);
+        assert_eq!(reply.finish_reason, finish);
+        assert_eq!(reply.reasoning_tokens, Some(4000));
+    }
+}
+
+#[test]
+fn a_complete_judge_reply_keeps_passes_and_failures() {
+    let content = r#"{"one_move":{"pass":false,"reason":"two changes"},"listen_for":{"pass":true,"reason":"ear test"}}"#;
+    for text in [content.to_string(), format!("```json\n{content}\n```")] {
+        let reply = parse_judge_reply(&json!({
+            "choices": [{ "message": { "content": text }, "finish_reason": "stop" }]
+        }), &[ONE_MOVE, LISTEN_FOR]);
+        let verdicts = reply.verdicts.unwrap();
+        assert_eq!(verdicts["one_move"], (false, "two changes".into()));
+        assert_eq!(verdicts["listen_for"], (true, "ear test".into()));
+        assert_eq!(reply.reasoning_tokens, None);
+    }
+    let cut_short = parse_judge_reply(&json!({
+        "choices": [{ "message": { "content": content }, "finish_reason": "length" }]
+    }), &[ONE_MOVE, LISTEN_FOR]);
+    assert!(cut_short.verdicts.is_err());
+}
+
 async fn judge(
     question: &str,
     context: &str,
@@ -340,7 +416,7 @@ async fn judge(
     calls: &[common::ToolCallRecord],
     mentor: &str,
     props: &[Property],
-) -> Result<BTreeMap<String, (bool, String)>, String> {
+) -> Result<JudgeReply, String> {
     let list = props
         .iter()
         .map(|p| format!("- {}: {}", p.key, p.description))
@@ -374,24 +450,7 @@ async fn judge(
         Ok(raw) => raw,
         Err(e) => return Err(format!("judge call failed: {}", judge_error(e))),
     };
-    let content = raw["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
-    let finish = raw["choices"][0]["finish_reason"].as_str().unwrap_or("?").to_string();
-    let parsed = match (content.find('{'), content.rfind('}')) {
-        (Some(a), Some(b)) if a < b => serde_json::from_str(&content[a..=b]).unwrap_or(Value::Null),
-        _ => Value::Null,
-    };
-    Ok(props
-        .iter()
-        .map(|p| {
-            let v = &parsed[p.key];
-            let pass = v["pass"].as_bool().unwrap_or(false);
-            let reason = v["reason"]
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("no verdict; finish_reason {finish}; judge said: {content}"));
-            (p.key.to_string(), (pass, reason))
-        })
-        .collect())
+    Ok(parse_judge_reply(&raw, props))
 }
 
 fn context_for(goal: Option<&str>) -> String {
@@ -412,6 +471,8 @@ struct Run {
     /// stay ordinary failed runs the majority absorbs; this one is an
     /// infrastructure fault `run_all` panics on, once every run has finished.
     infra_error: Option<String>,
+    invalid_evaluation: Option<String>,
+    judge_report: Option<String>,
 }
 
 async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
@@ -434,21 +495,35 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
         let verdicts =
             sc.must.iter().map(|p| (p.key.to_string(), (false, reason.clone()))).collect();
         let infra_error = turn.error.as_ref().map(|_| reason.clone());
-        return Run { answer: reason, called: turn.called, calls: turn.calls, verdicts, infra_error };
+        return Run {
+            answer: turn.answer, called: turn.called, calls: turn.calls, verdicts, infra_error,
+            invalid_evaluation: None, judge_report: None,
+        };
     }
     match judge(sc.question, &context, &turn.answer, &turn.calls, sc.mentor, sc.must).await {
-        Ok(verdicts) => {
-            Run { answer: turn.answer, called: turn.called, calls: turn.calls, verdicts, infra_error: None }
+        Ok(reply) => {
+            let judge_report = Some(format!(
+                "finish_reason {}; reasoning_tokens {:?}; content: {}",
+                reply.finish_reason, reply.reasoning_tokens, reply.content
+            ));
+            let (verdicts, invalid_evaluation) = match reply.verdicts {
+                Ok(verdicts) => (verdicts, None),
+                Err(e) => (BTreeMap::new(), Some(e)),
+            };
+            Run {
+                answer: turn.answer, called: turn.called, calls: turn.calls, verdicts,
+                infra_error: None, invalid_evaluation, judge_report,
+            }
         }
         Err(e) => {
-            let verdicts =
-                sc.must.iter().map(|p| (p.key.to_string(), (false, e.clone()))).collect();
             Run {
                 answer: turn.answer,
                 called: turn.called,
                 calls: turn.calls,
-                verdicts,
+                verdicts: BTreeMap::new(),
                 infra_error: Some(e),
+                invalid_evaluation: None,
+                judge_report: None,
             }
         }
     }
@@ -460,7 +535,12 @@ const RUNS: usize = 3;
 /// the judge's verdicts.
 fn report_line(i: usize, run: &Run) -> String {
     let evidence = serde_json::to_string(&run.calls).unwrap();
-    format!("\n--- run {i}: tools {:?}\ntool evidence: {evidence}\n{}\n{:#?}\n", run.called, run.answer, run.verdicts)
+    format!(
+        "\n--- run {i}: tools {:?}\njudge: {}\ninfra_error: {:?}\ninvalid_evaluation: {:?}\n\
+         tool evidence: {evidence}\n{}\n{:#?}\n",
+        run.called, run.judge_report.as_deref().unwrap_or("no reply"), run.infra_error,
+        run.invalid_evaluation, run.answer, run.verdicts
+    )
 }
 
 /// Runs the scenario `RUNS` times and formats the same per-run report both
@@ -476,19 +556,41 @@ async fn run_all(sc: &Scenario) -> (Vec<Run>, String) {
         report.push_str(&report_line(i, &run));
         runs.push(run);
     }
-    // A transport error -- the provider or the judge call itself failed --
-    // is an infrastructure fault, not model variance: it panics only after
-    // every run has completed, with the full report printed, rather than
-    // being absorbed by the majority like a truncated or empty run.
+    require_valid_evaluation(sc.question, &runs, &report);
+    (runs, report)
+}
+
+/// Invalid judges and transport failures never reach majority scoring.
+fn require_valid_evaluation(question: &str, runs: &[Run], report: &str) {
     let errors: Vec<&str> =
         runs.iter().filter_map(|r| r.infra_error.as_deref()).collect();
     if !errors.is_empty() {
         panic!(
             "infrastructure error on \"{}\": {:?}{report}",
-            sc.question, errors
+            question, errors
         );
     }
-    (runs, report)
+    let invalid: Vec<&str> = runs.iter().filter_map(|r| r.invalid_evaluation.as_deref()).collect();
+    assert!(invalid.is_empty(), "invalid evaluation on \"{question}\": {invalid:?}{report}");
+}
+
+#[test]
+fn an_invalid_judge_prevents_even_a_green_majority() {
+    let mut runs: Vec<Run> = (0..RUNS).map(|_| Run {
+        answer: "one move".into(), called: vec![], calls: vec![],
+        verdicts: BTreeMap::from([("one_move".into(), (true, "one intervention".into()))]),
+        infra_error: None, invalid_evaluation: None, judge_report: None,
+    }).collect();
+    require_valid_evaluation("question", &runs, "valid report");
+    let invalid = parse_judge_reply(&json!({
+        "choices": [{ "message": { "content": "" }, "finish_reason": "length" }]
+    }), &[ONE_MOVE]);
+    runs[2].verdicts.clear();
+    runs[2].invalid_evaluation = Some(invalid.verdicts.unwrap_err());
+    let report = report_line(2, &runs[2]);
+    assert!(report.contains("invalid_evaluation: Some"));
+    let result = std::panic::catch_unwind(|| require_valid_evaluation("question", &runs, &report));
+    assert!(result.is_err());
 }
 
 /// A run passes when every property passes and `extra` holds (tool-call
