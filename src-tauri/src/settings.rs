@@ -8,6 +8,13 @@ use std::path::{Path, PathBuf};
 /// which is why it is a setting, not a constant in the client.
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
+/// The model the app calls when the producer has not named one. Chosen on
+/// 2026-09-11 by `tests/latency.rs`: median 4.4 s over five runs of a
+/// two-tool question, the fastest of seven candidates. The Settings pane
+/// pre-fills it and shows it as the placeholder when the field is blank; a
+/// blank field, on save or on load, means this.
+pub const DEFAULT_MODEL: &str = "minimax/minimax-m3";
+
 pub const SETTINGS_FILE: &str = "settings.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,7 +30,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             base_url: DEFAULT_BASE_URL.to_string(),
-            model: String::new(),
+            model: DEFAULT_MODEL.to_string(),
             api_key: String::new(),
         }
     }
@@ -52,11 +59,16 @@ impl From<&Settings> for SettingsView {
 /// Reads the settings file, falling back to defaults for a first run or a
 /// file that no longer parses. Refusing to start over a corrupt settings
 /// file would strand the producer with no way to fix it from inside the app.
+/// A file whose model is blank loads the default, the same rule Save applies.
 pub fn load(dir: &Path) -> Settings {
-    std::fs::read_to_string(dir.join(SETTINGS_FILE))
+    let mut s: Settings = std::fs::read_to_string(dir.join(SETTINGS_FILE))
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if s.model.trim().is_empty() {
+        s.model = DEFAULT_MODEL.to_string();
+    }
+    s
 }
 
 pub fn save(dir: &Path, s: &Settings) -> std::io::Result<()> {
@@ -117,8 +129,23 @@ mod tests {
         // First run. The producer has not been to the settings pane yet.
         let loaded = load(&scratch());
         assert_eq!(loaded.base_url, DEFAULT_BASE_URL);
-        assert!(loaded.model.is_empty());
+        assert_eq!(loaded.model, DEFAULT_MODEL);
         assert!(loaded.api_key.is_empty());
+    }
+
+    #[test]
+    fn a_blank_model_in_the_file_loads_the_default() {
+        // A file written before the default existed, or hand-edited: the
+        // key is kept and the model takes the default.
+        let dir = scratch();
+        std::fs::write(
+            dir.join(SETTINGS_FILE),
+            r#"{"base_url":"https://openrouter.ai/api/v1","model":"  ","api_key":"sk-kept"}"#,
+        )
+        .unwrap();
+        let loaded = load(&dir);
+        assert_eq!(loaded.model, DEFAULT_MODEL);
+        assert_eq!(loaded.api_key, "sk-kept");
     }
 
     #[test]

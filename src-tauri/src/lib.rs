@@ -64,7 +64,7 @@ use osc::query::LiveQuery;
 use osc::socket::OscSocket;
 use osc::subs::SINGLETON_SUBSCRIPTIONS;
 use rosc::OscType;
-use settings::{Settings, SettingsView};
+use settings::{Settings, SettingsView, DEFAULT_MODEL};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -683,9 +683,10 @@ async fn save_settings_impl(
             .lock()
             .map_err(|_| "settings lock poisoned".to_string())?;
         let trimmed_key = api_key.trim();
+        let trimmed_model = model_name.trim();
         Settings {
             base_url: base_url.trim().to_string(),
-            model: model_name.trim().to_string(),
+            model: if trimmed_model.is_empty() { DEFAULT_MODEL.to_string() } else { trimmed_model.to_string() },
             api_key: if trimmed_key.is_empty() { stored.api_key.clone() } else { trimmed_key.to_string() },
         }
     };
@@ -2491,6 +2492,24 @@ mod tests {
         assert_eq!(reloaded.model, "good/model");
         assert_eq!(reloaded.api_key, "sk-good");
         assert_eq!(*state.settings.lock().unwrap(), reloaded);
+    }
+
+    #[tokio::test]
+    async fn an_empty_model_saves_and_probes_the_default() {
+        let server = MockServer::start().await;
+        mount_passing_probe(&server).await;
+        let dir = scratch_dir();
+        let state = model_state(dir.clone(), Settings::default());
+
+        let view = save_settings_impl(server.uri(), "  ".to_string(), "sk-good".to_string(), state.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(view.model, settings::DEFAULT_MODEL);
+        assert_eq!(settings::load(&dir).model, settings::DEFAULT_MODEL);
+        let probed: serde_json::Value =
+            serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
+        assert_eq!(probed["model"], settings::DEFAULT_MODEL, "the probe must test the model that gets saved");
     }
 
     #[tokio::test]

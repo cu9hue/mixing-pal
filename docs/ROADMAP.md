@@ -44,7 +44,8 @@ App 0.2.4, wire version 12. Shipped:
   arrangement notes, loop regions and source lengths, and Live's note names.
 - Rack contents with a Drum Rack pad's sample name and nested racks marked.
 
-Model access today: the producer pastes an OpenRouter key in Advanced. That is
+Model access today: the producer pastes an OpenRouter key in Settings and
+the app calls `minimax/minimax-m3` unless she names another model. That is
 fine for one person and a blocker for everyone else.
 
 ## The rule for advice
@@ -125,14 +126,28 @@ Ordered. Each item says what, why, size, and what it waits on.
    four first. Judge with a model that does not reason
    (`MIXINGPAL_JUDGE_MODEL`, checklist has the one used).
 
-7. **Default model and latency.** The same slowness that broke the judge is
-   what a producer waits on every turn: the release model through OpenRouter
-   took over 180 seconds on some turns and needs three minutes of timeout
-   to be safe. Why: this is the only item here a producer feels on every
-   question, so it may jump the queue. What it is: measure turn latency per
-   candidate model on the eval fixtures, pick a default that answers a
-   two-tool question in under a minute, and only then re-open the craft
-   evals against it. Size M. Waits on nothing.
+7. **Default model and latency.** Done 2026-09-11. `tests/latency.rs` runs
+   one two-tool question five times against the model the environment
+   names and asserts a median turn under a minute, a non-empty answer, and
+   a rack read that came back whole on every run. Measured through
+   OpenRouter on 2026-09-11, Chinese models with reasoning off by default:
+
+   | Model | Median | Slowest | Result |
+   | --- | --- | --- | --- |
+   | `minimax/minimax-m3` | 4.4 s | 5.8 s | passed, five of five read the rack |
+   | `moonshotai/kimi-k2` | 10.9 s | 12.4 s | passed |
+   | `deepseek/deepseek-v4-pro` | 13.3 s | 16.7 s | passed |
+   | `moonshotai/kimi-k2-0905` | | | one run answered without opening the rack |
+   | `qwen/qwen3.6-plus` | | | one run answered without opening the rack |
+   | `z-ai/glm-4.6` | | | one empty answer, one run skipped the rack |
+   | `deepseek/deepseek-v4-flash` | | | never read the rack, one empty answer |
+
+   `minimax/minimax-m3` is the default when the model field is blank. The
+   model timeout stays at 180 s: the default's slowest single round trip
+   was 2.6 s, the bound is there for a slower model she types herself, and
+   60 s is the bound that cut off a real turn on 2026-09-02. Re-run the
+   target when the default changes. Item 6's craft evals are re-opened
+   against it next: scenarios one to four first.
 
 ## When the waitlist says go
 
