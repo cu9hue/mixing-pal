@@ -647,18 +647,16 @@ fn tool_evidence_is_bounded_and_marks_the_missing_tail() {
 /// is the model's bookkeeping, not part of the answer.
 pub fn strip_note_blocks(answer: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
-    let mut in_block = false;
+    let mut block_start = None;
     for line in answer.lines() {
         let t = line.trim();
-        if !in_block && t == "```note" {
-            in_block = true;
-            continue;
-        }
-        if in_block {
-            if t == "```" {
-                in_block = false;
+        if block_start.is_none() && t == "```note" {
+            block_start = Some(out.len());
+        } else if t == "```" {
+            if let Some(start) = block_start.take() {
+                out.truncate(start);
+                continue;
             }
-            continue;
         }
         out.push(line);
     }
@@ -671,10 +669,77 @@ fn stripping_the_note_block_leaves_what_she_reads() {
     assert_eq!(strip_note_blocks(raw), "Try a high-pass.");
     assert_eq!(strip_note_blocks("No block here."), "No block here.");
     assert_eq!(strip_note_blocks("```note\n+ move a\n```"), "");
+    let unclosed = "Keep it.\n```note\n+ decided keep";
+    assert_eq!(strip_note_blocks(unclosed), unclosed);
+    let bare = "Keep it.\n```\nnote\n+ move try it\n```";
+    assert_eq!(strip_note_blocks(bare), bare);
+    assert_eq!(strip_note_blocks("Keep it.\r\n```note\r\n+ decided keep\r\n```"), "Keep it.");
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct NoteDefects {
+    pub malformed_blocks: usize,
+    pub outcome_placeholders: usize,
+}
+
+/// Mechanical note defects only; whether an outcome happened needs review.
+pub fn note_defects(raw: &str) -> NoteDefects {
+    let mut defects = NoteDefects::default();
+    let mut fence: Option<bool> = None;
+    let mut has_note_lines = false;
+    for line in raw.lines() {
+        let text = line.trim();
+        if text.starts_with("```") {
+            if let Some(valid) = fence.take() {
+                if has_note_lines && !valid {
+                    defects.malformed_blocks += 1;
+                }
+            } else {
+                fence = Some(text == "```note");
+                has_note_lines = false;
+            }
+            continue;
+        }
+        let Some(add) = text.strip_prefix("+ ") else { continue };
+        let mut words = add.splitn(2, char::is_whitespace);
+        let kind = words.next().unwrap_or("").trim_end_matches(':');
+        if !matches!(kind, "move" | "heard" | "decided") {
+            continue;
+        }
+        has_note_lines = true;
+        if matches!(kind, "heard" | "decided") {
+            let outcome = words.next().unwrap_or("").to_lowercase();
+            if (outcome.contains('<') && outcome.contains('>'))
+                || ["(pending)", "(not yet)", "(to be filled)"].iter().any(|p| outcome.contains(p))
+            {
+                defects.outcome_placeholders += 1;
+            }
+        }
+    }
+    if fence.is_some() && has_note_lines {
+        defects.malformed_blocks += 1;
+    }
+    defects
+}
+
+#[test]
+fn note_defects_cover_bare_fences_and_hidden_placeholders() {
+    for header in ["```", "```\nnote", "```note"] {
+        let raw = format!("Keep it.\n{header}\n+ move try bass\n+ heard <to be filled>\n+ decided (pending)\n```");
+        assert_eq!(note_defects(&raw), NoteDefects {
+            malformed_blocks: usize::from(header != "```note"), outcome_placeholders: 2,
+        });
+    }
+    assert_eq!(note_defects("```note\n+ heard the drop landed\n+ decided keep it\n```"), NoteDefects::default());
+    assert_eq!(note_defects("```rust\nlet pending = true;\n```\nA pending decision."), NoteDefects::default());
+    assert_eq!(note_defects("```note\n+ move try bass"), NoteDefects {
+        malformed_blocks: 1, outcome_placeholders: 0,
+    });
 }
 
 pub struct Turn {
     pub answer: String,
+    pub raw_answer: String,
     pub called: Vec<String>,
     pub calls: Vec<ToolCallRecord>,
     /// Set when the loop exhausted `MAX_ROUND_TRIPS` without a final answer.
@@ -766,6 +831,7 @@ pub async fn ask_with(
             Err(e) => {
                 return Turn {
                     answer: String::new(),
+                    raw_answer: String::new(),
                     called,
                     calls,
                     truncated: false,
@@ -778,6 +844,7 @@ pub async fn ask_with(
         if completion.tool_calls.is_empty() {
             return Turn {
                 answer: strip_note_blocks(&completion.text),
+                raw_answer: completion.text,
                 called,
                 calls,
                 truncated: false,
@@ -809,6 +876,7 @@ pub async fn ask_with(
     }
     Turn {
         answer: String::new(),
+        raw_answer: String::new(),
         called,
         calls,
         truncated: true,

@@ -108,11 +108,12 @@ async fn the_harness_sends_a_temperature_only_when_asked() {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    let raw_answer = "keep\n```note\n+ decided keep it\n```";
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "choices": [{ "message": { "role": "assistant", "content": "keep" } }]
+            "choices": [{ "message": { "role": "assistant", "content": raw_answer } }]
         })))
         .mount(&server)
         .await;
@@ -125,8 +126,10 @@ async fn the_harness_sends_a_temperature_only_when_asked() {
 
     let turn = common::ask_with(&s, Some(0.0), fixture(), &context, "keep or change?").await;
     assert_eq!(turn.answer, "keep");
+    assert_eq!(turn.raw_answer, raw_answer);
     let turn = common::ask_with(&s, None, fixture(), &context, "keep or change?").await;
     assert_eq!(turn.answer, "keep");
+    assert_eq!(turn.raw_answer, raw_answer);
 
     let bodies: Vec<Value> = server
         .received_requests()
@@ -463,6 +466,7 @@ fn context_for(goal: Option<&str>) -> String {
 
 struct Run {
     answer: String,
+    raw_answer: String,
     called: Vec<String>,
     calls: Vec<common::ToolCallRecord>,
     verdicts: BTreeMap<String, (bool, String)>,
@@ -496,6 +500,7 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
             sc.must.iter().map(|p| (p.key.to_string(), (false, reason.clone()))).collect();
         let infra_error = turn.error.as_ref().map(|_| reason.clone());
         return Run {
+            raw_answer: turn.raw_answer,
             answer: turn.answer, called: turn.called, calls: turn.calls, verdicts, infra_error,
             invalid_evaluation: None, judge_report: None,
         };
@@ -511,12 +516,14 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
                 Err(e) => (BTreeMap::new(), Some(e)),
             };
             Run {
+                raw_answer: turn.raw_answer,
                 answer: turn.answer, called: turn.called, calls: turn.calls, verdicts,
                 infra_error: None, invalid_evaluation, judge_report,
             }
         }
         Err(e) => {
             Run {
+                raw_answer: turn.raw_answer,
                 answer: turn.answer,
                 called: turn.called,
                 calls: turn.calls,
@@ -535,11 +542,13 @@ const RUNS: usize = 3;
 /// the judge's verdicts.
 fn report_line(i: usize, run: &Run) -> String {
     let evidence = serde_json::to_string(&run.calls).unwrap();
+    let defects = common::note_defects(&run.raw_answer);
     format!(
         "\n--- run {i}: tools {:?}\njudge: {}\ninfra_error: {:?}\ninvalid_evaluation: {:?}\n\
-         tool evidence: {evidence}\n{}\n{:#?}\n",
+         tool evidence: {evidence}\nnote defects (report only): {defects:?}\n\
+         VISIBLE ANSWER\n{}\nRAW ANSWER\n{}\nVERDICTS\n{:#?}\n",
         run.called, run.judge_report.as_deref().unwrap_or("no reply"), run.infra_error,
-        run.invalid_evaluation, run.answer, run.verdicts
+        run.invalid_evaluation, run.answer, run.raw_answer, run.verdicts
     )
 }
 
@@ -553,7 +562,9 @@ async fn run_all(sc: &Scenario) -> (Vec<Run>, String) {
     let mut report = String::new();
     for i in 0..RUNS {
         let run = run_once(sc, None).await;
-        report.push_str(&report_line(i, &run));
+        let line = report_line(i, &run);
+        println!("{}{line}", sc.question);
+        report.push_str(&line);
         runs.push(run);
     }
     require_valid_evaluation(sc.question, &runs, &report);
@@ -577,7 +588,7 @@ fn require_valid_evaluation(question: &str, runs: &[Run], report: &str) {
 #[test]
 fn an_invalid_judge_prevents_even_a_green_majority() {
     let mut runs: Vec<Run> = (0..RUNS).map(|_| Run {
-        answer: "one move".into(), called: vec![], calls: vec![],
+        answer: "one move".into(), raw_answer: "one move".into(), called: vec![], calls: vec![],
         verdicts: BTreeMap::from([("one_move".into(), (true, "one intervention".into()))]),
         infra_error: None, invalid_evaluation: None, judge_report: None,
     }).collect();
@@ -591,6 +602,23 @@ fn an_invalid_judge_prevents_even_a_green_majority() {
     assert!(report.contains("invalid_evaluation: Some"));
     let result = std::panic::catch_unwind(|| require_valid_evaluation("question", &runs, &report));
     assert!(result.is_err());
+}
+
+#[test]
+fn the_report_keeps_raw_notes_without_changing_verdicts() {
+    let raw = "Keep it.\n```note\n+ heard <to be filled>\n```";
+    let run = Run {
+        answer: common::strip_note_blocks(raw), raw_answer: raw.into(),
+        called: vec![], calls: vec![],
+        verdicts: BTreeMap::from([("one_move".into(), (true, "one intervention".into()))]),
+        infra_error: None, invalid_evaluation: None, judge_report: None,
+    };
+    let report = report_line(0, &run);
+    assert!(report.contains("VISIBLE ANSWER\nKeep it.\nRAW ANSWER"));
+    assert!(report.contains(raw));
+    assert!(report.contains("outcome_placeholders: 1"));
+    assert!(run.verdicts.values().all(|(pass, _)| *pass));
+    require_valid_evaluation("question", &[run], &report);
 }
 
 /// A run passes when every property passes and `extra` holds (tool-call
