@@ -178,7 +178,7 @@ const NAMED_AXIS: Property = Property {
 };
 const ONE_MOVE: Property = Property {
     key: "one_move",
-    description: "Proposes exactly one concrete move. A list of alternatives fails.",
+    description: "Proposes exactly one concrete intervention. Its implementation details and ways to perform the same intervention count together: loading an instrument, drawing or pasting its MIDI clip, choosing notes and placing that bass part are one move. Qualifying that same part (for example, keep the bassline simpler) is not another move. A second independent change, an alternative intervention, or a labelled 'second move' fails even when optional or conditional. Adding bass and separately lowering the Pad fader is two moves.",
 };
 const WHY: Property = Property {
     key: "why",
