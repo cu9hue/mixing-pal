@@ -393,7 +393,7 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         // Wire 9 adds the placement's own mute and MIDI
                         // type before its loop metadata.
                         reply.push(OscType::Bool(false));
-                        reply.push(OscType::Bool(true));
+                        reply.push(OscType::Bool(clip_is_midi(&track)));
                         match clip["loop"].as_array() {
                             Some(l) => {
                                 reply.push(OscType::Bool(true));
@@ -428,7 +428,7 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         OscType::Float((start_beats + clip["length"].as_f64().unwrap()) as f32),
                     ];
                     reply.push(OscType::Bool(false));
-                    reply.push(OscType::Bool(true));
+                    reply.push(OscType::Bool(clip_is_midi(&track)));
                     // `decode_identity` reads looping, then loop_start and
                     // loop_end only when it is true.
                     match clip["loop"].as_array() {

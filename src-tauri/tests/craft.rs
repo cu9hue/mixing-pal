@@ -85,6 +85,20 @@ async fn the_fake_live_serves_the_craft_fixture_in_full() {
     let clip_notes = read(&ctx, "get_clip_notes", json!({ "track": 0, "clip": 0 })).await;
     assert_eq!(clip_notes["value"]["loop_state_known"], json!(true), "{clip_notes}");
     assert!(!clip_notes["value"]["loop_region"].is_null(), "{clip_notes}");
+
+    let arrangement = read(&ctx, "get_arrangement", json!({})).await;
+    let vox_track = arrangement["value"]["tracks"].as_array().unwrap()
+        .iter().find(|t| t["track"] == json!(3)).unwrap();
+    let vox = &vox_track["clips"][0];
+    assert_eq!(vox["is_midi"], json!(false), "{arrangement}");
+    assert_eq!(vox["start_beats"], json!(64.0), "{arrangement}");
+    assert_eq!(vox["length_beats"], json!(32.0), "{arrangement}");
+
+    // This opens the identity bracket too: audio must be refused before
+    // the MIDI note read, not time out as `too_large`.
+    let vox_notes = read(&ctx, "get_arrangement_notes", json!({ "track": 3, "index": 0 })).await;
+    assert_eq!(vox_notes["missing_reason"], json!("not_midi_clip"), "{vox_notes}");
+    assert!(vox_notes["value"].is_null(), "{vox_notes}");
 }
 
 /// The gate runs at temperature 0 and the report at the app's sampling. The
