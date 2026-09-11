@@ -196,9 +196,9 @@ const RANKED: Property = Property {
     key: "ranked",
     description: "Says why this move comes first: what makes it the biggest gap.",
 };
-const VERDICT_LEAVE: Property = Property {
-    key: "verdict_leave",
-    description: "The verdict is to leave the pad as it is.",
+const READABLE_PROBLEM: Property = Property {
+    key: "readable_problem",
+    description: "If it proposes changing the Pad, it names the problem on a readable axis that the change addresses. If it finds no readable problem, it says so and stops without prescribing a change. Either keep or change can pass; do not require the mentor's decision. Asking to listen or read more is not a change.",
 };
 const READABLE_SOURCE: Property = Property {
     key: "readable_source",
@@ -502,13 +502,13 @@ async fn what_should_i_do_next() {
     .await;
 }
 
-// Scenario 3. Nothing is wrong. The right answer reads the notes and says
-// leave it; an invented change fails.
+// Scenario 3. Read the notes and justify a change, or find no readable
+// problem and stop. The decision belongs to the model.
 const PAD_TOO_BUSY: Scenario = Scenario {
     question: "is the pad too busy?",
     goal: None,
     mentor: "For the stated GOAL, I would use the Pad as a repeating harmonic idea. The notes show two triad attacks in a four-beat, one-bar loop: A2/C3/E3 at clip beat 0 and F2/A2/C3 at clip beat 2, each note lasting half a beat. The arrangement repeats it over beats 0–64 (bars 1–16) and 96–128 (bars 25–32); it does not overlap Vox's placements. I find no readable density problem in those two stabs per bar. Whether the sound or release tails feel crowded is yours to hear. Leave the Pad as it is.",
-    must: &[VERDICT_LEAVE, READABLE_SOURCE, NO_INVENTED_CHANGE],
+    must: &[READABLE_PROBLEM, READABLE_SOURCE, NO_INVENTED_CHANGE],
 };
 
 /// The verdict has to rest on the notes, so a read of them is required.
