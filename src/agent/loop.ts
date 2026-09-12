@@ -33,7 +33,12 @@ export interface Completion {
  * parameter here would be a way for the webview to widen them.
  */
 export interface ModelProvider {
-  complete(messages: ChatMessage[]): Promise<Completion>;
+  complete(messages: ChatMessage[], request?: { turnId: string; requestId: string; round: number }): Promise<Completion>;
+}
+
+export interface TurnObserver {
+  turnId: string;
+  record(event: { id: string; kind: "tool" | "terminal"; at: number; data: unknown }): Promise<void>;
 }
 
 export interface ToolRunner {
@@ -56,73 +61,94 @@ export async function runTurn(
   tools: ToolRunner,
   messages: ChatMessage[],
   onProgress?: (name: string, args: unknown) => void,
+  observer?: TurnObserver,
 ): Promise<{ messages: ChatMessage[]; text: string; truncated: boolean }> {
   const history = [...messages];
+  let captureFailed = false;
+  async function record(kind: "tool" | "terminal", data: unknown) {
+    if (!observer) return;
+    try { await observer.record({ id: crypto.randomUUID(), kind, at: Date.now(), data }); }
+    catch { captureFailed = true; }
+  }
 
-  for (let round = 0; round < MAX_ROUND_TRIPS; round++) {
-    const completion = await provider.complete(history);
-    if (completion.toolCalls.length === 0) {
-      history.push({ role: "assistant", content: completion.text });
-      return { messages: history, text: completion.text, truncated: false };
-    }
+  try {
+    for (let round = 0; round < MAX_ROUND_TRIPS; round++) {
+      const completion = await provider.complete(history, observer ? {
+        turnId: observer.turnId, requestId: crypto.randomUUID(), round: round + 1,
+      } : undefined);
+      if (completion.toolCalls.length === 0) {
+        history.push({ role: "assistant", content: completion.text });
+        await record("terminal", { status: "complete", incomplete: captureFailed });
+        return { messages: history, text: completion.text, truncated: false };
+      }
 
-    history.push({
-      role: "assistant",
-      content: completion.text === "" ? null : completion.text,
-      tool_calls: completion.toolCalls,
-    });
+      history.push({
+        role: "assistant",
+        content: completion.text === "" ? null : completion.text,
+        tool_calls: completion.toolCalls,
+      });
 
-    // Independent calls in one completion cannot depend on each other's
-    // output: the model has not received either result yet. Run them all at
-    // once, then append their replies in the provider's original order.
-    // This matters when it asks to inspect several clips: Live can process
-    // the requests in one tick, but awaiting them here used to serialize the
-    // entire batch before the next model request.
-    const toolMessages = await Promise.all(completion.toolCalls.map(async (c) => {
-      let args: unknown;
-      try {
-        args = JSON.parse(c.function.arguments || "{}");
-      } catch {
-        return {
-          role: "tool",
-          tool_call_id: c.id,
-          content: JSON.stringify({
+      // Independent calls in one completion cannot depend on each other's
+      // output: the model has not received either result yet. Run them all at
+      // once, then append their replies in the provider's original order.
+      // This matters when it asks to inspect several clips: Live can process
+      // the requests in one tick, but awaiting them here used to serialize the
+      // entire batch before the next model request.
+      const toolMessages = await Promise.all(completion.toolCalls.map(async (c) => {
+        let args: unknown;
+        try {
+          args = JSON.parse(c.function.arguments || "{}");
+        } catch {
+          return {
+            role: "tool",
+            tool_call_id: c.id,
+            content: JSON.stringify({
+              value: null,
+              queried_at: Date.now(),
+              fresh_as_of: null,
+              fresh: false,
+              missing_reason: "bad_arguments",
+            }),
+          } satisfies ChatMessage;
+        }
+
+        onProgress?.(c.function.name, args);
+        let result: unknown;
+        try {
+          result = await tools.run(c.function.name, args);
+        } catch (err) {
+          result = {
             value: null,
             queried_at: Date.now(),
             fresh_as_of: null,
             fresh: false,
-            missing_reason: "bad_arguments",
-          }),
+            missing_reason: `tool_failed: ${String(err)}`,
+          };
+        }
+        return {
+          role: "tool",
+          tool_call_id: c.id,
+          content: JSON.stringify(result),
         } satisfies ChatMessage;
+      }));
+      for (let i = 0; i < toolMessages.length; i++) {
+        const call = completion.toolCalls[i];
+        await record("tool", { round: round + 1, tool_call_id: call.id, name: call.function.name,
+          arguments: call.function.arguments, result: JSON.parse(toolMessages[i].content) });
       }
+      history.push(...toolMessages);
+    }
 
-      onProgress?.(c.function.name, args);
-      let result: unknown;
-      try {
-        result = await tools.run(c.function.name, args);
-      } catch (err) {
-        result = {
-          value: null,
-          queried_at: Date.now(),
-          fresh_as_of: null,
-          fresh: false,
-          missing_reason: `tool_failed: ${String(err)}`,
-        };
-      }
-      return {
-        role: "tool",
-        tool_call_id: c.id,
-        content: JSON.stringify(result),
-      } satisfies ChatMessage;
-    }));
-    history.push(...toolMessages);
+    await record("terminal", { status: "exhausted", incomplete: captureFailed });
+    return {
+      messages: history,
+      text:
+        "I kept needing to look things up and ran out of steps before answering. " +
+        "Try asking about one thing at a time.",
+      truncated: true,
+    };
+  } catch (error) {
+    await record("terminal", { status: "failed", incomplete: captureFailed });
+    throw error;
   }
-
-  return {
-    messages: history,
-    text:
-      "I kept needing to look things up and ran out of steps before answering. " +
-      "Try asking about one thing at a time.",
-    truncated: true,
-  };
 }

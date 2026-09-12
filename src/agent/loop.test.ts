@@ -29,6 +29,38 @@ const call = (id: string, name: string, args: string) => ({
 const echoTools: ToolRunner = { run: async (name, args) => ({ name, args }) };
 
 describe("runTurn", () => {
+  it("records tool failures and a terminal event under stable turn and distinct request IDs", async () => {
+    const provider = scriptedProvider([
+      { text: "", toolCalls: [call("bad", "get_clip_notes", "not-json"), call("broken", "get_clips", "{}")] },
+      { text: "raw answer\n```note\n+ move Read it\n```", toolCalls: [] },
+    ]);
+    const complete = vi.spyOn(provider, "complete");
+    const record = vi.fn().mockResolvedValue(undefined);
+    const out = await runTurn(provider, { run: async () => { throw new Error("Live disconnected"); } }, [], undefined,
+      { turnId: "advice-turn", record });
+    expect(out.text).toContain("```note");
+    expect(complete.mock.calls.map((c) => c[1]?.round)).toEqual([1, 2]);
+    expect(complete.mock.calls.every((c) => c[1]?.turnId === "advice-turn")).toBe(true);
+    expect(complete.mock.calls[0][1]?.requestId).not.toBe(complete.mock.calls[1][1]?.requestId);
+    expect(record.mock.calls.map((c) => c[0].kind)).toEqual(["tool", "tool", "terminal"]);
+    expect(record.mock.calls[0][0].data.result.missing_reason).toBe("bad_arguments");
+    expect(record.mock.calls[1][0].data.result.missing_reason).toContain("Live disconnected");
+    expect(record.mock.calls[2][0].data).toEqual({ status: "complete", incomplete: false });
+  });
+
+  it("marks an upload failure incomplete without losing the answer", async () => {
+    const record = vi.fn().mockRejectedValueOnce(new Error("disk full")).mockResolvedValue(undefined);
+    const provider = scriptedProvider([{ text: "", toolCalls: [call("a", "get_clips", "{}")] }, { text: "answer", toolCalls: [] }]);
+    expect((await runTurn(provider, echoTools, [], undefined, { turnId: "turn", record })).text).toBe("answer");
+    expect(record.mock.calls[1][0].data).toEqual({ status: "complete", incomplete: true });
+  });
+
+  it("records an interrupted model call without replacing its error", async () => {
+    const record = vi.fn().mockResolvedValue(undefined);
+    const provider = { complete: async () => { throw new Error("usage unknown"); } };
+    await expect(runTurn(provider, echoTools, [], undefined, { turnId: "turn", record })).rejects.toThrow("usage unknown");
+    expect(record.mock.calls[0][0].data.status).toBe("failed");
+  });
   it("ends in one round trip when the model asks for no tools", async () => {
     const provider = scriptedProvider([{ text: "Your kick sits at -3 dB.", toolCalls: [] }]);
     const out = await runTurn(provider, echoTools, [

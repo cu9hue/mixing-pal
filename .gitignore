@@ -30,3 +30,8 @@ __pycache__/
 .superpowers/
 
 .logs/
+
+# Worker state and credentials
+.wrangler/
+.dev.vars*
+proxy/.deploy-*.json

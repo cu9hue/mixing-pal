@@ -3,6 +3,7 @@ mod connector;
 mod deltas;
 mod install;
 mod model;
+mod proxy;
 mod osc;
 mod settings;
 mod threads;
@@ -664,6 +665,9 @@ async fn save_settings(
     api_key: String,
     state: tauri::State<'_, Arc<ModelState>>,
 ) -> Result<SettingsView, String> {
+    if !cfg!(feature = "direct-provider") {
+        return Err("Provider settings require a direct-provider development build.".into());
+    }
     save_settings_impl(base_url, model_name, api_key, state.inner().clone()).await
 }
 
@@ -712,10 +716,38 @@ async fn save_settings_impl(
 #[tauri::command]
 async fn model_complete(
     messages: Vec<ChatMessage>,
+    turn_id: Option<uuid::Uuid>,
+    request_id: Option<uuid::Uuid>,
+    round: Option<u8>,
     state: tauri::State<'_, Arc<ModelState>>,
+    proxy_state: tauri::State<'_, Arc<proxy::Proxy>>,
     trace_state: tauri::State<'_, Arc<Mutex<Trace>>>,
+) -> Result<serde_json::Value, proxy::ProxyError> {
+    if !cfg!(feature = "direct-provider") {
+        let body = model::build_body(&Settings::default(), &messages)
+            .map_err(|message| proxy::ProxyError { code: "invalid_request".into(), message })?;
+        let required = || proxy::ProxyError { code: "invalid_request".into(), message: "A turn and request identifier are required.".into() };
+        let start = Instant::now();
+        let result = proxy_state.complete(body.clone(), turn_id.ok_or_else(required)?, request_id.ok_or_else(required)?, round.ok_or_else(required)?).await;
+        let outcome = match &result {
+            Ok(reply) => serde_json::json!({ "ok": { "text": reply["text"], "tool_calls": reply["tool_calls"] } }),
+            Err(error) => serde_json::json!({ "error": error.message }),
+        };
+        if let Ok(mut trace) = trace_state.lock() {
+            trace.push(TraceStep::model(tools::now_millis(), body, outcome, start.elapsed().as_millis() as u64, ""));
+        }
+        return result;
+    }
+    let result = direct_complete(messages, state.inner().clone(), trace_state.inner().clone()).await
+        .map_err(|message| proxy::ProxyError { code: "provider_failed".into(), message })?;
+    Ok(serde_json::to_value(result).unwrap())
+}
+
+async fn direct_complete(
+    messages: Vec<ChatMessage>,
+    state: Arc<ModelState>,
+    trace_state: Arc<Mutex<Trace>>,
 ) -> Result<Completion, String> {
-    let state = state.inner().clone();
     let settings = {
         let s = state
             .settings
@@ -746,6 +778,56 @@ async fn model_complete(
     }
 
     result
+}
+
+#[tauri::command]
+async fn account_status(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<serde_json::Value, proxy::ProxyError> {
+    state.account().await
+}
+
+#[tauri::command]
+async fn account_send_code(email: String, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
+    state.send_code(email).await
+}
+
+#[tauri::command]
+async fn account_sign_in(email: String, code: String, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<serde_json::Value, proxy::ProxyError> {
+    state.sign_in(email, code).await
+}
+
+#[tauri::command]
+async fn account_redeem(code: String, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<serde_json::Value, proxy::ProxyError> {
+    state.redeem(code).await
+}
+
+#[tauri::command]
+async fn account_sign_out(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
+    state.sign_out().await
+}
+
+#[tauri::command]
+async fn account_consent(enabled: bool, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<serde_json::Value, proxy::ProxyError> {
+    state.consent(enabled).await
+}
+
+#[tauri::command]
+async fn account_delete(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
+    state.delete_account().await
+}
+
+#[tauri::command]
+async fn turn_event(turn_id: uuid::Uuid, event: serde_json::Value, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
+    state.event(turn_id, event).await
+}
+
+#[tauri::command]
+async fn turn_feedback(turn_id: uuid::Uuid, feedback: serde_json::Value, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<serde_json::Value, proxy::ProxyError> {
+    state.feedback(turn_id, feedback).await
+}
+
+#[tauri::command]
+async fn turn_delete_capture(turn_id: uuid::Uuid, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
+    state.delete_turn(turn_id).await
 }
 
 /// Every recorded step, oldest first -- see `trace.rs`'s module doc for why
@@ -808,6 +890,16 @@ pub fn run() {
             load_thread,
             save_thread,
             model_complete,
+            account_status,
+            account_send_code,
+            account_sign_in,
+            account_redeem,
+            account_sign_out,
+            account_consent,
+            account_delete,
+            turn_event,
+            turn_feedback,
+            turn_delete_capture,
             trace,
             clear_trace,
             window::set_window_mode,
@@ -854,6 +946,16 @@ pub fn run() {
             // bind attempt for the same reason everything else here is: a
             // failed socket must not take the chat pane down with it.
             let config_dir = app.path().app_config_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let proxy = Arc::new(proxy::Proxy::new(&config_dir));
+            app.manage(proxy.clone());
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    if let Err(e) = proxy.flush().await {
+                        eprintln!("pilot: pending events were not sent ({})", e.code);
+                    }
+                }
+            });
             // Threads nobody has opened in thirty days go at startup, once.
             match threads::prune(&config_dir.join(threads::THREADS_DIR), unix_now()) {
                 Ok(0) => {}

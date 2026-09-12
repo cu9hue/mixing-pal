@@ -146,27 +146,6 @@ export function ConnectedScreen({
   );
 }
 
-/**
- * A placeholder in the sense that it talks to nothing yet -- the model
- * access plan fills in what it calls. The screen itself is real, and it is
- * deliberately placed after Connected: she reaches a working, visible
- * result in three steps, and only then is asked for something she has to
- * go and find.
- */
-export function AccountScreen({ onContinue }: { onContinue: () => void }) {
-  return (
-    <>
-      <div className="setup__label">Almost there</div>
-      <h1 className="setup__title">Enter your invite code.</h1>
-      <p className="setup__body">This is what lets Mixing Pal answer questions.</p>
-      <input className="setup__field" placeholder="MP-0000-0000" />
-      <button className="setup__primary" onClick={onContinue}>
-        Continue
-      </button>
-    </>
-  );
-}
-
 export function GoalScreen({
   goal,
   onGoalChange,

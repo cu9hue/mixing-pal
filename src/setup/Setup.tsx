@@ -1,13 +1,14 @@
 import "./Setup.css";
 import { SetupStep } from "./step";
 import {
-  AccountScreen,
   ConnectedScreen,
   ControlSurfaceScreen,
   GoalScreen,
   InstallScreen,
   OpenLiveScreen,
 } from "./screens";
+import { AccountState } from "../model/account";
+import { AccountPanel } from "../ui/AccountPanel";
 
 /** Which of the four numbered ticks a step falls under. */
 const TICK: Record<SetupStep, number> = {
@@ -21,6 +22,7 @@ const TICK: Record<SetupStep, number> = {
 };
 
 export function Setup({
+  account,
   step,
   folder,
   trackCount,
@@ -32,6 +34,7 @@ export function Setup({
   onFinished,
   onExit,
 }: {
+  account: AccountState;
   step: SetupStep;
   folder: string;
   trackCount: number;
@@ -72,7 +75,7 @@ export function Setup({
             onContinue={onAcknowledgeConnected}
           />
         )}
-        {step === "account" && <AccountScreen onContinue={onFinished} />}
+        {step === "account" && <AccountPanel account={account} />}
         {step === "goal" && (
           <GoalScreen goal={goal} onGoalChange={onGoalChange} onFinish={onFinished} />
         )}

@@ -1,0 +1,81 @@
+name: Pilot proxy
+on:
+  pull_request:
+    paths: ['proxy/**', '.github/workflows/proxy.yml']
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        options: [staging, production]
+        required: true
+      operation:
+        type: choice
+        options: [deploy, secrets, enable, rollback]
+        required: true
+      version:
+        description: Known-good Worker version UUID (rollback only)
+        type: string
+      release_verified:
+        description: Email, provider data policy, key cap and staging smoke checked (enable only)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: proxy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: proxy/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: |
+          mkdir -p ../.superpowers/proxy
+          set -o pipefail
+          npm test 2>&1 | tee ../.superpowers/proxy/ci-tests.txt
+          tail -n 30 ../.superpowers/proxy/ci-tests.txt
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: proxy-checks
+          path: .superpowers/proxy/ci-tests.txt
+          include-hidden-files: true
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    needs: check
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stage }}
+    concurrency:
+      group: proxy-${{ inputs.stage }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: proxy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: proxy/package-lock.json
+      - run: npm ci
+      - env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          MIXINGPAL_D1_ID: ${{ vars.MIXINGPAL_D1_ID }}
+          MIXINGPAL_RELEASE_VERIFIED: ${{ inputs.release_verified && 'yes' || 'no' }}
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          RESEND_KEY: ${{ secrets.RESEND_KEY }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          OPERATION: ${{ inputs.operation }}
+          STAGE: ${{ inputs.stage }}
+          VERSION: ${{ inputs.version }}
+        run: node scripts/deploy.mjs "$OPERATION" "$STAGE" "$VERSION"

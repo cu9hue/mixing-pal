@@ -1,0 +1,27 @@
+{
+  "name": "mixing-pal-proxy",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "check": "tsc --noEmit",
+    "test": "vitest run && node --test scripts/operations.test.mjs",
+    "deploy": "node scripts/deploy.mjs",
+    "admin": "node scripts/admin.mjs"
+  },
+  "dependencies": {
+    "better-auth": "1.7.4",
+    "zod": "4.5.4"
+  },
+  "overrides": {
+    "sharp": "0.35.4"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "@cloudflare/workers-types": "5.20260911.1",
+    "typescript": "~5.8.3",
+    "vitest": "~4.1.0",
+    "wrangler": "4.131.1"
+  }
+}
