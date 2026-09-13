@@ -45,6 +45,12 @@ export function useAccount() {
   }, [observe]);
   const change = useCallback((next: AccountView) => { generation.current++; setView(next); setError(null); }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+  const usageHeld = view?.access === "active" && (view.reserved_micro_usd ?? 0) > 0;
+  useEffect(() => {
+    if (!usageHeld) return;
+    const timer = setInterval(() => { void refresh(); }, 30_000);
+    return () => clearInterval(timer);
+  }, [usageHeld, refresh]);
   return { view, error, refresh, change, observe };
 }
 

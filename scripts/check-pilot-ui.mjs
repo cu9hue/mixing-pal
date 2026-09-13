@@ -31,6 +31,7 @@ window.account={access:'signed_out',capture:false};
 const active={id:'producer',email:'invited@example.com',access:'active',capture:false,consent_epoch:0,remaining_micro_usd:5000000,period_end:Date.now()+86400000};
 const access=new URLSearchParams(location.search).get('access');
 if(access)window.account={...active,access,capture:true};
+if(location.search.includes('held'))window.account={...active,can_ask:false,reserved_micro_usd:319489};
 const snapshot=[{addr:'/live/mixingpal/get/version',args:[12]},{addr:'/live/song/get/tempo',args:[128]},{addr:'/live/track/get/name',args:[0,'Drums']}];
 mockWindows('main'); mockIPC(async (cmd,args)=>{
 window.requests.push({cmd,args});
@@ -118,6 +119,18 @@ await page.waitForFunction(()=>window.account.capture===false);
 assert.equal(await sharing.isEnabled(),false,access+' accounts must not enable sharing');
 assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),false);
 }
+await page.clock.install();
+await page.goto('http://127.0.0.1:1423?held');
+await page.getByText('We’re checking the last request’s usage before you can ask again.').waitFor();
+assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),false);
+await page.evaluate(()=>{window.account={...window.account,can_ask:true,reserved_micro_usd:0};window.requests=[];});
+await page.clock.fastForward(31000);
+await page.waitForTimeout(100);
+assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),true,'reconciliation should restore asking');
+const refreshed=await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_status').length);
+assert.equal(refreshed,1);
+await page.clock.fastForward(31000);
+assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_status').length),refreshed,'stop polling once usage settles');
 assert.deepEqual(errors,[]);
-console.log('PASS expired/revoked withdrawal,  fresh setup and existing-install sign-in, stale consent response, feedback set switch, delayed feedback persistence, window geometry');
+console.log('PASS held usage recovery, expired/revoked withdrawal, fresh setup and existing-install sign-in, stale consent response, feedback set switch, delayed feedback persistence, window geometry');
 } catch(e){await page.screenshot({path:`${artifacts}/failure.png`});console.log(errors);throw e;} finally {await browser.close();server.kill();closeSync(log);}
