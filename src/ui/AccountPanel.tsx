@@ -80,8 +80,10 @@ export function AccountPanel({ account }: { account: AccountState }) {
         {view.can_ask === false && <p>{(view.reserved_micro_usd ?? 0) > 0
           ? "We’re checking the last request’s usage before you can ask again."
           : "The remaining allowance cannot cover another request."}</p>}
+      </>}
+      {view && ["active", "expired", "revoked"].includes(view.access) && <>
         <label className="account__check" htmlFor={`${id}-capture`}>
-          <input id={`${id}-capture`} type="checkbox" checked={view.capture} disabled={busy}
+          <input id={`${id}-capture`} type="checkbox" checked={view.capture} disabled={busy || (view.access !== "active" && !view.capture)}
             onChange={(e) => { const enabled = e.target.checked; void act(async () => {
               account.change(await invoke<AccountView>("account_consent", { enabled }));
             }); }} aria-describedby={`${id}-sharing`} />

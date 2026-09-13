@@ -2,14 +2,16 @@ import assert from 'node:assert/strict';
 import { webkit } from 'playwright';
 import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
-mkdirSync('.superpowers/proxy', {recursive:true});
-const log = openSync('.superpowers/proxy/browser-vite.txt', 'w');
+const artifacts = `.superpowers/proxy/ui-${Date.now()}`;
+mkdirSync(artifacts, {recursive:true});
+console.log('Browser artifacts:', artifacts);
+const log = openSync(`${artifacts}/vite.txt`, 'w');
 const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js','--host','127.0.0.1','--port','1423','--strictPort'], {stdio:['ignore',log,log]});
 server.unref();
 process.on('exit', ()=>server.kill());
 let ready=false;
 for (let i=0; i<100; i++) {
-  if (server.exitCode !== null) throw new Error('Browser test server could not start; see .superpowers/proxy/browser-vite.txt');
+  if (server.exitCode !== null) throw new Error(`Browser test server could not start; see ${artifacts}/vite.txt`);
   try { ready=(await fetch('http://127.0.0.1:1423', {signal:AbortSignal.timeout(500)})).ok; } catch {}
   if(ready) break;
   await new Promise(resolve=>setTimeout(resolve,100));
@@ -27,6 +29,8 @@ if (location.search.includes('fresh')) { localStorage.removeItem('copilot.setupD
 window.emitFixture=emit; window.saved=[]; window.requests=[]; window.shared=[];
 window.account={access:'signed_out',capture:false};
 const active={id:'producer',email:'invited@example.com',access:'active',capture:false,consent_epoch:0,remaining_micro_usd:5000000,period_end:Date.now()+86400000};
+const access=new URLSearchParams(location.search).get('access');
+if(access)window.account={...active,access,capture:true};
 const snapshot=[{addr:'/live/mixingpal/get/version',args:[12]},{addr:'/live/song/get/tempo',args:[128]},{addr:'/live/track/get/name',args:[0,'Drums']}];
 mockWindows('main'); mockIPC(async (cmd,args)=>{
 window.requests.push({cmd,args});
@@ -70,7 +74,7 @@ await page.getByLabel('Share advice turns to help improve Mixing Pal').check();
 await page.evaluate(()=>window.finishModel());
 await page.waitForTimeout(100);
 assert.equal(await page.getByLabel('Share advice turns to help improve Mixing Pal').isChecked(),true);
-await page.screenshot({path:'.superpowers/proxy/ui-settings.png'});
+await page.screenshot({path:`${artifacts}/settings.png`});
 await page.getByRole('button',{name:'Done',exact:true}).click();
 async function set(id){await page.evaluate(id=>window.emitFixture('live://deltas',[{addr:'/live/mixingpal/get/set_identity',args:[id,'Set '+id,'/fixture/'+id+'.als']}]),id); await page.getByText('Question for '+id,{exact:true}).waitFor();}
 await set('A');
@@ -87,7 +91,7 @@ await page.evaluate(()=>window.finishFeedback());
 await page.waitForTimeout(100);
 const saves=await page.evaluate(()=>window.saved);
 assert.equal(saves.some(s=>s.setId==='A' && s.exchanges.some(x=>x.question==='Question for B')),false,'feedback response overwrote another set');
-await page.screenshot({path:'.superpowers/proxy/ui-feedback.png'});
+await page.screenshot({path:`${artifacts}/feedback.png`});
 const geometry=await page.evaluate(()=>({height:innerHeight,scroll:document.documentElement.scrollHeight,width:innerWidth,scrollWidth:document.documentElement.scrollWidth}));
 assert.equal(geometry.height,geometry.scroll);assert.equal(geometry.width,geometry.scrollWidth);
 await page.goto('http://127.0.0.1:1423?fresh');
@@ -103,6 +107,17 @@ await setup.getByRole('button',{name:'Skip',exact:true}).click();
 await page.locator('.card__main').waitFor({state:'visible'});
 assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),true);
 assert.equal(await page.evaluate(()=>localStorage.getItem('copilot.setupDone')),'1');
+for (const access of ['expired','revoked']) {
+await page.goto('http://127.0.0.1:1423?access='+access);
+await page.getByText('Your pilot access has ended. Contact Mixing Pal to continue.').waitFor();
+const sharing=page.locator('.card__main').getByLabel('Share advice turns to help improve Mixing Pal');
+assert.equal(await sharing.count(),1,access+' accounts must retain a withdrawal control');
+assert.equal(await sharing.isChecked(),true);
+await sharing.uncheck();
+await page.waitForFunction(()=>window.account.capture===false);
+assert.equal(await sharing.isEnabled(),false,access+' accounts must not enable sharing');
+assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),false);
+}
 assert.deepEqual(errors,[]);
-console.log('PASS fresh setup and existing-install sign-in, stale consent response, feedback set switch, delayed feedback persistence, window geometry');
-} catch(e){await page.screenshot({path:'.superpowers/proxy/ui-failure.png'});console.log(errors);throw e;} finally {await browser.close();server.kill();closeSync(log);}
+console.log('PASS expired/revoked withdrawal,  fresh setup and existing-install sign-in, stale consent response, feedback set switch, delayed feedback persistence, window geometry');
+} catch(e){await page.screenshot({path:`${artifacts}/failure.png`});console.log(errors);throw e;} finally {await browser.close();server.kill();closeSync(log);}
