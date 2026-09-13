@@ -95,6 +95,8 @@ struct Outbox {
     #[serde(default)]
     gaps: Vec<PendingEvent>,
     pending_withdrawal: bool,
+    #[serde(default)]
+    withdrawal_id: Option<Uuid>,
 }
 
 pub struct Proxy {
@@ -256,21 +258,29 @@ impl Proxy {
 
     pub async fn consent(&self, enabled: bool) -> Result<Value, ProxyError> {
         let session = self.required_session()?;
-        if !enabled {
+        let withdrawal_id = if !enabled {
+            let id = Uuid::new_v4();
             let mut outbox = self.outbox.lock().await;
             outbox.events.clear();
             outbox.gaps.clear();
             outbox.pending_withdrawal = true;
+            outbox.withdrawal_id = Some(id);
             self.save_outbox(&outbox)?;
             for turn in self.turns.lock().unwrap().values_mut() { turn.capture = false; turn.blocked = true; }
-        } else if self.outbox.lock().await.pending_withdrawal {
+            Some(id)
+        } else { None };
+        let _change = self.account_change.lock().await;
+        if enabled && self.outbox.lock().await.pending_withdrawal {
             return Err(ProxyError::new("consent_pending", "Finish turning off sharing before enabling it again."));
         }
-        let _change = self.account_change.lock().await;
         let (view, _) = self.request(Method::PUT, "/v1/consent", Some(json!({ "enabled": enabled, "version": CONSENT_VERSION })), Some(&session)).await?;
         let mut outbox = self.outbox.lock().await;
-        outbox.pending_withdrawal = false;
-        self.save_outbox(&outbox)?;
+        // An earlier response must not acknowledge a later withdrawal.
+        if withdrawal_id.is_some() && outbox.withdrawal_id == withdrawal_id {
+            outbox.pending_withdrawal = false;
+            outbox.withdrawal_id = None;
+            self.save_outbox(&outbox)?;
+        }
         Ok(view)
     }
 
@@ -513,6 +523,37 @@ mod tests {
         fixture.route("PUT", "/v1/consent", 200, json!({ "capture": false })).await;
         restarted.consent(false).await.unwrap();
         assert!(!restarted.outbox.lock().await.pending_withdrawal);
+    }
+
+    #[tokio::test]
+    async fn an_earlier_consent_response_cannot_clear_a_newer_withdrawal() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for enabled in [true, false] {
+            let fixture = Fixture::new().await;
+            let proxy = fixture.proxy();
+            let started = Arc::new(tokio::sync::Notify::new());
+            let calls = AtomicUsize::new(0);
+            let signal = started.clone();
+            Mock::given(method("PUT")).and(path("/v1/consent"))
+                .respond_with(move |_: &wiremock::Request| {
+                    if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                        signal.notify_one();
+                        ResponseTemplate::new(200).set_delay(Duration::from_millis(250))
+                            .set_body_json(json!({ "capture": enabled }))
+                    } else {
+                        ResponseTemplate::new(503).set_body_json(json!({ "error": { "code": "offline" } }))
+                    }
+                }).mount(&fixture.server).await;
+            let (earlier, later) = tokio::join!(proxy.consent(enabled), async {
+                started.notified().await;
+                proxy.consent(false).await
+            });
+            earlier.unwrap();
+            assert_eq!(later.unwrap_err().code, "offline");
+            assert_eq!(proxy.complete(json!({}), Uuid::new_v4(), Uuid::new_v4(), 1).await.unwrap_err().code, "consent_pending");
+            assert_eq!(fixture.proxy().complete(json!({}), Uuid::new_v4(), Uuid::new_v4(), 1).await.unwrap_err().code, "consent_pending");
+            assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
+        }
     }
 
     #[tokio::test]
