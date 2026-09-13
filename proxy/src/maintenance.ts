@@ -42,8 +42,8 @@ export async function maintain(env: Env): Promise<void> {
   // an R2 write can finish that write after the first deletion pass.
   const objects = await env.DB.prepare(`SELECT c.id, c.object_key FROM captures c JOIN turns t ON t.id = c.turn_id
     WHERE c.state = 'deleting' OR (c.state = 'writing' AND c.updated_at < ?)
-    OR (c.state = 'deleted' AND c.updated_at < ?) OR t.deleted_at IS NOT NULL
-    ORDER BY c.updated_at LIMIT 100`).bind(now - 5 * 60_000, now - DAY).all<{ id: string; object_key: string }>();
+    OR (c.state = 'deleted' AND c.updated_at < ?) OR (c.state != 'deleted' AND t.deleted_at IS NOT NULL)
+    ORDER BY c.state = 'deleted', c.updated_at LIMIT 100`).bind(now - 5 * 60_000, now - DAY).all<{ id: string; object_key: string }>();
   for (const row of objects.results) {
     try {
       await env.CAPTURE.delete(row.object_key);

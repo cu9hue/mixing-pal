@@ -415,6 +415,40 @@ describe("capture and deletion", () => {
     expect(await env.DB.prepare('SELECT id FROM "user" WHERE id = ?').bind(user.id).first()).toBeNull();
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM verification").first()).n).toBe(0);
   });
+
+  test.each([60 * 60_000, 2 * DAY])("new deletions precede tombstones last checked %i ms ago", async (age) => {
+    const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    const old = question();
+    reply();
+    await api("/v1/completions", old, user.token);
+    const original = await env.DB.prepare("SELECT id, object_key FROM captures WHERE turn_id = ?")
+      .bind(old.turn_id).first<{ id: string; object_key: string }>();
+    await env.DB.batch(Array.from({ length: 100 }, () => {
+      const id = crypto.randomUUID();
+      return env.DB.prepare(`INSERT INTO captures(id, turn_id, object_key, bytes, body_hash, kind, state, created_at, updated_at)
+        SELECT ?, turn_id, ?, bytes, body_hash, kind, 'deleted', created_at, updated_at FROM captures WHERE id = ?`)
+        .bind(id, `old-${id}`, original!.id);
+    }));
+    await api(`/v1/turns/${old.turn_id}/capture`, undefined, user.token, "DELETE");
+    await env.CAPTURE.delete(original!.object_key);
+    await env.DB.prepare("UPDATE captures SET state = 'deleted', updated_at = ? WHERE turn_id = ?")
+      .bind(Date.now() - age, old.turn_id).run();
+    const fresh = question();
+    reply();
+    await api("/v1/completions", fresh, user.token);
+    const object = (await capturedObjects())[0];
+    await api(`/v1/turns/${fresh.turn_id}/capture`, undefined, user.token, "DELETE");
+    const remove = vi.spyOn(env.CAPTURE, "delete");
+    await maintain(env);
+    expect(await env.CAPTURE.head(object.key), "newly deleted content must take priority").toBeNull();
+    expect(remove).toHaveBeenCalledTimes(age < DAY ? 1 : 100);
+    await env.CAPTURE.put(original!.object_key, "late write");
+    await env.DB.prepare("UPDATE captures SET updated_at = ? WHERE id = ?").bind(Date.now() - 2 * DAY, original!.id).run();
+    await maintain(env);
+    expect(await env.CAPTURE.head(original!.object_key), "tombstones must still remove late writes").toBeNull();
+  });
+
   test("captures the actual model request and raw answer only after consent", async () => {
     const user = await joined();
     await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
