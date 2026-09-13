@@ -49,3 +49,16 @@ test("deployment isolates stages, begins paused, and rejects absent resource IDs
   assert.throws(() => configuration(base, "production", undefined), /D1 UUID/);
   assert.throws(() => configuration(base, "typo", id), /staging or production/);
 });
+
+test("recovery commands send verified totals and reasons to the correct scope", async () => {
+  const sent = [];
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token", fetch: async (_url, options) => {
+    sent.push(JSON.parse(options.body)); return Response.json({ ok: true });
+  } };
+  await run(["recover-member", "member", "4800000", "Provider billing checked"], connection, () => {});
+  await run(["recover-budget", "6500000", "Service billing checked"], connection, () => {});
+  assert.deepEqual(sent, [
+    { action: "recover", member_id: "member", spent_micro_usd: 4800000, reason: "Provider billing checked" },
+    { action: "recover", spent_micro_usd: 6500000, reason: "Service billing checked" },
+  ]);
+});

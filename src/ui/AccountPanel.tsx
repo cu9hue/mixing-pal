@@ -77,7 +77,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
           {view.period_end && ` · until ${new Date(view.period_end).toLocaleDateString()}`}</p>
         <p>${((view.remaining_micro_usd ?? 0) / 1_000_000).toFixed(2)} of model usage remains.
           {(view.reserved_micro_usd ?? 0) > 0 && " Some allowance is held for requests being checked."}</p>
-        {view.can_ask === false && <p>{(view.reserved_micro_usd ?? 0) > 0
+        {view.can_ask === false && <p>{view.service_paused ? "Model access is temporarily paused." : (view.reserved_micro_usd ?? 0) > 0
           ? "We’re checking the last request’s usage before you can ask again."
           : "The remaining allowance cannot cover another request."}</p>}
       </>}

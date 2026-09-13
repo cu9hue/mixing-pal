@@ -74,3 +74,21 @@ export async function unknown(env: Env, id: string, errorCode: string): Promise<
     WHERE id = ? AND status != 'settled'`).bind(errorCode, Date.now(), id).run();
   console.error(JSON.stringify({ event: "usage_unknown", request_id: id, code: errorCode }));
 }
+
+export async function recover(env: Env, memberId: string | undefined, spent: number, reason: string): Promise<void> {
+  const table = memberId === undefined ? "budget" : "members";
+  const guard = `id = ? AND recovery_required = 1 AND reserved = 0 AND spent <= ?
+    AND EXISTS (SELECT 1 FROM budget WHERE paused = 1 AND recovery_required = 1)
+    AND NOT EXISTS (SELECT 1 FROM requests WHERE status != 'settled'${memberId === undefined ? "" : " AND member_id = members.id"})
+    ${memberId === undefined ? "AND NOT EXISTS (SELECT 1 FROM members WHERE recovery_required = 1) AND (SELECT COALESCE(SUM(spent), 0) FROM members) <= ?" : ""}`;
+  const values = memberId === undefined ? [1, spent, spent] : [memberId, spent];
+  const result = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO operator_actions(action, target, created_at, detail)
+      SELECT 'recover', ?, ?, ? FROM ${table} WHERE ${guard}`)
+      .bind(memberId ?? "service", Date.now(), JSON.stringify({ spent_micro_usd: spent, reason }), ...values),
+    env.DB.prepare(`UPDATE ${table} SET spent = ?, recovery_required = 0 WHERE ${guard}`).bind(spent, ...values),
+  ]);
+  if (!result[1].meta.changes) {
+    throw new ApiError(409, "recovery_not_ready", "Settle held requests first, recover each account before the global budget, and never reduce recorded spending.");
+  }
+}

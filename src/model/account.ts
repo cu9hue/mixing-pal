@@ -8,6 +8,7 @@ export interface AccountView {
   remaining_micro_usd?: number;
   can_ask?: boolean;
   reserved_micro_usd?: number;
+  service_paused?: boolean;
   period_end?: number;
   capture: boolean;
   consent_epoch?: number;
@@ -45,12 +46,12 @@ export function useAccount() {
   }, [observe]);
   const change = useCallback((next: AccountView) => { generation.current++; setView(next); setError(null); }, []);
   useEffect(() => { void refresh(); }, [refresh]);
-  const usageHeld = view?.access === "active" && (view.reserved_micro_usd ?? 0) > 0;
+  const waiting = view?.access === "active" && ((view.reserved_micro_usd ?? 0) > 0 || view.service_paused);
   useEffect(() => {
-    if (!usageHeld) return;
+    if (!waiting) return;
     const timer = setInterval(() => { void refresh(); }, 30_000);
     return () => clearInterval(timer);
-  }, [usageHeld, refresh]);
+  }, [waiting, refresh]);
   return { view, error, refresh, change, observe };
 }
 

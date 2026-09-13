@@ -146,7 +146,12 @@ async function recordDeletion(env: Env, target: { member_id: string; turn_id?: s
 }
 
 export async function replayDeletions(env: Env, cursor?: string): Promise<string | null> {
-  await env.DB.prepare("UPDATE budget SET paused = 1").run();
+  // A restored snapshot also loses later charges, not only deletions.
+  await env.DB.batch([
+    env.DB.prepare("UPDATE budget SET paused = 1, recovery_required = 1"),
+    env.DB.prepare("UPDATE members SET recovery_required = 1"),
+    env.DB.prepare("DELETE FROM invites WHERE redeemed_by IS NULL"),
+  ]);
   const page = await env.CAPTURE.list({ prefix: "deletions/", limit: 100, cursor });
   for (const object of page.objects) {
     const saved = await env.CAPTURE.get(object.key);

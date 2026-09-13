@@ -12,6 +12,7 @@ export interface Member {
   capture: number;
   consent_epoch: number;
   deleted_at: number | null;
+  recovery_required: number;
 }
 
 export async function member(env: Env, id: string): Promise<Member | null> {
@@ -19,14 +20,17 @@ export async function member(env: Env, id: string): Promise<Member | null> {
 }
 
 export async function account(env: Env, id: string): Promise<Response> {
-  const [m, user] = await Promise.all([
+  const [m, user, budget] = await Promise.all([
     member(env, id),
     env.DB.prepare('SELECT email FROM "user" WHERE id = ?').bind(id).first<{ email: string }>(),
+    env.DB.prepare("SELECT paused, recovery_required FROM budget").first<{ paused: number; recovery_required: number }>(),
   ]);
+  const servicePaused = !budget || Boolean(budget.paused || budget.recovery_required || m?.recovery_required);
   return json({ id, email: user?.email ?? "", access: !m ? "invitation_required"
     : m.revoked || m.deleted_at ? "revoked" : m.period_end <= Date.now() ? "expired" : "active",
     remaining_micro_usd: m ? Math.max(0, m.allowance - m.spent - m.reserved) : 0,
-    can_ask: Boolean(m && !m.revoked && !m.deleted_at && m.period_end > Date.now() && m.reserved === 0 && m.allowance - m.spent >= RESERVATION),
+    can_ask: Boolean(!servicePaused && m && !m.revoked && !m.deleted_at && m.period_end > Date.now() && m.reserved === 0 && m.allowance - m.spent >= RESERVATION),
+    service_paused: servicePaused,
     reserved_micro_usd: m?.reserved ?? 0, period_end: m?.period_end ?? null,
     capture: m?.capture === 1, consent_epoch: m?.consent_epoch ?? 0,
     consent_version: CAPTURE_VERSION, training: false });

@@ -80,7 +80,7 @@ beforeEach(async () => {
   });
   await env.DB.batch(["operator_actions", "deletion_jobs", "captures", "requests", "turns", "consents", "invites", "members", "session", "account", "user", "verification", "rateLimit", "api_limits"]
     .map((table) => env.DB.prepare(`DELETE FROM "${table}"`)));
-  await env.DB.prepare("UPDATE budget SET spent = 0, reserved = 0, allowance = 50000000, paused = 0").run();
+  await env.DB.prepare("UPDATE budget SET spent = 0, reserved = 0, allowance = 50000000, paused = 0, recovery_required = 0").run();
   const objects = await env.CAPTURE.list();
   await Promise.all(objects.objects.map((o) => env.CAPTURE.delete(o.key)));
 });
@@ -124,6 +124,50 @@ describe("invited accounts", () => {
 });
 
 describe("metered requests", () => {
+  test("a restored ledger stays paused until account and global spending are recovered", async () => {
+    const user = await joined();
+    const unused = await invited("restored-invite@example.com");
+    // Restored rows contain balances from before the producer spent $4.80.
+    const replay = await api("/operator", { action: "replay_deletions" }, env.ADMIN_TOKEN);
+    expect(replay.status).toBe(200);
+    expect((await api("/v1/invites/redeem", { code: unused.code }, unused.token)).status).toBe(403);
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ can_ask: false, service_paused: true });
+    await maintain(env);
+    expect((await api("/operator", { action: "pause", paused: false }, env.ADMIN_TOKEN)).status).toBe(409);
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(503);
+    const recover = (member_id: string | undefined, spent_micro_usd: number) => api("/operator", {
+      action: "recover", member_id, spent_micro_usd, reason: "Verified against pre-restore records and provider billing",
+    }, env.ADMIN_TOKEN);
+    expect((await recover(undefined, 4800000)).status).toBe(409);
+    expect((await recover(user.id, 4800000)).status).toBe(200);
+    expect((await recover(undefined, 4799999)).status).toBe(409);
+    expect((await recover(undefined, 4800000)).status).toBe(200);
+    expect((await api("/operator", { action: "pause", paused: false }, env.ADMIN_TOKEN)).status).toBe(200);
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(402);
+    const restored = await (await api("/v1/account", undefined, user.token)).json();
+    expect(restored).toMatchObject({ can_ask: false, remaining_micro_usd: 200000, service_paused: false });
+    expect((await env.DB.prepare("SELECT action, detail FROM operator_actions WHERE action = 'recover'").all()).results).toHaveLength(2);
+    expect(sent).toHaveLength(0);
+  });
+
+  test("recovery refuses unresolved or decreasing spending and keeps its audit atomic", async () => {
+    const user = await joined();
+    reply({ usage: null });
+    const request = question();
+    await api("/v1/completions", request, user.token);
+    await api("/operator", { action: "replay_deletions" }, env.ADMIN_TOKEN);
+    const recover = (spent_micro_usd: number) => api("/operator", { action: "recover", member_id: user.id,
+      spent_micro_usd, reason: "Verified recovery amount" }, env.ADMIN_TOKEN);
+    expect((await recover(1000)).status).toBe(409);
+    await settle(env, request.request_id, 1000);
+    expect((await recover(999)).status).toBe(409);
+    await env.DB.exec("CREATE TRIGGER fail_recovery_audit BEFORE INSERT ON operator_actions BEGIN SELECT RAISE(ABORT, 'unavailable'); END");
+    try { expect((await recover(1000)).status).toBe(503); }
+    finally { await env.DB.exec("DROP TRIGGER fail_recovery_audit"); }
+    expect((await env.DB.prepare("SELECT recovery_required FROM members WHERE id = ?").bind(user.id).first()).recovery_required).toBe(1);
+    expect((await recover(1000)).status).toBe(200);
+  });
+
   test("five unknown generations retain the global concurrency limit", async () => {
     for (let i = 0; i < 5; i++) {
       const user = await joined(`producer-${i}@example.com`);

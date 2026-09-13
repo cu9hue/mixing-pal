@@ -18,6 +18,10 @@ The token is never an argument. Only localhost may use HTTP.
   npm run admin -- pause | resume               Stop or resume admissions
   npm run admin -- sweep                        Run reconciliation and deletion now
   npm run admin -- replay-deletions             Reapply the external journal after a D1 restore
+  npm run admin -- recover-member member-id micro-usd reason
+                                                Restore verified total account spending
+  npm run admin -- recover-budget micro-usd reason
+                                                Restore verified total service spending
   npm run admin -- export member-id turn-id file Save a review reference (no transcript)
   npm run admin -- review file                  Fetch the current export for review
 
@@ -35,9 +39,22 @@ before resolve. Do not release a reservation just because time passed.
 Deletion sweeps run every ten minutes; capture expires at 30 days and settled
 operational records at 90 days. D1 Time Travel backups can retain earlier data
 for 7 days on Workers Free or 30 days on Paid. This service requires Paid.
-Before a restore, deploy with inference disabled. After restoring D1, run
-replay-deletions, then sweep. Deletion metadata is journaled separately in
-private R2 for 90 days. Check access and held costs before enabling inference.
+Before a restore, deploy with inference disabled and preserve available ledger
+records. After restoring D1, apply current migrations, run replay-deletions,
+then sweep. Replay blocks ordinary resume until spending is recovered too.
+Deletion metadata is journaled separately in private R2 for 90 days.
+Replay also invalidates unused invitations: they may belong to accounts lost
+by the restore. Reissue them only after checking the producer's spending.
+
+Settle surviving held requests using provider billing evidence. Recover every
+account's TOTAL spent amount (not an adjustment), including charges lost by
+the restore, with recover-member. usage lists unrecovered accounts first;
+repeat until none remain. Then recover-budget with the verified service total,
+including spending by accounts absent from the snapshot. Amounts cannot go
+down, and the service total must cover all recorded account spending. Keep the
+service paused if lost charges cannot be attributed reliably. Recovery records
+each amount and reason atomically; it never grants allowance or renews access.
+Only after recovery, check access and costs, resume and enable inference.
 Never restore deleted content from an operator's local copy.
 `;
 
@@ -65,7 +82,7 @@ export async function run(args, connection, print = console.log) {
   if (command === "replay-deletions") {
     let cursor;
     do { cursor = (await operator({ action: "replay_deletions", ...(cursor ? { cursor } : {}) }, connection)).cursor; } while (cursor);
-    print("Deletion journal replayed. Admissions remain paused. Run sweep before enabling access.");
+    print("Deletion journal replayed. Run sweep and recover account and global spending before resuming access.");
     return;
   }
   if (command === "review") {
@@ -78,11 +95,14 @@ export async function run(args, connection, print = console.log) {
     catch (error) { if (error.status === 404 || error.status === 410) await rm(file); throw error; }
     return;
   }
-  const arity = { invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3, pause: 0, resume: 0, sweep: 0, export: 3 };
+  const arity = { invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3,
+    "recover-member": 3, "recover-budget": 2, pause: 0, resume: 0, sweep: 0, export: 3 };
   if (!(command in arity) || values.length !== arity[command]) throw new Error("Unknown command or arguments. Run npm run admin -- help.");
   const payload = command === "invite" ? { action: "invite", email: values[0] }
     : command === "pause" || command === "resume" ? { action: "pause", paused: command === "pause" }
     : command === "resolve" ? { action: "resolve", request_id: values[0], cost_micro_usd: Number(values[1]), reason: values[2] }
+    : command === "recover-member" ? { action: "recover", member_id: values[0], spent_micro_usd: Number(values[1]), reason: values[2] }
+    : command === "recover-budget" ? { action: "recover", spent_micro_usd: Number(values[0]), reason: values[1] }
     : { action: command.replaceAll("-", "_"), ...(values[0] ? { member_id: values[0] } : {}), ...(values[1] ? { turn_id: values[1] } : {}) };
   const result = await operator(payload, connection);
   if (command !== "export") { print(JSON.stringify(result, null, 2)); return; }
