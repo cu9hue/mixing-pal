@@ -36,28 +36,28 @@ struct Session {
 }
 
 pub trait Credentials: Send + Sync {
-    fn read(&self) -> Result<Option<String>, String>;
-    fn write(&self, value: &str) -> Result<(), String>;
-    fn clear(&self) -> Result<(), String>;
+    fn read(&self, account: &str) -> Result<Option<String>, String>;
+    fn write(&self, account: &str, value: &str) -> Result<(), String>;
+    fn clear(&self, account: &str) -> Result<(), String>;
 }
 
 pub struct Keychain;
 
 #[cfg(target_os = "macos")]
 impl Credentials for Keychain {
-    fn read(&self) -> Result<Option<String>, String> {
-        match security_framework::passwords::get_generic_password("com.mixingpal.app", "pilot-session") {
+    fn read(&self, account: &str) -> Result<Option<String>, String> {
+        match security_framework::passwords::get_generic_password("com.mixingpal.app", account) {
             Ok(bytes) => String::from_utf8(bytes).map(Some).map_err(|_| "The saved session could not be read.".into()),
             Err(e) if e.code() == -25300 => Ok(None),
             Err(_) => Err("Unlock your keychain to sign in to Mixing Pal.".into()),
         }
     }
-    fn write(&self, value: &str) -> Result<(), String> {
-        security_framework::passwords::set_generic_password("com.mixingpal.app", "pilot-session", value.as_bytes())
+    fn write(&self, account: &str, value: &str) -> Result<(), String> {
+        security_framework::passwords::set_generic_password("com.mixingpal.app", account, value.as_bytes())
             .map_err(|_| "The session could not be saved in your keychain.".into())
     }
-    fn clear(&self) -> Result<(), String> {
-        match security_framework::passwords::delete_generic_password("com.mixingpal.app", "pilot-session") {
+    fn clear(&self, account: &str) -> Result<(), String> {
+        match security_framework::passwords::delete_generic_password("com.mixingpal.app", account) {
             Ok(()) => Ok(()),
             Err(e) if e.code() == -25300 => Ok(()),
             Err(_) => Err("The saved session could not be removed from your keychain.".into()),
@@ -67,9 +67,9 @@ impl Credentials for Keychain {
 
 #[cfg(not(target_os = "macos"))]
 impl Credentials for Keychain {
-    fn read(&self) -> Result<Option<String>, String> { Ok(None) }
-    fn write(&self, _: &str) -> Result<(), String> { Err("Secure sign-in storage is available on macOS.".into()) }
-    fn clear(&self) -> Result<(), String> { Ok(()) }
+    fn read(&self, _: &str) -> Result<Option<String>, String> { Ok(None) }
+    fn write(&self, _: &str, _: &str) -> Result<(), String> { Err("Secure sign-in storage is available on macOS.".into()) }
+    fn clear(&self, _: &str) -> Result<(), String> { Ok(()) }
 }
 
 #[derive(Clone)]
@@ -103,6 +103,7 @@ pub struct Proxy {
     client: Client,
     origin: String,
     credentials: Box<dyn Credentials>,
+    credential_name: String,
     session: Mutex<Option<Session>>,
     turns: Mutex<HashMap<Uuid, Turn>>,
     outbox: tokio::sync::Mutex<Outbox>,
@@ -120,7 +121,16 @@ impl Proxy {
     }
 
     fn with_store(dir: &Path, origin: String, credentials: Box<dyn Credentials>) -> Self {
-        let outbox_path = dir.join("pilot-outbox.json");
+        let origin = origin.trim_end_matches('/').to_owned();
+        // Preserve production's existing state; alternate origins never read it.
+        let credential_name = if origin == ORIGIN { "pilot-session".into() } else { format!("pilot-session:{origin}") };
+        let outbox_path = if origin == ORIGIN { dir.join("pilot-outbox.json") } else {
+            let mut path = dir.join("pilot-origins");
+            for part in origin.as_bytes().chunks(64) {
+                path.push(part.iter().map(|byte| format!("{byte:02x}")).collect::<String>());
+            }
+            path.join("outbox.json")
+        };
         let outbox = std::fs::metadata(&outbox_path).ok()
             .filter(|m| m.len() <= (MAX_OUTBOX + MAX_EVENT) as u64)
             .and_then(|_| std::fs::read(&outbox_path).ok())
@@ -131,7 +141,7 @@ impl Proxy {
             client: Client::builder().connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(180)).redirect(reqwest::redirect::Policy::none()).build()
                 .expect("the proxy HTTP configuration is valid"),
-            origin: origin.trim_end_matches('/').into(), credentials,
+            origin, credentials, credential_name,
             session: Mutex::new(None), turns: Mutex::new(HashMap::new()),
             outbox: tokio::sync::Mutex::new(outbox), outbox_path,
             account_change: tokio::sync::Mutex::new(()),
@@ -142,7 +152,7 @@ impl Proxy {
     fn session(&self) -> Result<Option<Session>, ProxyError> {
         let mut session = self.session.lock().map_err(|_| ProxyError::new("session_error", "The session is unavailable."))?;
         if session.is_none() {
-            *session = self.credentials.read().map_err(|e| ProxyError::new("keychain_error", &e))?
+            *session = self.credentials.read(&self.credential_name).map_err(|e| ProxyError::new("keychain_error", &e))?
                 .map(|raw| serde_json::from_str(&raw)).transpose()
                 .map_err(|_| ProxyError::new("session_error", "The saved session is unreadable. Sign out and sign in again."))?;
         }
@@ -213,7 +223,7 @@ impl Proxy {
             self.request(Method::POST, "/auth/sign-out", Some(json!({})), Some(&session)).await?;
             return Err(ProxyError::new("consent_pending", "Sign back into your previous account to finish turning off sharing."));
         }
-        self.credentials.write(&serde_json::to_string(&session).unwrap()).map_err(|e| ProxyError::new("keychain_error", &e))?;
+        self.credentials.write(&self.credential_name, &serde_json::to_string(&session).unwrap()).map_err(|e| ProxyError::new("keychain_error", &e))?;
         *self.session.lock().unwrap() = Some(session.clone());
         self.turns.lock().unwrap().clear();
         let mut outbox = self.outbox.lock().await;
@@ -244,7 +254,7 @@ impl Proxy {
     }
 
     async fn clear_local(&self) -> Result<(), ProxyError> {
-        self.credentials.clear().map_err(|e| ProxyError::new("keychain_error", &e))?;
+        self.credentials.clear(&self.credential_name).map_err(|e| ProxyError::new("keychain_error", &e))?;
         *self.session.lock().unwrap() = None;
         self.turns.lock().unwrap().clear();
         let mut outbox = self.outbox.lock().await;
@@ -434,19 +444,20 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[derive(Clone, Default)]
-    struct Memory(Arc<Mutex<Option<String>>>);
+    struct Memory(Arc<Mutex<HashMap<String, String>>>);
     impl Credentials for Memory {
-        fn read(&self) -> Result<Option<String>, String> { Ok(self.0.lock().unwrap().clone()) }
-        fn write(&self, value: &str) -> Result<(), String> { *self.0.lock().unwrap() = Some(value.into()); Ok(()) }
-        fn clear(&self) -> Result<(), String> { *self.0.lock().unwrap() = None; Ok(()) }
+        fn read(&self, account: &str) -> Result<Option<String>, String> { Ok(self.0.lock().unwrap().get(account).cloned()) }
+        fn write(&self, account: &str, value: &str) -> Result<(), String> { self.0.lock().unwrap().insert(account.into(), value.into()); Ok(()) }
+        fn clear(&self, account: &str) -> Result<(), String> { self.0.lock().unwrap().remove(account); Ok(()) }
     }
 
     struct Fixture { dir: PathBuf, store: Memory, server: MockServer }
     impl Fixture {
         async fn new() -> Self {
-            let store = Memory::default();
-            store.write(&json!({ "token": "private-session", "member_id": "producer" }).to_string()).unwrap();
-            Self { dir: std::env::temp_dir().join(format!("mixing-pal-proxy-test-{}", Uuid::new_v4())), store, server: MockServer::start().await }
+            let fixture = Self { dir: std::env::temp_dir().join(format!("mixing-pal-proxy-test-{}", Uuid::new_v4())),
+                store: Memory::default(), server: MockServer::start().await };
+            fixture.store.write(&fixture.proxy().credential_name, &json!({ "token": "private-session", "member_id": "producer" }).to_string()).unwrap();
+            fixture
         }
         fn proxy(&self) -> Proxy { Proxy::with_store(&self.dir, self.server.uri(), Box::new(self.store.clone())) }
         async fn route(&self, verb: &str, route: &str, status: u16, value: Value) {
@@ -466,9 +477,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn staging_sign_in_and_sign_out_preserve_the_production_credential() {
+        let fixture = Fixture::new().await;
+        let production = || Proxy::with_store(&fixture.dir, ORIGIN.into(), Box::new(fixture.store.clone()));
+        let staging = fixture.proxy();
+        fixture.store.clear(&staging.credential_name).unwrap();
+        fixture.store.write(&production().credential_name, &json!({ "token": "private-session", "member_id": "producer" }).to_string()).unwrap();
+        assert_eq!(production().credential_name, "pilot-session");
+        assert!(staging.session().unwrap().is_none(), "staging must not read the production credential");
+        Mock::given(method("POST")).and(path("/auth/sign-in/email-otp"))
+            .respond_with(ResponseTemplate::new(200).insert_header("set-auth-token", "staging-session")
+                .set_body_json(json!({ "user": { "id": "staging-member" } }))).mount(&fixture.server).await;
+        fixture.route("GET", "/v1/account", 200, json!({ "access": "active", "capture": false })).await;
+        fixture.route("POST", "/auth/sign-out", 200, json!({ "success": true })).await;
+        staging.sign_in("invited@example.com".into(), "123456".into()).await.unwrap();
+        assert_eq!(production().required_session().unwrap().token, "private-session");
+        assert_eq!(fixture.proxy().required_session().unwrap().token, "staging-session");
+        staging.sign_out().await.unwrap();
+        assert!(fixture.proxy().session().unwrap().is_none());
+        assert_eq!(production().required_session().unwrap().token, "private-session");
+    }
+
+    #[tokio::test]
+    async fn staging_cannot_read_or_purge_the_production_outbox() {
+        let fixture = Fixture::new().await;
+        let production = || Proxy::with_store(&fixture.dir, ORIGIN.into(), Box::new(fixture.store.clone()));
+        let outbox = Outbox { events: vec![PendingEvent { member_id: "producer".into(), turn_id: Uuid::new_v4(),
+            epoch: 1, queued_at: crate::tools::now_millis(), payload: event("tool", json!({ "private": "production notes" })) }],
+            pending_withdrawal: true, ..Outbox::default() };
+        production().save_outbox(&outbox).unwrap();
+        let staging = fixture.proxy();
+        assert!(staging.outbox.lock().await.events.is_empty());
+        assert!(!staging.outbox.lock().await.pending_withdrawal);
+        staging.clear_local().await.unwrap();
+        let restored = production();
+        assert_eq!(restored.outbox.lock().await.events.len(), 1);
+        assert!(restored.outbox.lock().await.pending_withdrawal);
+        assert_eq!(restored.outbox_path, fixture.dir.join("pilot-outbox.json"));
+        let same_origin = Proxy::with_store(&fixture.dir, format!("{}/", fixture.server.uri()), Box::new(fixture.store.clone()));
+        assert_eq!(same_origin.outbox_path, staging.outbox_path);
+    }
+
+    #[tokio::test]
     async fn sign_in_persists_only_in_the_credential_store_and_sign_out_revokes_it() {
         let fixture = Fixture::new().await;
-        fixture.store.clear().unwrap();
+        fixture.store.clear(&fixture.proxy().credential_name).unwrap();
         Mock::given(method("POST")).and(path("/auth/sign-in/email-otp"))
             .respond_with(ResponseTemplate::new(200).insert_header("set-auth-token", "new-private-session")
                 .set_body_json(json!({ "user": { "id": "producer" } }))).mount(&fixture.server).await;
@@ -481,7 +534,7 @@ mod tests {
         let restarted = fixture.proxy();
         assert_eq!(restarted.account().await.unwrap()["access"], "active");
         restarted.sign_out().await.unwrap();
-        assert!(fixture.store.read().unwrap().is_none());
+        assert!(fixture.store.read(&restarted.credential_name).unwrap().is_none());
         let requests = fixture.server.received_requests().await.unwrap();
         assert_eq!(requests.last().unwrap().headers.get("authorization").unwrap(), "Bearer new-private-session");
     }
