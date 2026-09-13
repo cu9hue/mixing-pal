@@ -11,6 +11,7 @@ const message = z.object({ role: z.enum(["system", "user", "assistant", "tool"])
 
 export const completionInput = z.object({
   turn_id: z.uuid(), request_id: z.uuid(), round: z.number().int().min(1).max(6),
+  capture_epoch: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullish(),
   app_version: z.string().regex(/^\d+\.\d+\.\d+$/).max(32), wire_version: z.number().int().min(1).max(10000),
   body: z.object({ messages: z.array(message).min(1).max(512),
     tools: z.array(z.object({ type: z.literal("function"), function: z.object({

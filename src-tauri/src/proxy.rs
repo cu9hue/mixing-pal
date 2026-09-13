@@ -294,7 +294,7 @@ impl Proxy {
         Ok(view)
     }
 
-    pub async fn complete(&self, body: Value, turn_id: Uuid, request_id: Uuid, round: u8) -> Result<Value, ProxyError> {
+    pub async fn complete(&self, body: Value, turn_id: Uuid, request_id: Uuid, round: u8, capture_epoch: Option<u64>) -> Result<Value, ProxyError> {
         let session = {
             let outbox = self.outbox.lock().await;
             if outbox.pending_withdrawal {
@@ -308,7 +308,7 @@ impl Proxy {
         };
         let wire: Value = serde_json::from_str(include_str!("../../shared/wire-version.json")).unwrap();
         let payload = json!({ "body": body, "turn_id": turn_id, "request_id": request_id, "round": round,
-            "app_version": env!("CARGO_PKG_VERSION"), "wire_version": wire["version"] });
+            "app_version": env!("CARGO_PKG_VERSION"), "wire_version": wire["version"], "capture_epoch": capture_epoch });
         let (value, _) = self.request(Method::POST, "/v1/completions", Some(payload), Some(&session)).await?;
         if self.session()?.as_ref().map(|s| &s.member_id) != Some(&session.member_id) {
             return Err(ProxyError::new("account_changed", "The account changed while this answer was running."));
@@ -466,7 +466,7 @@ mod tests {
         async fn turn(&self, proxy: &Proxy, capture: bool) -> Uuid {
             self.route("POST", "/v1/completions", 200, json!({ "text": "answer", "tool_calls": [], "capture": capture, "consent_epoch": 1 })).await;
             let turn = Uuid::new_v4();
-            proxy.complete(json!({ "messages": [] }), turn, Uuid::new_v4(), 1).await.unwrap();
+            proxy.complete(json!({ "messages": [] }), turn, Uuid::new_v4(), 1, capture.then_some(1)).await.unwrap();
             turn
         }
     }
@@ -547,7 +547,7 @@ mod tests {
         let turn = Uuid::new_v4();
         let request = Uuid::new_v4();
         let body = crate::model::build_body(&crate::settings::Settings::default(), &[]).unwrap();
-        let out = proxy.complete(body.clone(), turn, request, 1).await.unwrap();
+        let out = proxy.complete(body.clone(), turn, request, 1, None).await.unwrap();
         assert_eq!(out["text"], "raw```note");
         proxy.event(turn, event("tool", json!({ "secret": "clip notes" }))).await.unwrap();
         assert!(proxy.outbox.lock().await.events.is_empty());
@@ -561,6 +561,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completion_forwards_the_turn_start_consent_without_refreshing_it() {
+        let fixture = Fixture::new().await;
+        let proxy = fixture.proxy();
+        fixture.route("POST", "/v1/completions", 200, json!({ "text": "answer", "capture": false })).await;
+        for epoch in [None, Some(3)] {
+            proxy.complete(json!({}), Uuid::new_v4(), Uuid::new_v4(), 1, epoch).await.unwrap();
+        }
+        let requests = fixture.server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        let bodies: Vec<Value> = requests.iter().map(|r| serde_json::from_slice(&r.body).unwrap()).collect();
+        assert!(bodies[0]["capture_epoch"].is_null());
+        assert_eq!(bodies[1]["capture_epoch"], 3);
+    }
+
+    #[tokio::test]
     async fn offline_withdrawal_purges_uploads_and_survives_restart() {
         let fixture = Fixture::new().await;
         let proxy = fixture.proxy();
@@ -571,7 +586,7 @@ mod tests {
         let file = std::fs::read_to_string(&proxy.outbox_path).unwrap();
         assert!(!file.contains("project data"));
         let restarted = fixture.proxy();
-        assert_eq!(restarted.complete(json!({}), Uuid::new_v4(), Uuid::new_v4(), 1).await.unwrap_err().code, "consent_pending");
+        assert_eq!(restarted.complete(json!({}), Uuid::new_v4(), Uuid::new_v4(), 1, None).await.unwrap_err().code, "consent_pending");
         fixture.server.reset().await;
         fixture.route("PUT", "/v1/consent", 200, json!({ "capture": false })).await;
         restarted.consent(false).await.unwrap();
@@ -603,8 +618,8 @@ mod tests {
             });
             earlier.unwrap();
             assert_eq!(later.unwrap_err().code, "offline");
-            assert_eq!(proxy.complete(json!({}), Uuid::new_v4(), Uuid::new_v4(), 1).await.unwrap_err().code, "consent_pending");
-            assert_eq!(fixture.proxy().complete(json!({}), Uuid::new_v4(), Uuid::new_v4(), 1).await.unwrap_err().code, "consent_pending");
+            assert_eq!(proxy.complete(json!({}), Uuid::new_v4(), Uuid::new_v4(), 1, None).await.unwrap_err().code, "consent_pending");
+            assert_eq!(fixture.proxy().complete(json!({}), Uuid::new_v4(), Uuid::new_v4(), 1, None).await.unwrap_err().code, "consent_pending");
             assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
         }
     }
@@ -655,7 +670,7 @@ mod tests {
                 .set_body_json(json!({ "text": "answer", "capture": true, "consent_epoch": 1 }))).mount(&fixture.server).await;
         fixture.route("PUT", "/v1/consent", 200, json!({ "capture": false })).await;
         let turn = Uuid::new_v4();
-        let (completed, ()) = tokio::join!(proxy.complete(json!({}), turn, Uuid::new_v4(), 1), async {
+        let (completed, ()) = tokio::join!(proxy.complete(json!({}), turn, Uuid::new_v4(), 1, Some(1)), async {
             tokio::time::sleep(Duration::from_millis(20)).await;
             proxy.consent(false).await.unwrap();
         });
@@ -704,7 +719,7 @@ mod tests {
         let proxy = fixture.proxy();
         let turn = Uuid::new_v4();
         fixture.route("POST", "/v1/completions", 502, json!({ "error": { "code": "provider_failed", "message": "error private-session" } })).await;
-        let error = proxy.complete(json!({}), turn, Uuid::new_v4(), 1).await.unwrap_err();
+        let error = proxy.complete(json!({}), turn, Uuid::new_v4(), 1, None).await.unwrap_err();
         assert!(!error.message.contains("private-session"));
         fixture.route("POST", &format!("/v1/turns/{turn}/events"), 200, json!({ "saved": false })).await;
         proxy.event(turn, event("terminal", json!({ "status": "failed" }))).await.unwrap();

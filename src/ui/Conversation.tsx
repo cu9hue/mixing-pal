@@ -283,6 +283,7 @@ export function Conversation({
     // waits for the turn, so this is the key the answer lands under too.
     const askedUnder = key;
     const turnId = crypto.randomUUID();
+    const captureEpoch = account.view?.capture ? account.view.consent_epoch ?? null : null;
     const begun = begin(threadRef.current, asked, account.view?.access === "development" ? undefined : turnId);
     setThread(begun);
     // Saved now, not only when the answer lands: a quit mid-turn keeps the
@@ -322,7 +323,7 @@ export function Conversation({
         },
       };
 
-      const out = await runTurn(tauriProvider(account.observe()), tracked, turn, (name, args) => {
+      const out = await runTurn(tauriProvider(account.observe(), captureEpoch), tracked, turn, (name, args) => {
         setToolsCalled((n) => n + 1);
         setProgress(progressLabel(name, args, state));
       }, { turnId, record: (event) => invoke("turn_event", { turnId, event }) });

@@ -28,9 +28,9 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
   try {
     await env.DB.batch([
       env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
-        SELECT ?, id, ?, ?, ?, ?, consent_epoch, capture FROM members WHERE id = ?
+        SELECT ?, id, ?, ?, ?, ?, consent_epoch, CASE WHEN consent_epoch = ? THEN capture ELSE 0 END FROM members WHERE id = ?
         ON CONFLICT(id) DO NOTHING`)
-        .bind(input.turn_id, now, now, input.app_version, input.wire_version, memberId),
+        .bind(input.turn_id, now, now, input.app_version, input.wire_version, input.capture_epoch ?? null, memberId),
       env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash,
         policy_version, reserved, status, created_at, updated_at, model)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)`)

@@ -44,7 +44,7 @@ async function joined(email?: string) {
 }
 
 function question(round = 1, turnId = crypto.randomUUID()) {
-  return { turn_id: turnId, request_id: crypto.randomUUID(), round, app_version: "0.2.4", wire_version: 12,
+  return { turn_id: turnId, request_id: crypto.randomUUID(), round, app_version: "0.2.4", wire_version: 12, capture_epoch: 1 as number | null | undefined,
     body: { messages: [{ role: "system", content: "original prompt" }, { role: "user", content: "secret project question" }],
       tools: [{ type: "function", function: { name: "get_arrangement", description: "Read the timeline", parameters: { type: "object" } } }],
       model: "expensive-model", max_tokens: 999999, provider: { only: ["attacker"] } } };
@@ -292,6 +292,34 @@ describe("metered requests", () => {
 });
 
 describe("capture and deletion", () => {
+  test.each([null, undefined, 0])("capture uses the turn-start consent %s, not a later opt-in", async (capture_epoch) => {
+    const user = await joined();
+    const request = { ...question(), capture_epoch };
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    reply();
+    const result = await api("/v1/completions", request, user.token);
+    expect(result.status).toBe(200);
+    expect((await result.json()).capture).toBe(false);
+    reply();
+    await api("/v1/completions", question(2, request.turn_id), user.token);
+    expect(await capturedObjects()).toHaveLength(0);
+    reply();
+    await api("/v1/completions", question(), user.token);
+    expect(await capturedObjects()).toHaveLength(1);
+  });
+
+  test("withdrawing and enabling again cannot revive an earlier consent version", async () => {
+    const user = await joined();
+    for (const enabled of [true, false, true]) {
+      await api("/v1/consent", { enabled, version: "quality-2026-09-12" }, user.token, "PUT");
+    }
+    reply();
+    const result = await api("/v1/completions", question(), user.token);
+    expect(result.status).toBe(200);
+    expect((await result.json()).capture).toBe(false);
+    expect(await capturedObjects()).toHaveLength(0);
+  });
+
   test("the app's real tool loop completes through the proxy and exports replayable evidence", async () => {
     const user = await joined();
     await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");

@@ -70,6 +70,7 @@ assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled()
 await page.getByLabel('Ask about the set',{exact:true}).fill('Test consent ordering');
 await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
 await page.waitForFunction(()=>!!window.finishModel);
+assert.equal(await page.evaluate(()=>window.requests.find(x=>x.cmd==='model_complete').args.captureEpoch),null);
 await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.getByLabel('Share advice turns to help improve Mixing Pal').check();
 await page.evaluate(()=>window.finishModel());
@@ -77,6 +78,12 @@ await page.waitForTimeout(100);
 assert.equal(await page.getByLabel('Share advice turns to help improve Mixing Pal').isChecked(),true);
 await page.screenshot({path:`${artifacts}/settings.png`});
 await page.getByRole('button',{name:'Done',exact:true}).click();
+await page.getByLabel('Ask about the set',{exact:true}).fill('A new turn after opting in');
+await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
+await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete').length===2);
+assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='model_complete')[1].args.captureEpoch),1);
+await page.evaluate(()=>window.finishModel());
+await page.getByText('A new turn after opting in',{exact:true}).waitFor();
 async function set(id){await page.evaluate(id=>window.emitFixture('live://deltas',[{addr:'/live/mixingpal/get/set_identity',args:[id,'Set '+id,'/fixture/'+id+'.als']}]),id); await page.getByText('Question for '+id,{exact:true}).waitFor();}
 await set('A');
 await page.getByRole('button',{name:'Tried this advice?',exact:true}).first().click();

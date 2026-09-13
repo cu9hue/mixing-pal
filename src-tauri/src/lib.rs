@@ -719,6 +719,7 @@ async fn model_complete(
     turn_id: Option<uuid::Uuid>,
     request_id: Option<uuid::Uuid>,
     round: Option<u8>,
+    capture_epoch: Option<u64>,
     state: tauri::State<'_, Arc<ModelState>>,
     proxy_state: tauri::State<'_, Arc<proxy::Proxy>>,
     trace_state: tauri::State<'_, Arc<Mutex<Trace>>>,
@@ -728,7 +729,7 @@ async fn model_complete(
             .map_err(|message| proxy::ProxyError { code: "invalid_request".into(), message })?;
         let required = || proxy::ProxyError { code: "invalid_request".into(), message: "A turn and request identifier are required.".into() };
         let start = Instant::now();
-        let result = proxy_state.complete(body.clone(), turn_id.ok_or_else(required)?, request_id.ok_or_else(required)?, round.ok_or_else(required)?).await;
+        let result = proxy_state.complete(body.clone(), turn_id.ok_or_else(required)?, request_id.ok_or_else(required)?, round.ok_or_else(required)?, capture_epoch).await;
         let outcome = match &result {
             Ok(reply) => serde_json::json!({ "ok": { "text": reply["text"], "tool_calls": reply["tool_calls"] } }),
             Err(error) => serde_json::json!({ "error": error.message }),
