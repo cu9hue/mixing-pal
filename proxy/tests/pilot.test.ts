@@ -442,6 +442,27 @@ describe("capture and deletion", () => {
     expect((await (await exported()).json()).complete).toBe(false);
   });
 
+  test.each(["音".repeat(4000), "\u0000".repeat(4000)])("feedback accepts the full character limit even when JSON needs more bytes", async (heard) => {
+    const user = await joined();
+    const request = question();
+    reply();
+    await api("/v1/completions", request, user.token);
+    const result = await api(`/v1/turns/${request.turn_id}/feedback`, {
+      id: crypto.randomUUID(), outcome: "kept", heard, share: true,
+    }, user.token);
+    expect(result.status, await result.clone().text()).toBe(200);
+    expect((await result.json()).saved).toBe(true);
+    const objects = await capturedObjects();
+    expect(objects).toHaveLength(1);
+    expect((await (await env.CAPTURE.get(objects[0].key))!.json()).heard).toBe(heard);
+    expect((await api(`/v1/turns/${request.turn_id}/feedback`, {
+      id: crypto.randomUUID(), outcome: "kept", heard: heard + "x", share: true,
+    }, user.token)).status).toBe(400);
+    expect((await api(`/v1/turns/${request.turn_id}/feedback`, {
+      id: crypto.randomUUID(), outcome: "kept", heard: "x".repeat(32768), share: true,
+    }, user.token)).status).toBe(413);
+  });
+
   test("sharing one outcome does not enable conversation capture", async () => {
     const user = await joined();
     const request = question();

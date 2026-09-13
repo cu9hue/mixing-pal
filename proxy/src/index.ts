@@ -4,7 +4,7 @@ import { admin } from "./admin";
 import { auth, authenticate } from "./auth";
 import { deleteAccount, deleteTurn, event, feedback } from "./capture";
 import { complete } from "./completion";
-import { ApiError, Env, json, privateHash, readJson } from "./env";
+import { ApiError, Env, MAX_FEEDBACK_BODY, json, privateHash, readJson } from "./env";
 import { maintain } from "./maintenance";
 
 async function authRequest(request: Request, env: Env, path: string): Promise<Response> {
@@ -68,7 +68,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   if (turn) {
     const id = z.uuid().parse(turn[1]);
     if (request.method === "POST" && turn[2] === "events") return json({ saved: await event(env, memberId, id, await readJson(request)) });
-    if (request.method === "POST" && turn[2] === "feedback") return json({ saved: await feedback(env, memberId, id, await readJson(request, 8192)) });
+    if (request.method === "POST" && turn[2] === "feedback") return json({ saved: await feedback(env, memberId, id, await readJson(request, MAX_FEEDBACK_BODY)) });
     if (request.method === "DELETE" && turn[2] === "capture") {
       await deleteTurn(env, memberId, id);
       return json({ deletion: "pending" }, 202);
