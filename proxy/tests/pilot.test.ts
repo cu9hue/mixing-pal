@@ -124,6 +124,46 @@ describe("invited accounts", () => {
 });
 
 describe("metered requests", () => {
+  test("restore requires fresh sharing consent and preserves revoked access", async () => {
+    const user = await joined();
+    const revoked = await joined("revoked@example.com");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    const sessions = (await env.DB.prepare('SELECT * FROM "session" WHERE userId = ?').bind(revoked.id).all()).results;
+    await api("/v1/consent", { enabled: false, version: "quality-2026-09-12" }, user.token, "PUT");
+    expect((await api("/operator", { action: "revoke", member_id: revoked.id }, env.ADMIN_TOKEN)).status).toBe(200);
+    await env.DB.prepare("UPDATE members SET capture = 1, consent_epoch = 1 WHERE id = ?").bind(user.id).run();
+    await env.DB.prepare("UPDATE members SET revoked = 0 WHERE id = ?").bind(revoked.id).run();
+    for (const session of sessions) {
+      const columns = Object.keys(session).map((key) => `"${key}"`).join(",");
+      await env.DB.prepare(`INSERT INTO "session" (${columns}) VALUES (${Object.keys(session).map(() => "?").join(",")})`)
+        .bind(...Object.values(session)).run();
+    }
+    expect((await api("/operator", { action: "replay_deletions" }, env.ADMIN_TOKEN)).status).toBe(200);
+    for (const member_id of [user.id, revoked.id, undefined]) {
+      expect((await api("/operator", { action: "recover", member_id, spent_micro_usd: 0,
+        reason: "Verified no charges were lost" }, env.ADMIN_TOKEN)).status).toBe(200);
+    }
+    expect((await api("/operator", { action: "pause", paused: false }, env.ADMIN_TOKEN)).status).toBe(200);
+    const view = await (await api("/v1/account", undefined, user.token)).json();
+    expect(view.capture).toBe(false);
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+    expect(await capturedObjects()).toHaveLength(0);
+    expect((await api("/v1/completions", question(), revoked.token)).status).toBe(401);
+    expect((await env.DB.prepare("SELECT revoked FROM members WHERE id = ?").bind(revoked.id).first()).revoked).toBe(1);
+    const consent = await (await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT")).json();
+    reply();
+    await api("/v1/completions", { ...question(), capture_epoch: consent.consent_epoch }, user.token);
+    expect(await capturedObjects()).toHaveLength(1);
+  });
+
+  test("revocation cannot succeed without its restore journal", async () => {
+    const user = await joined();
+    vi.spyOn(env.CAPTURE, "put").mockRejectedValue(new Error("journal unavailable"));
+    expect((await api("/operator", { action: "revoke", member_id: user.id }, env.ADMIN_TOKEN)).status).toBe(503);
+    expect((await (await api("/v1/account", undefined, user.token)).json()).access).toBe("active");
+  });
+
   test("a restored ledger stays paused until account and global spending are recovered", async () => {
     const user = await joined();
     const unused = await invited("restored-invite@example.com");

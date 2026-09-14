@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { deleteAccount, deleteTurn, replayDeletions } from "./capture";
+import { deleteAccount, deleteTurn, replayDeletions, revokeAccess } from "./capture";
 import { ApiError, DAY, Env, hash, json, privateHash } from "./env";
 import { recover, settle } from "./ledger";
 import { maintain } from "./maintenance";
@@ -50,12 +50,7 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     return json({ ok: true });
   }
   const target = "member_id" in data ? data.member_id : "request_id" in data ? data.request_id : "service";
-  if (data.action === "revoke") {
-    await env.DB.batch([
-      env.DB.prepare("UPDATE members SET revoked = 1 WHERE id = ?").bind(data.member_id),
-      env.DB.prepare('DELETE FROM "session" WHERE userId = ?').bind(data.member_id),
-    ]);
-  }
+  if (data.action === "revoke") await revokeAccess(env, data.member_id);
   if (data.action === "delete_account") await deleteAccount(env, data.member_id);
   if (data.action === "delete_turn") await deleteTurn(env, data.member_id, data.turn_id);
   if (data.action === "resolve") {

@@ -17,7 +17,7 @@ The token is never an argument. Only localhost may use HTTP.
                                                 Resolve UNKNOWN cost after checking the provider
   npm run admin -- pause | resume               Stop or resume admissions
   npm run admin -- sweep                        Run reconciliation and deletion now
-  npm run admin -- replay-deletions             Reapply the external journal after a D1 restore
+  npm run admin -- replay-deletions             Replay deletions and revocations after a D1 restore
   npm run admin -- recover-member member-id micro-usd reason
                                                 Restore verified total account spending
   npm run admin -- recover-budget micro-usd reason
@@ -42,7 +42,10 @@ for 7 days on Workers Free or 30 days on Paid. This service requires Paid.
 Before a restore, deploy with inference disabled and preserve available ledger
 records. After restoring D1, apply current migrations, run replay-deletions,
 then sweep. Replay blocks ordinary resume until spending is recovered too.
-Deletion metadata is journaled separately in private R2 for 90 days.
+Deletion and revocation metadata is journaled separately in private R2 for 90 days.
+Replay turns sharing off for every restored account and invalidates its old
+consent version. Producers must opt in again. Recorded revocations also remove
+restored sessions; recovering spending never restores revoked access.
 Replay also invalidates unused invitations: they may belong to accounts lost
 by the restore. Reissue them only after checking the producer's spending.
 

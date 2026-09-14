@@ -117,7 +117,7 @@ export async function feedback(env: Env, memberId: string, turnId: string, input
 
 export async function deleteTurn(env: Env, memberId: string, turnId: string, journal = true): Promise<void> {
   await ownedTurn(env, turnId, memberId);
-  if (journal) await recordDeletion(env, { member_id: memberId, turn_id: turnId });
+  if (journal) await recordRestriction(env, { member_id: memberId, turn_id: turnId });
   await env.DB.batch([
     env.DB.prepare("UPDATE turns SET deleted_at = COALESCE(deleted_at, ?), capture = 0 WHERE id = ?").bind(Date.now(), turnId),
     env.DB.prepare("UPDATE captures SET state = 'deleting', updated_at = ? WHERE turn_id = ? AND state != 'deleted'")
@@ -127,7 +127,7 @@ export async function deleteTurn(env: Env, memberId: string, turnId: string, jou
 
 export async function deleteAccount(env: Env, memberId: string, journal = true): Promise<void> {
   const now = Date.now();
-  if (journal) await recordDeletion(env, { member_id: memberId });
+  if (journal) await recordRestriction(env, { member_id: memberId });
   await env.DB.batch([
     env.DB.prepare("UPDATE members SET revoked = 1, capture = 0, consent_epoch = consent_epoch + 1, deleted_at = ? WHERE id = ?")
       .bind(now, memberId),
@@ -139,7 +139,15 @@ export async function deleteAccount(env: Env, memberId: string, journal = true):
   ]);
 }
 
-async function recordDeletion(env: Env, target: { member_id: string; turn_id?: string }): Promise<void> {
+export async function revokeAccess(env: Env, memberId: string, journal = true): Promise<void> {
+  if (journal) await recordRestriction(env, { member_id: memberId, revoked: true });
+  await env.DB.batch([
+    env.DB.prepare("UPDATE members SET revoked = 1 WHERE id = ?").bind(memberId),
+    env.DB.prepare('DELETE FROM "session" WHERE userId = ?').bind(memberId),
+  ]);
+}
+
+async function recordRestriction(env: Env, target: { member_id: string; turn_id?: string; revoked?: true }): Promise<void> {
   // This journal must survive restoring D1 to an earlier point in time.
   await env.CAPTURE.put(`deletions/${Date.now()}-${crypto.randomUUID()}.json`,
     JSON.stringify({ ...target, requested_at: Date.now() }), { httpMetadata: { contentType: "application/json" } });
@@ -149,15 +157,16 @@ export async function replayDeletions(env: Env, cursor?: string): Promise<string
   // A restored snapshot also loses later charges, not only deletions.
   await env.DB.batch([
     env.DB.prepare("UPDATE budget SET paused = 1, recovery_required = 1"),
-    env.DB.prepare("UPDATE members SET recovery_required = 1"),
+    env.DB.prepare("UPDATE members SET recovery_required = 1, capture = 0, consent_epoch = consent_epoch + 1"),
     env.DB.prepare("DELETE FROM invites WHERE redeemed_by IS NULL"),
   ]);
   const page = await env.CAPTURE.list({ prefix: "deletions/", limit: 100, cursor });
   for (const object of page.objects) {
     const saved = await env.CAPTURE.get(object.key);
     if (!saved) continue;
-    const entry = z.object({ member_id: z.string(), turn_id: z.uuid().optional(), requested_at: z.number() }).parse(await saved.json());
-    if (entry.turn_id) {
+    const entry = z.object({ member_id: z.string(), turn_id: z.uuid().optional(), revoked: z.literal(true).optional(), requested_at: z.number() }).parse(await saved.json());
+    if (entry.revoked) await revokeAccess(env, entry.member_id, false);
+    else if (entry.turn_id) {
       const exists = await env.DB.prepare("SELECT id FROM turns WHERE id = ? AND member_id = ?").bind(entry.turn_id, entry.member_id).first();
       if (exists) await deleteTurn(env, entry.member_id, entry.turn_id, false);
     } else await deleteAccount(env, entry.member_id, false);
