@@ -41,7 +41,8 @@ export async function authenticate(request: Request, env: Env): Promise<string> 
     throw new ApiError(401, "sign_in_required", "Sign in to Mixing Pal to continue.");
   }
   const session = await auth(env).api.getSession({ headers: request.headers });
-  if (!session?.user.emailVerified) {
+  if (!session?.user.emailVerified || await env.DB.prepare("SELECT 1 FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL")
+    .bind(session.user.id).first()) {
     throw new ApiError(401, "sign_in_required", "Your session has ended. Sign in again.");
   }
   return session.user.id;

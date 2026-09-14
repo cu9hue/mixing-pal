@@ -129,6 +129,7 @@ export async function deleteAccount(env: Env, memberId: string, journal = true):
   const now = Date.now();
   if (journal) await recordRestriction(env, { member_id: memberId });
   await env.DB.batch([
+    env.DB.prepare('DELETE FROM invites WHERE email = (SELECT lower(email) FROM "user" WHERE id = ?)').bind(memberId),
     env.DB.prepare("UPDATE members SET revoked = 1, capture = 0, consent_epoch = consent_epoch + 1, deleted_at = ? WHERE id = ?")
       .bind(now, memberId),
     env.DB.prepare("UPDATE turns SET deleted_at = COALESCE(deleted_at, ?), capture = 0 WHERE member_id = ?").bind(now, memberId),

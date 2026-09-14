@@ -46,8 +46,9 @@ export async function redeem(env: Env, id: string, input: unknown): Promise<Resp
     env.DB.prepare(`UPDATE invites SET redeemed_by = ?, redeemed_at = ?
       WHERE code_hash = ? AND redeemed_by IS NULL AND expires_at > ?
       AND email = (SELECT lower(email) FROM "user" WHERE id = ? AND emailVerified = 1)
-      AND NOT EXISTS (SELECT 1 FROM members WHERE id = ?)`)
-      .bind(id, now, codeHash, now, id, id),
+      AND NOT EXISTS (SELECT 1 FROM members WHERE id = ?)
+      AND NOT EXISTS (SELECT 1 FROM deletion_jobs WHERE member_id = ?)`)
+      .bind(id, now, codeHash, now, id, id, id),
     env.DB.prepare(`INSERT INTO members(id, period_end, created_at)
       SELECT redeemed_by, redeemed_at + ?, redeemed_at FROM invites
       WHERE code_hash = ? AND redeemed_by = ?

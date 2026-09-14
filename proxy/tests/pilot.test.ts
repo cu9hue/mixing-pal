@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
 import { hash, DAY } from "../src/env";
 import { settle } from "../src/ledger";
+import { redeem } from "../src/account";
 import { maintain } from "../src/maintenance";
 import { RESERVATION } from "../src/policy";
 import { runTurn } from "../../src/agent/loop";
@@ -87,6 +88,30 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("invited accounts", () => {
+  test("deletion before redemption invalidates the invitation immediately", async () => {
+    const user = await invited();
+    expect((await api("/v1/account", undefined, user.token, "DELETE")).status).toBe(202);
+    expect((await env.DB.prepare("SELECT code_hash FROM invites WHERE email = ?").bind("producer@example.com").all()).results).toHaveLength(0);
+    await api("/auth/email-otp/send-verification-otp", { email: "producer@example.com" });
+    const signed = await api("/auth/sign-in/email-otp", { email: "producer@example.com", otp: otpSent });
+    expect(signed.status).toBe(401);
+    expect(await env.DB.prepare("SELECT id FROM members WHERE id = ?").bind(user.id).first()).toBeNull();
+  });
+
+  test("a pending deletion denies a newly issued invitation and a late sign-in session", async () => {
+    const user = await invited();
+    const session = await env.DB.prepare('SELECT * FROM "session" WHERE userId = ?').bind(user.id).first();
+    await api("/v1/account", undefined, user.token, "DELETE");
+    const invite = await (await api("/operator", { action: "invite", email: "producer@example.com" }, env.ADMIN_TOKEN)).json();
+    const columns = Object.keys(session).map((key) => `"${key}"`).join(",");
+    await env.DB.prepare(`INSERT INTO "session" (${columns}) VALUES (${Object.keys(session).map(() => "?").join(",")})`)
+      .bind(...Object.values(session)).run();
+    expect((await api("/v1/invites/redeem", { code: invite.code }, user.token)).status).toBe(401);
+    // A request can have authenticated before deletion committed.
+    await expect(redeem(env, user.id, { code: invite.code })).rejects.toMatchObject({ status: 403 });
+    expect(await env.DB.prepare("SELECT id FROM members WHERE id = ?").bind(user.id).first()).toBeNull();
+  });
+
   test("requires a verified email and consumes the invite once without resetting allowance", async () => {
     const user = await invited();
     const before = await api("/v1/account", undefined, user.token);
