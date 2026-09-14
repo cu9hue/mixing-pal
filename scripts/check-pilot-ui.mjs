@@ -19,6 +19,7 @@ for (let i=0; i<100; i++) {
 if (!ready) throw new Error('Browser test server did not become ready.');
 const browser = await webkit.launch({headless:true});
 const page = await browser.newPage({viewport:{width:380,height:480}});
+page.setDefaultTimeout(10_000);
 const errors=[]; page.on('pageerror', e=>errors.push(e.message));
 await page.exposeFunction('resizeNative', ({width,height})=>page.setViewportSize({width,height}));
 await page.route(/\/src\/main\.tsx(?:\?t=\d+)?$/, route=>route.fulfill({contentType:'application/javascript',body:`
@@ -51,7 +52,8 @@ if(cmd==='set_window_mode'){window.geometry=args;return window.resizeNative(args
 if(cmd==='load_thread')return {saved_at:Math.floor(Date.now()/1000),note:[],next_bullet:0,exchanges:[{turnId:args.setId==='B'?'22222222-2222-4222-8222-222222222222':'11111111-1111-4111-8111-111111111111',question:'Question for '+args.setId,answer:'Answer for '+args.setId,error:null}]};
 if(cmd==='save_thread'){window.saved.push(args);return;}
 if(cmd==='turn_event')return;
-if(cmd==='model_complete'){const account={...window.account};return new Promise(resolve=>window.finishModel=()=>resolve({text:'A complete answer.',tool_calls:[],account}));}
+if(cmd==='model_complete'){const account={...window.account};return new Promise((resolve,reject)=>{window.failModel=()=>reject({code:'completion_unknown',message:'The reply was interrupted.'});window.finishModel=()=>resolve({text:'A complete answer.',tool_calls:[],account});});}
+if(cmd==='turn_delete_capture')return;
 if(cmd==='turn_feedback'){window.shared.push(args);return new Promise(resolve=>window.finishFeedback=()=>resolve({saved:true}));}
 throw new Error('Unexpected native call: '+cmd);
 },{shouldMockEvents:true});
@@ -85,6 +87,18 @@ await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='model_complete')[1].args.captureEpoch),1);
 await page.evaluate(()=>window.finishModel());
 await page.getByText('A new turn after opting in',{exact:true}).waitFor();
+await page.getByLabel('Ask about the set',{exact:true}).fill('A failed shared turn');
+await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
+await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete').length===3);
+await page.evaluate(()=>window.failModel());
+const failed=page.locator('.card__exchange').filter({hasText:'A failed shared turn'});
+await failed.getByText('The reply was interrupted.',{exact:true}).waitFor();
+await failed.getByRole('button',{name:'Shared turn',exact:true}).click();
+assert.equal(await failed.getByRole('button',{name:'Save outcome',exact:true}).count(),0);
+await failed.getByRole('button',{name:'Delete shared turn…',exact:true}).click();
+await failed.getByRole('button',{name:'Delete shared turn',exact:true}).click();
+await failed.getByText('Deletion requested. Your local conversation stays here.').waitFor();
+assert.equal(await page.evaluate(()=>window.requests.find(x=>x.cmd==='turn_delete_capture').args.turnId===window.requests.filter(x=>x.cmd==='model_complete')[2].args.turnId),true);
 async function set(id){await page.evaluate(id=>window.emitFixture('live://deltas',[{addr:'/live/mixingpal/get/set_identity',args:[id,'Set '+id,'/fixture/'+id+'.als']}]),id); await page.getByText('Question for '+id,{exact:true}).waitFor();}
 await set('A');
 await page.getByRole('button',{name:'Tried this advice?',exact:true}).first().click();

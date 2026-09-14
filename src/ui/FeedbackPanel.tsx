@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { errorMessage } from "../model/account";
 import { Feedback } from "./thread";
 
-export function FeedbackPanel({ turnId, saved, onSave }: { turnId: string; saved?: Feedback; onSave: (value: Feedback) => void }) {
+export function FeedbackPanel({ turnId, answered, saved, onSave }: { turnId: string; answered: boolean; saved?: Feedback; onSave: (value: Feedback) => void }) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [outcome, setOutcome] = useState<Feedback["outcome"]>(saved?.outcome ?? "not_tried");
@@ -14,9 +14,11 @@ export function FeedbackPanel({ turnId, saved, onSave }: { turnId: string; saved
   const [deleting, setDeleting] = useState(false);
 
   return <div className="feedback" data-tauri-drag-region="false">
-    <button aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>{saved ? "Your outcome" : "Tried this advice?"}</button>
+    <button aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>{answered ? saved ? "Your outcome" : "Tried this advice?" : "Shared turn"}</button>
     {open && <form id={id} onSubmit={async (e) => {
-      e.preventDefault(); setBusy(true); setMessage("");
+      e.preventDefault();
+      if (!answered) return;
+      setBusy(true); setMessage("");
       const value = { outcome, heard, shared: false };
       onSave(value);
       try {
@@ -31,7 +33,7 @@ export function FeedbackPanel({ turnId, saved, onSave }: { turnId: string; saved
       } catch (error) { setMessage(errorMessage(error)); }
       finally { setBusy(false); }
     }}>
-      <label htmlFor={`${id}-outcome`}>What did you do?</label>{" "}
+      {answered && <><label htmlFor={`${id}-outcome`}>What did you do?</label>{" "}
       <select id={`${id}-outcome`} value={outcome} disabled={busy} onChange={(e) => setOutcome(e.target.value as Feedback["outcome"])}>
         <option value="not_tried">Haven't tried it</option><option value="tried">Tried it, still deciding</option>
         <option value="kept">Tried it and kept it</option><option value="undone">Tried it and undid it</option>
@@ -40,8 +42,8 @@ export function FeedbackPanel({ turnId, saved, onSave }: { turnId: string; saved
       <textarea id={`${id}-heard`} value={heard} maxLength={4000} rows={2} disabled={busy} onChange={(e) => setHeard(e.target.value)} />
       <label htmlFor={`${id}-share`}><input id={`${id}-share`} type="checkbox" checked={share} disabled={busy}
         onChange={(e) => setShare(e.target.checked)} /> Share this report with Mixing Pal for review</label>
-      <p>Optional. Shared reports are kept with this advice for up to 30 days. This does not enable conversation sharing or permit training.</p>
-      <div className="account__actions"><button type="submit" disabled={busy}>Save outcome</button>
+      <p>Optional. Shared reports are kept with this advice for up to 30 days. This does not enable conversation sharing or permit training.</p></>}
+      <div className="account__actions">{answered && <button type="submit" disabled={busy}>Save outcome</button>}
         <button type="button" disabled={busy} onClick={() => setDeleting(true)}>Delete shared turn…</button></div>
       {deleting && <div><p>Delete this turn's shared questions, answers, tool reads and feedback?</p>
         <button type="button" disabled={busy} onClick={async () => {

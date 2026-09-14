@@ -409,8 +409,8 @@ export function Conversation({
             ref={i === thread.length - 1 ? newest : undefined}
           >
             <ExchangeView x={x} />
-            {x.turnId && x.answer !== null && account.view?.access !== "development" && (
-              <FeedbackPanel turnId={x.turnId} saved={x.feedback} onSave={(feedback) => {
+            {x.turnId && (!busy || i !== thread.length - 1) && account.view?.access !== "development" && (
+              <FeedbackPanel turnId={x.turnId} answered={x.answer !== null} saved={x.feedback} onSave={(feedback) => {
                 if (keyRef.current?.id !== key?.id || keyRef.current?.path !== key?.path) return;
                 const updated = threadRef.current.map((entry) => entry.turnId === x.turnId ? { ...entry, feedback } : entry);
                 setThread(updated);
