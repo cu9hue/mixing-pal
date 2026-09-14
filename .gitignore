@@ -11,27 +11,47 @@ node_modules
 dist
 dist-ssr
 *.local
+*.tsbuildinfo
+
+# Local environment files
+.env
+.env.*
+!.env*.example
+
+# Test artifacts
+coverage/
+test-results/
+playwright-report/
 
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
 
 # Editor directories and files
 .vscode/
 .idea
 .DS_Store
+.AppleDouble/
+._*
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*~
 
-# superpowers brainstorm scratch
+# Local agent files and worktrees
 .superpowers/
+.claude/settings.local.json
+.worktrees/
 
 .logs/
 
 # Worker state and credentials
 .wrangler/
 .dev.vars*
+!.dev.vars*.example
 proxy/.deploy-*.json
