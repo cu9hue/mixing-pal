@@ -15,8 +15,12 @@ on:
       version:
         description: Known-good Worker version UUID (rollback only)
         type: string
+      staging_preflight_verified:
+        description: Staging email, provider policy and key cap checked; test account only (staging enable)
+        type: boolean
+        default: false
       release_verified:
-        description: Email, provider data policy, key cap and staging smoke checked (enable only)
+        description: Production email, provider policy, key cap, staging smoke and rollback checked (production enable)
         type: boolean
         default: false
 permissions:
@@ -70,6 +74,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           MIXINGPAL_D1_ID: ${{ vars.MIXINGPAL_D1_ID }}
+          MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: ${{ inputs.staging_preflight_verified && 'yes' || 'no' }}
           MIXINGPAL_RELEASE_VERIFIED: ${{ inputs.release_verified && 'yes' || 'no' }}
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
           RESEND_KEY: ${{ secrets.RESEND_KEY }}

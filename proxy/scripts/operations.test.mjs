@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, access } from "node:fs/promises";
+import { mkdtemp, readFile, rm, access, mkdir, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { operator, run } from "./admin.mjs";
@@ -61,4 +63,37 @@ test("recovery commands send verified totals and reasons to the correct scope", 
     { action: "recover", member_id: "member", spent_micro_usd: 4800000, reason: "Provider billing checked" },
     { action: "recover", spent_micro_usd: 6500000, reason: "Service billing checked" },
   ]);
+});
+
+
+test("enable requires stage-specific checks before invoking Wrangler", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  try {
+    await writeFile(join(dir, "wrangler.jsonc"), JSON.stringify({ vars: {} }));
+    await mkdir(join(dir, "node_modules/wrangler/bin"), { recursive: true });
+    await writeFile(join(dir, "node_modules/wrangler/bin/wrangler.js"),
+      `require("node:fs").appendFileSync("calls.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");`);
+    for (const [stage, preflight, release, allowed] of [
+      ["staging", "no", "no", false], ["staging", "no", "yes", false],
+      ["staging", "yes", "no", true], ["production", "yes", "no", false],
+      ["production", "no", "yes", true],
+    ]) {
+      await rm(join(dir, "calls.jsonl"), { force: true });
+      const result = spawnSync(process.execPath, [script, "enable", stage], { cwd: dir, encoding: "utf8", env: {
+        PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+        MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: preflight, MIXINGPAL_RELEASE_VERIFIED: release,
+      } });
+      assert.equal(result.status, allowed ? 0 : 1, `${stage}: ${result.stderr}`);
+      if (!allowed) { await assert.rejects(access(join(dir, "calls.jsonl"))); continue; }
+      const calls = (await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+      assert.deepEqual(calls, [
+        ["d1", "migrations", "apply", "DB", "--config", `.deploy-${stage}.json`, "--remote"],
+        ["deploy", "--config", `.deploy-${stage}.json`],
+      ]);
+      const config = JSON.parse(await readFile(join(dir, `.deploy-${stage}.json`), "utf8"));
+      assert.equal(config.vars.INFERENCE_ENABLED, "true");
+      assert.equal(config.name, `mixing-pal-${stage}`);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

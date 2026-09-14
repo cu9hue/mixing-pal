@@ -31,11 +31,16 @@ Configure the sending domain signin@mixingpal.com in Resend first. The auth
 secret must stay stable across deployments; rotating it revokes sessions and
 changes request fingerprints. Deploy never prints secret values.
 
-Before enable: verify sign-in delivery, run an invited staging turn, exercise
-capture off/on/withdrawal/deletion, verify provider prices and strict ZDR
-routing, disable OpenRouter input/output logging and content use, and set its
-API key credit cap. Keep the production cap at $50 with no replenishment.
-Pass MIXINGPAL_RELEASE_VERIFIED=yes to acknowledge these deployment checks.
+Before enabling staging: verify sign-in delivery, provider prices and strict
+ZDR routing, disable OpenRouter input/output logging and content use, and set
+its API key credit cap. Invite only your test account until the smoke passes.
+Pass MIXINGPAL_STAGING_PREFLIGHT_VERIFIED=yes to acknowledge this preflight.
+Then run an invited staging turn, exercise capture off/on/withdrawal/deletion,
+and rehearse rollback before inviting pilot producers or enabling production.
+
+Before enabling production: complete those staging checks and verify production
+email, provider policy and its $50 API key cap with no replenishment.
+Pass MIXINGPAL_RELEASE_VERIFIED=yes to acknowledge these release checks.
 
 Rollback changes only the Worker version; never reverse ledger migrations.
 Keep schema changes additive and compatible with the previous version. First
@@ -68,7 +73,10 @@ export async function run(args) {
   const [command, stage, version] = args;
   if (!command || command === "help" || command === "--help") { console.log(help); return; }
   if (!["configure", "check", "deploy", "secrets", "enable", "rollback"].includes(command)) throw new Error("Unknown deployment command.");
-  if (command === "enable" && process.env.MIXINGPAL_RELEASE_VERIFIED !== "yes") throw new Error("Complete the release checks shown by help before enable.");
+  if (command === "enable") {
+    const check = stage === "staging" ? "MIXINGPAL_STAGING_PREFLIGHT_VERIFIED" : "MIXINGPAL_RELEASE_VERIFIED";
+    if (process.env[check] !== "yes") throw new Error(`Complete the ${stage} checks shown by help and set ${check}=yes before enable.`);
+  }
   const base = JSON.parse(await readFile("wrangler.jsonc", "utf8"));
   const config = configuration(base, stage, process.env.MIXINGPAL_D1_ID, command === "enable");
   const file = `.deploy-${stage}.json`;
