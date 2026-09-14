@@ -2,9 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChatMessage, Completion, ModelProvider, ToolRunner } from "../agent/loop";
 import { AccountView, errorMessage } from "./account";
 
-// The only ModelProvider implementation. Everything that makes the call a
-// call -- prompt, tool schema and authenticated transport -- lives in Rust.
-// Account state returns to the webview; the credential never does.
+// Keeping the provider call in Rust keeps its credential out of the webview.
+// Only the completion and account state return over IPC.
 export function tauriProvider(onAccount: (view: AccountView) => void, captureEpoch: number | null = null): ModelProvider {
   return { async complete(messages: ChatMessage[], request): Promise<Completion> {
     try {

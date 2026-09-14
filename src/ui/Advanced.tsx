@@ -17,13 +17,8 @@ interface ConnectorView {
   installed: boolean;
 }
 
-/**
- * Settings, reached from the app menu: the model the app calls and the
- * harness inside Live. Provider credentials are available only in an
- * explicit development build; public builds use their Mixing Pal account.
- * Debug views (the trace, the tracks the model sees) are not settings and
- * stay under "What I can see".
- */
+// Development builds expose provider settings for direct-provider testing.
+// Public builds keep account access as the only model transport.
 export function Advanced({
   account,
   scriptVersion,

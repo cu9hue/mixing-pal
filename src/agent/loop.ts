@@ -88,12 +88,8 @@ export async function runTurn(
         tool_calls: completion.toolCalls,
       });
 
-      // Independent calls in one completion cannot depend on each other's
-      // output: the model has not received either result yet. Run them all at
-      // once, then append their replies in the provider's original order.
-      // This matters when it asks to inspect several clips: Live can process
-      // the requests in one tick, but awaiting them here used to serialize the
-      // entire batch before the next model request.
+      // Calls from one completion cannot depend on each other's unread results.
+      // Parallel execution avoids serial Live queries while preserving reply order.
       const toolMessages = await Promise.all(completion.toolCalls.map(async (c) => {
         let args: unknown;
         try {
