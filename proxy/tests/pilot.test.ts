@@ -88,6 +88,22 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("invited accounts", () => {
+  test("account availability follows the deployment inference switch", async () => {
+    const user = await joined();
+    const enabled = env.INFERENCE_ENABLED;
+    try {
+      env.INFERENCE_ENABLED = "false";
+      const paused = await (await api("/v1/account", undefined, user.token)).json();
+      expect(paused.can_ask).toBe(false);
+      expect(paused.service_paused).toBe(true);
+      expect((await api("/v1/completions", question(), user.token)).status).toBe(503);
+      expect(sent).toHaveLength(0);
+    } finally { env.INFERENCE_ENABLED = enabled; }
+    const active = await (await api("/v1/account", undefined, user.token)).json();
+    expect(active.can_ask).toBe(true);
+    expect(active.service_paused).toBe(false);
+  });
+
   test("deletion before redemption invalidates the invitation immediately", async () => {
     const user = await invited();
     expect((await api("/v1/account", undefined, user.token, "DELETE")).status).toBe(202);

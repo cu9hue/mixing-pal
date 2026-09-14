@@ -25,7 +25,7 @@ export async function account(env: Env, id: string): Promise<Response> {
     env.DB.prepare('SELECT email FROM "user" WHERE id = ?').bind(id).first<{ email: string }>(),
     env.DB.prepare("SELECT paused, recovery_required FROM budget").first<{ paused: number; recovery_required: number }>(),
   ]);
-  const servicePaused = !budget || Boolean(budget.paused || budget.recovery_required || m?.recovery_required);
+  const servicePaused = env.INFERENCE_ENABLED !== "true" || !env.OPENROUTER_KEY || !budget || Boolean(budget.paused || budget.recovery_required || m?.recovery_required);
   return json({ id, email: user?.email ?? "", access: !m ? "invitation_required"
     : m.revoked || m.deleted_at ? "revoked" : m.period_end <= Date.now() ? "expired" : "active",
     remaining_micro_usd: m ? Math.max(0, m.allowance - m.spent - m.reserved) : 0,
