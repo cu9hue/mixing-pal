@@ -46,7 +46,7 @@ async function authRequest(request: Request, env: Env, path: string): Promise<Re
   return new Response(response.body, { status: response.status, headers });
 }
 
-export async function handle(request: Request, env: Env): Promise<Response> {
+export async function handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/health" && request.method === "GET") return json({ ok: true });
   const ip = request.headers.get("cf-connecting-ip") ?? "local";
@@ -59,7 +59,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   if (route === "GET /v1/account") return account(env, memberId);
   if (route === "POST /v1/invites/redeem") return redeem(env, memberId, await readJson(request, 4096));
   if (route === "PUT /v1/consent") return consent(env, memberId, await readJson(request, 4096));
-  if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request));
+  if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx);
   if (route === "DELETE /v1/account") {
     await deleteAccount(env, memberId);
     return json({ deletion: "pending" }, 202);
@@ -78,9 +78,9 @@ export async function handle(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
     try {
-      return await handle(request, env);
+      return await handle(request, env, ctx);
     } catch (error) {
       if (error instanceof ApiError) return json({ error: { code: error.code, message: error.message } }, error.status);
       if (error instanceof z.ZodError) return json({ error: { code: "invalid_request", message: "The request has invalid fields." } }, 400);

@@ -74,16 +74,19 @@ export async function saveCapture(env: Env, turn: Turn, id: string, payload: unk
   }
 }
 
-export async function optionalCapture(env: Env, turn: Turn, id: string, payload: unknown): Promise<void> {
+export async function optionalCapture(env: Env, turn: Turn, id: string, payload: unknown, ctx: ExecutionContext): Promise<void> {
   if (!turn.capture) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const saving = saveCapture(env, turn, id, payload);
+  ctx.waitUntil(saving.catch(() => {}));
   try {
-    await Promise.race([saveCapture(env, turn, id, payload), new Promise<never>((_, reject) => {
+    await Promise.race([saving, new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("Capture deadline")), 2000);
     })]);
   } catch {
     console.error(JSON.stringify({ event: "capture_failed", turn_id: turn.id }));
-    await incomplete(env, turn.id).catch(() => {});
+    // Cleanup must not extend the optional capture deadline.
+    ctx.waitUntil(incomplete(env, turn.id).catch(() => {}));
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

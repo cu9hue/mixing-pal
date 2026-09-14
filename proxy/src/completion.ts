@@ -4,7 +4,7 @@ import { ApiError, Env, MAX_BODY, MODEL_TIMEOUT, json, readJson } from "./env";
 import { reserve, settle, unknown } from "./ledger";
 import { completionInput, providerBody, responseSchema, routes, usageSchema } from "./policy";
 
-export async function complete(env: Env, memberId: string, input: unknown): Promise<Response> {
+export async function complete(env: Env, memberId: string, input: unknown, ctx: ExecutionContext): Promise<Response> {
   const request = completionInput.parse(input);
   if (env.INFERENCE_ENABLED !== "true" || !env.OPENROUTER_KEY) {
     throw new ApiError(503, "service_paused", "Model access is not enabled yet.");
@@ -30,7 +30,7 @@ export async function complete(env: Env, memberId: string, input: unknown): Prom
     await unknown(env, request.request_id, "provider_interrupted");
     await incomplete(env, turn.id);
     await optionalCapture(env, turn, crypto.randomUUID(), { kind: "model_failure", request_id: request.request_id,
-      round: request.round, source: "proxy", body, error: "provider_interrupted", at: start });
+      round: request.round, source: "proxy", body, error: "provider_interrupted", at: start }, ctx);
     throw new ApiError(504, "completion_unknown", "The reply was interrupted. Its usage is being checked; it has not been retried.");
   }
   const durationMs = Date.now() - start;
@@ -43,7 +43,7 @@ export async function complete(env: Env, memberId: string, input: unknown): Prom
     await incomplete(env, turn.id);
     const response = JSON.parse(JSON.stringify(raw).split(env.OPENROUTER_KEY).join("[redacted]"));
     await optionalCapture(env, turn, crypto.randomUUID(), { kind: "model_failure", request_id: request.request_id,
-      round: request.round, source: "proxy", body, response, status, at: start, duration_ms: durationMs });
+      round: request.round, source: "proxy", body, response, status, at: start, duration_ms: durationMs }, ctx);
     throw new ApiError(502, "provider_failed", "The model could not answer. Please try again later.");
   }
   // A provider can echo a credential even in a malformed success response.
@@ -67,7 +67,7 @@ export async function complete(env: Env, memberId: string, input: unknown): Prom
     await unknown(env, request.request_id, "missing_usage");
   }
   await optionalCapture(env, turn, crypto.randomUUID(), { kind: "model", request_id: request.request_id,
-    round: request.round, source: "proxy", body, response: safe, at: start, duration_ms: durationMs });
+    round: request.round, source: "proxy", body, response: safe, at: start, duration_ms: durationMs }, ctx);
   if (!parsed.success) throw new ApiError(502, "invalid_completion", "The model returned an unreadable reply.");
   const choice = parsed.data.choices[0];
   const text = choice.message.content ?? "";

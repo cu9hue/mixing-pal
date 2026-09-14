@@ -469,6 +469,42 @@ describe("capture and deletion", () => {
     await vi.waitFor(async () => expect((await env.DB.prepare("SELECT state FROM captures").first()).state).toBe("ready"));
   });
 
+  test("capture cleanup cannot extend the answer deadline", async () => {
+    const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    let release!: () => void;
+    const stalled = new Promise<void>((resolve) => { release = resolve; });
+    const put = env.CAPTURE.put.bind(env.CAPTURE);
+    vi.spyOn(env.CAPTURE, "put").mockImplementation(async (...args) => { await stalled; return put(...args); });
+    const prepare = env.DB.prepare.bind(env.DB);
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql === "UPDATE turns SET incomplete = 1 WHERE id = ?") {
+        const bind = statement.bind.bind(statement);
+        vi.spyOn(statement, "bind").mockImplementation((...values) => {
+          const bound = bind(...values);
+          const run = bound.run.bind(bound);
+          vi.spyOn(bound, "run").mockImplementation(async () => { await stalled; return run(); });
+          return bound;
+        });
+      }
+      return statement;
+    });
+    reply();
+    const pending = api("/v1/completions", question(), user.token);
+    try {
+      const result = await Promise.race([pending, new Promise<undefined>((resolve) => setTimeout(resolve, 2800))]);
+      expect(result?.status).toBe(200);
+    } finally {
+      release();
+      await pending;
+      await vi.waitFor(async () => {
+        expect((await env.DB.prepare("SELECT incomplete FROM turns").first()).incomplete).toBe(1);
+        expect((await env.DB.prepare("SELECT state FROM captures").first()).state).toBe("ready");
+      });
+    }
+  });
+
   test("a D1 restore cannot erase the external deletion journal", async () => {
     const user = await joined();
     await api("/v1/account", undefined, user.token, "DELETE");
