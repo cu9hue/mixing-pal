@@ -1,0 +1,89 @@
+import { deleteTurn } from "./capture";
+import { DAY, Env, readJson } from "./env";
+import { settle, UsageRequest } from "./ledger";
+
+export async function maintain(env: Env): Promise<void> {
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE requests SET status = 'unknown', error_code = 'worker_interrupted', updated_at = ? WHERE status IN ('reserved', 'dispatched') AND updated_at < ?")
+      .bind(now, now - 5 * 60_000),
+    env.DB.prepare("UPDATE turns SET status = 'interrupted', incomplete = 1 WHERE status = 'running' AND updated_at < ?").bind(now - 20 * 60_000),
+    env.DB.prepare('DELETE FROM verification WHERE expiresAt < ?').bind(new Date(now).toISOString()),
+    env.DB.prepare('DELETE FROM "session" WHERE expiresAt < ?').bind(new Date(now).toISOString()),
+    env.DB.prepare('DELETE FROM "rateLimit" WHERE lastRequest < ?').bind(now - DAY),
+    env.DB.prepare("DELETE FROM api_limits WHERE expires_at < ?").bind(now - DAY),
+    env.DB.prepare("DELETE FROM invites WHERE expires_at < ?").bind(now - 83 * DAY),
+    env.DB.prepare("DELETE FROM operator_actions WHERE created_at < ?").bind(now - 90 * DAY),
+    env.DB.prepare(`DELETE FROM "user" WHERE createdAt < ? AND NOT EXISTS (SELECT 1 FROM members WHERE members.id = "user".id)`)
+      .bind(new Date(now - 90 * DAY).toISOString()),
+  ]);
+  const pending = await env.DB.prepare(`SELECT * FROM requests WHERE status = 'unknown' AND generation_id IS NOT NULL
+    AND reconcile_after <= ? ORDER BY reconcile_after, updated_at LIMIT 20`).bind(now).all<UsageRequest>();
+  for (const row of pending.results) {
+    await env.DB.prepare("UPDATE requests SET reconcile_after = ? WHERE id = ?").bind(now + 10 * 60_000, row.id).run();
+    try {
+      const response = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(row.generation_id!)}`, {
+        headers: { Authorization: `Bearer ${env.OPENROUTER_KEY}` }, signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) { await response.body?.cancel(); continue; }
+      const value = await readJson(response) as { data?: { total_cost?: unknown } };
+      const cost = value?.data?.total_cost;
+      if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) {
+        await settle(env, row.id, Math.ceil(cost * 1_000_000), { generationId: row.generation_id!, errorCode: "reconciled" });
+      }
+    } catch {
+      console.error(JSON.stringify({ event: "reconciliation_failed", request_id: row.id }));
+    }
+  }
+  const expired = await env.DB.prepare("SELECT id, member_id FROM turns WHERE created_at <= ? AND deleted_at IS NULL LIMIT 100")
+    .bind(now - 30 * DAY).all<{ id: string; member_id: string }>();
+  for (const row of expired.results) await deleteTurn(env, row.member_id, row.id);
+  // Keep tombstones and re-delete their object keys. A Worker canceled during
+  // an R2 write can finish that write after the first deletion pass.
+  const objects = await env.DB.prepare(`SELECT c.id, c.object_key FROM captures c JOIN turns t ON t.id = c.turn_id
+    WHERE c.state = 'deleting' OR (c.state = 'writing' AND c.updated_at < ?)
+    OR (c.state = 'deleted' AND c.updated_at < ?) OR (c.state != 'deleted' AND t.deleted_at IS NOT NULL)
+    ORDER BY c.state = 'deleted', c.updated_at LIMIT 100`).bind(now - 5 * 60_000, now - DAY).all<{ id: string; object_key: string }>();
+  for (const row of objects.results) {
+    try {
+      await env.CAPTURE.delete(row.object_key);
+      await env.DB.prepare("UPDATE captures SET state = 'deleted', updated_at = ? WHERE id = ?").bind(now, row.id).run();
+    } catch {
+      console.error(JSON.stringify({ event: "deletion_failed", capture_id: row.id }));
+    }
+  }
+  const deletions = await env.DB.prepare("SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND requested_at < ? LIMIT 20")
+    .bind(now - 10 * 60_000).all<{ member_id: string }>();
+  for (const { member_id: id } of deletions.results) {
+    const unfinished = await env.DB.prepare(`SELECT id FROM captures WHERE turn_id IN (SELECT id FROM turns WHERE member_id = ?)
+      AND state != 'deleted' LIMIT 1`).bind(id).first();
+    if (unfinished) continue;
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM verification WHERE identifier IN (
+        SELECT 'sign-in-otp-' || lower(email) FROM "user" WHERE id = ?
+        UNION SELECT 'sign-in-otp-' || email FROM "user" WHERE id = ?)` ).bind(id, id),
+      env.DB.prepare('DELETE FROM invites WHERE email = (SELECT lower(email) FROM "user" WHERE id = ?)').bind(id),
+      env.DB.prepare('DELETE FROM "user" WHERE id = ?').bind(id),
+      env.DB.prepare("DELETE FROM consents WHERE member_id = ?").bind(id),
+      env.DB.prepare("UPDATE deletion_jobs SET completed_at = ? WHERE member_id = ?").bind(now, id),
+    ]);
+  }
+  // Balances outlive individual request metadata. Never prune a held cost.
+  const old = await env.DB.prepare(`SELECT t.id FROM turns t WHERE t.created_at < ?
+    AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.turn_id = t.id AND r.status != 'settled')
+    AND NOT EXISTS (SELECT 1 FROM captures c WHERE c.turn_id = t.id AND c.state != 'deleted') LIMIT 100`)
+    .bind(now - 90 * DAY).all<{ id: string }>();
+  for (const { id } of old.results) {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM captures WHERE turn_id = ?").bind(id),
+      env.DB.prepare("DELETE FROM requests WHERE turn_id = ?").bind(id),
+      env.DB.prepare("DELETE FROM turns WHERE id = ?").bind(id),
+    ]);
+  }
+  const health = await env.DB.prepare("SELECT COUNT(*) AS count FROM requests WHERE status = 'unknown'").first<{ count: number }>();
+  if (health?.count) console.error(JSON.stringify({ event: "held_usage", count: health.count }));
+  const journal = await env.CAPTURE.list({ prefix: "deletions/", limit: 100 });
+  for (const object of journal.objects) {
+    if (object.uploaded.getTime() < now - 90 * DAY) await env.CAPTURE.delete(object.key);
+  }
+}

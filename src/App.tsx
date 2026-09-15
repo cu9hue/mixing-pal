@@ -15,8 +15,10 @@ import { Setup } from "./setup/Setup";
 import { SetupFacts, SetupStep, currentStep, needsSetup } from "./setup/step";
 import { loadSetupDone, saveSetupDone } from "./setup/setupDone";
 import { loadGoal, saveGoal } from "./ui/goal";
+import { useAccount } from "./model/account";
 
 export default function App() {
+  const account = useAccount();
   const [state, setState] = useState(emptySet());
   const [lastSeen, setLastSeen] = useState<number | null>(null);
   const [mode, setMode] = useState<WindowMode>("card");
@@ -106,7 +108,7 @@ export default function App() {
     liveRunning,
     deltasArriving: connected,
     connectedAcknowledged,
-    hasAccount: true, // the model-access plan replaces this
+    hasAccount: account.view?.access === "active" || account.view?.access === "development",
     goalAnswered,
   };
 
@@ -279,6 +281,7 @@ export default function App() {
     <div ref={root}>
       {view === "setup" && (
         <Setup
+          account={account}
           step={step}
           folder={folder}
           trackCount={trackNames.length}
@@ -305,6 +308,7 @@ export default function App() {
           survive a collapse to the pill only if the component does. */}
       <div className={view === "card" ? undefined : "card-slot--hidden"}>
         <Card
+          account={account}
           state={state}
           lastSeen={lastSeen}
           connected={connected}

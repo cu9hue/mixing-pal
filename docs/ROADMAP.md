@@ -185,9 +185,31 @@ Ordered. Each item says what, why, size, and what it waits on.
 
 All specced or named already. The order is fixed by the gate.
 
-1. **Model access.** Subsystem B of the product UI spec: a proxy holding the
-   provider key, invite codes, per-account caps, consented trace capture. No
-   spec yet. Size L.
+1. **Model access.** Free invited pilot implemented: email-code accounts,
+   single-use invitations, a server-owned MiniMax M3 route, and atomic usage
+   reservations against a $5 account allowance for 30 days and a $50 pilot
+   ceiling. Public builds use the proxy; the direct provider path requires
+   an explicit development feature. Quality sharing starts off, retains
+   opted-in turns for 30 days, and permits no training. Operator commands
+   cover access, reconciliation, live review exports and deletion, including
+   a separate deletion journal for database restores. Activation still needs
+   separate staging/production resources, secrets, verified email delivery,
+   provider data-policy and credit-cap checks, and a live staging smoke and
+   rollback check. Workers Paid is required; hosting charges are separate
+   from model allowances. The deployment starts with inference disabled.
+
+   Split telemetry ownership at this boundary. The app records what the
+   producer explicitly says she tried, heard, kept or undid. The proxy links
+   consented questions, relevant set context, tool arguments/results, raw
+   answers, versions, costs, timings and errors under a turn ID. The eval
+   harness replays reviewed examples against a held-out set. Keep producer
+   reports separate from model-written NOTES, collection consent separate
+   from training consent, and retention/deletion part of the design. Review
+   labels and corrected answers before any training. This evidence should
+   decide whether to change the prompt, tools or model, or evaluate
+   post-training. Subscriptions follow measured pilot usage and use the same
+   account access checks; price and paid allowances remain undecided.
+
 2. **Signing.** Apple enrollment, Developer ID signing, notarization, stapling.
    Distribution stage 2. Size M, mostly waiting on Apple.
 3. **Updates.** Tagged release CI, hosted artifacts, the updater. Distribution

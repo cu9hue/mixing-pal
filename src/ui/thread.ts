@@ -8,10 +8,18 @@ export interface Exchange {
   answer: string | null;
   /** What went wrong, shown where the answer would have been. */
   error: string | null;
+  turnId?: string;
+  feedback?: Feedback;
 }
 
-export function begin(thread: Exchange[], question: string): Exchange[] {
-  return [...thread, { question, answer: null, error: null }];
+export interface Feedback {
+  outcome: "kept" | "undone" | "tried" | "not_tried";
+  heard: string;
+  shared: boolean;
+}
+
+export function begin(thread: Exchange[], question: string, turnId?: string): Exchange[] {
+  return [...thread, { question, answer: null, error: null, ...(turnId ? { turnId } : {}) }];
 }
 
 export function complete(thread: Exchange[], answer: string): Exchange[] {

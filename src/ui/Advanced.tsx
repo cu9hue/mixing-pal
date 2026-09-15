@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import "./Advanced.css";
 import wireVersion from "../../shared/wire-version.json";
 import { version as appVersion } from "../../package.json";
+import { AccountState } from "../model/account";
+import { AccountPanel } from "./AccountPanel";
 
 interface SettingsView {
   base_url: string;
@@ -15,18 +17,14 @@ interface ConnectorView {
   installed: boolean;
 }
 
-/**
- * Settings, reached from the app menu: the model the app calls and the
- * harness inside Live. The bring-your-own-key fields live here rather than
- * in setup because they are a pressure valve for a technical minority and
- * for the day the proxy is down -- not a step anybody is asked to complete.
- * Debug views (the trace, the tracks the model sees) are not settings and
- * stay under "What I can see".
- */
+// Development builds expose provider settings for direct-provider testing.
+// Public builds keep account access as the only model transport.
 export function Advanced({
+  account,
   scriptVersion,
   onClose,
 }: {
+  account: AccountState;
   scriptVersion: number | null;
   onClose: () => void;
 }) {
@@ -118,6 +116,8 @@ export function Advanced({
         </button>
       </div>
 
+      <AccountPanel account={account} />
+      {account.view?.access === "development" && <>
       <h3 className="advanced__heading">Model settings</h3>
 
       <label className="advanced__field">
@@ -165,6 +165,7 @@ export function Advanced({
           {error}
         </div>
       )}
+      </>}
 
       <h3 className="advanced__heading">Harness settings</h3>
 

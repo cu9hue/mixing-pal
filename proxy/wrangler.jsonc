@@ -1,0 +1,16 @@
+{
+  "name": "mixing-pal-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "observability": { "enabled": true },
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "vars": {
+    "API_ORIGIN": "http://localhost:8787",
+    "MAIL_FROM": "Mixing Pal <signin@mixingpal.com>",
+    "INFERENCE_ENABLED": "false"
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "mixing-pal-local", "database_id": "local", "migrations_dir": "migrations" }],
+  "r2_buckets": [{ "binding": "CAPTURE", "bucket_name": "mixing-pal-local-capture" }]
+}

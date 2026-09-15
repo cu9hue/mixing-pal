@@ -26,6 +26,17 @@ pub struct Exchange {
     pub question: String,
     pub answer: Option<String>,
     pub error: Option<String>,
+    #[serde(default, rename = "turnId", skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<Feedback>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Feedback {
+    pub outcome: String,
+    pub heard: String,
+    pub shared: bool,
 }
 
 /// One outcome bullet of a set's note; the same shape as the frontend's
@@ -263,6 +274,8 @@ mod tests {
                 question: question.into(),
                 answer: Some("an answer".into()),
                 error: None,
+                turn_id: None,
+                feedback: None,
             }],
             saved_at,
             note: vec![],

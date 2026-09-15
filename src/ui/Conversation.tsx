@@ -1,4 +1,7 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { AccountState, canAsk, errorMessage } from "../model/account";
+import { FeedbackPanel } from "./FeedbackPanel";
 import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
@@ -141,12 +144,14 @@ export function Conversation({
   onGoalChange,
   onTurnRunningChange,
   onAnswer,
+  account,
 }: {
   state: SetState;
   goal: string;
   onGoalChange: (value: string) => void;
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
+  account: AccountState;
 }) {
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [thread, setThread] = useState<Exchange[]>([]);
@@ -163,6 +168,8 @@ export function Conversation({
   // under the key it was asked in. Questions asked before the first
   // identity arrives are carried into the first thread rather than lost.
   const [key, setKey] = useState<ThreadKey | null>(null);
+  const keyRef = useRef(key);
+  keyRef.current = key;
   const [recap, setRecap] = useState<string | null>(null);
   const threadRef = useRef<Exchange[]>([]);
   threadRef.current = thread;
@@ -269,13 +276,15 @@ export function Conversation({
 
   async function send() {
     const asked = input.trim();
-    if (asked === "" || busy) return;
+    if (asked === "" || busy || !canAsk(account.view)) return;
     setInput("");
     pinned.current = true;
     // Saved under the key current when the question was asked. A switch
     // waits for the turn, so this is the key the answer lands under too.
     const askedUnder = key;
-    const begun = begin(threadRef.current, asked);
+    const turnId = crypto.randomUUID();
+    const captureEpoch = account.view?.capture ? account.view.consent_epoch ?? null : null;
+    const begun = begin(threadRef.current, asked, account.view?.access === "development" ? undefined : turnId);
     setThread(begun);
     // Saved now, not only when the answer lands: a quit mid-turn keeps the
     // question, and the restored thread shows it with no answer.
@@ -314,10 +323,10 @@ export function Conversation({
         },
       };
 
-      const out = await runTurn(tauriProvider, tracked, turn, (name, args) => {
+      const out = await runTurn(tauriProvider(account.observe(), captureEpoch), tracked, turn, (name, args) => {
         setToolsCalled((n) => n + 1);
         setProgress(progressLabel(name, args, state));
-      });
+      }, { turnId, record: (event) => invoke("turn_event", { turnId, event }) });
       // The model's note changes ride at the end of its answer and are not
       // part of what she reads or what the history keeps.
       const { answer, delta } = noteDelta(out.text);
@@ -333,13 +342,14 @@ export function Conversation({
       onAnswer();
     } catch (e) {
       // Provider errors surface as text and the app keeps running.
-      const settled = fail(threadRef.current, String(e));
+      const settled = fail(threadRef.current, errorMessage(e));
       setThread(settled);
       persist(askedUnder, settled, noteRef.current);
     } finally {
       setProgress(null);
       setBusy(false);
       onTurnRunningChange(false);
+      void account.refresh();
     }
   }
 
@@ -393,12 +403,20 @@ export function Conversation({
         )}
         {thread.map((x, i) => (
           <div
-            key={i}
+            key={x.turnId ?? `${key?.id}:${key?.path}:${i}`}
             className="card__exchange"
             data-tauri-drag-region="deep"
             ref={i === thread.length - 1 ? newest : undefined}
           >
             <ExchangeView x={x} />
+            {x.turnId && (!busy || i !== thread.length - 1) && account.view?.access !== "development" && (
+              <FeedbackPanel turnId={x.turnId} answered={x.answer !== null} saved={x.feedback} onSave={(feedback) => {
+                if (keyRef.current?.id !== key?.id || keyRef.current?.path !== key?.path) return;
+                const updated = threadRef.current.map((entry) => entry.turnId === x.turnId ? { ...entry, feedback } : entry);
+                setThread(updated);
+                persist(key, updated, noteRef.current);
+              }} />
+            )}
           </div>
         ))}
         {waiting !== null && (
@@ -417,8 +435,9 @@ export function Conversation({
           value={input}
           // Enter during a turn used to do nothing, silently. One question at
           // a time is the rule, so the field says so and stops taking one.
-          disabled={busy}
-          placeholder={busy ? "Answering. Ask the next one after." : "Ask about the set…"}
+          disabled={busy || !canAsk(account.view)}
+          aria-label="Ask about the set"
+          placeholder={busy ? "Answering. Ask the next one after." : !canAsk(account.view) ? "Account access is needed to ask." : "Ask about the set…"}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
         />
