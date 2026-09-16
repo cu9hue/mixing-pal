@@ -26,7 +26,28 @@ export function auth(env: Env) {
           method: "POST",
           headers: { "Authorization": `Bearer ${env.RESEND_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({ from: env.MAIL_FROM, to: [email], subject: "Your Mixing Pal sign-in code",
-            text: `Your Mixing Pal sign-in code is ${otp}. It expires in five minutes. If you did not request it, ignore this email.` }),
+            text: `Your Mixing Pal sign-in code is ${otp}. It expires in five minutes. If you did not request it, ignore this email.`,
+            html: `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Your Mixing Pal sign-in code</title></head>
+<body style="margin:0;padding:0;background-color:#101113;color:#e8e9ec;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
+  <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">Your sign-in code expires in five minutes.</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#101113;">
+    <tr><td align="center" style="padding:32px 16px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:480px;background-color:#151619;border-radius:12px;">
+        <tr><td style="padding:32px 24px;">
+          <p style="margin:0 0 32px;color:#f2b544;font-size:16px;font-weight:600;">Mixing Pal</p>
+          <h1 style="margin:0 0 12px;color:#e8e9ec;font-size:24px;line-height:1.25;font-weight:600;">Back to your session.</h1>
+          <p style="margin:0 0 24px;color:#c3c7cd;font-size:16px;line-height:1.5;">Enter this code in Mixing Pal to sign in.</p>
+          <p style="margin:0 0 16px;padding:20px 12px;background-color:#1b1d21;border-radius:8px;text-align:center;font-family:'Courier New',monospace;font-size:36px;font-weight:700;letter-spacing:6px;line-height:1.25;color:#e8e9ec;">${otp}</p>
+          <p style="margin:0 0 32px;color:#c3c7cd;font-size:14px;line-height:1.5;">This code expires in five minutes.</p>
+          <p style="margin:0;color:#8b9099;font-size:14px;line-height:1.5;">If you didn’t request this code, you can ignore this email.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>` }),
           signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) throw new Error("Could not send sign-in code");
