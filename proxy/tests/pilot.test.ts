@@ -88,6 +88,15 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("invited accounts", () => {
+  test("sign-in sends the same usable code in HTML and plain text", async () => {
+    await invited();
+    const delivery = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "https://api.resend.com/emails");
+    const email = JSON.parse(String(delivery![1]?.body));
+    expect(email.to).toEqual(["producer@example.com"]);
+    expect(email.text).toContain(otpSent);
+    expect(email.html).toContain(`>${otpSent}</`);
+  });
+
   test("account availability follows the deployment inference switch", async () => {
     const user = await joined();
     const enabled = env.INFERENCE_ENABLED;
