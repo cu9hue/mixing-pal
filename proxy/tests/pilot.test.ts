@@ -95,6 +95,12 @@ describe("invited accounts", () => {
     expect(email.to).toEqual(["producer@example.com"]);
     expect(email.text).toContain(otpSent);
     expect(email.html).toContain(`>${otpSent}</`);
+    const logo = email.attachments?.find((attachment: { content_id: string }) => attachment.content_id === "mixing-pal-logo");
+    expect(logo).toBeDefined();
+    expect(email.html).toContain(`src="cid:${logo.content_id}"`);
+    expect(email.html).not.toMatch(/src="https?:/);
+    expect(atob(logo.content).slice(0, 8)).toBe("\x89PNG\r\n\x1a\n");
+    expect(logo.content_type).toBe("image/png");
   });
 
   test("account availability follows the deployment inference switch", async () => {
