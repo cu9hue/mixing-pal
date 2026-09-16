@@ -76,25 +76,19 @@ CREATE INDEX requests_status_time ON requests(status, updated_at);
 -- Admission and settlement share the write transaction with the request.
 -- A read followed by separate balance writes lets two Workers spend one allowance.
 CREATE TRIGGER admit_request BEFORE INSERT ON requests BEGIN
-  SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM members
-    WHERE id = NEW.member_id AND revoked = 0 AND deleted_at IS NULL AND period_end > NEW.created_at)
-    THEN RAISE(ABORT, 'access_denied') END;
-  SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM turns WHERE id = NEW.turn_id
-    AND member_id = NEW.member_id AND status = 'running' AND deleted_at IS NULL)
-    THEN RAISE(ABORT, 'turn_closed') END;
-  SELECT CASE WHEN NEW.round != 1 + (SELECT COUNT(*) FROM requests WHERE turn_id = NEW.turn_id)
-    OR EXISTS (SELECT 1 FROM requests WHERE turn_id = NEW.turn_id AND status != 'settled')
-    THEN RAISE(ABORT, 'invalid_round') END;
-  SELECT CASE WHEN EXISTS (SELECT 1 FROM budget WHERE paused = 1)
-    THEN RAISE(ABORT, 'service_paused') END;
-  SELECT CASE WHEN EXISTS (SELECT 1 FROM members WHERE id = NEW.member_id
+  SELECT RAISE(ABORT, 'access_denied') WHERE NOT EXISTS (SELECT 1 FROM members
+    WHERE id = NEW.member_id AND revoked = 0 AND deleted_at IS NULL AND period_end > NEW.created_at);
+  SELECT RAISE(ABORT, 'turn_closed') WHERE NOT EXISTS (SELECT 1 FROM turns WHERE id = NEW.turn_id
+    AND member_id = NEW.member_id AND status = 'running' AND deleted_at IS NULL);
+  SELECT RAISE(ABORT, 'invalid_round') WHERE NEW.round != 1 + (SELECT COUNT(*) FROM requests WHERE turn_id = NEW.turn_id)
+    OR EXISTS (SELECT 1 FROM requests WHERE turn_id = NEW.turn_id AND status != 'settled');
+  SELECT RAISE(ABORT, 'service_paused') WHERE EXISTS (SELECT 1 FROM budget WHERE paused = 1);
+  SELECT RAISE(ABORT, 'allowance_exhausted') WHERE EXISTS (SELECT 1 FROM members WHERE id = NEW.member_id
     AND spent + reserved + NEW.reserved > allowance)
-    OR EXISTS (SELECT 1 FROM budget WHERE spent + reserved + NEW.reserved > allowance)
-    THEN RAISE(ABORT, 'allowance_exhausted') END;
-  SELECT CASE WHEN EXISTS (SELECT 1 FROM requests WHERE member_id = NEW.member_id
+    OR EXISTS (SELECT 1 FROM budget WHERE spent + reserved + NEW.reserved > allowance);
+  SELECT RAISE(ABORT, 'busy') WHERE EXISTS (SELECT 1 FROM requests WHERE member_id = NEW.member_id
     AND status IN ('reserved', 'dispatched', 'unknown'))
-    OR (SELECT COUNT(*) FROM requests WHERE status IN ('reserved', 'dispatched', 'unknown')) >= 5
-    THEN RAISE(ABORT, 'busy') END;
+    OR (SELECT COUNT(*) FROM requests WHERE status IN ('reserved', 'dispatched', 'unknown')) >= 5;
 END;
 
 CREATE TRIGGER reserve_request AFTER INSERT ON requests BEGIN
@@ -104,11 +98,11 @@ END;
 
 CREATE TRIGGER settle_request AFTER UPDATE OF status ON requests
 WHEN NEW.status = 'settled' AND OLD.status != 'settled' BEGIN
-  SELECT CASE WHEN NEW.cost IS NULL THEN RAISE(ABORT, 'cost_required') END;
+  SELECT RAISE(ABORT, 'cost_required') WHERE NEW.cost IS NULL;
   UPDATE members SET reserved = reserved - OLD.reserved, spent = spent + NEW.cost
     WHERE id = NEW.member_id;
   UPDATE budget SET reserved = reserved - OLD.reserved, spent = spent + NEW.cost,
-    paused = CASE WHEN NEW.cost > OLD.reserved THEN 1 ELSE paused END WHERE id = 1;
+    paused = iif(NEW.cost > OLD.reserved, 1, paused) WHERE id = 1;
 END;
 
 CREATE TABLE consents (
@@ -134,14 +128,12 @@ CREATE INDEX captures_turn ON captures(turn_id, state);
 CREATE INDEX captures_state ON captures(state, updated_at);
 
 CREATE TRIGGER admit_capture BEFORE INSERT ON captures BEGIN
-  SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM turns t JOIN members m ON m.id = t.member_id
+  SELECT RAISE(ABORT, 'capture_disabled') WHERE NOT EXISTS (SELECT 1 FROM turns t JOIN members m ON m.id = t.member_id
     WHERE t.id = NEW.turn_id AND (NEW.kind = 'feedback' OR (t.capture = 1 AND m.capture = 1
     AND t.consent_epoch = m.consent_epoch)) AND t.deleted_at IS NULL AND m.deleted_at IS NULL
-    AND t.created_at > NEW.created_at - 2592000000)
-    THEN RAISE(ABORT, 'capture_disabled') END;
-  SELECT CASE WHEN (SELECT captured_bytes FROM turns WHERE id = NEW.turn_id) + NEW.bytes > 10485760
-    OR (SELECT COUNT(*) FROM captures WHERE turn_id = NEW.turn_id) >= 256
-    THEN RAISE(ABORT, 'capture_limit') END;
+    AND t.created_at > NEW.created_at - 2592000000);
+  SELECT RAISE(ABORT, 'capture_limit') WHERE (SELECT captured_bytes FROM turns WHERE id = NEW.turn_id) + NEW.bytes > 10485760
+    OR (SELECT COUNT(*) FROM captures WHERE turn_id = NEW.turn_id) >= 256;
 END;
 
 CREATE TRIGGER reserve_capture AFTER INSERT ON captures BEGIN
