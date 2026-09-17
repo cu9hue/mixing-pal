@@ -96,8 +96,7 @@ describe("currentStep", () => {
     ).toBe("install");
   });
 
-  // Authentication does not depend on Live, so it comes first even when
-  // the connector has already started sending data.
+  // Authentication is independent of Live, so it comes first.
   it("asks for an account before showing the connection confirmation", () => {
     expect(
       currentStep({ ...DONE, connectedAcknowledged: false, hasAccount: false }),

@@ -72,17 +72,13 @@ export default function App() {
 
   const connected = lastSeen !== null && Date.now() - lastSeen <= STALE_MS;
 
-  // The goal frames this chat session, not every conversation this person
-  // ever has with Mixing Pal. Starting empty makes the deliberate goal
-  // screen meaningful instead of resurrecting yesterday's intention.
+  // Goals frame one chat session, so each session starts with new context.
   const [goal, setGoal] = useState("");
   const [folder, setFolder] = useState("");
   const [connectorInstalled, setConnectorInstalled] = useState<boolean | null>(null);
   const [liveRunning, setLiveRunning] = useState(false);
   const [setupDone, setSetupDone] = useState(loadSetupDone);
-  // A returning producer already knows that Mixing Pal reads settings,
-  // so a new session goes straight to its goal rather than replaying the
-  // connection confirmation.
+  // Returning producers skip connection confirmation and go straight to a session goal.
   const [connectedAcknowledged, setConnectedAcknowledged] = useState(loadSetupDone);
   const [goalAnswered, setGoalAnswered] = useState(false);
   // Set only when she asks for a setup screen from a banner. The window
@@ -118,9 +114,7 @@ export default function App() {
   };
 
   const setupNeeded = needsSetup({ connectorInstalled, connectorCurrent, setupDone });
-  // Once the one-time connector setup is finished, a newly launched chat
-  // still needs its own context. Wait for both an account and Live data so
-  // sign-in and disconnected recovery remain focused screens.
+  // A new session needs both an account and Live data before asking for its goal.
   const goalSessionNeeded =
     setupDone &&
     !goalAnswered &&

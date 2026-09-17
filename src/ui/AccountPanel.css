@@ -150,8 +150,7 @@
   border-bottom: none;
 }
 
-/* AccountPanel is also used inside Settings. Its own padding made the
-   account content look accidentally nested under the page title. */
+/* Settings keeps account content aligned with its section, not nested in a panel. */
 .advanced > .account {
   padding: 0 0 var(--space-5);
   border-bottom: 1px solid var(--border);

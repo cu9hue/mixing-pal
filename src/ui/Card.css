@@ -274,9 +274,7 @@
   display: none;
 }
 
-/* The connection banner is the whole disconnected experience. The chat
-   stays mounted behind this wrapper so its draft and thread return as soon
-   as Live does, without exposing controls that cannot answer usefully. */
+/* Keep conversation mounted so brief disconnects preserve its draft and thread. */
 .card__conversation {
   display: flex;
   flex: 1;
@@ -331,8 +329,7 @@
   gap: var(--space-2);
 }
 
-/* The empty card: one line of what to ask, then three deliberate prompt
-   controls. Clicking one fills the input; nothing is sent on her behalf. */
+/* Prompt ideas fill the composer but never send a request. */
 .card__empty-line {
   font-size: var(--text-md);
   line-height: 1.5;

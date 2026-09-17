@@ -80,9 +80,7 @@ export function Card({
       {nudge !== null && connected && (
         <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />
       )}
-      {/* A disconnected Live cannot provide a set for the conversation.
-          Hide its dependent UI, but do not unmount it: a brief cable or
-          Control Surface interruption must not discard her thread. */}
+      {/* Preserve the conversation through brief Live interruptions. */}
       <div className={`card__conversation${connected ? "" : " card__conversation--hidden"}`}>
         <Conversation
           account={account}

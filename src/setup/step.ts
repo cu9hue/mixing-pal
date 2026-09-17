@@ -42,9 +42,7 @@ export interface SetupFacts {
  * a disconnected app look ready.
  */
 export function currentStep(facts: SetupFacts): SetupStep {
-  // Signing in is independent of Live. It comes first so a new user can
-  // complete one task at a time instead of seeing authentication mixed
-  // with a disconnected-state message.
+  // Sign-in comes first because it does not depend on Live.
   if (!facts.hasAccount) return "account";
 
   if (!facts.connectorInstalled || !facts.connectorCurrent) return "install";

@@ -10,7 +10,6 @@ import {
 import { AccountState } from "../model/account";
 import { AccountPanel } from "../ui/AccountPanel";
 
-/** Which of the five numbered ticks a step falls under. */
 const TICK: Record<SetupStep, number> = {
   account: 0,
   install: 1,
