@@ -16,9 +16,13 @@ pub const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 /// only one of them gets better with a smaller window: past `MAX_DATAGRAM`,
 /// Live's `sendto` raises and the client receives nothing at all.
 ///
-/// Bounded so a Live that is simply not answering costs a fixed number of
-/// round trips instead of an exponential sweep of an unresponsive port.
+/// Limits initial windows from the untrusted note count.
+/// Preserves retries for windows that need subdivision.
 pub const MAX_WINDOWS: usize = 16;
+
+/// Limits all note-window requests, including oversized-reply retries.
+/// Lets dense clips finish while bounding unresponsive Live.
+pub const MAX_WINDOW_REQUESTS: usize = 32;
 const MIN_WINDOW_BEATS: f32 = 0.25;
 
 /// `get_notes_extended(from_pitch, pitch_span, ..)` covers
@@ -324,7 +328,7 @@ pub async fn get_notes_at(
     let mut windows_used = 0usize;
 
     while !pending.is_empty() {
-        let room = MAX_WINDOWS.saturating_sub(windows_used);
+        let room = MAX_WINDOW_REQUESTS.saturating_sub(windows_used);
         if room == 0 {
             missing_reason = Some("too_large".to_string());
             break;
@@ -882,6 +886,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_clustered_clip_uses_the_retry_budget_to_return_every_note() {
+        // All 2,048 notes occupy the first 12.5%, forcing three retry rounds.
+        // A complete read takes 18 requests, within the bounded retry budget.
+        let notes: Vec<(f32, i32)> = (0..2_048)
+            .map(|i| (i as f32 / 128.0, 36 + (i % 60) as i32))
+            .collect();
+        let initial_span = 128.0 / 6.0;
+        let half = initial_span / 2.0;
+        let quarter = initial_span / 4.0;
+        let (q, seen) = spawn(FakeLive {
+            length: 128.0,
+            notes,
+            silent: vec![
+                (0.0, initial_span),
+                (0.0, half),
+                (half, half),
+                (0.0, quarter),
+                (quarter, quarter),
+                (half, quarter),
+            ],
+            silent_all: false,
+            full_reply: None,
+            malformed_length: false,
+            answers_num_notes: true,
+            hold_notes_until: None,
+        })
+        .await;
+
+        let result = get_clip_notes(q, 2, 1, FAST).await.unwrap();
+
+        assert_eq!(result.notes.len(), 2_048);
+        assert_eq!(result.missing_reason, None);
+        assert!(
+            *seen
+                .lock()
+                .unwrap()
+                .get("/live/clip/get/notes_window")
+                .unwrap()
+                <= 32,
+            "the complete-read retry budget stays bounded"
+        );
+    }
+
+    #[tokio::test]
     async fn a_script_too_old_to_report_the_note_count_does_not_wait_out_the_query_timeout() {
         // A version mismatch WARNS and keeps running (see `Connection.tsx`'s
         // `version_mismatch`), so a producer who has not reinstalled yet is
@@ -976,7 +1024,7 @@ mod tests {
                 .unwrap()
                 .get("/live/clip/get/notes_window")
                 .unwrap()
-                <= MAX_WINDOWS,
+                <= MAX_WINDOW_REQUESTS,
             "the splitter must be bounded"
         );
     }

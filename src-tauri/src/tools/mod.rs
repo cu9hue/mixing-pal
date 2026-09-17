@@ -381,11 +381,8 @@ fn duration_notation(duration: f64) -> Option<String> {
     Some(name.to_owned())
 }
 
-/// The model-facing cap on one clip's notes. The wire reads up to
-/// `MAX_WINDOWS` pages, several thousand notes, and the positions above
-/// roughly double each note's cost in a result that rides every later
-/// round trip of the turn. Keep the notes as read, earliest windows first,
-/// and say how many followed; `get_arrangement` has the same shape of cap.
+/// Bounds model output because positions roughly double each note's later round-trip cost.
+/// Keeps earliest notes and reports omissions, matching `get_arrangement`.
 const MAX_NOTES_FOR_MODEL: usize = 1024;
 
 fn trim_notes_for_model(notes: &mut Vec<clip_notes::Note>) -> Option<String> {
