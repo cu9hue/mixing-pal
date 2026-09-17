@@ -20,10 +20,8 @@ pub const MAX_PARAMS: usize = 256;
 /// Floor for halve-and-retry, mirroring `clip_notes::MIN_WINDOW_BEATS`.
 const MIN_WINDOW_PARAMS: usize = 8;
 
-/// Bounds the retry sweep so a Live that is simply not answering costs a
-/// fixed number of round trips instead of an exponential descent. That is
-/// word for word the rationale `clip_notes::MAX_WINDOWS` already carries, so
-/// this is that constant rather than a second copy of the number.
+/// The shared 16-page cap bounds parameter retries when Live does not answer.
+/// Keeping one constant prevents the tools' request limits from drifting.
 const MAX_WINDOWS: usize = crate::tools::clip_notes::MAX_WINDOWS;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
