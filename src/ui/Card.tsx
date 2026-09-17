@@ -5,7 +5,6 @@ import { SetupStep } from "../setup/step";
 import { Header } from "./Header";
 import { Noticed } from "./Noticed";
 import { Conversation } from "./Conversation";
-import { WhatICanSee } from "./WhatICanSee";
 import { Connection } from "./Connection";
 import { Advanced } from "./Advanced";
 import { AccountState, canAsk } from "../model/account";
@@ -17,8 +16,6 @@ export function Card({
   lastSeen,
   connected,
   nudge,
-  goal,
-  onGoalChange,
   onDismissNudge,
   onTurnRunningChange,
   onAnswer,
@@ -32,8 +29,6 @@ export function Card({
   lastSeen: number | null;
   connected: boolean;
   nudge: Nudge | null;
-  goal: string;
-  onGoalChange: (value: string) => void;
   onDismissNudge: (id: string) => void;
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
@@ -85,12 +80,9 @@ export function Card({
         <Conversation
           account={account}
           state={state}
-          goal={goal}
-          onGoalChange={onGoalChange}
           onTurnRunningChange={onTurnRunningChange}
           onAnswer={onAnswer}
         />
-        <WhatICanSee state={state} />
       </div>
       </div>
     </div>

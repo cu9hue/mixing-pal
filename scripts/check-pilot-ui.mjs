@@ -25,9 +25,9 @@ await page.exposeFunction('resizeNative', ({width,height})=>page.setViewportSize
 await page.route(/\/src\/main\.tsx(?:\?t=\d+)?$/, route=>route.fulfill({contentType:'application/javascript',body:`
 import { mockIPC, mockWindows } from '/node_modules/@tauri-apps/api/mocks.js';
 import { emit } from '/node_modules/@tauri-apps/api/event.js';
-localStorage.setItem('copilot.setupDone','1'); localStorage.setItem('copilot.goal','Finish this arrangement');
-if (location.search.includes('fresh')) { localStorage.removeItem('copilot.setupDone'); localStorage.removeItem('copilot.goal'); }
-window.emitFixture=emit; window.saved=[]; window.requests=[]; window.shared=[];
+localStorage.setItem('copilot.setupDone','1');
+if (location.search.includes('fresh')) localStorage.removeItem('copilot.setupDone');
+window.emitFixture=emit; window.saved=[]; window.savedThreads={}; window.requests=[]; window.shared=[];
 window.account={access:'signed_out',capture:false};
 const active={id:'producer',email:'invited@example.com',access:'active',capture:false,consent_epoch:0,remaining_micro_usd:5000000,period_end:Date.now()+86400000};
 const access=new URLSearchParams(location.search).get('access');
@@ -35,7 +35,10 @@ if(access)window.account={...active,access,capture:true};
 if(location.search.includes('held'))window.account={...active,can_ask:false,reserved_micro_usd:319489};
 if(location.search.includes('paused'))window.account={...active,can_ask:false,service_paused:true};
 const disconnected=location.search.includes('disconnected');
-const snapshot=[{addr:'/live/mixingpal/get/version',args:[12]},{addr:'/live/song/get/tempo',args:[128]},{addr:'/live/track/get/name',args:[0,'Drums']}];
+const initialSet=location.search.includes('fresh')?'fresh-set':'default';
+window.currentSet=initialSet;
+window.switchSet=(id)=>{window.currentSet=id;return emit('live://deltas',[{addr:'/live/mixingpal/get/set_identity',args:[id,'Set '+id,'/fixture/'+id+'.als']}]);};
+const snapshot=[{addr:'/live/mixingpal/get/version',args:[12]},{addr:'/live/mixingpal/get/set_identity',args:[initialSet,'Set '+initialSet,'/fixture/'+initialSet+'.als']},{addr:'/live/song/get/tempo',args:[128]},{addr:'/live/track/get/name',args:[0,'Drums']}];
 mockWindows('main'); mockIPC(async (cmd,args)=>{
 window.requests.push({cmd,args});
 if(cmd==='snapshot')return disconnected?[]:snapshot;
@@ -50,15 +53,20 @@ if(cmd==='live_is_running')return true;
 if(cmd==='connection_status')return {status:'bound'};
 if(cmd==='get_settings')return {base_url:'',model:'',has_key:false};
 if(cmd==='set_window_mode'){window.geometry=args;return window.resizeNative(args);}
-if(cmd==='load_thread')return {saved_at:Math.floor(Date.now()/1000),note:[],next_bullet:0,exchanges:[{turnId:args.setId==='B'?'22222222-2222-4222-8222-222222222222':'11111111-1111-4111-8111-111111111111',question:'Question for '+args.setId,answer:'Answer for '+args.setId,error:null}]};
-if(cmd==='save_thread'){window.saved.push(args);return;}
+if(cmd==='load_thread'){
+  if(window.savedThreads[args.setId])return window.savedThreads[args.setId];
+  if(['C','D','fresh-set'].includes(args.setId))return null;
+  return {saved_at:Math.floor(Date.now()/1000),goal:args.setId==='default'?'Finish this arrangement':'Goal for '+args.setId,note:[],next_bullet:0,
+    exchanges:args.setId==='default'?[]:[{turnId:args.setId==='B'?'22222222-2222-4222-8222-222222222222':'11111111-1111-4111-8111-111111111111',question:'Question for '+args.setId,answer:'Answer for '+args.setId,error:null}]};
+}
+if(cmd==='save_thread'){window.saved.push(args);window.savedThreads[args.setId]={saved_at:Math.floor(Date.now()/1000),goal:args.goal,note:args.note,next_bullet:args.nextBullet,exchanges:args.exchanges};return;}
 if(cmd==='turn_event')return;
 if(cmd==='model_complete'){const account={...window.account};return new Promise((resolve,reject)=>{window.failModel=()=>reject({code:'completion_unknown',message:'The reply was interrupted.'});window.finishModel=()=>resolve({text:'A complete answer.',tool_calls:[],account});});}
 if(cmd==='turn_delete_capture')return;
 if(cmd==='turn_feedback'){window.shared.push(args);return new Promise(resolve=>window.finishFeedback=()=>resolve({saved:true}));}
 throw new Error('Unexpected native call: '+cmd);
 },{shouldMockEvents:true});
-setInterval(()=>{if(!disconnected)emit('live://deltas',snapshot)},1000);
+setInterval(()=>{if(!disconnected)emit('live://deltas',snapshot.map(delta=>delta.addr==='/live/mixingpal/get/set_identity'?{...delta,args:[window.currentSet,'Set '+window.currentSet,'/fixture/'+window.currentSet+'.als']}:delta))},1000);
 await import('/src/main.tsx?proxy-fixture');
 `}));
 try {
@@ -68,10 +76,38 @@ const disconnectedComposer=page.getByLabel('Ask about the set',{exact:true});
 assert.equal(await disconnectedComposer.isVisible(),false,'the composer must stay hidden until Live reconnects');
 await page.screenshot({path:`${artifacts}/disconnected.png`});
 await page.goto('http://127.0.0.1:1423?access=active');
-await page.getByRole('heading',{name:'What are you making?',exact:true}).waitFor();
-assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isVisible(),false,'a fresh session must ask about its goal before opening chat');
+await page.getByLabel('Ask about the set',{exact:true}).waitFor();
+assert.equal(await page.locator('.setup').count(),0,'a returning session opens in the card');
+await page.getByRole('button',{name:'Finish this arrangement',exact:false}).waitFor();
 await page.screenshot({path:`${artifacts}/session-goal.png`});
-await page.getByRole('button',{name:'Skip',exact:true}).click();
+async function openSet(id){await page.evaluate(id=>window.switchSet(id),id);}
+await openSet('C');
+await page.getByLabel('Goal (optional)',{exact:true}).waitFor();
+const promptBottom=await page.getByRole('button',{name:'Start chatting',exact:true}).evaluate(button=>button.getBoundingClientRect().bottom);
+assert.ok(promptBottom<=await page.evaluate(()=>innerHeight),'the set goal actions must fit the card when the prompt appears');
+await page.screenshot({path:`${artifacts}/new-set-goal.png`});
+assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isVisible(),false,'a new set asks for its goal first');
+assert.equal(await page.getByRole('button',{name:'Skip',exact:true}).count(),0,'optional goal has one primary action');
+await page.getByLabel('Goal (optional)',{exact:true}).fill('dark garage');
+await page.getByRole('button',{name:'Start chatting',exact:true}).click();
+await page.getByRole('button',{name:'dark garage',exact:false}).waitFor();
+assert.equal(await page.evaluate(()=>window.savedThreads.C.goal),'dark garage');
+await openSet('default');
+await page.getByRole('button',{name:'Finish this arrangement',exact:false}).waitFor();
+await openSet('C');
+await page.getByRole('button',{name:'dark garage',exact:false}).waitFor();
+assert.equal(await page.getByRole('button',{name:'Skip',exact:true}).count(),0,'reopening a set restores its goal');
+await openSet('D');
+await page.getByLabel('Goal (optional)',{exact:true}).waitFor();
+await page.getByRole('button',{name:'Start chatting',exact:true}).click();
+assert.equal(await page.evaluate(()=>window.savedThreads.D.goal),'','an empty goal is remembered for this set');
+await openSet('C');
+await page.getByRole('button',{name:'dark garage',exact:false}).waitFor();
+await openSet('D');
+await page.getByLabel('Ask about the set',{exact:true}).waitFor();
+assert.equal(await page.getByRole('button',{name:'Start chatting',exact:true}).count(),0,'reopening a set with no goal goes straight to chat');
+await openSet('default');
+await page.getByRole('button',{name:'Finish this arrangement',exact:false}).waitFor();
 await page.getByLabel('Ask about the set',{exact:true}).waitFor();
 await page.goto('http://127.0.0.1:1423');
 await page.getByLabel('Email',{exact:true}).waitFor();
@@ -88,8 +124,6 @@ await page.getByLabel('Six-digit sign-in code').fill('123456');
 await page.getByRole('button',{name:'Sign in',exact:true}).click();
 await page.getByLabel('Invitation code').fill('example-invite-code');
 await page.getByRole('button',{name:'Join the free pilot'}).click();
-await page.getByRole('heading',{name:'What are you making?',exact:true}).waitFor();
-await page.getByRole('button',{name:'Skip',exact:true}).click();
 await page.getByLabel('Ask about the set',{exact:true}).waitFor();
 assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),true);
 await page.getByLabel('Ask about the set',{exact:true}).fill('Test consent ordering');
@@ -97,12 +131,12 @@ await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
 await page.waitForFunction(()=>!!window.finishModel);
 assert.equal(await page.evaluate(()=>window.requests.find(x=>x.cmd==='model_complete').args.captureEpoch),null);
 await page.evaluate(()=>window.emitFixture('menu://settings'));
-await page.getByLabel('Share advice turns to help improve Mixing Pal').check();
+await page.getByLabel('Share advice and outcomes to help improve Mixing Pal').check();
 await page.evaluate(()=>window.finishModel());
 await page.waitForTimeout(100);
-assert.equal(await page.getByLabel('Share advice turns to help improve Mixing Pal').isChecked(),true);
+assert.equal(await page.getByLabel('Share advice and outcomes to help improve Mixing Pal').isChecked(),true);
 await page.screenshot({path:`${artifacts}/settings.png`});
-assert.equal(await page.getByText('Optional. Save your questions, relevant set context, tool reads and raw answers for human review for 30 days.').count(),0,'settings should not lead with the sharing explanation');
+assert.equal(await page.getByText('Optional. Save your questions, relevant set context, tool reads, raw answers and outcomes for human review for 30 days.').count(),0,'settings should not lead with the sharing explanation');
 await page.getByRole('button',{name:'How sharing works',exact:true}).click();
 await page.getByRole('tooltip').waitFor();
 await page.screenshot({path:`${artifacts}/settings-sharing-tooltip.png`});
@@ -113,8 +147,12 @@ await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='model_complete')[1].args.captureEpoch),1);
 await page.evaluate(()=>window.finishModel());
 await page.getByText('A new turn after opting in',{exact:true}).waitFor();
+const priorOutcome=page.getByRole('button',{name:'Tried this advice?',exact:true}).first();
+await priorOutcome.click();
+assert.equal(await priorOutcome.getAttribute('aria-expanded'),'true');
 await page.getByLabel('Ask about the set',{exact:true}).fill('A failed shared turn');
 await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
+assert.equal(await priorOutcome.getAttribute('aria-expanded'),'false','a new question closes the prior outcome');
 await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete').length===3);
 await page.evaluate(()=>window.failModel());
 const failed=page.locator('.card__exchange').filter({hasText:'A failed shared turn'});
@@ -125,21 +163,27 @@ await failed.getByRole('button',{name:'Delete shared turn…',exact:true}).click
 await failed.getByRole('button',{name:'Delete shared turn',exact:true}).click();
 await failed.getByText('Deletion requested. Your local conversation stays here.').waitFor();
 assert.equal(await page.evaluate(()=>window.requests.find(x=>x.cmd==='turn_delete_capture').args.turnId===window.requests.filter(x=>x.cmd==='model_complete')[2].args.turnId),true);
-async function set(id){await page.evaluate(id=>window.emitFixture('live://deltas',[{addr:'/live/mixingpal/get/set_identity',args:[id,'Set '+id,'/fixture/'+id+'.als']}]),id); await page.getByText('Question for '+id,{exact:true}).waitFor();}
+async function set(id){await page.evaluate(id=>window.switchSet(id),id); await page.getByText('Question for '+id,{exact:true}).waitFor();}
 await set('A');
 await page.getByRole('button',{name:'Tried this advice?',exact:true}).first().click();
 await page.getByLabel('What did you hear?',{exact:true}).fill('A private report');
-await page.getByLabel('Share this report with Mixing Pal for review').check();
+assert.equal(await page.getByLabel('Share this report with Mixing Pal for review').count(),0);
 await page.getByRole('button',{name:'Save outcome',exact:true}).click();
 await page.waitForFunction(()=>!!window.finishFeedback);
+assert.equal(await page.evaluate(()=>window.shared.length),1,'account sharing sends the outcome without another checkbox');
 await set('B');
 await page.getByRole('button',{name:'Tried this advice?',exact:true}).click();
 assert.equal(await page.getByLabel('What did you hear?',{exact:true}).inputValue(),'');
-assert.equal(await page.getByLabel('Share this report with Mixing Pal for review').isChecked(),false);
 await page.evaluate(()=>window.finishFeedback());
 await page.waitForTimeout(100);
 const saves=await page.evaluate(()=>window.saved);
 assert.equal(saves.some(s=>s.setId==='A' && s.exchanges.some(x=>x.question==='Question for B')),false,'feedback response overwrote another set');
+await page.evaluate(()=>window.emitFixture('menu://settings'));
+await page.getByLabel('Share advice and outcomes to help improve Mixing Pal').uncheck();
+await page.getByRole('button',{name:'Done',exact:true}).click();
+await page.getByRole('button',{name:'Save outcome',exact:true}).click();
+await page.getByText('Saved on this laptop.',{exact:true}).waitFor();
+assert.equal(await page.evaluate(()=>window.shared.length),1,'sharing off keeps the next outcome local');
 await page.screenshot({path:`${artifacts}/feedback.png`});
 const geometry=await page.evaluate(()=>({height:innerHeight,scroll:document.documentElement.scrollHeight,width:innerWidth,scrollWidth:document.documentElement.scrollWidth}));
 assert.equal(geometry.height,geometry.scroll);assert.equal(geometry.width,geometry.scrollWidth);
@@ -154,19 +198,17 @@ await setup.getByRole('button',{name:'Sign in',exact:true}).click();
 await setup.getByLabel('Invitation code').fill('example-invite-code');
 await setup.getByRole('button',{name:'Join the free pilot'}).click();
 await setup.getByRole('button',{name:'Got it',exact:true}).click();
-await setup.getByLabel('Share advice turns to help improve Mixing Pal').waitFor();
-assert.equal(await setup.getByText('Optional. Save your questions, relevant set context, tool reads and raw answers for human review for 30 days.').count(),0,'sharing detail should stay out of the onboarding flow until requested');
-await setup.getByRole('button',{name:'How sharing works',exact:true}).click();
-await setup.getByRole('tooltip').waitFor();
-await setup.getByRole('button',{name:'Skip',exact:true}).click();
 await page.locator('.card__main').waitFor({state:'visible'});
+assert.equal(await page.locator('.setup').count(),0,'install setup ends before the set goal');
+await page.getByLabel('Goal (optional)',{exact:true}).waitFor();
+await page.getByRole('button',{name:'Start chatting',exact:true}).click();
 await page.screenshot({path:`${artifacts}/empty-chat.png`});
 assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),true);
 assert.equal(await page.evaluate(()=>localStorage.getItem('copilot.setupDone')),'1');
 for (const access of ['expired','revoked']) {
 await page.goto('http://127.0.0.1:1423?access='+access);
 await page.getByText('Your pilot access has ended. Contact Mixing Pal to continue.').waitFor();
-const sharing=page.locator('.card__main').getByLabel('Share advice turns to help improve Mixing Pal');
+const sharing=page.locator('.card__main').getByLabel('Share advice and outcomes to help improve Mixing Pal');
 assert.equal(await sharing.count(),1,access+' accounts must retain a withdrawal control');
 assert.equal(await sharing.isChecked(),true);
 await sharing.uncheck();
@@ -177,8 +219,7 @@ assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled()
 await page.clock.install();
 for(const state of ['held','paused']) {
 await page.goto('http://127.0.0.1:1423?'+state);
-await page.locator('.setup__title').filter({hasText:'What are you making?'}).waitFor();
-await page.getByRole('button',{name:'Skip',exact:true}).click();
+await page.getByLabel('Ask about the set',{exact:true}).waitFor();
 await page.getByText(state==='held'?'We’re checking the last request’s usage before you can ask again.':'Model access is temporarily paused.').waitFor();
 assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),false);
 await page.evaluate(()=>{window.account={...window.account,can_ask:true,reserved_micro_usd:0,service_paused:false};window.requests=[];});

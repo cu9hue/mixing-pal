@@ -1,17 +1,18 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { errorMessage } from "../model/account";
 import { Feedback } from "./thread";
 
-export function FeedbackPanel({ turnId, answered, saved, onSave }: { turnId: string; answered: boolean; saved?: Feedback; onSave: (value: Feedback) => void }) {
+export function FeedbackPanel({ turnId, answered, saved, sharingEnabled, sentCount, onSave }: { turnId: string; answered: boolean; saved?: Feedback; sharingEnabled: boolean; sentCount: number; onSave: (value: Feedback) => void }) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [outcome, setOutcome] = useState<Feedback["outcome"]>(saved?.outcome ?? "not_tried");
   const [heard, setHeard] = useState(saved?.heard ?? "");
-  const [share, setShare] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => { setOpen(false); setDeleting(false); }, [sentCount]);
 
   return <div className="feedback" data-tauri-drag-region="false">
     <button aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>{answered ? saved ? "Your outcome" : "Tried this advice?" : "Shared turn"}</button>
@@ -22,15 +23,16 @@ export function FeedbackPanel({ turnId, answered, saved, onSave }: { turnId: str
       const value = { outcome, heard, shared: false };
       onSave(value);
       try {
-        if (share) {
+        if (sharingEnabled) {
           const result = await invoke<{ saved: boolean }>("turn_feedback", {
-            turnId, feedback: { id: crypto.randomUUID(), outcome, heard, share: true },
+            turnId, feedback: { id: crypto.randomUUID(), outcome, heard },
           });
-          if (!result.saved) throw new Error("This shared turn has expired or was deleted. Your feedback is saved on this laptop.");
-          onSave({ ...value, shared: true });
+          if (result.saved) onSave({ ...value, shared: true });
+          setMessage(result.saved ? "Saved and shared." : "Saved on this laptop. This advice was not shared.");
+        } else {
+          setMessage("Saved on this laptop.");
         }
-        setMessage(share ? "Saved and shared." : "Saved on this laptop.");
-      } catch (error) { setMessage(errorMessage(error)); }
+      } catch (error) { setMessage(`Saved on this laptop. Could not share: ${errorMessage(error)}`); }
       finally { setBusy(false); }
     }}>
       {answered && <><label htmlFor={`${id}-outcome`}>What did you do?</label>{" "}
@@ -40,9 +42,7 @@ export function FeedbackPanel({ turnId, answered, saved, onSave }: { turnId: str
       </select>
       <label htmlFor={`${id}-heard`}>What did you hear?</label>
       <textarea id={`${id}-heard`} value={heard} maxLength={4000} rows={2} disabled={busy} onChange={(e) => setHeard(e.target.value)} />
-      <label htmlFor={`${id}-share`}><input id={`${id}-share`} type="checkbox" checked={share} disabled={busy}
-        onChange={(e) => setShare(e.target.checked)} /> Share this report with Mixing Pal for review</label>
-      <p>Optional. Shared reports are kept with this advice for up to 30 days. This does not enable conversation sharing or permit training.</p></>}
+      </>}
       <div className="account__actions">{answered && <button type="submit" disabled={busy}>Save outcome</button>}
         <button type="button" disabled={busy} onClick={() => setDeleting(true)}>Delete shared turn…</button></div>
       {deleting && <div><p>Delete this turn's shared questions, answers, tool reads and feedback?</p>

@@ -1,14 +1,5 @@
-//! Per-set threads on disk: the thread she reads in the card, saved under
-//! the set's identity and restored when the set is open again.
-//!
-//! One JSON file per thread under `threads/` beside `settings.json`, and an
-//! `index.json` that maps each thread to the set's stored id and path. The
-//! index is what makes the identity rules cheap: a lookup goes by id first,
-//! then by path, and a hit by path adopts the entry under the new id. That
-//! covers a set she closed without saving, whose id was minted again on the
-//! next open, and the promotion from path to stored id every new set goes
-//! through. A thread nobody has opened for `RETENTION` loses its transcript;
-//! its note, which is what she decided, stays.
+//! Path fallback keeps an unsaved set's thread when Live mints a new id.
+//! Retention removes old transcripts while preserving set notes and goals.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -53,6 +44,9 @@ pub struct Bullet {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Thread {
     pub exchanges: Vec<Exchange>,
+    /// None awaits the goal prompt; an empty string records starting without a goal.
+    #[serde(default)]
+    pub goal: Option<String>,
     /// Seconds since the epoch, set by the caller on save. The recap line
     /// in the card is derived from it.
     pub saved_at: u64,
@@ -200,13 +194,8 @@ fn read_thread(file: &Path) -> Option<Thread> {
     serde_json::from_str(&raw).ok()
 }
 
-/// Drops the transcript of every thread whose last open is more than
-/// `RETENTION` before `now`. A thread with a note keeps the note and its
-/// entry, with the exchanges cleared: the transcript is disposable, what
-/// she decided is not. A thread without one is deleted. Returns how many
-/// transcripts went. An entry whose file could not be rewritten or deleted
-/// stays in the index, so the next startup tries again rather than leaving
-/// a transcript on disk that nothing points at.
+/// Drops aged transcripts while retaining each set's note and goal.
+/// Failed rewrites keep their index entry so the next startup can retry.
 pub fn prune(dir: &Path, now: u64) -> std::io::Result<usize> {
     let mut index = read_index(dir);
     let mut kept = Vec::new();
@@ -220,7 +209,7 @@ pub fn prune(dir: &Path, now: u64) -> std::io::Result<usize> {
             continue;
         }
         let file = dir.join(&e.file);
-        if let Some(thread) = read_thread(&file).filter(|t| !t.note.is_empty()) {
+        if let Some(thread) = read_thread(&file).filter(|t| !t.note.is_empty() || t.goal.is_some()) {
             if thread.exchanges.is_empty() {
                 // Already pruned to its note on an earlier startup.
                 kept.push(e);
@@ -278,6 +267,7 @@ mod tests {
                 feedback: None,
             }],
             saved_at,
+            goal: None,
             note: vec![],
             next_bullet: 0,
         }
@@ -300,6 +290,31 @@ mod tests {
             load(&dir, ID, Some(PATH), 200).unwrap(),
             Some(thread("why is the pad muddy", 100))
         );
+    }
+
+    #[test]
+    fn a_goal_round_trips_with_its_set_thread() {
+        let dir = scratch();
+        let mut t = thread("why is the pad muddy", 100);
+        let mut saved = serde_json::to_value(&t).unwrap();
+        saved["goal"] = serde_json::json!("dark garage, 2am");
+        t = serde_json::from_value(saved).unwrap();
+        save(&dir, ID, Some(PATH), &t).unwrap();
+        let restored = load(&dir, ID, Some(PATH), 200).unwrap().unwrap();
+        assert_eq!(serde_json::to_value(restored).unwrap()["goal"], "dark garage, 2am");
+    }
+
+    #[test]
+    fn a_skipped_goal_survives_transcript_retention() {
+        let dir = scratch();
+        let mut saved = serde_json::to_value(thread("question", 0)).unwrap();
+        saved["goal"] = serde_json::json!("");
+        let t: Thread = serde_json::from_value(saved).unwrap();
+        save(&dir, ID, Some(PATH), &t).unwrap();
+        assert_eq!(prune(&dir, RETENTION.as_secs()).unwrap(), 1);
+        let restored = load(&dir, ID, Some(PATH), RETENTION.as_secs()).unwrap().unwrap();
+        assert_eq!(restored.exchanges, vec![]);
+        assert_eq!(serde_json::to_value(restored).unwrap()["goal"], "");
     }
 
     // The set was closed without saving, so its id was minted again on the
@@ -451,6 +466,7 @@ mod tests {
         )
         .unwrap();
         let t = load(&dir, "id", None, 10).unwrap().unwrap();
+        assert_eq!(t.goal, None);
         assert_eq!(t.note, vec![]);
         assert_eq!(t.next_bullet, 0);
     }

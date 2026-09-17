@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import "./SharingConsent.css";
 
 const DETAIL =
-  "Optional. Save your questions, relevant set context, tool reads and raw answers for human review for 30 days. You can stop sharing or delete a shared turn. This does not permit model training.";
+  "Optional. Save your questions, relevant set context, tool reads, raw answers and outcomes for human review for 30 days. Outcomes from advice given before you enabled sharing stay on this laptop. You can stop future sharing or delete a shared turn. This does not permit model training.";
 
 export function SharingConsent({
   checked,
@@ -27,7 +27,7 @@ export function SharingConsent({
             disabled={disabled}
             onChange={(event) => onChange(event.target.checked)}
           />
-          <span>Share advice turns to help improve Mixing Pal</span>
+          <span>Share advice and outcomes to help improve Mixing Pal</span>
         </label>
         <button
           className="sharing-consent__info"

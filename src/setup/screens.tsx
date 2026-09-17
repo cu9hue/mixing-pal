@@ -1,8 +1,5 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { GOAL_MAX_LENGTH } from "../ui/goal";
-import { AccountState, AccountView, errorMessage } from "../model/account";
-import { SharingConsent } from "../ui/SharingConsent";
 
 /** Every screen after "install" names the connector as Live shows it. */
 export function InstallScreen({
@@ -37,7 +34,7 @@ export function InstallScreen({
 
   return (
     <>
-      <div className="setup__label">Step 2 of 5</div>
+      <div className="setup__label">Step 2 of 4</div>
       <h1 className="setup__title">Mixing Pal needs a small connector inside Live.</h1>
       <p className="setup__body">
         It goes into your Ableton User Library, where Live keeps the things you add
@@ -65,7 +62,7 @@ export function InstallScreen({
 export function OpenLiveScreen() {
   return (
     <>
-      <div className="setup__label">Step 3 of 5</div>
+      <div className="setup__label">Step 3 of 4</div>
       <h1 className="setup__title">Now open Ableton Live.</h1>
       <p className="setup__body">
         Live only looks for connectors when it starts, so if it was already open,
@@ -82,7 +79,7 @@ export function OpenLiveScreen() {
 export function ControlSurfaceScreen({ folder }: { folder: string }) {
   return (
     <>
-      <div className="setup__label">Step 4 of 5</div>
+      <div className="setup__label">Step 4 of 4</div>
       <h1 className="setup__title">Turn it on inside Live.</h1>
       <p className="setup__body">
         Open Live's <b>Settings → Link, Tempo &amp; MIDI</b> (called{" "}
@@ -121,7 +118,7 @@ export function ConnectedScreen({
   const named = trackNames.filter((n) => n.trim() !== "").slice(0, 4);
   return (
     <>
-      <div className="setup__label">Step 4 of 5</div>
+      <div className="setup__label">Step 4 of 4</div>
       <h1 className="setup__title">
         <span className="setup__ok-dot" />
         Connected.
@@ -143,70 +140,6 @@ export function ConnectedScreen({
       </p>
       <button className="setup__primary" onClick={onContinue}>
         Got it
-      </button>
-    </>
-  );
-}
-
-export function GoalScreen({
-  account,
-  goal,
-  onGoalChange,
-  onFinish,
-}: {
-  account: AccountState;
-  goal: string;
-  onGoalChange: (value: string) => void;
-  onFinish: () => void;
-}) {
-  const [sharing, setSharing] = useState(() => account.view?.capture ?? false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function finish() {
-    const view = account.view;
-    if (view?.access !== "active" || view.capture === sharing) {
-      onFinish();
-      return;
-    }
-
-    setBusy(true);
-    setError(null);
-    try {
-      account.change(await invoke<AccountView>("account_consent", { enabled: sharing }));
-      onFinish();
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <>
-      <div className="setup__label">Step 5 of 5</div>
-      <h1 className="setup__title">What are you making?</h1>
-      <p className="setup__body">
-        A few words is plenty. It's the difference between advice about music and advice
-        about <em>your</em> track — and you can change it any time.
-      </p>
-      <input
-        className="setup__field"
-        autoFocus
-        aria-label="What are you making?"
-        value={goal}
-        maxLength={GOAL_MAX_LENGTH}
-        placeholder="dark garage, 2am"
-        onChange={(e) => onGoalChange(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && void finish()}
-      />
-      <SharingConsent checked={sharing} disabled={busy} onChange={setSharing} />
-      {error !== null && <div className="setup__error" role="alert">{error}</div>}
-      <button className="setup__primary" onClick={() => void finish()} disabled={busy}>
-        {busy ? "Saving…" : "Start"}
-      </button>
-      <button className="setup__secondary" onClick={() => void finish()} disabled={busy}>
-        Skip
       </button>
     </>
   );

@@ -3,7 +3,6 @@ import { SetupStep } from "./step";
 import {
   ConnectedScreen,
   ControlSurfaceScreen,
-  GoalScreen,
   InstallScreen,
   OpenLiveScreen,
 } from "./screens";
@@ -16,8 +15,7 @@ const TICK: Record<SetupStep, number> = {
   open_live: 2,
   control_surface: 3,
   connected: 3,
-  goal: 4,
-  done: 4,
+  done: 3,
 };
 
 export function Setup({
@@ -26,11 +24,8 @@ export function Setup({
   folder,
   trackCount,
   trackNames,
-  goal,
-  onGoalChange,
   onFactsChanged,
   onAcknowledgeConnected,
-  onFinished,
   onExit,
 }: {
   account: AccountState;
@@ -38,11 +33,8 @@ export function Setup({
   folder: string;
   trackCount: number;
   trackNames: string[];
-  goal: string;
-  onGoalChange: (value: string) => void;
   onFactsChanged: () => void;
   onAcknowledgeConnected: () => void;
-  onFinished: () => void;
   /** Present only when she opened setup from a banner rather than because
       first run is unfinished. Then this is her way back to the card. */
   onExit?: () => void;
@@ -52,7 +44,7 @@ export function Setup({
   return (
     <div className="setup" data-tauri-drag-region>
       <div className="setup__bar">
-        {[0, 1, 2, 3, 4].map((i) => (
+        {[0, 1, 2, 3].map((i) => (
           <span
             key={i}
             className={`setup__tick ${
@@ -76,17 +68,9 @@ export function Setup({
         )}
         {step === "account" && (
           <>
-            <div className="setup__label">Step 1 of 5</div>
+            <div className="setup__label">Step 1 of 4</div>
             <AccountPanel account={account} />
           </>
-        )}
-        {step === "goal" && (
-          <GoalScreen
-            account={account}
-            goal={goal}
-            onGoalChange={onGoalChange}
-            onFinish={onFinished}
-          />
         )}
       </div>
       {onExit !== undefined && (

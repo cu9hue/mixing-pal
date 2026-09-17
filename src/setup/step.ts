@@ -4,21 +4,9 @@ export type SetupStep =
   | "control_surface"
   | "connected"
   | "account"
-  | "goal"
   | "done";
 
-/**
- * Everything the step depends on, all of it observable right now.
- *
- * `connectedAcknowledged` is the one piece of session state: the connected
- * screen is something she reads and moves past, and nothing observable
- * records that she has. It resets on relaunch, and on its own that would
- * put a machine set up months ago back on the connected screen -- the gate
- * order asks about it before `goalAnswered`, so having named a goal does
- * not save her. What saves her is `needsSetup` below:
- * whether setup opens at all is a separate question from which step it
- * shows once it is open.
- */
+/** Connection acknowledgement is transient; setupDone keeps returning users in the card. */
 export interface SetupFacts {
   connectorInstalled: boolean;
   connectorCurrent: boolean;
@@ -26,7 +14,6 @@ export interface SetupFacts {
   deltasArriving: boolean;
   connectedAcknowledged: boolean;
   hasAccount: boolean;
-  goalAnswered: boolean;
 }
 
 /**
@@ -55,7 +42,6 @@ export function currentStep(facts: SetupFacts): SetupStep {
   }
 
   if (!facts.connectedAcknowledged) return "connected";
-  if (!facts.goalAnswered) return "goal";
   return "done";
 }
 
