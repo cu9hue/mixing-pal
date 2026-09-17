@@ -10,15 +10,15 @@ import {
 import { AccountState } from "../model/account";
 import { AccountPanel } from "../ui/AccountPanel";
 
-/** Which of the four numbered ticks a step falls under. */
+/** Which of the five numbered ticks a step falls under. */
 const TICK: Record<SetupStep, number> = {
-  install: 0,
-  open_live: 1,
-  control_surface: 2,
+  account: 0,
+  install: 1,
+  open_live: 2,
+  control_surface: 3,
   connected: 3,
-  account: 3,
-  goal: 3,
-  done: 3,
+  goal: 4,
+  done: 4,
 };
 
 export function Setup({
@@ -53,7 +53,7 @@ export function Setup({
   return (
     <div className="setup" data-tauri-drag-region>
       <div className="setup__bar">
-        {[0, 1, 2, 3].map((i) => (
+        {[0, 1, 2, 3, 4].map((i) => (
           <span
             key={i}
             className={`setup__tick ${
@@ -75,9 +75,19 @@ export function Setup({
             onContinue={onAcknowledgeConnected}
           />
         )}
-        {step === "account" && <AccountPanel account={account} />}
+        {step === "account" && (
+          <>
+            <div className="setup__label">Step 1 of 5</div>
+            <AccountPanel account={account} />
+          </>
+        )}
         {step === "goal" && (
-          <GoalScreen goal={goal} onGoalChange={onGoalChange} onFinish={onFinished} />
+          <GoalScreen
+            account={account}
+            goal={goal}
+            onGoalChange={onGoalChange}
+            onFinish={onFinished}
+          />
         )}
       </div>
       {onExit !== undefined && (

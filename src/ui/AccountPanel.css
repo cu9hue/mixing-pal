@@ -11,8 +11,49 @@
   font-weight: 600;
 }
 
+.account--sign-in {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5);
+  text-align: center;
+}
+
+.account--sign-in .account__title {
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xl);
+  line-height: 1.25;
+}
+
+.account__subtitle {
+  margin: 0 0 var(--space-5);
+  color: var(--text-muted);
+}
+
+.account__sign-in-form {
+  display: grid;
+  gap: var(--space-2);
+  text-align: left;
+}
+
+.account__sign-in-form input:not([type="checkbox"]) {
+  margin: 0;
+  padding: var(--space-3);
+}
+
 .account p {
   margin: var(--space-2) 0;
+}
+
+.account__summary {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+}
+
+.account__email {
+  color: var(--text);
 }
 
 .account input:not([type="checkbox"]),
@@ -41,6 +82,32 @@
   cursor: pointer;
 }
 
+.account .account__primary {
+  width: 100%;
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--surface);
+  padding: var(--space-3);
+}
+
+.account .account__primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.account .account__secondary {
+  width: 100%;
+  margin-top: var(--space-2);
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  padding: var(--space-3);
+}
+
+.account .account__secondary:hover:not(:disabled) {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
 .account__actions {
   display: flex;
   flex-wrap: wrap;
@@ -48,10 +115,9 @@
   margin-top: var(--space-2);
 }
 
-.account__check {
-  display: flex;
-  gap: var(--space-2);
-  align-items: baseline;
+.account__sign-in-form .account__actions {
+  display: block;
+  margin-top: var(--space-3);
 }
 
 .account__error {
@@ -76,6 +142,24 @@
   max-height: 300px;
   overflow-y: auto;
   border-bottom: 1px solid var(--border);
+}
+
+.card__account--solo {
+  flex: 1;
+  max-height: none;
+  border-bottom: none;
+}
+
+/* AccountPanel is also used inside Settings. Its own padding made the
+   account content look accidentally nested under the page title. */
+.advanced > .account {
+  padding: 0 0 var(--space-5);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-5);
+}
+
+.advanced > .account .account__title {
+  margin-bottom: var(--space-3);
 }
 
 .feedback {

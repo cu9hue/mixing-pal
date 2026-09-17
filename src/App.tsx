@@ -14,7 +14,6 @@ import wireVersion from "../shared/wire-version.json";
 import { Setup } from "./setup/Setup";
 import { SetupFacts, SetupStep, currentStep, needsSetup } from "./setup/step";
 import { loadSetupDone, saveSetupDone } from "./setup/setupDone";
-import { loadGoal, saveGoal } from "./ui/goal";
 import { useAccount } from "./model/account";
 
 export default function App() {
@@ -73,13 +72,19 @@ export default function App() {
 
   const connected = lastSeen !== null && Date.now() - lastSeen <= STALE_MS;
 
-  const [goal, setGoal] = useState(loadGoal);
+  // The goal frames this chat session, not every conversation this person
+  // ever has with Mixing Pal. Starting empty makes the deliberate goal
+  // screen meaningful instead of resurrecting yesterday's intention.
+  const [goal, setGoal] = useState("");
   const [folder, setFolder] = useState("");
   const [connectorInstalled, setConnectorInstalled] = useState<boolean | null>(null);
   const [liveRunning, setLiveRunning] = useState(false);
-  const [connectedAcknowledged, setConnectedAcknowledged] = useState(false);
-  const [goalAnswered, setGoalAnswered] = useState(() => loadGoal().trim() !== "");
   const [setupDone, setSetupDone] = useState(loadSetupDone);
+  // A returning producer already knows that Mixing Pal reads settings,
+  // so a new session goes straight to its goal rather than replaying the
+  // connection confirmation.
+  const [connectedAcknowledged, setConnectedAcknowledged] = useState(loadSetupDone);
+  const [goalAnswered, setGoalAnswered] = useState(false);
   // Set only when she asks for a setup screen from a banner. The window
   // then opens on that screen whatever the derivation thinks, and clearing
   // it is the only way out -- so every path that sets it has one.
@@ -113,7 +118,17 @@ export default function App() {
   };
 
   const setupNeeded = needsSetup({ connectorInstalled, connectorCurrent, setupDone });
-  const setupOpen = setupNeeded || forcedStep !== null;
+  // Once the one-time connector setup is finished, a newly launched chat
+  // still needs its own context. Wait for both an account and Live data so
+  // sign-in and disconnected recovery remain focused screens.
+  const goalSessionNeeded =
+    setupDone &&
+    !goalAnswered &&
+    connected &&
+    facts.hasAccount &&
+    connectorInstalled === true &&
+    connectorCurrent;
+  const setupOpen = setupNeeded || forcedStep !== null || goalSessionNeeded;
   const step = forcedStep ?? currentStep(facts);
 
   // What is actually on screen. `mode` is the state machine's answer and
@@ -289,7 +304,6 @@ export default function App() {
           goal={goal}
           onGoalChange={(v) => {
             setGoal(v);
-            saveGoal(v);
           }}
           onFactsChanged={() => {
             refreshConnector();
@@ -316,7 +330,6 @@ export default function App() {
           goal={goal}
           onGoalChange={(v) => {
             setGoal(v);
-            saveGoal(v);
           }}
           onDismissNudge={(id) => setNudges((n) => dismiss(n, id))}
           onTurnRunningChange={setTurnRunning}

@@ -109,6 +109,11 @@
   cursor: default;
 }
 
+.setup :is(button, input):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .setup__secondary {
   background: none;
   border: none;

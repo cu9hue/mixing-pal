@@ -42,6 +42,22 @@ export function Card({
   settingsOpen: boolean;
   onCloseSettings: () => void;
 }) {
+  const needsSignIn =
+    account.view === null ||
+    account.view.access === "signed_out" ||
+    account.view.access === "invitation_required";
+
+  if (needsSignIn) {
+    return (
+      <div className="card" data-tauri-drag-region="deep">
+        <Header connected={connected} onCollapse={onCollapse} showConnection={false} />
+        <div className="card__account card__account--solo">
+          <AccountPanel account={account} />
+        </div>
+      </div>
+    );
+  }
+
   // One drag mechanism for the whole card: everything inside drags the
   // window, except buttons, inputs, and summaries (Tauri blocks those
   // itself), the answer and error text she may want to select, and the
@@ -64,15 +80,20 @@ export function Card({
       {nudge !== null && connected && (
         <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />
       )}
-      <Conversation
-        account={account}
-        state={state}
-        goal={goal}
-        onGoalChange={onGoalChange}
-        onTurnRunningChange={onTurnRunningChange}
-        onAnswer={onAnswer}
-      />
-      <WhatICanSee state={state} />
+      {/* A disconnected Live cannot provide a set for the conversation.
+          Hide its dependent UI, but do not unmount it: a brief cable or
+          Control Surface interruption must not discard her thread. */}
+      <div className={`card__conversation${connected ? "" : " card__conversation--hidden"}`}>
+        <Conversation
+          account={account}
+          state={state}
+          goal={goal}
+          onGoalChange={onGoalChange}
+          onTurnRunningChange={onTurnRunningChange}
+          onAnswer={onAnswer}
+        />
+        <WhatICanSee state={state} />
+      </div>
       </div>
     </div>
   );

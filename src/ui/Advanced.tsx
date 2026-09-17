@@ -167,10 +167,9 @@ export function Advanced({
       )}
       </>}
 
-      <h3 className="advanced__heading">Harness settings</h3>
+      <h3 className="advanced__heading">Live connector</h3>
 
       <div className="advanced__field">
-        <span className="advanced__label">Connector</span>
         <div className="advanced__value">
           {connector === null
             ? "—"
