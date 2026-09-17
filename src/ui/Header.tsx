@@ -14,17 +14,27 @@ import { BrandMark } from "./BrandMark";
  * that is already open. They live in the disclosure below, where the job
  * is proof rather than information.
  */
-export function Header({ connected, onCollapse }: { connected: boolean; onCollapse: () => void }) {
+export function Header({
+  connected,
+  onCollapse,
+  showConnection = true,
+}: {
+  connected: boolean;
+  onCollapse: () => void;
+  showConnection?: boolean;
+}) {
   return (
     <div className="card__header">
       <BrandMark />
-      <span
-        className={`card__label card__live${connected ? "" : " card__live--error"}`}
-        title={connected ? "Connected to Live" : "Not connected to Live"}
-      >
-        <span className={`card__dot ${connected ? "card__dot--ok" : "card__dot--error"}`} />
-        Live
-      </span>
+      {showConnection && (
+        <span
+          className={`card__label card__live${connected ? "" : " card__live--error"}`}
+          title={connected ? "Connected to Live" : "Not connected to Live"}
+        >
+          <span className={`card__dot ${connected ? "card__dot--ok" : "card__dot--error"}`} />
+          Live
+        </span>
+      )}
       <button className="card__chevron" onClick={onCollapse} title="Collapse">
         ⌄
       </button>

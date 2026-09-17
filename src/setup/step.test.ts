@@ -16,7 +16,7 @@ describe("currentStep", () => {
     expect(currentStep(DONE)).toBe("done");
   });
 
-  it("starts at install on a clean machine", () => {
+  it("asks a new user to sign in before setting up Live", () => {
     expect(
       currentStep({
         connectorInstalled: false,
@@ -27,7 +27,7 @@ describe("currentStep", () => {
         hasAccount: false,
         goalAnswered: false,
       }),
-    ).toBe("install");
+    ).toBe("account");
   });
 
   // The app updated and the part inside Live did not. Reinstalling is the
@@ -69,7 +69,7 @@ describe("currentStep", () => {
     ).toBe(false);
   });
 
-  it("asks for an account after she has seen it work", () => {
+  it("asks for an account before Live setup", () => {
     expect(currentStep({ ...DONE, hasAccount: false })).toBe("account");
   });
 
@@ -96,14 +96,11 @@ describe("currentStep", () => {
     ).toBe("install");
   });
 
-  // The account step sits after the connected screen deliberately: she
-  // reaches a visible working result before being asked for a code she has
-  // to go and find. With both unsatisfied, "connected" must win — a test
-  // that leaves one of them satisfied cannot tell the two orderings apart.
-  it("shows the connected screen before asking for an account", () => {
+  // Authentication is independent of Live, so it comes first.
+  it("asks for an account before showing the connection confirmation", () => {
     expect(
       currentStep({ ...DONE, connectedAcknowledged: false, hasAccount: false }),
-    ).toBe("connected");
+    ).toBe("account");
   });
 
   it("asks for an account before asking what she is making", () => {

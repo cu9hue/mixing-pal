@@ -3,48 +3,52 @@
  *
  * Direction is "Composed": the card is its own object sitting above Live,
  * not a panel that lost its window. That means a surface deeper than
- * Live's grey, one warm accent used sparingly, and soft depth.
+ * Live's grey, pink identity ink, acid-green signal ink, and soft depth.
  *
  * Every value here came from the 2026-08-19 product UI design, which now
  * lives only in git history. Change a value here with intent, and say why.
  */
 :root {
-  --surface: #151619;
-  --surface-raised: #1b1d21;
-  --surface-sunken: #101113;
+  --surface: #0d070b;
+  --surface-raised: #191116;
+  --surface-sunken: #080508;
   /* A faint white wash for things that sit ON a surface rather than beside
      it: inline chips, code. Deliberately not --border, which happens to
      share this value today but means something else and may be retuned. */
   --surface-overlay: rgba(255, 255, 255, 0.07);
 
-  --border: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.12);
+  --border: #4e3c47;
+  --border-strong: #68505e;
 
   /* Four steps, brightest to faintest. The model's prose is the brightest
      thing in the app; everything the app measured is dimmer than it. The
      faint step is the floor for a sentence: 4.6:1 on the raised surface,
      which is what WCAG asks of body text. It was #666c74, 3.2:1 there,
      and used for eight kinds of sentence; theme.test.ts holds the floor. */
-  --text: #e8e9ec;
-  --text-secondary: #c3c7cd;
-  --text-muted: #8b9099;
-  --text-faint: #80868f;
+  --text: #eee5ea;
+  --text-secondary: #d8cbd2;
+  --text-muted: #ab9da5;
+  --text-faint: #968991;
   /* For glyphs only, never words: the pencil, the ×, the chevron. A
      control's mark needs 3:1, and this clears it while staying quieter
      than any sentence. */
-  --glyph-faint: #666c74;
+  --glyph-faint: #786b73;
 
-  /* At most twice in any one view. A third use is decoration. */
-  --accent: #f2b544;
-  --ok: #5ed6a0;
-  --error: #e06c5c;
+  /* Pink is identity ink. Acid is the signal colour for actions and focus. */
+  --brand: #fd24cd;
+  --brand-hover: #c8009f;
+  --brand-core: #83f700;
+  --accent: #83f700;
+  --accent-hover: #67d000;
+  --ok: #83f700;
+  --error: #ff2f3a;
 
   /* Banner label tints: a muted, desaturated form of the status colour, so
      the label reads as a category rather than competing with the sentence
      under it. Deliberately not --error/--accent themselves, which are used
      at full strength for dots and rules. */
-  --error-label: #c78a80;
-  --warn-label: #d3b078;
+  --error-label: #e78089;
+  --warn-label: #d6b65a;
 
   --radius-card: 12px;
   --radius-control: 8px;

@@ -14,8 +14,8 @@ export type SetupStep =
  * screen is something she reads and moves past, and nothing observable
  * records that she has. It resets on relaunch, and on its own that would
  * put a machine set up months ago back on the connected screen -- the gate
- * order asks about it before `hasAccount` and `goalAnswered`, so those
- * being true does not save her. What saves her is `needsSetup` below:
+ * order asks about it before `goalAnswered`, so having named a goal does
+ * not save her. What saves her is `needsSetup` below:
  * whether setup opens at all is a separate question from which step it
  * shows once it is open.
  */
@@ -42,6 +42,9 @@ export interface SetupFacts {
  * a disconnected app look ready.
  */
 export function currentStep(facts: SetupFacts): SetupStep {
+  // Sign-in comes first because it does not depend on Live.
+  if (!facts.hasAccount) return "account";
+
   if (!facts.connectorInstalled || !facts.connectorCurrent) return "install";
 
   // Deltas are the only real evidence that the whole chain works. A
@@ -52,7 +55,6 @@ export function currentStep(facts: SetupFacts): SetupStep {
   }
 
   if (!facts.connectedAcknowledged) return "connected";
-  if (!facts.hasAccount) return "account";
   if (!facts.goalAnswered) return "goal";
   return "done";
 }

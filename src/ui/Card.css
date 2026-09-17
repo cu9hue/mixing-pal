@@ -36,16 +36,16 @@
 }
 
 .brand-mark__solid {
-  fill: oklch(0.68 0.28 340);
+  fill: var(--brand);
 }
 
 .brand-mark__core {
-  fill: oklch(0.87 0.28 133);
+  fill: var(--brand-core);
 }
 
 .brand-mark__echo {
   fill: none;
-  stroke: oklch(0.68 0.28 340);
+  stroke: var(--brand);
   stroke-width: 2;
   opacity: 0.6;
 }
@@ -214,6 +214,10 @@
   cursor: pointer;
 }
 
+.card__chevron {
+  margin-left: auto;
+}
+
 .card__chevron:hover,
 .card__dismiss:hover {
   color: var(--text-secondary);
@@ -270,6 +274,18 @@
   display: none;
 }
 
+/* Keep conversation mounted so brief disconnects preserve its draft and thread. */
+.card__conversation {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.card__conversation--hidden {
+  display: none;
+}
+
 .card__settings {
   overflow-y: auto;
   flex: 1;
@@ -308,33 +324,45 @@
   margin-bottom: var(--space-3);
 }
 
-/* The empty card: one line of what to ask, and three questions dressed as
-   questions she already asked, in the same step and size. Clicking one
-   fills the input; nothing is sent on her behalf. */
+.card__empty {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* Prompt ideas fill the composer but never send a request. */
 .card__empty-line {
   font-size: var(--text-md);
   line-height: 1.5;
   color: var(--text-faint);
-  margin-bottom: var(--space-2-5);
+  margin: 0 0 var(--space-0-5);
 }
 
 .card__example {
-  display: block;
-  background: none;
-  border: none;
-  padding: 0;
-  margin-bottom: var(--space-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  box-sizing: border-box;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: var(--space-2) var(--space-2-5);
   font: inherit;
   font-size: var(--text-md);
   line-height: 1.5;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  transition: border-color 120ms ease-out, color 120ms ease-out;
 }
 
 .card__example:hover {
+  border-color: var(--border-strong);
   color: var(--text);
+}
+
+.card__example:active {
+  color: var(--text-muted);
 }
 
 /* The largest and lightest text in the app. Everything the app measured is
