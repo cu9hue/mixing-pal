@@ -85,14 +85,15 @@ export function SetRow({
         <label htmlFor="goal" className="card__label card__goal-label">
           Goal
         </label>
-        {editingGoal ? (
+        {editingGoal || empty ? (
           <input
             id="goal"
             className="card__goal-input"
-            autoFocus
+            autoFocus={editingGoal}
             value={goal}
             maxLength={GOAL_MAX_LENGTH}
             placeholder="What are you making?"
+            onFocus={() => setEditingGoal(true)}
             onChange={(e) => onGoalChange(e.target.value)}
             onBlur={() => setEditingGoal(false)}
             onKeyDown={(e) => e.key === "Enter" && setEditingGoal(false)}

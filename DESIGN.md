@@ -60,12 +60,13 @@ The existing CSS variables remain the source of truth. This React app does not u
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  --touch-target: 44px;
 }
 ```
 
 ## Interaction rules
 
-- The only entry sequence is sign in, connect Ableton, name the goal, then chat.
+- The only entry sequence is sign in, connect Ableton, optionally name the Live set's goal in the card, then chat. One action starts chatting with or without a goal; each set keeps that choice with its conversation.
 - Signed-out views omit Live status, chat, goals, notes, and data summaries.
 - Sign-in centers “Your music production assistant.” above “Sign into your MixingPal account”. Its field label stays left aligned. The exact invitation-email placeholder remains in the field. `--accent` provides the acid-green action and focus ring.
 - Prompt ideas are 44px minimum-height buttons. They fill the composer but never send a request.

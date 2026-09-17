@@ -72,15 +72,12 @@ export default function App() {
 
   const connected = lastSeen !== null && Date.now() - lastSeen <= STALE_MS;
 
-  // Goals frame one chat session, so each session starts with new context.
-  const [goal, setGoal] = useState("");
   const [folder, setFolder] = useState("");
   const [connectorInstalled, setConnectorInstalled] = useState<boolean | null>(null);
   const [liveRunning, setLiveRunning] = useState(false);
   const [setupDone, setSetupDone] = useState(loadSetupDone);
-  // Returning producers skip connection confirmation and go straight to a session goal.
+  // Completed setup bypasses connection acknowledgement on relaunch.
   const [connectedAcknowledged, setConnectedAcknowledged] = useState(loadSetupDone);
-  const [goalAnswered, setGoalAnswered] = useState(false);
   // Set only when she asks for a setup screen from a banner. The window
   // then opens on that screen whatever the derivation thinks, and clearing
   // it is the only way out -- so every path that sets it has one.
@@ -110,19 +107,10 @@ export default function App() {
     deltasArriving: connected,
     connectedAcknowledged,
     hasAccount: account.view?.access === "active" || account.view?.access === "development",
-    goalAnswered,
   };
 
   const setupNeeded = needsSetup({ connectorInstalled, connectorCurrent, setupDone });
-  // A new session needs both an account and Live data before asking for its goal.
-  const goalSessionNeeded =
-    setupDone &&
-    !goalAnswered &&
-    connected &&
-    facts.hasAccount &&
-    connectorInstalled === true &&
-    connectorCurrent;
-  const setupOpen = setupNeeded || forcedStep !== null || goalSessionNeeded;
+  const setupOpen = setupNeeded || forcedStep !== null;
   const step = forcedStep ?? currentStep(facts);
 
   // What is actually on screen. `mode` is the state machine's answer and
@@ -135,9 +123,6 @@ export default function App() {
   setupOpenRef.current = setupOpen;
 
   const finishSetup = useCallback(() => {
-    setGoalAnswered(true);
-    // Persisted, unlike the step. See setupDone.ts: this is a fact about
-    // the world, not a cursor, and Skip leaves nothing else behind.
     setSetupDone(true);
     saveSetupDone(true);
     setForcedStep(null);
@@ -149,10 +134,8 @@ export default function App() {
     else dispatch({ type: "setup_finished" });
   }, [setupOpen, dispatch]);
 
-  // Setup has no "done" screen. Someone upgrading into this build carries
-  // a goal but no setupDone flag, so she can satisfy the last step by
-  // acknowledging the connected screen and leave nothing to show. Record
-  // the flag and hand over to the card rather than render an empty window.
+  // Setup has no "done" screen. Acknowledging the connected screen
+  // records installation and hands over to the card.
   useEffect(() => {
     if (setupNeeded && forcedStep === null && step === "done") finishSetup();
   }, [setupNeeded, forcedStep, step, finishSetup]);
@@ -241,24 +224,27 @@ export default function App() {
     document.documentElement.style.setProperty("--card-max-height", `${CARD_MAX_HEIGHT}px`);
   }, []);
 
-  // Measured after every render, because the content can change without
-  // any state this component owns changing. setState re-renders only when
-  // the number actually moved, which is what keeps the effect below quiet.
+  // Conversation updates its own state during a set switch, without rendering
+  // App. Observe the root so its new content resizes the native window now.
   const root = useRef<HTMLDivElement>(null);
   const [measured, setMeasured] = useState<Measured | null>(null);
   useLayoutEffect(() => {
-    const geometry = MODE_GEOMETRY[view];
-    const height = Math.ceil(
-      geometry.height ??
-        Math.min(root.current?.scrollHeight ?? 0, geometry.maxHeight ?? Infinity),
-    );
-    // The height travels with the mode it was measured for, so the effect
-    // below can tell a fresh measurement from the outgoing mode's. Returning
-    // the same object when nothing moved is what keeps this from looping.
-    setMeasured((prev) =>
-      prev !== null && prev.view === view && prev.height === height ? prev : { view, height },
-    );
-  });
+    const element = root.current;
+    if (element === null) return;
+    const measure = () => {
+      const geometry = MODE_GEOMETRY[view];
+      const height = Math.ceil(
+        geometry.height ?? Math.min(element.scrollHeight, geometry.maxHeight ?? Infinity),
+      );
+      setMeasured((prev) =>
+        prev !== null && prev.view === view && prev.height === height ? prev : { view, height },
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [view]);
 
   // Resize before the frame paints, so the window never shows a card at
   // the pill's size or the reverse.
@@ -295,10 +281,6 @@ export default function App() {
           folder={folder}
           trackCount={trackNames.length}
           trackNames={trackNames}
-          goal={goal}
-          onGoalChange={(v) => {
-            setGoal(v);
-          }}
           onFactsChanged={() => {
             refreshConnector();
             // She came here from a banner to reinstall. The install is
@@ -307,7 +289,6 @@ export default function App() {
             setForcedStep(null);
           }}
           onAcknowledgeConnected={() => setConnectedAcknowledged(true)}
-          onFinished={finishSetup}
           onExit={forcedStep !== null ? () => setForcedStep(null) : undefined}
         />
       )}
@@ -321,10 +302,6 @@ export default function App() {
           lastSeen={lastSeen}
           connected={connected}
           nudge={nudge}
-          goal={goal}
-          onGoalChange={(v) => {
-            setGoal(v);
-          }}
           onDismissNudge={(id) => setNudges((n) => dismiss(n, id))}
           onTurnRunningChange={setTurnRunning}
           onAnswer={() => {

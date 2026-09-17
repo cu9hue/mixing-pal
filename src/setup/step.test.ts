@@ -8,11 +8,10 @@ const DONE: SetupFacts = {
   deltasArriving: true,
   connectedAcknowledged: true,
   hasAccount: true,
-  goalAnswered: true,
 };
 
 describe("currentStep", () => {
-  it("finishes when every fact is satisfied", () => {
+  it("finishes after the Live connection is acknowledged", () => {
     expect(currentStep(DONE)).toBe("done");
   });
 
@@ -25,7 +24,6 @@ describe("currentStep", () => {
         deltasArriving: false,
         connectedAcknowledged: false,
         hasAccount: false,
-        goalAnswered: false,
       }),
     ).toBe("account");
   });
@@ -73,10 +71,6 @@ describe("currentStep", () => {
     expect(currentStep({ ...DONE, hasAccount: false })).toBe("account");
   });
 
-  it("asks what she is making last", () => {
-    expect(currentStep({ ...DONE, goalAnswered: false })).toBe("goal");
-  });
-
   // The whole point of deriving rather than storing. She uninstalls the
   // connector months later; setup must reopen at install, not at done.
   it("reopens at install when a finished setup is later broken", () => {
@@ -103,9 +97,6 @@ describe("currentStep", () => {
     ).toBe("account");
   });
 
-  it("asks for an account before asking what she is making", () => {
-    expect(currentStep({ ...DONE, hasAccount: false, goalAnswered: false })).toBe("account");
-  });
 });
 
 describe("needsSetup", () => {

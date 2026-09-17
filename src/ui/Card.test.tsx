@@ -21,8 +21,6 @@ describe("a signed-out card", () => {
         lastSeen={null}
         connected={false}
         nudge={null}
-        goal=""
-        onGoalChange={() => {}}
         onDismissNudge={() => {}}
         onTurnRunningChange={() => {}}
         onAnswer={() => {}}

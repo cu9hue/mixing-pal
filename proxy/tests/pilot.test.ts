@@ -177,9 +177,9 @@ describe("metered requests", () => {
   test("restore requires fresh sharing consent and preserves revoked access", async () => {
     const user = await joined();
     const revoked = await joined("revoked@example.com");
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     const sessions = (await env.DB.prepare('SELECT * FROM "session" WHERE userId = ?').bind(revoked.id).all()).results;
-    await api("/v1/consent", { enabled: false, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: false, version: "quality-2026-09-17" }, user.token, "PUT");
     expect((await api("/operator", { action: "revoke", member_id: revoked.id }, env.ADMIN_TOKEN)).status).toBe(200);
     await env.DB.prepare("UPDATE members SET capture = 1, consent_epoch = 1 WHERE id = ?").bind(user.id).run();
     await env.DB.prepare("UPDATE members SET revoked = 0 WHERE id = ?").bind(revoked.id).run();
@@ -201,7 +201,7 @@ describe("metered requests", () => {
     expect(await capturedObjects()).toHaveLength(0);
     expect((await api("/v1/completions", question(), revoked.token)).status).toBe(401);
     expect((await env.DB.prepare("SELECT revoked FROM members WHERE id = ?").bind(revoked.id).first()).revoked).toBe(1);
-    const consent = await (await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT")).json();
+    const consent = await (await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT")).json();
     reply();
     await api("/v1/completions", { ...question(), capture_epoch: consent.consent_epoch }, user.token);
     expect(await capturedObjects()).toHaveLength(1);
@@ -291,7 +291,7 @@ describe("metered requests", () => {
   });
   test("failed generations retain opted-in request evidence and never claim completeness", async () => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     const request = question();
     expect((await api("/v1/completions", request, user.token)).status).toBe(504);
     const objects = await capturedObjects();
@@ -349,7 +349,7 @@ describe("metered requests", () => {
 
   test("never exposes a provider credential in a reply or capture", async () => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     reply({ choices: [{ finish_reason: "stop", message: { content: env.OPENROUTER_KEY } }] });
     const result = await api("/v1/completions", question(), user.token);
     expect(await result.text()).not.toContain(env.OPENROUTER_KEY);
@@ -429,7 +429,7 @@ describe("capture and deletion", () => {
   test.each([null, undefined, 0])("capture uses the turn-start consent %s, not a later opt-in", async (capture_epoch) => {
     const user = await joined();
     const request = { ...question(), capture_epoch };
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     reply();
     const result = await api("/v1/completions", request, user.token);
     expect(result.status).toBe(200);
@@ -445,7 +445,7 @@ describe("capture and deletion", () => {
   test("withdrawing and enabling again cannot revive an earlier consent version", async () => {
     const user = await joined();
     for (const enabled of [true, false, true]) {
-      await api("/v1/consent", { enabled, version: "quality-2026-09-12" }, user.token, "PUT");
+      await api("/v1/consent", { enabled, version: "quality-2026-09-17" }, user.token, "PUT");
     }
     reply();
     const result = await api("/v1/completions", question(), user.token);
@@ -456,7 +456,7 @@ describe("capture and deletion", () => {
 
   test("the app's real tool loop completes through the proxy and exports replayable evidence", async () => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     const turnId = crypto.randomUUID();
     reply({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [
       { id: "read-1", type: "function", function: { name: "get_arrangement", arguments: "{}" } },
@@ -481,7 +481,7 @@ describe("capture and deletion", () => {
   });
   test("a slow capture store does not withhold a billed answer", async () => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     let release: () => void;
     const stalled = new Promise<void>((resolve) => { release = resolve; });
     const put = env.CAPTURE.put.bind(env.CAPTURE);
@@ -496,7 +496,7 @@ describe("capture and deletion", () => {
 
   test("capture cleanup cannot extend the answer deadline", async () => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     let release!: () => void;
     const stalled = new Promise<void>((resolve) => { release = resolve; });
     const put = env.CAPTURE.put.bind(env.CAPTURE);
@@ -546,7 +546,7 @@ describe("capture and deletion", () => {
   });
   test("exports a complete multi-tool turn and identifies missing local evidence", async () => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     const request = question();
     const calls = ["call-a", "call-b"].map((id) => ({ id, type: "function", function: { name: "get_arrangement", arguments: "{}" } }));
     reply({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: calls } }] });
@@ -561,7 +561,7 @@ describe("capture and deletion", () => {
     expect((await (await exported()).json()).complete).toBe(false);
     await tool("call-b");
     const full = await (await exported()).json();
-    expect(full).toMatchObject({ complete: true, training_allowed: false, consent_version: "quality-2026-09-12" });
+    expect(full).toMatchObject({ complete: true, training_allowed: false, consent_version: "quality-2026-09-17" });
     expect(full.requests).toHaveLength(2);
     expect(full.events).toHaveLength(5);
     await api(`/v1/turns/${request.turn_id}/events`, { id: crypto.randomUUID(), kind: "terminal", at: Date.now(), data: { status: "complete", incomplete: true } }, user.token);
@@ -570,41 +570,67 @@ describe("capture and deletion", () => {
 
   test.each(["音".repeat(4000), "\u0000".repeat(4000)])("feedback accepts the full character limit even when JSON needs more bytes", async (heard) => {
     const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     const request = question();
     reply();
     await api("/v1/completions", request, user.token);
     const result = await api(`/v1/turns/${request.turn_id}/feedback`, {
-      id: crypto.randomUUID(), outcome: "kept", heard, share: true,
+      id: crypto.randomUUID(), outcome: "kept", heard,
     }, user.token);
     expect(result.status, await result.clone().text()).toBe(200);
     expect((await result.json()).saved).toBe(true);
-    const objects = await capturedObjects();
-    expect(objects).toHaveLength(1);
-    expect((await (await env.CAPTURE.get(objects[0].key))!.json()).heard).toBe(heard);
+    const reports = await env.DB.prepare("SELECT object_key FROM captures WHERE kind = 'feedback' AND state = 'ready'").all<{ object_key: string }>();
+    expect(reports.results).toHaveLength(1);
+    expect((await (await env.CAPTURE.get(reports.results[0].object_key))!.json()).heard).toBe(heard);
     expect((await api(`/v1/turns/${request.turn_id}/feedback`, {
-      id: crypto.randomUUID(), outcome: "kept", heard: heard + "x", share: true,
+      id: crypto.randomUUID(), outcome: "kept", heard: heard + "x",
     }, user.token)).status).toBe(400);
     expect((await api(`/v1/turns/${request.turn_id}/feedback`, {
-      id: crypto.randomUUID(), outcome: "kept", heard: "x".repeat(32768), share: true,
+      id: crypto.randomUUID(), outcome: "kept", heard: "x".repeat(32768),
     }, user.token)).status).toBe(413);
   });
 
-  test("sharing one outcome does not enable conversation capture", async () => {
+  test("outcome sharing follows account consent, including withdrawal and older turns", async () => {
     const user = await joined();
     const request = question();
     reply();
     await api("/v1/completions", request, user.token);
-    const feedback = { id: crypto.randomUUID(), outcome: "undone", heard: "The balance got worse.", share: true };
-    expect((await (await api(`/v1/turns/${request.turn_id}/feedback`, feedback, user.token)).json()).saved).toBe(true);
+    const feedback = { id: crypto.randomUUID(), outcome: "undone", heard: "The balance got worse." };
+    expect((await (await api(`/v1/turns/${request.turn_id}/feedback`, feedback, user.token)).json()).saved).toBe(false);
+    expect((await (await api(`/v1/turns/${request.turn_id}/feedback`, { ...feedback, id: crypto.randomUUID(), share: true }, user.token)).json()).saved).toBe(false);
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
+    expect((await (await api(`/v1/turns/${request.turn_id}/feedback`, { ...feedback, id: crypto.randomUUID() }, user.token)).json()).saved).toBe(false);
+    const sharedTurn = question();
+    reply();
+    await api("/v1/completions", sharedTurn, user.token);
+    expect((await (await api(`/v1/turns/${sharedTurn.turn_id}/feedback`, { ...feedback, id: crypto.randomUUID() }, user.token)).json()).saved).toBe(true);
+    await api("/v1/consent", { enabled: false, version: "quality-2026-09-17" }, user.token, "PUT");
+    expect((await (await api(`/v1/turns/${sharedTurn.turn_id}/feedback`, { ...feedback, id: crypto.randomUUID() }, user.token)).json()).saved).toBe(false);
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
+    expect((await (await api(`/v1/turns/${sharedTurn.turn_id}/feedback`, { ...feedback, id: crypto.randomUUID() }, user.token)).json()).saved).toBe(false);
+    const reports = await env.DB.prepare("SELECT object_key FROM captures WHERE kind = 'feedback' AND state = 'ready'").all<{ object_key: string }>();
+    expect(reports.results).toHaveLength(1);
+    expect(await (await env.CAPTURE.get(reports.results[0].object_key))!.json()).toMatchObject({ source: "producer", outcome: "undone" });
+  });
+
+  test("an earlier consent version cannot authorize the expanded sharing setting", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE members SET capture = 1, consent_epoch = 1 WHERE id = ?").bind(user.id).run();
+    await env.DB.prepare("INSERT INTO consents(member_id, version, enabled, created_at) VALUES (?, ?, 1, ?)")
+      .bind(user.id, "quality-2026-09-12", Date.now()).run();
     expect((await (await api("/v1/account", undefined, user.token)).json()).capture).toBe(false);
-    const objects = await capturedObjects();
-    expect(objects).toHaveLength(1);
-    expect(await (await env.CAPTURE.get(objects[0].key))!.json()).toMatchObject({ source: "producer", outcome: "undone" });
+    const request = question();
+    reply();
+    await api("/v1/completions", request, user.token);
+    const turn = await env.DB.prepare("SELECT capture FROM turns WHERE id = ?").bind(request.turn_id).first<{ capture: number }>();
+    expect(turn?.capture).toBe(0);
+    const feedback = { id: crypto.randomUUID(), outcome: "kept", heard: "It worked." };
+    expect((await (await api(`/v1/turns/${request.turn_id}/feedback`, feedback, user.token)).json()).saved).toBe(false);
   });
 
   test("deletion during an object write cannot recreate captured content", async () => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     const request = question();
     const put = env.CAPTURE.put.bind(env.CAPTURE);
     vi.spyOn(env.CAPTURE, "put").mockImplementation(async (...args) => {
@@ -619,7 +645,7 @@ describe("capture and deletion", () => {
 
   test("expiry removes content and account deletion removes identity and sign-in codes", async () => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     reply();
     await api("/v1/completions", question(), user.token);
     await env.DB.prepare("UPDATE turns SET created_at = ?").bind(Date.now() - 31 * DAY).run();
@@ -637,7 +663,7 @@ describe("capture and deletion", () => {
 
   test.each([60 * 60_000, 2 * DAY])("new deletions precede tombstones last checked %i ms ago", async (age) => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     const old = question();
     reply();
     await api("/v1/completions", old, user.token);
@@ -670,7 +696,7 @@ describe("capture and deletion", () => {
 
   test("captures the actual model request and raw answer only after consent", async () => {
     const user = await joined();
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     reply();
     const response = await api("/v1/completions", question(), user.token);
     expect(response.status, await response.clone().text()).toBe(200);
@@ -686,10 +712,10 @@ describe("capture and deletion", () => {
     reply();
     const request = question();
     await api("/v1/completions", request, user.token);
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     const post = () => api(`/v1/turns/${request.turn_id}/events`, { id: crypto.randomUUID(), kind: "tool", at: Date.now(), data: { private: "notes" } }, user.token);
     expect((await (await post()).json()).saved).toBe(false);
-    await api("/v1/consent", { enabled: false, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: false, version: "quality-2026-09-17" }, user.token, "PUT");
     expect((await (await post()).json()).saved).toBe(false);
     expect(await capturedObjects()).toHaveLength(0);
   });
@@ -697,7 +723,7 @@ describe("capture and deletion", () => {
   test("deletes captured content and rejects events from another account", async () => {
     const user = await joined();
     const other = await joined("other@example.com");
-    await api("/v1/consent", { enabled: true, version: "quality-2026-09-12" }, user.token, "PUT");
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     reply();
     const request = question();
     await api("/v1/completions", request, user.token);

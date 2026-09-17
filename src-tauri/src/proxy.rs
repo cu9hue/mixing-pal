@@ -11,7 +11,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 const ORIGIN: &str = "https://api.mixingpal.com";
-const CONSENT_VERSION: &str = "quality-2026-09-12";
+const CONSENT_VERSION: &str = "quality-2026-09-17";
 const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 const MAX_EVENT: usize = 1024 * 1024;
 const MAX_OUTBOX: usize = 20 * MAX_EVENT;

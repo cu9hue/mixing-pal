@@ -628,11 +628,12 @@ fn save_thread(
     set_id: String,
     set_path: Option<String>,
     exchanges: Vec<threads::Exchange>,
+    goal: Option<String>,
     note: Vec<threads::Bullet>,
     next_bullet: u64,
     state: tauri::State<'_, Arc<ModelState>>,
 ) -> Result<(), String> {
-    let thread = threads::Thread { exchanges, saved_at: unix_now(), note, next_bullet };
+    let thread = threads::Thread { exchanges, goal, saved_at: unix_now(), note, next_bullet };
     threads::save(
         &state.config_dir.join(threads::THREADS_DIR),
         &set_id,

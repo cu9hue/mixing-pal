@@ -1,4 +1,4 @@
-import { ApiError, Env, MODEL, hash, privateHash } from "./env";
+import { ApiError, CAPTURE_VERSION, Env, MODEL, hash, privateHash } from "./env";
 import { CompletionInput, POLICY_VERSION, RESERVATION } from "./policy";
 
 export interface UsageRequest {
@@ -28,9 +28,13 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
   try {
     await env.DB.batch([
       env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
-        SELECT ?, id, ?, ?, ?, ?, consent_epoch, CASE WHEN consent_epoch = ? THEN capture ELSE 0 END FROM members WHERE id = ?
+        SELECT ?, id, ?, ?, ?, ?, consent_epoch,
+          CASE WHEN consent_epoch = ? AND capture = 1 AND EXISTS (
+            SELECT 1 FROM consents WHERE member_id = members.id AND version = ? AND enabled = 1
+              AND id = (SELECT MAX(id) FROM consents WHERE member_id = members.id)
+          ) THEN 1 ELSE 0 END FROM members WHERE id = ?
         ON CONFLICT(id) DO NOTHING`)
-        .bind(input.turn_id, now, now, input.app_version, input.wire_version, input.capture_epoch ?? null, memberId),
+        .bind(input.turn_id, now, now, input.app_version, input.wire_version, input.capture_epoch ?? null, CAPTURE_VERSION, memberId),
       env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash,
         policy_version, reserved, status, created_at, updated_at, model)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)`)

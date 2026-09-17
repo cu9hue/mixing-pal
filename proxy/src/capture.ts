@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ApiError, DAY, Env, MAX_BODY, privateHash } from "./env";
+import { ApiError, CAPTURE_VERSION, DAY, Env, MAX_BODY, privateHash } from "./env";
 
 export interface Turn {
   id: string;
@@ -57,9 +57,11 @@ export async function saveCapture(env: Env, turn: Turn, id: string, payload: unk
     await env.CAPTURE.put(key, raw, { httpMetadata: { contentType: "application/json" } });
     const saved = await env.DB.prepare(`UPDATE captures SET state = 'ready', updated_at = ? WHERE id = ?
       AND state = 'writing' AND EXISTS (SELECT 1 FROM turns t JOIN members m ON m.id = t.member_id
-        WHERE t.id = ? AND (? = 'feedback' OR (t.capture = 1 AND m.capture = 1 AND t.consent_epoch = m.consent_epoch))
+        WHERE t.id = ? AND t.capture = 1 AND m.capture = 1 AND t.consent_epoch = m.consent_epoch
+        AND EXISTS (SELECT 1 FROM consents c WHERE c.member_id = m.id AND c.version = ? AND c.enabled = 1
+          AND c.id = (SELECT MAX(id) FROM consents WHERE member_id = m.id))
         AND t.deleted_at IS NULL AND m.deleted_at IS NULL AND t.created_at > ?)`)
-      .bind(Date.now(), id, turn.id, kind, Date.now() - 30 * DAY).run();
+      .bind(Date.now(), id, turn.id, CAPTURE_VERSION, Date.now() - 30 * DAY).run();
     if (saved.meta.changes) return true;
     await env.CAPTURE.delete(key);
     await env.DB.prepare("UPDATE captures SET state = 'deleting', updated_at = ? WHERE id = ?")
@@ -110,11 +112,16 @@ export async function event(env: Env, memberId: string, turnId: string, input: u
 
 export async function feedback(env: Env, memberId: string, turnId: string, input: unknown): Promise<boolean> {
   const data = z.object({ id: z.uuid(), outcome: z.enum(["kept", "undone", "tried", "not_tried"]),
-    heard: z.string().max(4000), share: z.literal(true) }).parse(input);
+    heard: z.string().max(4000) }).parse(input);
   const turn = await ownedTurn(env, turnId, memberId);
-  // Feedback sharing is a per-submission action. It must not turn future
-  // capture on, nor reopen content that the producer has already deleted.
-  if (turn.deleted_at !== null || turn.created_at <= Date.now() - 30 * DAY) return false;
+  if (!turn.capture || turn.deleted_at !== null || turn.created_at <= Date.now() - 30 * DAY) return false;
+  const consent = await env.DB.prepare(`SELECT capture, consent_epoch,
+    (SELECT version FROM consents WHERE member_id = members.id ORDER BY id DESC LIMIT 1) AS version,
+    (SELECT enabled FROM consents WHERE member_id = members.id ORDER BY id DESC LIMIT 1) AS enabled
+    FROM members WHERE id = ? AND deleted_at IS NULL`)
+    .bind(memberId).first<{ capture: number; consent_epoch: number; version: string | null; enabled: number | null }>();
+  if (consent?.capture !== 1 || consent.consent_epoch !== turn.consent_epoch ||
+    consent.version !== CAPTURE_VERSION || consent.enabled !== 1) return false;
   return saveCapture(env, turn, data.id, { kind: "feedback", source: "producer", outcome: data.outcome, heard: data.heard }, "feedback");
 }
 

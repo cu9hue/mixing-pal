@@ -15,6 +15,8 @@ import { SWITCH_HOLD_MS, ThreadKey, carryNote, classify, historyFrom, keyFor, re
 import { Note, emptyNote, mergeNote, noteDelta } from "../notes/note";
 import { SetRow } from "./SetRow";
 import { EXAMPLE_QUESTIONS } from "./examples";
+import { GOAL_MAX_LENGTH } from "./goal";
+import { WhatICanSee } from "./WhatICanSee";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -140,15 +142,11 @@ const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
  */
 export function Conversation({
   state,
-  goal,
-  onGoalChange,
   onTurnRunningChange,
   onAnswer,
   account,
 }: {
   state: SetState;
-  goal: string;
-  onGoalChange: (value: string) => void;
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
   account: AccountState;
@@ -156,6 +154,10 @@ export function Conversation({
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [thread, setThread] = useState<Exchange[]>([]);
   const [input, setInput] = useState("");
+  const [goal, setGoal] = useState<string | null>(null);
+  const goalRef = useRef<string | null>(null);
+  goalRef.current = goal;
+  const [goalDraft, setGoalDraft] = useState("");
   const [progress, setProgress] = useState<string | null>(null);
   // Reads this turn, for the waiting line. Reset when a turn starts.
   const [toolsCalled, setToolsCalled] = useState(0);
@@ -183,6 +185,7 @@ export function Conversation({
   // note is hers by hand; a write that silently failed would lose it with
   // the row still showing it applied.
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const next = keyFor(state);
   const nextId = next?.id ?? null;
   const nextPath = next?.path ?? null;
@@ -193,10 +196,12 @@ export function Conversation({
     if (action === "rekey") {
       // Same set, new name: the thread stays, the file follows. Saving
       // under the new key is what makes the Rust index adopt it.
+      keyRef.current = target;
       setKey(target);
-      persist(target, threadRef.current, noteRef.current);
+      persist(target, threadRef.current, noteRef.current, goalRef.current);
       return;
     }
+    setLoadError(null);
     let cancelled = false;
     const timer = setTimeout(async () => {
       if (cancelled) return;
@@ -208,6 +213,7 @@ export function Conversation({
         // start that set over on top of a thread nobody has seen; the
         // next identity change tries again.
         console.error("failed to load the set's thread", e);
+        setLoadError(`Could not load this set's conversation: ${String(e)}`);
         return;
       }
       if (cancelled) return;
@@ -216,6 +222,11 @@ export function Conversation({
       const merged = [...restored, ...carried];
       const { note: restoredNote, carried: noteCarried } = carryNote(saved, noteRef.current, key === null);
       setNote(restoredNote);
+      const restoredGoal = saved?.goal ?? null;
+      setGoal(restoredGoal);
+      goalRef.current = restoredGoal;
+      setGoalDraft("");
+      keyRef.current = target;
       setKey(target);
       setThread(merged);
       setHistory(historyFrom(merged, MAX_HISTORY_MESSAGES));
@@ -224,7 +235,7 @@ export function Conversation({
           ? recapLine(restored.length, saved.saved_at, Math.floor(Date.now() / 1000))
           : null,
       );
-      if (carried.length > 0 || noteCarried) persist(target, merged, restoredNote);
+      if (carried.length > 0 || noteCarried) persist(target, merged, restoredNote, restoredGoal);
     }, SWITCH_HOLD_MS);
     return () => {
       cancelled = true;
@@ -232,9 +243,9 @@ export function Conversation({
     };
   }, [key, nextId, nextPath, busy]);
 
-  function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note) {
+  function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note, withGoal = goalRef.current) {
     if (under === null) return;
-    saveThread(under, exchanges, withNote).then(
+    saveThread(under, exchanges, withNote, withGoal).then(
       () => setSaveError(null),
       (e) => {
         console.error("failed to save the thread", e);
@@ -246,6 +257,17 @@ export function Conversation({
   function changeNote(next: Note) {
     setNote(next);
     persist(key, threadRef.current, next);
+  }
+
+  function changeGoal(next: string) {
+    setGoal(next);
+    goalRef.current = next;
+    persist(key, threadRef.current, noteRef.current, next);
+  }
+
+  function finishGoal(next: string) {
+    changeGoal(next);
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   // The newest question goes to the top of the body, which is where the
@@ -276,7 +298,7 @@ export function Conversation({
 
   async function send() {
     const asked = input.trim();
-    if (asked === "" || busy || !canAsk(account.view)) return;
+    if (asked === "" || busy || goal === null || key === null || !canAsk(account.view)) return;
     setInput("");
     pinned.current = true;
     // Saved under the key current when the question was asked. A switch
@@ -354,6 +376,30 @@ export function Conversation({
   }
 
   const waiting = waitingLabel({ busy, toolProgress: progress, toolsCalled, elapsedMs });
+  const loadingSet = key === null || (next !== null && classify(key, next, busy) === "switch");
+
+  if (loadingSet) return <div className="card__body" role={loadError === null ? "status" : "alert"}>
+    {loadError ?? (next === null
+      ? "Waiting for Live to identify this set. If this persists, save the set in Live."
+      : "Opening this set…")}
+  </div>;
+
+  if (goal === null) return (
+    <div className="set-row card__session-goal">
+      <form onSubmit={(event) => { event.preventDefault(); finishGoal(goalDraft.trim()); }}>
+        <h2>What are you making?</h2>
+        <p>A goal helps tailor advice for this Live set. Change it anytime.</p>
+        <label htmlFor="session-goal" className="card__label card__session-goal-label">Goal (optional)</label>
+        <input id="session-goal" className="card__input" value={goalDraft}
+          maxLength={GOAL_MAX_LENGTH}
+          placeholder="e.g. dark garage, 2am"
+          onChange={(event) => setGoalDraft(event.target.value)} />
+        <div className="card__session-goal-actions">
+          <button type="submit">Start chatting</button>
+        </div>
+      </form>
+    </div>
+  );
 
   return (
     <>
@@ -363,7 +409,7 @@ export function Conversation({
       <SetRow
         key={key === null ? "" : `${key.id ?? ""}:${key.path ?? ""}`}
         goal={goal}
-        onGoalChange={onGoalChange}
+        onGoalChange={changeGoal}
         note={note}
         onNoteChange={changeNote}
       />
@@ -410,7 +456,8 @@ export function Conversation({
           >
             <ExchangeView x={x} />
             {x.turnId && (!busy || i !== thread.length - 1) && account.view?.access !== "development" && (
-              <FeedbackPanel turnId={x.turnId} answered={x.answer !== null} saved={x.feedback} onSave={(feedback) => {
+              <FeedbackPanel turnId={x.turnId} answered={x.answer !== null} saved={x.feedback}
+                sharingEnabled={account.view?.capture === true} sentCount={thread.length} onSave={(feedback) => {
                 if (keyRef.current?.id !== key?.id || keyRef.current?.path !== key?.path) return;
                 const updated = threadRef.current.map((entry) => entry.turnId === x.turnId ? { ...entry, feedback } : entry);
                 setThread(updated);
@@ -446,6 +493,7 @@ export function Conversation({
             any of it. */}
         <div className="card__disclaimer">AI can make mistakes. Treat responses as suggestions.</div>
       </div>
+      <WhatICanSee state={state} />
     </>
   );
 }
