@@ -212,8 +212,17 @@ All specced or named already. The order is fixed by the gate.
 
 2. **Signing.** Apple enrollment, Developer ID signing, notarization, stapling.
    Distribution stage 2. Size M, mostly waiting on Apple.
-3. **Updates.** Tagged release CI, hosted artifacts, the updater. Distribution
-   stage 3. Size M.
+3. **Updates.** Tagged release CI, hosted artifacts, and automatic update
+   checks with separate pilot and stable channels. Test releases in the pilot
+   before wider rollout, with an operator control to pause rollout. Require
+   Apple signing and notarization for macOS releases plus a separate update
+   signature the app verifies. Show an in-app notice with release notes and
+   an explicit restart action; never force a restart during a Live session.
+   Check app/Wire compatibility so an app update cannot silently leave an
+   incompatible Wire installed. Inspect the existing Tauri release setup
+   and Wire installer before choosing the smallest implementation. Build and
+   test the update flow while Apple enrollment is pending; distributing the
+   signed macOS release waits on item 2. Distribution stage 3. Size M.
 4. **Invites.**
 
 ## Deferred, with the trigger
