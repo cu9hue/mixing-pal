@@ -6,6 +6,7 @@ import { deleteAccount, deleteTurn, event, feedback } from "./capture";
 import { complete } from "./completion";
 import { ApiError, Env, MAX_FEEDBACK_BODY, json, privateHash, readJson } from "./env";
 import { maintain } from "./maintenance";
+import { releaseRequest } from "./releases";
 
 async function authRequest(request: Request, env: Env, path: string): Promise<Response> {
   const allowed = ["/auth/email-otp/send-verification-otp", "/auth/sign-in/email-otp", "/auth/sign-out", "/auth/get-session"];
@@ -49,6 +50,8 @@ async function authRequest(request: Request, env: Env, path: string): Promise<Re
 export async function handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/health" && request.method === "GET") return json({ ok: true });
+  const release = await releaseRequest(request, env);
+  if (release) return release;
   const ip = request.headers.get("cf-connecting-ip") ?? "local";
   await rateLimit(env, `ip:${await privateHash(env.AUTH_SECRET, ip)}`, 120, 60_000);
   if (url.pathname.startsWith("/auth/")) return authRequest(request, env, url.pathname);

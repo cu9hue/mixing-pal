@@ -12,8 +12,10 @@ queries per invocation). Platform charges are separate from model allowances.
 
   npx wrangler d1 create mixing-pal-staging --location weur
   npx wrangler r2 bucket create mixing-pal-staging-capture
+  npx wrangler r2 bucket create mixing-pal-staging-releases
   npx wrangler d1 create mixing-pal-production --location weur
   npx wrangler r2 bucket create mixing-pal-production-capture
+  npx wrangler r2 bucket create mixing-pal-production-releases
 
 Use the matching database UUID as MIXINGPAL_D1_ID. Cloudflare account/API token
 come from Wrangler login or CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN.
@@ -58,10 +60,14 @@ export function configuration(base, stage, databaseId, enabled = false) {
   if (!["staging", "production"].includes(stage)) throw new Error("Choose staging or production.");
   if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(databaseId ?? "")) throw new Error("Set MIXINGPAL_D1_ID to this stage's D1 UUID.");
   const host = stage === "production" ? "api.mixingpal.com" : "api-staging.mixingpal.com";
+  const captureBucket = `mixing-pal-${stage}-capture`;
+  const releaseBucket = `mixing-pal-${stage}-releases`;
+  if (captureBucket === releaseBucket) throw new Error("Release and capture buckets must be distinct.");
   return { ...base, name: `mixing-pal-${stage}`, routes: [{ pattern: host, custom_domain: true }],
-    vars: { ...base.vars, API_ORIGIN: `https://${host}`, INFERENCE_ENABLED: String(enabled) },
+    vars: { ...base.vars, API_ORIGIN: `https://${host}`, INFERENCE_ENABLED: String(enabled),
+      DOWNLOADS_ORIGIN: stage === "production" ? "https://downloads.mixingpal.com" : "https://downloads-staging.mixingpal.com" },
     d1_databases: [{ binding: "DB", database_name: `mixing-pal-${stage}`, database_id: databaseId, migrations_dir: "migrations" }],
-    r2_buckets: [{ binding: "CAPTURE", bucket_name: `mixing-pal-${stage}-capture` }] };
+    r2_buckets: [{ binding: "CAPTURE", bucket_name: captureBucket }, { binding: "RELEASES", bucket_name: releaseBucket }] };
 }
 
 function wrangler(args, input) {
