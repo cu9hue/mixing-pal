@@ -1,5 +1,5 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import worker from "../src/index";
 
 const release = {
@@ -65,4 +65,19 @@ test("missing storage binding and read failures fail closed", async () => {
     env.RELEASES = { get: async () => { throw new Error("storage unavailable"); } } as R2Bucket;
     expect((await get("/v1/updates/stable")).status).toBe(503);
   } finally { env.RELEASES = original; }
+});
+
+test("release read failures log only a safe category and channel", async () => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  const original = env.RELEASES;
+  try {
+    await env.RELEASES.put("channels/pilot.json", '{"private":"sensitive manifest text"');
+    expect((await get("/v1/updates/pilot")).status).toBe(503);
+    env.RELEASES = { get: async () => { throw new Error("secret storage detail"); } } as R2Bucket;
+    expect((await get("/v1/updates/pilot")).status).toBe(503);
+    expect(log.mock.calls.map(([entry]) => JSON.parse(String(entry)))).toEqual([
+      { event: "release_read_failed", category: "invalid_manifest", channel: "pilot" },
+      { event: "release_read_failed", category: "storage", channel: "pilot" },
+    ]);
+  } finally { env.RELEASES = original; log.mockRestore(); }
 });

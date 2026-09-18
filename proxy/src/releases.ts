@@ -15,6 +15,10 @@ function unavailable(message = "This download is currently unavailable."): Respo
   return json({ error: { code: "release_unavailable", message } }, 503);
 }
 
+function logFailure(channel: string, category: string): void {
+  console.error(JSON.stringify({ event: "release_read_failed", category, channel }));
+}
+
 export async function releaseRequest(request: Request, env: Env): Promise<Response | null> {
   const path = new URL(request.url).pathname;
   if (!path.startsWith("/v1/updates/") && !path.startsWith("/v1/downloads/")) return null;
@@ -23,11 +27,24 @@ export async function releaseRequest(request: Request, env: Env): Promise<Respon
   if (!update && !download) return json({ error: { code: "not_found", message: "Not found." } }, 404);
   if (request.method !== "GET") return json({ error: { code: "method_not_allowed", message: "Use GET." } }, 405);
   if (!env.RELEASES || !env.DOWNLOADS_ORIGIN) return unavailable();
+  const channel = (update ?? download)![1];
   try {
-    const object = await env.RELEASES.get(`channels/${(update ?? download)![1]}.json`);
-    if (!object || object.size > 32 * 1024) return unavailable();
-    const manifest = channelSchema.safeParse(JSON.parse(await object.text()));
-    if (!manifest.success) return unavailable();
+    const object = await env.RELEASES.get(`channels/${channel}.json`);
+    if (!object) { logFailure(channel, "missing_manifest"); return unavailable(); }
+    if (object.size > 32 * 1024) {
+      await object.body.cancel();
+      logFailure(channel, "oversized_manifest");
+      return unavailable();
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(await object.text()); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      logFailure(channel, "invalid_manifest");
+      return unavailable();
+    }
+    const manifest = channelSchema.safeParse(parsed);
+    if (!manifest.success) { logFailure(channel, "invalid_manifest"); return unavailable(); }
     if (manifest.data.paused || !manifest.data.release) {
       return update ? new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } }) : unavailable();
     }
@@ -40,6 +57,7 @@ export async function releaseRequest(request: Request, env: Env): Promise<Respon
     return json({ version: release.version, notes: release.notes, pub_date: release.pub_date,
       platforms: { "darwin-aarch64": platform, "darwin-x86_64": platform } });
   } catch {
+    logFailure(channel, "storage");
     return unavailable();
   }
 }
