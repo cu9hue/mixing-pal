@@ -223,6 +223,18 @@ All specced or named already. The order is fixed by the gate.
    and Wire installer before choosing the smallest implementation. Build and
    test the update flow while Apple enrollment is pending; distributing the
    signed macOS release waits on item 2. Distribution stage 3. Size M.
+
+   Implemented the update path on 2026-09-18: private release CI publishes
+   signed artifacts to a dedicated R2 bucket, with pilot and stable manifests
+   served through the existing proxy. Promotion reuses the tested files;
+   pause controls run separately from builds. The app verifies downloads,
+   requires an explicit install/restart action, waits for active operations
+   and saved threads, and blocks questions until Wire reports a matching
+   version. Local checks include an isolated install through Tauri's updater.
+   The website download button is prepared behind a disabled build setting.
+   Developer ID signing, the signed GUI update rehearsal, release hosting
+   activation and the live download path remain release gates. Existing
+   installations need one manual install of the first updater-enabled build.
 4. **Invites.**
 
 ## Deferred, with the trigger
