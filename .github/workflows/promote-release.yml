@@ -1,0 +1,75 @@
+name: Desktop release channel
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        options: [staging, production]
+        required: true
+      channel:
+        type: choice
+        options: [pilot, stable]
+        required: true
+      action:
+        type: choice
+        options: [promote, pause]
+        required: true
+      version:
+        description: Exact release version for promotion
+        type: string
+      pilot_verified:
+        description: I installed and checked this exact pilot release before stable promotion
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  control:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: ${{ inputs.stage }}
+    concurrency:
+      group: desktop-channels-${{ inputs.stage }}
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - name: Apply channel selection
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          STAGE: ${{ inputs.stage }}
+          CHANNEL: ${{ inputs.channel }}
+          ACTION: ${{ inputs.action }}
+          VERSION: ${{ inputs.version }}
+          PILOT_VERIFIED: ${{ inputs.pilot_verified }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { r2Store, validateRelease, selectChannel, pauseChannel } from './scripts/publish-release.mjs';
+          const { STAGE, CHANNEL, ACTION, VERSION, PILOT_VERIFIED, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN } = process.env;
+          const store = r2Store({ stage: STAGE, accountId: CLOUDFLARE_ACCOUNT_ID, token: CLOUDFLARE_API_TOKEN });
+          const key = `channels/${CHANNEL}.json`;
+          const currentBytes = await store.get(key);
+          const current = currentBytes ? JSON.parse(currentBytes) : { paused: true, release: null };
+          let next;
+          if (ACTION === 'pause') {
+            next = pauseChannel(current);
+          } else if (ACTION === 'promote') {
+            if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(VERSION ?? '')) throw new Error('Valid version required');
+            const bytes = await store.get(`releases/${VERSION}/release.json`);
+            if (!bytes) throw new Error('Release is not published');
+            const release = validateRelease(JSON.parse(bytes));
+            if (release.version !== VERSION) throw new Error('Release version mismatch');
+            if (CHANNEL === 'stable') {
+              const pilotBytes = await store.get('channels/pilot.json');
+              if (!pilotBytes) throw new Error('Pilot channel is empty');
+              const pilot = JSON.parse(pilotBytes);
+              if (PILOT_VERIFIED !== 'true' || pilot.paused !== false || JSON.stringify(pilot.release) !== JSON.stringify(release)) throw new Error('Exact unpaused pilot release and verification required');
+            }
+            next = selectChannel(release);
+          } else throw new Error('Invalid action');
+          await store.put(key, Buffer.from(JSON.stringify(next)), 'application/json', 'no-store');
+          NODE
