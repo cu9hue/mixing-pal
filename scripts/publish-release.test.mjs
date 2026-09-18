@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { publishRelease, selectChannel, pauseChannel, r2Store } from './publish-release.mjs';
+import { publishRelease, selectChannel, pauseChannel, r2Store, verifyDistributedArtifacts } from './publish-release.mjs';
 
 const version = '0.3.0';
 const files = {
@@ -78,4 +78,24 @@ test('R2 upload sends the object in Cloudflare body form field', async () => {
   await store.put('channels/pilot.json', Buffer.from('test'), 'application/json', 'no-store');
   assert.match(uploaded.url, /mixing-pal-staging-releases\/objects\/channels\/pilot.json$/);
   assert.equal((await uploaded.request.body.get('body').text()), 'test');
+});
+test('DMG app version mismatch aborts publication and detaches image', async () => {
+  const commands = [];
+  const expected = { directory: '/fake/release', publicKey: 'cHVibGlj', version, identifier: 'com.mixingpal.app', team: 'ABC1234567', identity: 'Developer ID Application: Example (ABC1234567)' };
+  const run = async (command, args) => {
+    commands.push([command, args]);
+    if (command === 'plutil') {
+      const field = args[1];
+      if (field === 'CFBundleIdentifier') return { stdout: expected.identifier };
+      if (field === 'CFBundleShortVersionString') return { stdout: args.at(-1).includes('/mount/') ? '0.3.1' : version };
+    }
+    if (command === 'codesign' && args[0] === '-dv') return { stderr: `Authority=${expected.identity}\nTeamIdentifier=${expected.team}\n` };
+    return { stdout: '', stderr: '' };
+  };
+  const h = harness();
+  h.io.verify = () => verifyDistributedArtifacts(expected, { run, readFile: async () => Buffer.from('c2lnbmF0dXJl'.repeat(6)) });
+  await assert.rejects(publishRelease(options, h.io), /bundle version mismatch/);
+  assert.deepEqual(h.uploaded, []);
+  assert.ok(commands.some(([command, args]) => command === 'hdiutil' && args[0] === 'detach'));
+  assert.ok(commands.some(([command, args]) => command === 'minisign' && args.includes('-Vm')));
 });

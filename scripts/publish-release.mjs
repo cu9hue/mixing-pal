@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -55,30 +55,46 @@ export async function publishRelease({ version, tag, commit, notes, wireVersion,
   return release;
 }
 
-async function verifyArtifacts(directory, publicKey) {
+export async function verifyDistributedArtifacts({ directory, publicKey, version, identifier, team, identity }, { run = exec, readFile: read = readFile } = {}) {
+  if (!versionPattern.test(version) || !identifier || !/^[A-Z0-9]{10}$/.test(team ?? '') || !identity?.startsWith('Developer ID Application: ')) throw new Error('Expected Apple release identity missing');
   const work = await mkdtemp(join(tmpdir(), 'mixing-pal-release-'));
+  const mount = join(work, 'mount');
+  let mounted = false;
   try {
-    const app = join(directory, 'Mixing Pal.app');
     const dmg = join(directory, names[0]);
     const archive = join(directory, names[1]);
-    const signature = Buffer.from((await readFile(join(directory, names[2]))).toString('utf8').trim(), 'base64');
+    const signature = Buffer.from((await read(join(directory, names[2]))).toString('utf8').trim(), 'base64');
     const key = Buffer.from(publicKey, 'base64');
     if (!signature.length || !key.length) throw new Error('Invalid updater public key or signature');
     const sigPath = join(work, 'update.minisig');
     const keyPath = join(work, 'update.pub');
     await writeFile(sigPath, signature, { mode: 0o600 });
     await writeFile(keyPath, key, { mode: 0o600 });
-    await exec('minisign', ['-Vm', archive, '-x', sigPath, '-p', keyPath]);
-    await exec('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
-    await exec('spctl', ['--assess', '--type', 'execute', app]);
-    await exec('xcrun', ['stapler', 'validate', app]);
-    await exec('xcrun', ['stapler', 'validate', dmg]);
-    await exec('hdiutil', ['verify', dmg]);
-    await exec('tar', ['-xzf', archive, '-C', work]);
-    const archivedApp = join(work, 'Mixing Pal.app');
-    await exec('codesign', ['--verify', '--deep', '--strict', '--verbose=2', archivedApp]);
-    await exec('spctl', ['--assess', '--type', 'execute', archivedApp]);
-  } finally { await rm(work, { recursive: true, force: true }); }
+    await run('minisign', ['-Vm', archive, '-x', sigPath, '-p', keyPath]);
+    await run('codesign', ['--verify', '--verbose=2', dmg]);
+    await run('xcrun', ['stapler', 'validate', dmg]);
+    await run('hdiutil', ['verify', dmg]);
+    const extracted = join(work, 'archive');
+    await mkdir(extracted);
+    await run('tar', ['-xzf', archive, '-C', extracted]);
+    await mkdir(mount);
+    await run('hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mount, dmg]);
+    mounted = true;
+    for (const app of [join(extracted, 'Mixing Pal.app'), join(mount, 'Mixing Pal.app')]) {
+      const actualIdentifier = (await run('plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', join(app, 'Contents', 'Info.plist')])).stdout.trim();
+      const actualVersion = (await run('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', join(app, 'Contents', 'Info.plist')])).stdout.trim();
+      if (actualIdentifier !== identifier) throw new Error(`Distributed app bundle identifier mismatch: ${app}`);
+      if (actualVersion !== version) throw new Error(`Distributed app bundle version mismatch: ${app}`);
+      await run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
+      const details = await run('codesign', ['-dv', '--verbose=4', app]);
+      const signing = `${details.stdout ?? ''}\n${details.stderr ?? ''}`;
+      if (!signing.split('\n').includes(`TeamIdentifier=${team}`) || !signing.split('\n').includes(`Authority=${identity}`)) throw new Error(`Distributed app signing identity mismatch: ${app}`);
+      await run('spctl', ['--assess', '--type', 'execute', app]);
+    }
+  } finally {
+    try { if (mounted) await run('hdiutil', ['detach', mount]); }
+    finally { await rm(work, { recursive: true, force: true }); }
+  }
 }
 
 export function bucketForStage(stage) {
@@ -128,11 +144,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const version = config.version;
   if (!directory || pkg.version !== version || cargo !== version) throw new Error('Package, Cargo and Tauri versions disagree');
   const publicKey = config.plugins?.updater?.pubkey;
-  if (!publicKey || !config.bundle?.createUpdaterArtifacts || !/^Developer ID Application: /.test(process.env.APPLE_SIGNING_IDENTITY ?? '')) throw new Error('Production signing is not configured');
+  if (!publicKey || !config.bundle?.createUpdaterArtifacts || !/^Developer ID Application: /.test(process.env.APPLE_SIGNING_IDENTITY ?? '') || !/^[A-Z0-9]{10}$/.test(process.env.APPLE_TEAM_ID ?? '')) throw new Error('Production signing is not configured');
   const store = r2Store({ stage: process.env.RELEASE_STAGE, accountId: process.env.CLOUDFLARE_ACCOUNT_ID, token: process.env.CLOUDFLARE_API_TOKEN });
   await publishRelease({ version, tag: process.env.RELEASE_TAG, commit: process.env.GITHUB_SHA, notes: await readFile(process.env.RELEASE_NOTES_FILE, 'utf8'), wireVersion: JSON.parse(await readFile('shared/wire-version.json', 'utf8')).version, pubDate: new Date().toISOString() }, {
     ...store,
     readFile: name => readFile(join(directory, name)),
-    verify: () => verifyArtifacts(directory, publicKey),
+    verify: () => verifyDistributedArtifacts({ directory, publicKey, version, identifier: config.identifier, team: process.env.APPLE_TEAM_ID, identity: process.env.APPLE_SIGNING_IDENTITY }),
   });
 }
