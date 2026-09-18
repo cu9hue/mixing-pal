@@ -45,7 +45,7 @@ export function classify(
   if (next === null || busy) return "none";
   if (current === null) return "switch";
   if (current.id === next.id) return current.path === next.path ? "none" : "rekey";
-  if (current.path !== null && current.path === next.path) return "rekey";
+  if (current.path && current.path === next.path) return "rekey";
   return "switch";
 }
 

@@ -202,9 +202,10 @@ export function Conversation({
     if (action === "rekey") {
       // Same set, new name: the thread stays, the file follows. Saving
       // under the new key is what makes the Rust index adopt it.
+      const previous = key;
       keyRef.current = target;
       setKey(target);
-      persist(target, threadRef.current, noteRef.current, goalRef.current);
+      persist(target, threadRef.current, noteRef.current, goalRef.current, previous);
       return;
     }
     setLoadError(null);
@@ -249,9 +250,9 @@ export function Conversation({
     };
   }, [key, nextId, nextPath, busy]);
 
-  function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note, withGoal = goalRef.current) {
+  function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note, withGoal = goalRef.current, rekeyFrom: ThreadKey | null = null) {
     if (under === null) return;
-    saveThread(under, exchanges, withNote, withGoal).then(
+    saveThread(under, exchanges, withNote, withGoal, rekeyFrom).then(
       () => setSaveError(null),
       (e) => {
         console.error("failed to save the thread", e);

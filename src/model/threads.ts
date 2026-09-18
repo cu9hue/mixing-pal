@@ -20,20 +20,19 @@ export function loadThread(key: ThreadKey): Promise<SavedThread | null> {
 
 let writesLocked = false;
 const pending = new Set<Promise<void>>();
-const retry = new Map<ThreadKey, () => Promise<void>>();
+const retry = new Map<string, () => Promise<void>>();
 export function lockThreadSaves(locked: boolean): void { writesLocked = locked; }
 export async function flushThreadSaves(): Promise<void> {
   await Promise.all([...pending]);
   for (const write of [...retry.values()]) await write();
 }
 
-export function saveThread(key: ThreadKey, exchanges: Exchange[], note: Note, goal: string | null): Promise<void> {
+export function saveThread(key: ThreadKey, exchanges: Exchange[], note: Note, goal: string | null, rekeyFrom: ThreadKey | null = null): Promise<void> {
   if (writesLocked) return Promise.reject(new Error("Mixing Pal is preparing to restart."));
-  // Match Rust Index::find: ID wins; only nonempty paths can adopt an ID.
-  const keys = [...retry.keys()];
-  const previous = keys.find((saved) => saved.id === key.id)
-    ?? (key.path ? keys.find((saved) => saved.path === key.path) : undefined);
-  if (previous) retry.delete(previous);
+  // Only the caller knows when the displayed thread adopts a new ID.
+  // A shared path alone cannot distinguish it from another indexed thread.
+  if (rekeyFrom) retry.delete(rekeyFrom.id);
+  const id = key.id;
   const write = (): Promise<void> => {
     const request = invoke<void>("save_thread", {
       setId: key.id,
@@ -44,10 +43,10 @@ export function saveThread(key: ThreadKey, exchanges: Exchange[], note: Note, go
       nextBullet: note.next,
     });
     pending.add(request);
-    retry.set(key, write);
+    retry.set(id, write);
     void request.then(() => {
       pending.delete(request);
-      if (retry.get(key) === write) retry.delete(key);
+      if (retry.get(id) === write) retry.delete(id);
     }, () => { pending.delete(request); });
     return request;
   };
