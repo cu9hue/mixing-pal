@@ -10,6 +10,7 @@ export type SetupStep =
 export interface SetupFacts {
   connectorInstalled: boolean;
   connectorCurrent: boolean;
+  connectorCopied?: boolean;
   liveRunning: boolean;
   deltasArriving: boolean;
   connectedAcknowledged: boolean;
@@ -32,6 +33,7 @@ export function currentStep(facts: SetupFacts): SetupStep {
   // Sign-in comes first because it does not depend on Live.
   if (!facts.hasAccount) return "account";
 
+  if (facts.connectorCopied && (!facts.connectorCurrent || !facts.deltasArriving)) return "open_live";
   if (!facts.connectorInstalled || !facts.connectorCurrent) return "install";
 
   // Deltas are the only real evidence that the whole chain works. A
@@ -75,4 +77,8 @@ export function needsSetup(need: SetupNeed): boolean {
   // the setup window at someone whose setup has been done for months.
   if (need.connectorInstalled === null) return false;
   return !need.connectorInstalled || !need.connectorCurrent || !need.setupDone;
+}
+
+export function wireReady(connected: boolean, actual: number | null, expected: number): boolean {
+  return connected && actual !== null && actual === expected;
 }

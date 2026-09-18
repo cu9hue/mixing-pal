@@ -143,3 +143,10 @@ describe("needsSetup", () => {
     expect(currentStep({ ...DONE, deltasArriving: false })).toBe("control_surface");
   });
 });
+
+it("waits for Live after copying a repair, and finishes only after matching traffic arrives", () => {
+  const repaired = { ...DONE, connectorCopied: true, connectorCurrent: false, deltasArriving: false };
+  expect(currentStep(repaired)).toBe("open_live");
+  expect(currentStep({ ...repaired, connectorCurrent: true })).toBe("open_live");
+  expect(currentStep({ ...repaired, connectorCurrent: true, deltasArriving: true })).toBe("done");
+});
