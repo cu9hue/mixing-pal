@@ -28,7 +28,9 @@
       "csp": null
     }
   },
+  "plugins": { "updater": { "pubkey": "" } },
   "bundle": {
+    "createUpdaterArtifacts": true,
     "active": true,
     "targets": ["app", "dmg"],
     "category": "Music",
