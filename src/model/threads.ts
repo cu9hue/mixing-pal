@@ -20,7 +20,7 @@ export function loadThread(key: ThreadKey): Promise<SavedThread | null> {
 
 let writesLocked = false;
 const pending = new Set<Promise<void>>();
-const retry = new Map<string, () => Promise<void>>();
+const retry = new Map<ThreadKey, () => Promise<void>>();
 export function lockThreadSaves(locked: boolean): void { writesLocked = locked; }
 export async function flushThreadSaves(): Promise<void> {
   await Promise.all([...pending]);
@@ -29,7 +29,11 @@ export async function flushThreadSaves(): Promise<void> {
 
 export function saveThread(key: ThreadKey, exchanges: Exchange[], note: Note, goal: string | null): Promise<void> {
   if (writesLocked) return Promise.reject(new Error("Mixing Pal is preparing to restart."));
-  const id = JSON.stringify(key);
+  // Match Rust Index::find: ID wins; only nonempty paths can adopt an ID.
+  const keys = [...retry.keys()];
+  const previous = keys.find((saved) => saved.id === key.id)
+    ?? (key.path ? keys.find((saved) => saved.path === key.path) : undefined);
+  if (previous) retry.delete(previous);
   const write = (): Promise<void> => {
     const request = invoke<void>("save_thread", {
       setId: key.id,
@@ -40,10 +44,10 @@ export function saveThread(key: ThreadKey, exchanges: Exchange[], note: Note, go
       nextBullet: note.next,
     });
     pending.add(request);
-    retry.set(id, write);
+    retry.set(key, write);
     void request.then(() => {
       pending.delete(request);
-      if (retry.get(id) === write) retry.delete(id);
+      if (retry.get(key) === write) retry.delete(key);
     }, () => { pending.delete(request); });
     return request;
   };
