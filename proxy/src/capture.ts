@@ -31,7 +31,7 @@ export async function saveCapture(env: Env, turn: Turn, id: string, payload: unk
     return false;
   }
   const bodyHash = await privateHash(env.AUTH_SECRET, raw);
-  const key = `${turn.member_id}/${turn.id}/${id}.json`;
+  const key = `captures/${turn.member_id}/${turn.id}/${id}.json`;
   const now = Date.now();
   const prior = await env.DB.prepare("SELECT body_hash, state, turn_id FROM captures WHERE id = ?")
     .bind(id).first<{ body_hash: string; state: string; turn_id: string }>();
@@ -126,8 +126,8 @@ export async function feedback(env: Env, memberId: string, turnId: string, input
 }
 
 export async function deleteTurn(env: Env, memberId: string, turnId: string, journal = true): Promise<void> {
-  await ownedTurn(env, turnId, memberId);
-  if (journal) await recordRestriction(env, { member_id: memberId, turn_id: turnId });
+  const turn = await ownedTurn(env, turnId, memberId);
+  if (journal && turn.deleted_at === null) await recordRestriction(env, { member_id: memberId, turn_id: turnId });
   await env.DB.batch([
     env.DB.prepare("UPDATE turns SET deleted_at = COALESCE(deleted_at, ?), capture = 0 WHERE id = ?").bind(Date.now(), turnId),
     env.DB.prepare("UPDATE captures SET state = 'deleting', updated_at = ? WHERE turn_id = ? AND state != 'deleted'")

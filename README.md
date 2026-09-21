@@ -62,6 +62,18 @@ still agree. They exist because the failures they catch are silent — an app th
 ships without its connector, or a version that drifts in one manifest of three.
 When one fails, read its message; it names the failure mode.
 
+### Pilot proxy deployment
+
+Run `cd proxy && npm run deploy -- help` for the staging and production
+procedure. Before enabling either stage, create account-wide Cloudflare budget
+alerts at $10 and $25 under **Manage Account → Billing → Billable Usage**. These
+alerts send warnings; they do not cap usage. Set
+`MIXINGPAL_BUDGET_ALERTS_VERIFIED=yes` only after both alerts are active.
+
+The deploy command applies the D1 capture budget and the R2 lifecycle rules
+before it publishes the Worker. It leaves inference disabled until the separate
+enable command passes all release acknowledgments.
+
 ## Releasing a new version
 
 There is no release automation yet. This is the manual procedure.

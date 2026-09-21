@@ -2,6 +2,9 @@ import { deleteTurn } from "./capture";
 import { DAY, Env, readJson } from "./env";
 import { settle, UsageRequest } from "./ledger";
 
+const CAPTURE_DELETE_BATCH = 100;
+const CAPTURE_DELETE_BATCHES = 3;
+
 export async function maintain(env: Env): Promise<void> {
   const now = Date.now();
   await env.DB.batch([
@@ -40,17 +43,32 @@ export async function maintain(env: Env): Promise<void> {
   for (const row of expired.results) await deleteTurn(env, row.member_id, row.id);
   // Keep tombstones and re-delete their object keys. A Worker canceled during
   // an R2 write can finish that write after the first deletion pass.
-  const objects = await env.DB.prepare(`SELECT c.id, c.object_key FROM captures c JOIN turns t ON t.id = c.turn_id
+  const backlog = await env.DB.prepare(`SELECT COUNT(*) AS count, MIN(c.updated_at) AS oldest_updated_at
+    FROM captures c JOIN turns t ON t.id = c.turn_id
     WHERE c.state = 'deleting' OR (c.state = 'writing' AND c.updated_at < ?)
     OR (c.state = 'deleted' AND c.updated_at < ?) OR (c.state != 'deleted' AND t.deleted_at IS NOT NULL)
-    ORDER BY c.state = 'deleted', c.updated_at LIMIT 100`).bind(now - 5 * 60_000, now - DAY).all<{ id: string; object_key: string }>();
-  for (const row of objects.results) {
-    try {
-      await env.CAPTURE.delete(row.object_key);
-      await env.DB.prepare("UPDATE captures SET state = 'deleted', updated_at = ? WHERE id = ?").bind(now, row.id).run();
-    } catch {
-      console.error(JSON.stringify({ event: "deletion_failed", capture_id: row.id }));
+    `).bind(now - 5 * 60_000, now - DAY).first<{ count: number; oldest_updated_at: number | null }>();
+  if (backlog && backlog.count > CAPTURE_DELETE_BATCH) {
+    console.error(JSON.stringify({ event: "capture_cleanup_backlog", count: backlog.count,
+      oldest_updated_at: backlog.oldest_updated_at }));
+  }
+  for (let batch = 0; batch < CAPTURE_DELETE_BATCHES; batch++) {
+    const objects = await env.DB.prepare(`SELECT c.id, c.object_key FROM captures c JOIN turns t ON t.id = c.turn_id
+      WHERE c.state = 'deleting' OR (c.state = 'writing' AND c.updated_at < ?)
+      OR (c.state = 'deleted' AND c.updated_at < ?) OR (c.state != 'deleted' AND t.deleted_at IS NOT NULL)
+      ORDER BY c.state = 'deleted', c.updated_at LIMIT ?`).bind(now - 5 * 60_000, now - DAY, CAPTURE_DELETE_BATCH)
+      .all<{ id: string; object_key: string }>();
+    let failed = false;
+    for (const row of objects.results) {
+      try {
+        await env.CAPTURE.delete(row.object_key);
+        await env.DB.prepare("UPDATE captures SET state = 'deleted', updated_at = ? WHERE id = ?").bind(now, row.id).run();
+      } catch {
+        failed = true;
+        console.error(JSON.stringify({ event: "deletion_failed", capture_id: row.id }));
+      }
     }
+    if (failed || objects.results.length < CAPTURE_DELETE_BATCH) break;
   }
   const deletions = await env.DB.prepare("SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND requested_at < ? LIMIT 20")
     .bind(now - 10 * 60_000).all<{ member_id: string }>();

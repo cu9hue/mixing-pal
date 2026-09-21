@@ -32,13 +32,16 @@ being kept as fixtures; trace consent never grants training permission.
 
 Run usage and sweep before each pilot review. Worker error logs contain only
 event categories and IDs: held_usage, reconciliation_failed, deletion_failed,
-capture_failed, request_failed. Alert on any of these in Cloudflare Logs.
+capture_cleanup_backlog, capture_failed, request_failed. Alert on any of these
+in Cloudflare Logs.
 For held requests without a generation ID, check the provider billing record
 before resolve. Do not release a reservation just because time passed.
 
 Deletion sweeps run every ten minutes; capture expires at 30 days and settled
 operational records at 90 days. D1 Time Travel backups can retain earlier data
 for 7 days on Workers Free or 30 days on Paid. This service requires Paid.
+Each stage rejects new capture objects at 4 GB. R2 lifecycle rules independently
+expire capture objects after 30 days and deletion journals after 90 days.
 Before a restore, deploy with inference disabled and preserve available ledger
 records. After restoring D1, apply current migrations, run replay-deletions,
 then sweep. Replay blocks ordinary resume until spending is recovered too.
