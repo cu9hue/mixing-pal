@@ -81,7 +81,8 @@ beforeEach(async () => {
   });
   await env.DB.batch(["operator_actions", "deletion_jobs", "captures", "requests", "turns", "consents", "invites", "members", "session", "account", "user", "verification", "rateLimit", "api_limits"]
     .map((table) => env.DB.prepare(`DELETE FROM "${table}"`)));
-  await env.DB.prepare("UPDATE budget SET spent = 0, reserved = 0, allowance = 50000000, paused = 0, recovery_required = 0").run();
+  await env.DB.prepare(`UPDATE budget SET spent = 0, reserved = 0, allowance = 50000000,
+    paused = 0, recovery_required = 0, capture_bytes = 0, capture_allowance = 4000000000`).run();
   const objects = await env.CAPTURE.list();
   await Promise.all(objects.objects.map((o) => env.CAPTURE.delete(o.key)));
 });
@@ -432,6 +433,18 @@ describe("metered requests", () => {
 });
 
 describe("capture and deletion", () => {
+  test("the global capture allowance rejects new objects before R2 storage can grow", async () => {
+    const user = await joined();
+    const consent = await (await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT")).json();
+    await env.DB.prepare("UPDATE budget SET capture_allowance = 1").run();
+    reply();
+    const request = { ...question(), capture_epoch: consent.consent_epoch };
+    expect((await api("/v1/completions", request, user.token)).status).toBe(200);
+    expect(await capturedObjects()).toHaveLength(0);
+    expect(await env.DB.prepare("SELECT capture_bytes FROM budget").first()).toEqual({ capture_bytes: 0 });
+    expect(await env.DB.prepare("SELECT incomplete FROM turns WHERE id = ?").bind(request.turn_id).first()).toEqual({ incomplete: 1 });
+  });
+
   test.each([null, undefined, 0])("capture uses the turn-start consent %s, not a later opt-in", async (capture_epoch) => {
     const user = await joined();
     const request = { ...question(), capture_epoch };
@@ -657,6 +670,7 @@ describe("capture and deletion", () => {
     await env.DB.prepare("UPDATE turns SET created_at = ?").bind(Date.now() - 31 * DAY).run();
     await maintain(env);
     expect(await capturedObjects()).toHaveLength(0);
+    expect(await env.DB.prepare("SELECT capture_bytes FROM budget").first()).toEqual({ capture_bytes: 0 });
     await api("/auth/email-otp/send-verification-otp", { email: "producer@example.com" });
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM verification").first()).n).toBeGreaterThan(0);
     expect((await api("/v1/account", undefined, user.token, "DELETE")).status).toBe(202);
@@ -667,7 +681,7 @@ describe("capture and deletion", () => {
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM verification").first()).n).toBe(0);
   });
 
-  test.each([60 * 60_000, 2 * DAY])("new deletions precede tombstones last checked %i ms ago", async (age) => {
+  test.each([60 * 60_000, 2 * DAY])("new deletions precede tombstones and the sweep drains more than one page at age %i", async (age) => {
     const user = await joined();
     await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
     const old = question();
@@ -691,9 +705,14 @@ describe("capture and deletion", () => {
     const object = (await capturedObjects())[0];
     await api(`/v1/turns/${fresh.turn_id}/capture`, undefined, user.token, "DELETE");
     const remove = vi.spyOn(env.CAPTURE, "delete");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     await maintain(env);
     expect(await env.CAPTURE.head(object.key), "newly deleted content must take priority").toBeNull();
-    expect(remove).toHaveBeenCalledTimes(age < DAY ? 1 : 100);
+    expect(remove).toHaveBeenCalledTimes(age < DAY ? 1 : 102);
+    if (age >= DAY) {
+      expect(logged.mock.calls.map(([line]) => JSON.parse(String(line))))
+        .toContainEqual(expect.objectContaining({ event: "capture_cleanup_backlog", count: 102 }));
+    }
     await env.CAPTURE.put(original!.object_key, "late write");
     await env.DB.prepare("UPDATE captures SET updated_at = ? WHERE id = ?").bind(Date.now() - 2 * DAY, original!.id).run();
     await maintain(env);
@@ -708,9 +727,20 @@ describe("capture and deletion", () => {
     expect(response.status, await response.clone().text()).toBe(200);
     const objects = await capturedObjects();
     expect(objects).toHaveLength(1);
+    expect(objects[0].key).toMatch(/^captures\//);
     const payload = await (await env.CAPTURE.get(objects[0].key))!.json();
     expect(payload.body).toEqual(sent[0]);
     expect(payload.response.choices[0].message.content).toContain("```note");
+  });
+
+  test("repeating a turn deletion does not create billable journal writes", async () => {
+    const user = await joined();
+    const request = question();
+    reply();
+    await api("/v1/completions", request, user.token);
+    expect((await api(`/v1/turns/${request.turn_id}/capture`, undefined, user.token, "DELETE")).status).toBe(202);
+    expect((await api(`/v1/turns/${request.turn_id}/capture`, undefined, user.token, "DELETE")).status).toBe(202);
+    expect((await env.CAPTURE.list({ prefix: "deletions/" })).objects).toHaveLength(1);
   });
 
   test("withdrawal rejects late events and enabling capture does not include an earlier turn", async () => {

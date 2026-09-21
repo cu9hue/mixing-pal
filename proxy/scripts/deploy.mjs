@@ -33,7 +33,9 @@ changes request fingerprints. Deploy never prints secret values.
 
 Before enabling staging: verify sign-in delivery, provider prices and strict
 ZDR routing, disable OpenRouter input/output logging and content use, and set
-its API key credit cap. Invite only your test account until the smoke passes.
+its API key credit cap. In Cloudflare, create account-wide budget alerts at
+$10 and $25, then set MIXINGPAL_BUDGET_ALERTS_VERIFIED=yes. Budget alerts warn;
+they do not cap usage. Invite only your test account until the smoke passes.
 Pass MIXINGPAL_STAGING_PREFLIGHT_VERIFIED=yes to acknowledge this preflight.
 Then run an invited staging turn, exercise capture off/on/withdrawal/deletion,
 and rehearse rollback before inviting pilot producers or enabling production.
@@ -74,6 +76,9 @@ export async function run(args) {
   if (!command || command === "help" || command === "--help") { console.log(help); return; }
   if (!["configure", "check", "deploy", "secrets", "enable", "rollback"].includes(command)) throw new Error("Unknown deployment command.");
   if (command === "enable") {
+    if (process.env.MIXINGPAL_BUDGET_ALERTS_VERIFIED !== "yes") {
+      throw new Error("Create and verify the $10 and $25 Cloudflare budget alerts before enable.");
+    }
     const check = stage === "staging" ? "MIXINGPAL_STAGING_PREFLIGHT_VERIFIED" : "MIXINGPAL_RELEASE_VERIFIED";
     if (process.env[check] !== "yes") throw new Error(`Complete the ${stage} checks shown by help and set ${check}=yes before enable.`);
   }
@@ -95,6 +100,9 @@ export async function run(args) {
     return;
   }
   wrangler(["d1", "migrations", "apply", "DB", "--config", file, "--remote"]);
+  const lifecycle = fileURLToPath(new URL("../r2-lifecycle.json", import.meta.url));
+  wrangler(["r2", "bucket", "lifecycle", "set", `mixing-pal-${stage}-capture`, "--file", lifecycle,
+    "--config", file, "--force"]);
   wrangler(["deploy", "--config", file]);
 }
 

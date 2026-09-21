@@ -69,6 +69,7 @@ test("recovery commands send verified totals and reasons to the correct scope", 
 test("enable requires stage-specific checks before invoking Wrangler", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));
   const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  const lifecycle = fileURLToPath(new URL("../r2-lifecycle.json", import.meta.url));
   try {
     await writeFile(join(dir, "wrangler.jsonc"), JSON.stringify({ vars: {} }));
     await mkdir(join(dir, "node_modules/wrangler/bin"), { recursive: true });
@@ -83,17 +84,43 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
       const result = spawnSync(process.execPath, [script, "enable", stage], { cwd: dir, encoding: "utf8", env: {
         PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
         MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: preflight, MIXINGPAL_RELEASE_VERIFIED: release,
+        MIXINGPAL_BUDGET_ALERTS_VERIFIED: "yes",
       } });
       assert.equal(result.status, allowed ? 0 : 1, `${stage}: ${result.stderr}`);
       if (!allowed) { await assert.rejects(access(join(dir, "calls.jsonl"))); continue; }
       const calls = (await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
       assert.deepEqual(calls, [
         ["d1", "migrations", "apply", "DB", "--config", `.deploy-${stage}.json`, "--remote"],
+        ["r2", "bucket", "lifecycle", "set", `mixing-pal-${stage}-capture`, "--file", lifecycle,
+          "--config", `.deploy-${stage}.json`, "--force"],
         ["deploy", "--config", `.deploy-${stage}.json`],
       ]);
       const config = JSON.parse(await readFile(join(dir, `.deploy-${stage}.json`), "utf8"));
       assert.equal(config.vars.INFERENCE_ENABLED, "true");
       assert.equal(config.name, `mixing-pal-${stage}`);
+      assert.deepEqual(JSON.parse(await readFile(lifecycle, "utf8")), { rules: [
+        { id: "expire-captures", enabled: true, conditions: { prefix: "captures/" },
+          deleteObjectsTransition: { condition: { type: "Age", maxAge: 2592000 } } },
+        { id: "expire-deletion-journal", enabled: true, conditions: { prefix: "deletions/" },
+          deleteObjectsTransition: { condition: { type: "Age", maxAge: 7776000 } } },
+        { id: "abort-incomplete-multipart-uploads", enabled: true, conditions: { prefix: "" },
+          abortMultipartUploadsTransition: { condition: { type: "Age", maxAge: 604800 } } },
+      ] });
     }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("enable refuses to run until Cloudflare budget alerts are verified", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  try {
+    await writeFile(join(dir, "wrangler.jsonc"), JSON.stringify({ vars: {} }));
+    const result = spawnSync(process.execPath, [script, "enable", "production"], { cwd: dir, encoding: "utf8", env: {
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+      MIXINGPAL_RELEASE_VERIFIED: "yes",
+    } });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /budget alerts/i);
+    await assert.rejects(access(join(dir, "calls.jsonl")));
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
