@@ -67,8 +67,7 @@ When one fails, read its message; it names the failure mode.
 Run `cd proxy && npm run deploy -- help` for the staging and production
 procedure. Before enabling either stage, create account-wide Cloudflare budget
 alerts at $10 and $25 under **Manage Account → Billing → Billable Usage**. These
-alerts send warnings; they do not cap usage. Set
-`MIXINGPAL_BUDGET_ALERTS_VERIFIED=yes` only after both alerts are active.
+alerts send warnings; they do not cap usage.
 
 The deploy command applies the D1 capture budget and the R2 lifecycle rules
 before it publishes the Worker. It leaves inference disabled until the separate
