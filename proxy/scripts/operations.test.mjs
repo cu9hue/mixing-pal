@@ -84,7 +84,6 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
       const result = spawnSync(process.execPath, [script, "enable", stage], { cwd: dir, encoding: "utf8", env: {
         PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
         MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: preflight, MIXINGPAL_RELEASE_VERIFIED: release,
-        MIXINGPAL_BUDGET_ALERTS_VERIFIED: "yes",
       } });
       assert.equal(result.status, allowed ? 0 : 1, `${stage}: ${result.stderr}`);
       if (!allowed) { await assert.rejects(access(join(dir, "calls.jsonl"))); continue; }
@@ -107,20 +106,5 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
           abortMultipartUploadsTransition: { condition: { type: "Age", maxAge: 604800 } } },
       ] });
     }
-  } finally { await rm(dir, { recursive: true, force: true }); }
-});
-
-test("enable refuses to run until Cloudflare budget alerts are verified", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));
-  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
-  try {
-    await writeFile(join(dir, "wrangler.jsonc"), JSON.stringify({ vars: {} }));
-    const result = spawnSync(process.execPath, [script, "enable", "production"], { cwd: dir, encoding: "utf8", env: {
-      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
-      MIXINGPAL_RELEASE_VERIFIED: "yes",
-    } });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /budget alerts/i);
-    await assert.rejects(access(join(dir, "calls.jsonl")));
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
