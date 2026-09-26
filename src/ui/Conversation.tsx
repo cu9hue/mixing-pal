@@ -261,10 +261,14 @@ export function Conversation({
     );
   }
 
-  function changeNote(next: Note) {
-    if (operations.install) return;
+  function changeNote(next: Note): boolean {
+    if (operations.install) {
+      setSaveError("Wait for the app update to finish before changing notes.");
+      return false;
+    }
     setNote(next);
     persist(key, threadRef.current, next);
+    return true;
   }
 
   function changeGoal(next: string) {

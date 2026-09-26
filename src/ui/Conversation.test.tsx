@@ -6,6 +6,7 @@ import { Conversation } from "./Conversation";
 import { SWITCH_HOLD_MS } from "./threadStore";
 import { flushThreadSaves, lockThreadSaves } from "../model/threads";
 import { emptySet } from "../live/apply";
+import { BusyContext, createBusyState, installWhenIdle } from "../model/updates";
 import { AccountState } from "../model/account";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -20,6 +21,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   cleanup();
+  localStorage.removeItem("copilot.notesOpen");
   vi.mocked(invoke).mockResolvedValue(undefined);
   await flushThreadSaves();
   vi.useRealTimers();
@@ -48,4 +50,37 @@ it.each([
   vi.mocked(invoke).mockClear();
   await flushThreadSaves();
   expect(invoke).not.toHaveBeenCalled();
+});
+
+it.each(["add", "edit"])("keeps a rejected note %s draft until installation fails and she retries", async (action) => {
+  localStorage.setItem("copilot.notesOpen", "1");
+  const busy = createBusyState();
+  let rejectInstall!: (reason: Error) => void;
+  const installation = new Promise<void>((_, reject) => { rejectInstall = reject; });
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "install_update") return installation;
+    if (command === "load_thread") return {
+      exchanges: [], goal: "finish this track", saved_at: 1, next_bullet: 2,
+      note: [{ id: "b1", kind: "heard", text: "Original note", at: 1, hers: true }],
+    };
+  });
+  render(<BusyContext.Provider value={busy}><Conversation
+    state={{ ...emptySet(), setId: "set", setPath: "/set.als" }} connected account={account}
+    onTurnRunningChange={() => {}} onAnswer={() => {}}
+  /></BusyContext.Provider>);
+  await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+  if (action === "edit") fireEvent.click(screen.getByRole("button", { name: "Original note" }));
+  const input = action === "add" ? screen.getByPlaceholderText("Add a note…") : screen.getByDisplayValue("Original note");
+  fireEvent.change(input, { target: { value: "Keep this draft" } });
+  let installing!: Promise<unknown>;
+  await act(async () => { installing = installWhenIdle(busy).catch((error) => error); });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(screen.getByDisplayValue("Keep this draft")).toBe(input);
+  expect(invoke).not.toHaveBeenCalledWith("save_thread", expect.anything());
+  await act(async () => { rejectInstall(new Error("offline")); await installing; });
+  await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+  expect(screen.getByRole("button", { name: "Keep this draft" })).toBeTruthy();
+  expect(invoke).toHaveBeenCalledWith("save_thread", expect.objectContaining({
+    note: expect.arrayContaining([expect.objectContaining({ text: "Keep this draft" })]),
+  }));
 });
