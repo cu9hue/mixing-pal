@@ -64,7 +64,8 @@ beforeEach(async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
     if (String(url) === "https://api.resend.com/emails") {
       const body = JSON.parse(String(options?.body));
-      otpSent = body.text.match(/code is (\d{6})/)[1];
+      const otp = body.text.match(/code is (\d{6})/);
+      if (otp) otpSent = otp[1];
       return Response.json({ id: "email-id" });
     }
     if (String(url) === `${provider}/api/v1/models/minimax/minimax-m3/endpoints`) {
@@ -89,6 +90,55 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("invited accounts", () => {
+  test("operator invitation emails the download link and redeemable code", async () => {
+    const before = Date.now();
+    const response = await api("/operator", { action: "invite", email: "Producer@example.com" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(200);
+    const invite = await response.json();
+    expect(invite.email_status).toBe("accepted");
+    expect(invite.expires_at).toBeGreaterThanOrEqual(before + 7 * DAY);
+    const delivery = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "https://api.resend.com/emails");
+    expect(delivery).toBeDefined();
+    const email = JSON.parse(String(delivery![1]?.body));
+    expect(email.to).toEqual(["producer@example.com"]);
+    expect(email.from).toBe(env.MAIL_FROM);
+    expect(email.subject).toBe("Your Mixing Pal invitation");
+    for (const body of [email.html, email.text]) {
+      expect(body).toContain(invite.code);
+      expect(body).toContain("https://mixingpal.com/beta/");
+      expect(body).toContain("seven days");
+      expect(body).toContain("six-digit");
+    }
+    expect(email.html).toContain('src="cid:mixing-pal-logo"');
+    expect(email.attachments[0].content_id).toBe("mixing-pal-logo");
+    const stored = await env.DB.prepare("SELECT * FROM invites WHERE email = ?").bind("producer@example.com").first();
+    expect(stored!.code_hash).toBe(await hash(invite.code));
+    await api("/auth/email-otp/send-verification-otp", { email: "producer@example.com" });
+    const signed = await api("/auth/sign-in/email-otp", { email: "producer@example.com", otp: otpSent });
+    expect(signed.status).toBe(200);
+    expect((await api("/v1/invites/redeem", { code: invite.code }, signed.headers.get("set-auth-token")!)).status).toBe(200);
+  });
+
+  test.each(["rejection", "timeout"])("invitation email %s reports failure and removes only the new invite", async (failure) => {
+    await env.DB.prepare("INSERT INTO invites(code_hash, email, expires_at) VALUES (?, ?, ?)")
+      .bind("existing-invite", "producer@example.com", Date.now() + DAY).run();
+    vi.mocked(fetch).mockImplementationOnce(async () => {
+      if (failure === "timeout") throw new DOMException("Timed out", "TimeoutError");
+      return Response.json({ message: "private provider details" }, { status: 403 });
+    });
+    const response = await api("/operator", { action: "invite", email: "producer@example.com" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: "invite_email_failed" } });
+    const stored = await env.DB.prepare("SELECT code_hash FROM invites").all();
+    expect(stored.results).toEqual([{ code_hash: "existing-invite" }]);
+  });
+
+  test("unauthorized operators cannot send invitation emails", async () => {
+    expect((await api("/operator", { action: "invite", email: "producer@example.com" }, "wrong-token")).status).toBe(401);
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await env.DB.prepare("SELECT * FROM invites").all()).results).toHaveLength(0);
+  });
+
   test("sign-in sends the same usable code in HTML and plain text", async () => {
     await invited();
     const delivery = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "https://api.resend.com/emails");
