@@ -283,18 +283,18 @@ export function Conversation({
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
-  // The newest question goes to the top of the body, which is where the
-  // card has always put the question she is about to read the answer to.
-  // Sending always scrolls. A fresh question has nothing below it yet, so
-  // it may stop short of the top; the answer arriving scrolls again to
-  // finish the job, but only while she is still at the bottom. Scrolling
-  // up to an older answer unpins her, and nothing then pulls her away.
+  // Scroll only the answer area; scrolling ancestors can hide the controls.
   const newest = useRef<HTMLDivElement>(null);
+  const scrollBody = useRef<HTMLDivElement>(null);
   // So an example question can hand her the caret along with the words.
   const inputRef = useRef<HTMLInputElement>(null);
   const pinned = useRef(true);
   useEffect(() => {
-    if (pinned.current) newest.current?.scrollIntoView({ block: "start" });
+    const body = scrollBody.current;
+    const exchange = newest.current;
+    if (pinned.current && body && exchange) {
+      body.scrollTop += exchange.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    }
   }, [thread]);
 
   // When the current turn started, and a clock to re-read it against. The
@@ -434,6 +434,7 @@ export function Conversation({
         onNoteChange={changeNote}
       />
       <div
+        ref={scrollBody}
         className="card__body"
         data-tauri-drag-region="false"
         onScroll={(e) => {

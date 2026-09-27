@@ -350,6 +350,7 @@
 }
 
 /* Keep conversation mounted so brief disconnects preserve its draft and thread. */
+.card__session,
 .card__conversation {
   display: flex;
   flex: 1;
@@ -357,6 +358,7 @@
   min-height: 0;
 }
 
+.card__session--hidden,
 .card__conversation--hidden {
   display: none;
 }
