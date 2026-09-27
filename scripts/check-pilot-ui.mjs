@@ -61,7 +61,7 @@ if(cmd==='load_thread'){
 }
 if(cmd==='save_thread'){window.saved.push(args);window.savedThreads[args.setId]={saved_at:Math.floor(Date.now()/1000),goal:args.goal,note:args.note,next_bullet:args.nextBullet,exchanges:args.exchanges};return;}
 if(cmd==='turn_event')return;
-if(cmd==='model_complete'){const account={...window.account};return new Promise((resolve,reject)=>{window.failModel=()=>reject({code:'completion_unknown',message:'The reply was interrupted.'});window.finishModel=()=>resolve({text:'A complete answer.',tool_calls:[],account});});}
+if(cmd==='model_complete'){const account={...window.account};return new Promise((resolve,reject)=>{window.failModel=()=>reject({code:'completion_unknown',message:'The reply was interrupted.'});window.finishModel=(text='A complete answer.')=>resolve({text,tool_calls:[],account});});}
 if(cmd==='turn_delete_capture')return;
 if(cmd==='turn_feedback'){window.shared.push(args);return new Promise(resolve=>window.finishFeedback=()=>resolve({saved:true}));}
 throw new Error('Unexpected native call: '+cmd);
@@ -80,6 +80,33 @@ await page.getByLabel('Ask about the set',{exact:true}).waitFor();
 assert.equal(await page.locator('.setup').count(),0,'a returning session opens in the card');
 await page.getByRole('button',{name:'Finish this arrangement',exact:false}).waitFor();
 await page.screenshot({path:`${artifacts}/session-goal.png`});
+for (const ceiling of [520, 360]) {
+await page.evaluate(ceiling=>document.documentElement.style.setProperty('--card-max-height',`${ceiling}px`),ceiling);
+await page.getByLabel('Ask about the set',{exact:true}).fill('Show a long answer');
+await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
+await page.waitForFunction(()=>!!window.finishModel);
+await page.evaluate(()=>{window.finishModel('A paragraph of advice that wraps across several lines in this narrow window.\n\n'.repeat(30));window.finishModel=null;});
+await page.locator('.card__answer').last().waitFor();
+await page.waitForTimeout(150);
+await page.screenshot({path:`${artifacts}/long-answer-${ceiling}.png`});
+const layout=await page.evaluate(()=>{
+  const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {top:r.top,bottom:r.bottom};};
+  const body=document.querySelector('.card__body');
+  return {header:rect('.card__header'),goal:rect('.set-row'),footer:rect('.card__footer'),
+    height:innerHeight,bodyHeight:body.clientHeight,bodyScrollHeight:body.scrollHeight,cardScroll:document.querySelector('.card').scrollTop};
+});
+assert.ok(layout.header.top>=0&&layout.header.bottom<=layout.height,'the logo must stay inside the window after an answer');
+assert.ok(layout.goal.top>=0&&layout.goal.bottom<=layout.height,'the goal must stay inside the window after an answer');
+assert.ok(layout.footer.top>=0&&layout.footer.bottom<=layout.height,'the composer must stay inside the window after an answer');
+assert.ok(layout.bodyHeight>0&&layout.bodyScrollHeight>layout.bodyHeight,'long answers must scroll inside the chat body');
+assert.equal(layout.cardScroll,0,'autoscroll must not scroll the outer card');
+await page.locator('.card__body').evaluate(body=>body.scrollTop=0);
+await page.locator('.card__body').hover();
+await page.mouse.wheel(0,200);
+await page.waitForFunction(()=>document.querySelector('.card__body').scrollTop>0);
+await page.goto('http://127.0.0.1:1423?access=active');
+await page.getByLabel('Ask about the set',{exact:true}).waitFor();
+}
 async function openSet(id){await page.evaluate(id=>window.switchSet(id),id);}
 await openSet('C');
 await page.getByLabel('Goal (optional)',{exact:true}).waitFor();
@@ -207,20 +234,23 @@ assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled()
 assert.equal(await page.evaluate(()=>localStorage.getItem('copilot.setupDone')),'1');
 for (const access of ['expired','revoked']) {
 await page.goto('http://127.0.0.1:1423?access='+access);
+await page.getByText('Check your account access in Settings.').waitFor();
+await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.getByText('Your pilot access has ended. Contact Mixing Pal to continue.').waitFor();
-const sharing=page.locator('.card__main').getByLabel('Share advice and outcomes to help improve Mixing Pal');
+const sharing=page.locator('.card__settings').getByLabel('Share advice and outcomes to help improve Mixing Pal');
 assert.equal(await sharing.count(),1,access+' accounts must retain a withdrawal control');
 assert.equal(await sharing.isChecked(),true);
 await sharing.uncheck();
 await page.waitForFunction(()=>window.account.capture===false);
 assert.equal(await sharing.isEnabled(),false,access+' accounts must not enable sharing');
+await page.getByRole('button',{name:'Done',exact:true}).click();
 assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),false);
 }
 await page.clock.install();
 for(const state of ['held','paused']) {
 await page.goto('http://127.0.0.1:1423?'+state);
 await page.getByLabel('Ask about the set',{exact:true}).waitFor();
-await page.getByText(state==='held'?'We’re checking the last request’s usage before you can ask again.':'Model access is temporarily paused.').waitFor();
+await page.getByText(state==='held'?'Checking the last request’s usage. Please wait.':'Model access is temporarily paused.').waitFor();
 assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),false);
 await page.evaluate(()=>{window.account={...window.account,can_ask:true,reserved_micro_usd:0,service_paused:false};window.requests=[];});
 await page.clock.fastForward(31000);

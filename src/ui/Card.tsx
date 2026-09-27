@@ -66,7 +66,7 @@ export function Card({
       )}
       <div className={`card__main${settingsOpen ? " card__main--hidden" : ""}`}>
       {needsSignIn && <div className="card__account card__account--solo"><AccountPanel account={account} /></div>}
-      <div className={needsSignIn ? "card__main--hidden" : undefined}>
+      <div className={`card__session${needsSignIn ? " card__session--hidden" : ""}`}>
       {!needsSignIn && <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />}
       {nudge !== null && connected && (
         <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />
