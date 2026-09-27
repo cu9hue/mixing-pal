@@ -502,8 +502,6 @@ export function Conversation({
           ref={inputRef}
           className="card__input"
           value={input}
-          // Enter during a turn used to do nothing, silently. One question at
-          // a time is the rule, so the field says so and stops taking one.
           disabled={busy || operations.install || !wireReady(connected, state.scriptVersion, wireVersion.version) || !canAsk(account.view)}
           aria-label="Ask about the set"
           placeholder={busy ? "Answering. Ask the next one after." : "Ask about the set…"}
