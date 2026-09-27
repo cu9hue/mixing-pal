@@ -1,6 +1,8 @@
 export interface Env {
   DB: D1Database;
   CAPTURE: R2Bucket;
+  RELEASES?: R2Bucket;
+  DOWNLOADS_ORIGIN?: string;
   API_ORIGIN: string;
   MAIL_FROM: string;
   AUTH_SECRET: string;

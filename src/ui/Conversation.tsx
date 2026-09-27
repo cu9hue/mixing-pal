@@ -1,3 +1,6 @@
+import { useBusyState, beginMutation } from "../model/updates";
+import { wireReady } from "../setup/step";
+import wireVersion from "../../shared/wire-version.json";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AccountState, canAsk, errorMessage } from "../model/account";
@@ -145,12 +148,15 @@ export function Conversation({
   onTurnRunningChange,
   onAnswer,
   account,
+  connected,
 }: {
+  connected: boolean;
   state: SetState;
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
   account: AccountState;
 }) {
+  const operations = useBusyState();
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [thread, setThread] = useState<Exchange[]>([]);
   const [input, setInput] = useState("");
@@ -196,9 +202,10 @@ export function Conversation({
     if (action === "rekey") {
       // Same set, new name: the thread stays, the file follows. Saving
       // under the new key is what makes the Rust index adopt it.
+      const previous = key;
       keyRef.current = target;
       setKey(target);
-      persist(target, threadRef.current, noteRef.current, goalRef.current);
+      persist(target, threadRef.current, noteRef.current, goalRef.current, previous);
       return;
     }
     setLoadError(null);
@@ -243,9 +250,9 @@ export function Conversation({
     };
   }, [key, nextId, nextPath, busy]);
 
-  function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note, withGoal = goalRef.current) {
+  function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note, withGoal = goalRef.current, rekeyFrom: ThreadKey | null = null) {
     if (under === null) return;
-    saveThread(under, exchanges, withNote, withGoal).then(
+    saveThread(under, exchanges, withNote, withGoal, rekeyFrom).then(
       () => setSaveError(null),
       (e) => {
         console.error("failed to save the thread", e);
@@ -254,12 +261,18 @@ export function Conversation({
     );
   }
 
-  function changeNote(next: Note) {
+  function changeNote(next: Note): boolean {
+    if (operations.install) {
+      setSaveError("Wait for the app update to finish before changing notes.");
+      return false;
+    }
     setNote(next);
     persist(key, threadRef.current, next);
+    return true;
   }
 
   function changeGoal(next: string) {
+    if (operations.install) return;
     setGoal(next);
     goalRef.current = next;
     persist(key, threadRef.current, noteRef.current, next);
@@ -299,6 +312,7 @@ export function Conversation({
   async function send() {
     const asked = input.trim();
     if (asked === "" || busy || goal === null || key === null || !canAsk(account.view)) return;
+    if (!wireReady(connected, state.scriptVersion, wireVersion.version) || !beginMutation(operations, "turn")) return;
     setInput("");
     pinned.current = true;
     // Saved under the key current when the question was asked. A switch
@@ -370,6 +384,7 @@ export function Conversation({
     } finally {
       setProgress(null);
       setBusy(false);
+      operations.turn = false;
       onTurnRunningChange(false);
       void account.refresh();
     }
@@ -458,6 +473,7 @@ export function Conversation({
             {x.turnId && (!busy || i !== thread.length - 1) && account.view?.access !== "development" && (
               <FeedbackPanel turnId={x.turnId} answered={x.answer !== null} saved={x.feedback}
                 sharingEnabled={account.view?.capture === true} sentCount={thread.length} onSave={(feedback) => {
+                if (operations.install) return;
                 if (keyRef.current?.id !== key?.id || keyRef.current?.path !== key?.path) return;
                 const updated = threadRef.current.map((entry) => entry.turnId === x.turnId ? { ...entry, feedback } : entry);
                 setThread(updated);
@@ -482,7 +498,7 @@ export function Conversation({
           value={input}
           // Enter during a turn used to do nothing, silently. One question at
           // a time is the rule, so the field says so and stops taking one.
-          disabled={busy || !canAsk(account.view)}
+          disabled={busy || operations.install || !wireReady(connected, state.scriptVersion, wireVersion.version) || !canAsk(account.view)}
           aria-label="Ask about the set"
           placeholder={busy ? "Answering. Ask the next one after." : !canAsk(account.view) ? "Account access is needed to ask." : "Ask about the set…"}
           onChange={(e) => setInput(e.target.value)}

@@ -1,3 +1,4 @@
+import { BusyContext, createBusyState, useUpdates } from "./model/updates";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -12,11 +13,13 @@ import { unnamedTracks } from "./rules/unnamedTracks";
 import { EMPTY_NUDGE_STATE, dismiss, offer } from "./rules/nudges";
 import wireVersion from "../shared/wire-version.json";
 import { Setup } from "./setup/Setup";
-import { SetupFacts, SetupStep, currentStep, needsSetup } from "./setup/step";
+import { SetupFacts, SetupStep, currentStep, needsSetup, wireReady } from "./setup/step";
 import { loadSetupDone, saveSetupDone } from "./setup/setupDone";
 import { useAccount } from "./model/account";
 
 export default function App() {
+  const busy = useRef(createBusyState()).current;
+  const updates = useUpdates(busy);
   const account = useAccount();
   const [state, setState] = useState(emptySet());
   const [lastSeen, setLastSeen] = useState<number | null>(null);
@@ -81,6 +84,7 @@ export default function App() {
   // Set only when she asks for a setup screen from a banner. The window
   // then opens on that screen whatever the derivation thinks, and clearing
   // it is the only way out -- so every path that sets it has one.
+  const [wireCopied, setWireCopied] = useState(false);
   const [forcedStep, setForcedStep] = useState<SetupStep | null>(null);
 
   const refreshConnector = useCallback(() => {
@@ -103,8 +107,9 @@ export default function App() {
   const facts: SetupFacts = {
     connectorInstalled: connectorInstalled ?? true,
     connectorCurrent,
+    connectorCopied: wireCopied,
     liveRunning,
-    deltasArriving: connected,
+    deltasArriving: wireReady(connected, state.scriptVersion, wireVersion.version),
     connectedAcknowledged,
     hasAccount: account.view?.access === "active" || account.view?.access === "development",
   };
@@ -118,9 +123,7 @@ export default function App() {
   // than by a render guard that can fail both ways -- which is how a
   // forced setup used to leave the app rendering a pill into a 44px window
   // with no way out.
-  const view: WindowMode = setupOpen ? "setup" : mode === "setup" ? "card" : mode;
-  const setupOpenRef = useRef(setupOpen);
-  setupOpenRef.current = setupOpen;
+  const view: WindowMode = settingsOpen ? "card" : setupOpen ? "setup" : mode === "setup" ? "card" : mode;
 
   const finishSetup = useCallback(() => {
     setSetupDone(true);
@@ -191,9 +194,6 @@ export default function App() {
 
   useEffect(() => {
     const stop = listen("menu://settings", () => {
-      // Setup owns the window until it finishes; a pane queued behind it
-      // would pop up the moment she gets past the last step.
-      if (setupOpenRef.current) return;
       setSettingsOpen(true);
       dispatch({ type: "settings_opened" });
     });
@@ -273,6 +273,7 @@ export default function App() {
     .map((i) => state.tracks[i].name ?? "");
 
   return (
+    <BusyContext.Provider value={busy}>
     <div ref={root}>
       {view === "setup" && (
         <Setup
@@ -283,6 +284,7 @@ export default function App() {
           trackNames={trackNames}
           onFactsChanged={() => {
             refreshConnector();
+            setWireCopied(connectorInstalled === true);
             // She came here from a banner to reinstall. The install is
             // done, so the force is spent -- otherwise this screen would
             // be the only thing she could ever see again.
@@ -298,6 +300,8 @@ export default function App() {
       <div className={view === "card" ? undefined : "card-slot--hidden"}>
         <Card
           account={account}
+          updates={updates}
+          onOpenSettings={() => setSettingsOpen(true)}
           state={state}
           lastSeen={lastSeen}
           connected={connected}
@@ -325,5 +329,6 @@ export default function App() {
         />
       )}
     </div>
+    </BusyContext.Provider>
   );
 }

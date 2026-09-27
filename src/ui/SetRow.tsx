@@ -50,7 +50,7 @@ export function SetRow({
   goal: string;
   onGoalChange: (value: string) => void;
   note: Note;
-  onNoteChange: (next: Note) => void;
+  onNoteChange: (next: Note) => boolean;
 }) {
   const [editingGoal, setEditingGoal] = useState(false);
   const empty = goal.trim() === "";
@@ -69,13 +69,13 @@ export function SetRow({
   // Opening the editor and leaving is not an edit: only a changed text
   // makes the bullet hers and moves its time.
   function commitEdit(b: Bullet) {
-    if (draft.trim() !== b.text) onNoteChange(editBullet(note, b.id, draft, now()));
+    if (draft.trim() !== b.text && !onNoteChange(editBullet(note, b.id, draft, now()))) return;
     setEditing(null);
   }
 
   function add() {
     if (adding.trim() === "") return;
-    onNoteChange(addBullet(note, kind, adding, true, now()));
+    if (!onNoteChange(addBullet(note, kind, adding, true, now()))) return;
     setAdding("");
   }
 

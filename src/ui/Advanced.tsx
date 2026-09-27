@@ -1,3 +1,6 @@
+import { UpdatePanel } from "./UpdatePanel";
+import { Updates } from "../model/updates";
+import { useBusyState, beginMutation } from "../model/updates";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./Advanced.css";
@@ -21,13 +24,16 @@ interface ConnectorView {
 // Public builds keep account access as the only model transport.
 export function Advanced({
   account,
+  updates,
   scriptVersion,
   onClose,
 }: {
   account: AccountState;
+  updates?: Updates;
   scriptVersion: number | null;
   onClose: () => void;
 }) {
+  const operations = useBusyState();
   const [view, setView] = useState<SettingsView | null>(null);
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +56,7 @@ export function Advanced({
   }, []);
 
   async function reinstall() {
+    if (!beginMutation(operations, "wireInstall")) return;
     setReinstalling(true);
     setConnectorNote(null);
     try {
@@ -62,6 +69,7 @@ export function Advanced({
       setConnectorNote(String(e));
     } finally {
       setReinstalling(false);
+      operations.wireInstall = false;
     }
   }
 
@@ -72,6 +80,7 @@ export function Advanced({
   if (view === null) {
     return (
       <div className="advanced">
+        {updates && <UpdatePanel updates={updates} />}
         {loadError === null ? (
           <div className="advanced__note">Reading your settings…</div>
         ) : (
@@ -85,6 +94,7 @@ export function Advanced({
   }
 
   async function save() {
+    if (!beginMutation(operations, "settingsSave")) return;
     setSaving(true);
     setError(null);
     try {
@@ -103,6 +113,7 @@ export function Advanced({
       setError(String(e));
     } finally {
       setSaving(false);
+      operations.settingsSave = false;
     }
   }
 
@@ -116,6 +127,7 @@ export function Advanced({
         </button>
       </div>
 
+      {updates && <UpdatePanel updates={updates} />}
       <AccountPanel account={account} />
       {account.view?.access === "development" && <>
       <h3 className="advanced__heading">Model settings</h3>
@@ -151,7 +163,7 @@ export function Advanced({
         />
       </label>
 
-      <button className="advanced__button" onClick={save} disabled={saving}>
+      <button className="advanced__button" onClick={save} disabled={saving || operations.install}>
         {saving ? "Checking the model…" : "Save"}
       </button>
       {savedNote !== null && error === null && (
@@ -179,7 +191,7 @@ export function Advanced({
           {" · this app expects v"}
           {wireVersion.version}
         </div>
-        <button className="advanced__button" onClick={reinstall} disabled={reinstalling}>
+        <button className="advanced__button" onClick={reinstall} disabled={reinstalling || operations.install}>
           {reinstalling ? "Reinstalling…" : "Reinstall"}
         </button>
         {connectorNote !== null && (

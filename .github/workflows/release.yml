@@ -1,0 +1,172 @@
+name: Signed desktop release
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # stable
+        with:
+          toolchain: stable
+      - run: npm ci
+      - name: Run release checks with retained logs
+        run: |
+          set -euo pipefail
+          mkdir -p .superpowers/updates
+          run_check() {
+            local name="$1"
+            shift
+            local log=".superpowers/updates/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${name}.log"
+            set +e
+            "$@" > "$log" 2>&1
+            local result=$?
+            set -e
+            tail -n 30 "$log"
+            return "$result"
+          }
+          run_check publisher node --test scripts/publish-release.test.mjs
+          run_check app-tests npm test
+          run_check frontend-build npm run build
+          run_check rust-tests cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Verify release versions
+        run: |
+          set +e
+          mkdir -p .superpowers/updates
+          log=".superpowers/updates/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-versions.log"
+          node --input-type=module > "$log" 2>&1 <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json')).version;
+          const config = JSON.parse(readFileSync('src-tauri/tauri.conf.json')).version;
+          const cargo = /^version = "([^"]+)"$/m.exec(readFileSync('src-tauri/Cargo.toml', 'utf8'))?.[1];
+          if (!cargo || pkg !== config || pkg !== cargo) throw new Error('Package, Tauri and Cargo versions disagree');
+          if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME !== `v${pkg}`) throw new Error('Tag and package version disagree');
+          NODE
+          result=$?
+          tail -n 30 "$log"
+          exit "$result"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: release-checks-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .superpowers/updates/release-${{ github.run_id }}-${{ github.run_attempt }}-*.log
+          if-no-files-found: warn
+          include-hidden-files: true
+  publish:
+    if: github.event_name == 'push'
+    needs: check
+    runs-on: macos-15
+    timeout-minutes: 120
+    environment: production
+    concurrency:
+      group: desktop-artifacts-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Require tag commit on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main
+      - run: npm ci
+      - run: npm ci --prefix proxy
+      - name: Install pinned Minisign verifier
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-bin"
+          curl -fsSL 'https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-macos.zip' -o "$RUNNER_TEMP/release-bin/minisign.zip"
+          printf '%s  %s\n' '89000b19535765f9cffc65a65d64a820f433ef6db8020667f7570e06bf6aac63' "$RUNNER_TEMP/release-bin/minisign.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/release-bin/minisign.zip" minisign -d "$RUNNER_TEMP/release-bin"
+          chmod +x "$RUNNER_TEMP/release-bin/minisign"
+          printf '%s\n' "$RUNNER_TEMP/release-bin" >> "$GITHUB_PATH"
+      - name: Import Developer ID certificate and updater key
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/release-secrets"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/release-secrets/certificate.p12"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$RUNNER_TEMP/release-secrets/AuthKey.p8"
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/release-secrets/updater.key"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          if (!process.env.TAURI_SIGNING_PUBLIC_KEY) throw new Error('Updater public key missing');
+          writeFileSync(process.env.RUNNER_TEMP + '/release-secrets/tauri-release.json', JSON.stringify({ plugins: { updater: { pubkey: process.env.TAURI_SIGNING_PUBLIC_KEY } }, bundle: { createUpdaterArtifacts: true } }));
+          NODE
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release-secrets/build.keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release-secrets/build.keychain"
+          security set-keychain-settings -t 7200 -u "$RUNNER_TEMP/release-secrets/build.keychain"
+          security import "$RUNNER_TEMP/release-secrets/certificate.p12" -k "$RUNNER_TEMP/release-secrets/build.keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release-secrets/build.keychain"
+          security list-keychains -d user -s "$RUNNER_TEMP/release-secrets/build.keychain"
+          security default-keychain -s "$RUNNER_TEMP/release-secrets/build.keychain"
+          security find-identity -v -p codesigning "$RUNNER_TEMP/release-secrets/build.keychain"
+      - name: Build, sign, notarize and staple universal macOS release
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export APPLE_API_KEY_PATH="$RUNNER_TEMP/release-secrets/AuthKey.p8"
+          export TAURI_SIGNING_PRIVATE_KEY="$RUNNER_TEMP/release-secrets/updater.key"
+          APPLE_SIGNING_IDENTITY="$(security find-identity -v -p codesigning "$RUNNER_TEMP/release-secrets/build.keychain" | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
+          export APPLE_SIGNING_IDENTITY
+          test -n "$APPLE_SIGNING_IDENTITY"
+          npm run tauri -- build --target universal-apple-darwin --config "$RUNNER_TEMP/release-secrets/tauri-release.json"
+          mkdir -p "$RUNNER_TEMP/release-files"
+          cp 'src-tauri/target/universal-apple-darwin/release/bundle/macos/Mixing Pal.app.tar.gz' "$RUNNER_TEMP/release-files/Mixing-Pal.app.tar.gz"
+          cp 'src-tauri/target/universal-apple-darwin/release/bundle/macos/Mixing Pal.app.tar.gz.sig' "$RUNNER_TEMP/release-files/Mixing-Pal.app.tar.gz.sig"
+          cp "src-tauri/target/universal-apple-darwin/release/bundle/dmg/Mixing Pal_${GITHUB_REF_NAME#v}_universal.dmg" "$RUNNER_TEMP/release-files/Mixing-Pal.dmg"
+          xcrun notarytool submit "$RUNNER_TEMP/release-files/Mixing-Pal.dmg" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait --output-format json > "$RUNNER_TEMP/release-files/dmg-notarization.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const result = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/release-files/dmg-notarization.json', 'utf8'));
+          if (result.status !== 'Accepted') throw new Error(`DMG notarization failed: ${result.status}`);
+          NODE
+          xcrun stapler staple "$RUNNER_TEMP/release-files/Mixing-Pal.dmg"
+          xcrun stapler validate "$RUNNER_TEMP/release-files/Mixing-Pal.dmg"
+          git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-files/notes.txt"
+          test -s "$RUNNER_TEMP/release-files/notes.txt"
+          printf 'APPLE_SIGNING_IDENTITY=%s\n' "$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+      - name: Verify and publish immutable files
+        env:
+          RELEASE_STAGE: production
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          export RELEASE_DIR="$RUNNER_TEMP/release-files"
+          export RELEASE_TAURI_CONFIG="$RUNNER_TEMP/release-secrets/tauri-release.json"
+          export RELEASE_NOTES_FILE="$RUNNER_TEMP/release-files/notes.txt"
+          export RELEASE_TAG="$GITHUB_REF_NAME"
+          node scripts/publish-release.mjs
+      - name: Remove private signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release-secrets/build.keychain" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/release-secrets"

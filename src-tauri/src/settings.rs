@@ -189,3 +189,16 @@ mod tests {
         );
     }
 }
+
+/// Update preferences have their own file so account/provider saves cannot overwrite them.
+pub fn load_update_channel(dir: &Path) -> crate::updates::Channel {
+    #[derive(Default, Deserialize)]
+    struct Preferences { #[serde(default)] channel: crate::updates::Channel }
+    std::fs::read(dir.join("updates.json")).ok()
+        .and_then(|bytes| serde_json::from_slice::<Preferences>(&bytes).ok())
+        .unwrap_or_default().channel
+}
+pub fn save_update_channel(dir: &Path, channel: crate::updates::Channel) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join("updates.json"), serde_json::to_vec(&serde_json::json!({"channel": channel}))?)
+}

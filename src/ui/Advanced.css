@@ -146,3 +146,9 @@
   white-space: pre-wrap;
   font-size: var(--text-sm);
 }
+
+.advanced__release-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}

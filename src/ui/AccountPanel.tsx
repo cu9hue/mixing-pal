@@ -1,3 +1,4 @@
+import { useBusyState, beginMutation } from "../model/updates";
 import { useId, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AccountState, AccountView, errorMessage } from "../model/account";
@@ -10,6 +11,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
   const [code, setCode] = useState("");
   const [invite, setInvite] = useState("");
   const [codeSent, setCodeSent] = useState(false);
+  const operations = useBusyState();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -18,10 +20,11 @@ export function AccountPanel({ account }: { account: AccountState }) {
   const signingIn = view === null || view.access === "signed_out" || view.access === "invitation_required";
 
   async function act(action: () => Promise<void>) {
+    if (!beginMutation(operations, "accountMutation")) return;
     setBusy(true);
     setError(null);
     try { await action(); } catch (e) { setError(errorMessage(e)); }
-    finally { setBusy(false); }
+    finally { setBusy(false); operations.accountMutation = false; }
   }
 
   if (view?.access === "development") return null;
@@ -50,18 +53,18 @@ export function AccountPanel({ account }: { account: AccountState }) {
         <label htmlFor={`${id}-email`}>Email</label>
         <input id={`${id}-email`} type="email" autoComplete="email" required value={email}
           placeholder="Enter the email from your invitation"
-          disabled={busy || codeSent} onChange={(e) => setEmail(e.target.value)}
+          disabled={busy || operations.install || codeSent} onChange={(e) => setEmail(e.target.value)}
           aria-describedby={problem ? `${id}-error` : undefined} />
         {codeSent && <>
           <p>If your email has an invitation, your code is on its way.</p>
           <label htmlFor={`${id}-code`}>Six-digit sign-in code</label>
           <input id={`${id}-code`} autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}"
-            maxLength={6} required value={code} autoFocus disabled={busy} onChange={(e) => setCode(e.target.value)}
+            maxLength={6} required value={code} autoFocus disabled={busy || operations.install} onChange={(e) => setCode(e.target.value)}
             aria-invalid={Boolean(error)} aria-describedby={problem ? `${id}-error` : undefined} />
         </>}
         <div className="account__actions">
-          <button className="account__primary" type="submit" disabled={busy}>{busy ? "Please wait…" : codeSent ? "Sign in" : "Continue"}</button>
-          {codeSent && <button className="account__secondary" type="button" disabled={busy} onClick={() => { setCodeSent(false); setCode(""); }}>Use another email or resend</button>}
+          <button className="account__primary" type="submit" disabled={busy || operations.install}>{busy ? "Please wait…" : codeSent ? "Sign in" : "Continue"}</button>
+          {codeSent && <button className="account__secondary" type="button" disabled={busy || operations.install} onClick={() => { setCodeSent(false); setCode(""); }}>Use another email or resend</button>}
         </div>
       </form>}
       {view?.access === "invitation_required" && <form onSubmit={(e) => {
@@ -70,9 +73,9 @@ export function AccountPanel({ account }: { account: AccountState }) {
       }}>
         <p>Signed in as {view.email}. Enter the invitation code from Mixing Pal.</p>
         <label htmlFor={`${id}-invite`}>Invitation code</label>
-        <input id={`${id}-invite`} value={invite} required autoComplete="off" disabled={busy}
+        <input id={`${id}-invite`} value={invite} required autoComplete="off" disabled={busy || operations.install}
           onChange={(e) => setInvite(e.target.value)} aria-describedby={problem ? `${id}-error` : undefined} />
-        <button type="submit" disabled={busy}>Join the free pilot</button>
+        <button type="submit" disabled={busy || operations.install}>Join the free pilot</button>
       </form>}
       {view?.access === "active" && <>
         <div className="account__summary">
@@ -89,7 +92,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
       {view && ["active", "expired", "revoked"].includes(view.access) && <>
         <SharingConsent
           checked={view.capture}
-          disabled={busy || (view.access !== "active" && !view.capture)}
+          disabled={busy || operations.install || (view.access !== "active" && !view.capture)}
           onChange={(enabled) => {
             void act(async () => {
               account.change(await invoke<AccountView>("account_consent", { enabled }));
@@ -99,18 +102,18 @@ export function AccountPanel({ account }: { account: AccountState }) {
       </>}
       {(view?.access === "expired" || view?.access === "revoked") && <p>Your pilot access has ended. Contact Mixing Pal to continue.</p>}
       {view && view.access !== "signed_out" && <div className="account__actions">
-        <button disabled={busy} onClick={() => void act(async () => {
+        <button disabled={busy || operations.install} onClick={() => void act(async () => {
           await invoke("account_sign_out"); account.change({ access: "signed_out", capture: false }); setCodeSent(false);
         })}>Sign out</button>
-        <button disabled={busy} onClick={() => setDeleting(true)}>Delete account…</button>
+        <button disabled={busy || operations.install} onClick={() => setDeleting(true)}>Delete account…</button>
       </div>}
       {deleting && <div>
         <p>Delete your account and shared advice? This ends your access. Your local set notes stay on this laptop.</p>
         <div className="account__actions">
-          <button disabled={busy} onClick={() => void act(async () => {
+          <button disabled={busy || operations.install} onClick={() => void act(async () => {
             await invoke("account_delete"); account.change({ access: "signed_out", capture: false }); setDeleting(false);
           })}>Delete account and shared advice</button>
-          <button disabled={busy} onClick={() => setDeleting(false)}>Cancel</button>
+          <button disabled={busy || operations.install} onClick={() => setDeleting(false)}>Cancel</button>
         </div>
       </div>}
     </section>

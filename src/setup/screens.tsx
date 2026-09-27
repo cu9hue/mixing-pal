@@ -1,3 +1,4 @@
+import { useBusyState, beginMutation } from "../model/updates";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -9,12 +10,14 @@ export function InstallScreen({
   folder: string;
   onInstalled: () => void;
 }) {
+  const operations = useBusyState();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [library, setLibrary] = useState("");
   const [askingForLibrary, setAskingForLibrary] = useState(false);
 
   async function install() {
+    if (!beginMutation(operations, "wireInstall")) return;
     setBusy(true);
     setError(null);
     try {
@@ -29,6 +32,7 @@ export function InstallScreen({
       setAskingForLibrary(true);
     } finally {
       setBusy(false);
+      operations.wireInstall = false;
     }
   }
 
@@ -49,7 +53,7 @@ export function InstallScreen({
           onChange={(e) => setLibrary(e.target.value)}
         />
       )}
-      <button className="setup__primary" onClick={install} disabled={busy}>
+      <button className="setup__primary" onClick={install} disabled={busy || operations.install}>
         {busy ? "Installing…" : askingForLibrary ? "Try again" : "Install it"}
       </button>
       <p className="setup__note" style={{ marginTop: 14 }}>

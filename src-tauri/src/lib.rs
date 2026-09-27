@@ -1,3 +1,4 @@
+mod updates;
 mod bulk;
 mod connector;
 mod deltas;
@@ -883,7 +884,12 @@ fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            updates::check_update,
+            updates::download_update,
+            updates::install_update,
+            updates::set_update_channel,
             snapshot,
             connection_status,
             execute_tool,
@@ -910,6 +916,7 @@ pub fn run() {
             install::live_is_running
         ])
         .setup(|app| {
+            app.manage(updates::Updates::load(app.path().app_config_dir()?));
             let handle = app.handle().clone();
             install_menu(&handle)?;
             let coalescer = Arc::new(Mutex::new(Coalescer::new()));

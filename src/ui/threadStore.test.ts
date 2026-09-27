@@ -43,8 +43,8 @@ describe("classify", () => {
 
   // Two unsaved sets have no path; a new id with no path in common is
   // another set, not a promotion.
-  it("does not treat two pathless sets as one", () => {
-    expect(classify({ id: "x", path: null }, { id: "y", path: null }, false)).toBe("switch");
+  it.each([null, ""])("does not treat two pathless sets as one (%s)", (path) => {
+    expect(classify({ id: "x", path }, { id: "y", path }, false)).toBe("switch");
   });
 
   // The connector gone, or an unsaved set: nothing on screen changes.

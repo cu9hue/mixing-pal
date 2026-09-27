@@ -1,3 +1,4 @@
+import { Updates } from "../model/updates";
 import "./Card.css";
 import { SetState } from "../live/model";
 import { Nudge } from "../rules/nudges";
@@ -12,6 +13,8 @@ import { AccountPanel } from "./AccountPanel";
 
 export function Card({
   account,
+  updates,
+  onOpenSettings,
   state,
   lastSeen,
   connected,
@@ -25,6 +28,8 @@ export function Card({
   onCloseSettings,
 }: {
   account: AccountState;
+  updates?: Updates;
+  onOpenSettings?: () => void;
   state: SetState;
   lastSeen: number | null;
   connected: boolean;
@@ -42,17 +47,6 @@ export function Card({
     account.view.access === "signed_out" ||
     account.view.access === "invitation_required";
 
-  if (needsSignIn) {
-    return (
-      <div className="card" data-tauri-drag-region="deep">
-        <Header connected={connected} onCollapse={onCollapse} showConnection={false} />
-        <div className="card__account card__account--solo">
-          <AccountPanel account={account} />
-        </div>
-      </div>
-    );
-  }
-
   // One drag mechanism for the whole card: everything inside drags the
   // window, except buttons, inputs, and summaries (Tauri blocks those
   // itself), the answer and error text she may want to select, and the
@@ -60,18 +54,21 @@ export function Card({
   // exchange opts back in. See dragRegions.test.ts.
   return (
     <div className="card" data-tauri-drag-region="deep">
-      <Header connected={connected} onCollapse={onCollapse} />
+      <Header connected={connected} onCollapse={onCollapse} showConnection={!needsSignIn} />
+      {updates && (updates.view.phase === "available" || updates.view.phase === "ready") && !settingsOpen && <button className="advanced__button" onClick={onOpenSettings}>Update available · Open Settings</button>}
       {/* Settings replaces what is below the header, but hides it rather
           than unmounting it: the conversation and any answer in flight live
           in Conversation's state, the same reason App hides the card. */}
       {settingsOpen && (
         <div className="card__settings">
-          <Advanced account={account} scriptVersion={state.scriptVersion} onClose={onCloseSettings} />
+          <Advanced updates={updates} account={account} scriptVersion={state.scriptVersion} onClose={onCloseSettings} />
         </div>
       )}
       <div className={`card__main${settingsOpen ? " card__main--hidden" : ""}`}>
-      <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />
-      {!canAsk(account.view) && <div className="card__account"><AccountPanel account={account} /></div>}
+      {needsSignIn && <div className="card__account card__account--solo"><AccountPanel account={account} /><button className="advanced__button" onClick={onOpenSettings}>Settings</button></div>}
+      <div className={needsSignIn ? "card__main--hidden" : undefined}>
+      {!needsSignIn && <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />}
+      {!needsSignIn && !canAsk(account.view) && <div className="card__account"><AccountPanel account={account} /></div>}
       {nudge !== null && connected && (
         <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />
       )}
@@ -79,10 +76,12 @@ export function Card({
       <div className={`card__conversation${connected ? "" : " card__conversation--hidden"}`}>
         <Conversation
           account={account}
+          connected={connected}
           state={state}
           onTurnRunningChange={onTurnRunningChange}
           onAnswer={onAnswer}
         />
+      </div>
       </div>
       </div>
     </div>

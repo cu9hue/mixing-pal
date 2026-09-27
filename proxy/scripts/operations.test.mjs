@@ -48,6 +48,15 @@ test("deployment isolates stages, begins paused, and rejects absent resource IDs
   assert.notEqual(staging.vars.API_ORIGIN, production.vars.API_ORIGIN);
   assert.notEqual(staging.d1_databases[0].database_id, production.d1_databases[0].database_id);
   assert.notEqual(staging.r2_buckets[0].bucket_name, production.r2_buckets[0].bucket_name);
+  assert.deepEqual(staging.r2_buckets.map(({ binding, bucket_name }) => [binding, bucket_name]), [
+    ["CAPTURE", "mixing-pal-staging-capture"], ["RELEASES", "mixing-pal-staging-releases"],
+  ]);
+  assert.deepEqual(production.r2_buckets.map(({ binding, bucket_name }) => [binding, bucket_name]), [
+    ["CAPTURE", "mixing-pal-production-capture"], ["RELEASES", "mixing-pal-production-releases"],
+  ]);
+  assert.equal(staging.vars.DOWNLOADS_ORIGIN, "https://downloads-staging.mixingpal.com");
+  assert.equal(production.vars.DOWNLOADS_ORIGIN, "https://downloads.mixingpal.com");
+  assert.notEqual(staging.r2_buckets[0].bucket_name, staging.r2_buckets[1].bucket_name);
   assert.throws(() => configuration(base, "production", undefined), /D1 UUID/);
   assert.throws(() => configuration(base, "typo", id), /staging or production/);
 });
