@@ -391,6 +391,11 @@ export function Conversation({
   }
 
   const waiting = waitingLabel({ busy, toolProgress: progress, toolsCalled, elapsedMs });
+  const accessProblem = canAsk(account.view) ? null
+    : account.view?.access !== "active" ? "Check your account access in Settings."
+    : account.view.service_paused ? "Model access is temporarily paused."
+    : (account.view.reserved_micro_usd ?? 0) > 0 ? "Checking the last request’s usage. Please wait."
+    : "Your remaining allowance cannot cover another request. See Settings.";
   const loadingSet = key === null || (next !== null && classify(key, next, busy) === "switch");
 
   if (loadingSet) return <div className="card__body" role={loadError === null ? "status" : "alert"}>
@@ -492,6 +497,7 @@ export function Conversation({
         )}
       </div>
       <div className="card__footer">
+        {accessProblem && <div id="chat-access-status" className="card__access-status" role="status">{accessProblem}</div>}
         <input
           ref={inputRef}
           className="card__input"
@@ -500,7 +506,8 @@ export function Conversation({
           // a time is the rule, so the field says so and stops taking one.
           disabled={busy || operations.install || !wireReady(connected, state.scriptVersion, wireVersion.version) || !canAsk(account.view)}
           aria-label="Ask about the set"
-          placeholder={busy ? "Answering. Ask the next one after." : !canAsk(account.view) ? "Account access is needed to ask." : "Ask about the set…"}
+          placeholder={busy ? "Answering. Ask the next one after." : "Ask about the set…"}
+          aria-describedby={accessProblem ? "chat-access-status" : undefined}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
         />

@@ -8,6 +8,7 @@ import { flushThreadSaves, lockThreadSaves } from "../model/threads";
 import { emptySet } from "../live/apply";
 import { BusyContext, createBusyState, installWhenIdle } from "../model/updates";
 import { AccountState } from "../model/account";
+import wireVersion from "../../shared/wire-version.json";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const account: AccountState = {
@@ -26,6 +27,22 @@ afterEach(async () => {
   await flushThreadSaves();
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("keeps the chat visible during a pause and enables its draft when service resumes", async () => {
+  vi.mocked(invoke).mockResolvedValue({ exchanges: [], goal: "finish this track", saved_at: 1, next_bullet: 1, note: [] });
+  let current: AccountState = { ...account, view: { access: "active", capture: false, can_ask: false, service_paused: true, remaining_micro_usd: 5_000_000 } };
+  const conversation = () => <Conversation state={{ ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version }}
+    connected account={current} onTurnRunningChange={() => {}} onAnswer={() => {}} />;
+  const mounted = render(conversation());
+  await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+  const input = screen.getByLabelText("Ask about the set") as HTMLInputElement;
+  expect(input.disabled).toBe(true);
+  expect(screen.getByRole("status").textContent).toBe("Model access is temporarily paused.");
+  current = { ...current, view: { ...current.view!, can_ask: true, service_paused: false } };
+  mounted.rerender(conversation());
+  expect(input.disabled).toBe(false);
+  expect(screen.queryByText("Model access is temporarily paused.")).toBeNull();
 });
 
 it.each([

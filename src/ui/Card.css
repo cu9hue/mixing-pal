@@ -565,6 +565,13 @@
   border-top: 1px solid var(--border);
 }
 
+.card__access-status {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
 .card__input {
   width: 100%;
   box-sizing: border-box;
