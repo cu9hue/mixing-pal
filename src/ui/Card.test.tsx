@@ -41,5 +41,6 @@ describe("a signed-out card", () => {
     expect(html).not.toContain("How your data is handled");
     expect(html).not.toContain("Not connected");
     expect(html).not.toContain("Ask about the set");
+    expect(html).not.toContain(">Settings</button>");
   });
 });

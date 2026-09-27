@@ -65,7 +65,7 @@ export function Card({
         </div>
       )}
       <div className={`card__main${settingsOpen ? " card__main--hidden" : ""}`}>
-      {needsSignIn && <div className="card__account card__account--solo"><AccountPanel account={account} /><button className="advanced__button" onClick={onOpenSettings}>Settings</button></div>}
+      {needsSignIn && <div className="card__account card__account--solo"><AccountPanel account={account} /></div>}
       <div className={needsSignIn ? "card__main--hidden" : undefined}>
       {!needsSignIn && <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />}
       {!needsSignIn && !canAsk(account.view) && <div className="card__account"><AccountPanel account={account} /></div>}
