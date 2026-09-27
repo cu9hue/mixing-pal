@@ -44,3 +44,16 @@ describe("a signed-out card", () => {
     expect(html).not.toContain(">Settings</button>");
   });
 });
+
+it.each(["active", "expired", "revoked"] as const)("keeps the %s account panel out of the chat view", (access) => {
+  const html = renderToStaticMarkup(<Card
+    account={{ ...signedOutAccount, view: { access, capture: false, can_ask: false, service_paused: true, email: "producer@example.com" } }}
+    state={emptySet()} lastSeen={null} connected={false} nudge={null}
+    onDismissNudge={() => {}} onTurnRunningChange={() => {}} onAnswer={() => {}}
+    onCollapse={() => {}} onShowSetup={() => {}} settingsOpen={false} onCloseSettings={() => {}}
+  />);
+  expect(html).not.toContain("producer@example.com");
+  expect(html).not.toContain("Sign out");
+  expect(html).not.toContain("Delete account");
+  expect(html).not.toContain('class="account');
+});

@@ -8,7 +8,7 @@ import { Noticed } from "./Noticed";
 import { Conversation } from "./Conversation";
 import { Connection } from "./Connection";
 import { Advanced } from "./Advanced";
-import { AccountState, canAsk } from "../model/account";
+import { AccountState } from "../model/account";
 import { AccountPanel } from "./AccountPanel";
 
 export function Card({
@@ -68,7 +68,6 @@ export function Card({
       {needsSignIn && <div className="card__account card__account--solo"><AccountPanel account={account} /></div>}
       <div className={needsSignIn ? "card__main--hidden" : undefined}>
       {!needsSignIn && <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />}
-      {!needsSignIn && !canAsk(account.view) && <div className="card__account"><AccountPanel account={account} /></div>}
       {nudge !== null && connected && (
         <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />
       )}
