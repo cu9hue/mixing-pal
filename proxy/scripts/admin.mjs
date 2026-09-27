@@ -8,7 +8,7 @@ const help = `Mixing Pal pilot operator
 Set MIXINGPAL_API_ORIGIN and MIXINGPAL_ADMIN_TOKEN in your shell's secret store.
 The token is never an argument. Only localhost may use HTTP.
 
-  npm run admin -- invite email                 Issue a seven-day code; send nothing
+  npm run admin -- invite email                 Email a seven-day invitation and download link
   npm run admin -- usage                        Balances and held requests
   npm run admin -- revoke member-id              End access and revoke sessions
   npm run admin -- delete-account member-id      Delete identity and shared content
@@ -74,7 +74,10 @@ export async function operator(action, { origin, token, fetch: send = fetch }) {
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(action), signal: AbortSignal.timeout(60_000) });
   if (!response.ok) {
-    const error = new Error(`Operator request failed (${response.status}).`);
+    const message = action.action === "invite" && response.status === 502
+      ? "Invitation email could not be confirmed. Run the invite command again to send a new code."
+      : `Operator request failed (${response.status}).`;
+    const error = new Error(message);
     error.status = response.status;
     await response.body?.cancel();
     throw error;

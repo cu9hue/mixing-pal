@@ -4,6 +4,7 @@ import { ApiError, DAY, Env, hash, json, privateHash } from "./env";
 import { recover, settle } from "./ledger";
 import { maintain } from "./maintenance";
 import { exportTurn } from "./export";
+import { sendInvitation } from "./invitation-email";
 
 export async function admin(request: Request, env: Env, input: unknown): Promise<Response> {
   if (!env.ADMIN_TOKEN) throw new ApiError(503, "admin_disabled", "Operator access is not configured.");
@@ -31,9 +32,15 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
   const now = Date.now();
   if (data.action === "invite") {
     const code = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+    const codeHash = await hash(code);
     await env.DB.prepare("INSERT INTO invites(code_hash, email, expires_at) VALUES (?, ?, ?)")
-      .bind(await hash(code), data.email, now + 7 * DAY).run();
-    return json({ code, expires_at: now + 7 * DAY });
+      .bind(codeHash, data.email, now + 7 * DAY).run();
+    try { await sendInvitation(env, data.email, code); }
+    catch {
+      await env.DB.prepare("DELETE FROM invites WHERE code_hash = ? AND redeemed_by IS NULL").bind(codeHash).run();
+      throw new ApiError(502, "invite_email_failed", "Invitation email could not be confirmed. Run the invite command again to send a new code.");
+    }
+    return json({ code, expires_at: now + 7 * DAY, email_status: "accepted" });
   }
   if (data.action === "usage") {
     const [budget, members, pending] = await Promise.all([

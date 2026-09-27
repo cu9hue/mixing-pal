@@ -38,6 +38,20 @@ test("operator credentials never follow a plaintext or redirected public origin"
   assert.equal(sent, 0);
 });
 
+test("invite command reports mail acceptance and gives a safe retry message on failure", async () => {
+  const output = [];
+  let rejected = false;
+  const connection = { origin: "https://api.mixingpal.com", token: "operator-token", fetch: async (_url, options) => {
+    assert.deepEqual(JSON.parse(options.body), { action: "invite", email: "producer@example.com" });
+    return rejected ? Response.json({ error: "private provider details" }, { status: 502 })
+      : Response.json({ code: "invitation-code", expires_at: 123, email_status: "accepted" });
+  } };
+  await run(["invite", "producer@example.com"], connection, (text) => output.push(text));
+  assert.equal(JSON.parse(output[0]).email_status, "accepted");
+  rejected = true;
+  await assert.rejects(run(["invite", "producer@example.com"], connection), /Invitation email could not be confirmed.*new code/);
+});
+
 test("deployment isolates stages, begins paused, and rejects absent resource IDs", () => {
   const id = "00000000-0000-4000-8000-000000000000";
   const base = { main: "src/index.ts", vars: { MAIL_FROM: "sender" } };
