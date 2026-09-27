@@ -36,6 +36,8 @@ jobs:
           run_check publisher node --test scripts/publish-release.test.mjs
           run_check app-tests npm test
           run_check frontend-build npm run build
+          run_check webkit-install npx playwright install webkit
+          run_check browser-tests npm run test:ui
           run_check rust-tests cargo test --manifest-path src-tauri/Cargo.toml
       - name: Verify release versions
         run: |
@@ -57,7 +59,9 @@ jobs:
         if: always()
         with:
           name: release-checks-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .superpowers/updates/release-${{ github.run_id }}-${{ github.run_attempt }}-*.log
+          path: |
+            .superpowers/updates/release-${{ github.run_id }}-${{ github.run_attempt }}-*.log
+            .superpowers/proxy/ui-*/
           if-no-files-found: warn
           include-hidden-files: true
   publish:
