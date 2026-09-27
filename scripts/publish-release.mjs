@@ -109,12 +109,11 @@ export function r2Store({ stage, accountId, token, fetchImpl = fetch }) {
   async function request(method, key, body, type, cacheControl) {
     if (!/^(?:releases\/[0-9A-Za-z.-]+\/[A-Za-z0-9.-]+|channels\/(?:pilot|stable)\.json)$/.test(key)) throw new Error('Invalid R2 key');
     if (method === 'PUT' && body.length > 300_000_000) throw new Error('R2 REST object exceeds 300 MB upload limit');
-    const form = method === 'PUT' ? new FormData() : undefined;
-    if (form) form.set('body', new Blob([body], { type: type ?? 'application/octet-stream' }), key.split('/').at(-1));
     const response = await fetchImpl(base + key, { method, headers: {
       Authorization: `Bearer ${token}`,
+      ...(method === 'PUT' ? { 'Content-Type': type ?? 'application/octet-stream', 'Content-Length': String(body.length) } : {}),
       ...(cacheControl ? { 'Cache-Control': cacheControl } : {}),
-    }, body: form });
+    }, body });
     if (method === 'GET' && response.status === 404) return null;
     if (!response.ok) throw new Error(`R2 ${method} ${key} failed: ${response.status}`);
     return method === 'GET' ? Buffer.from(await response.arrayBuffer()) : null;

@@ -69,15 +69,21 @@ test('channel selection and pause retain the complete release', async () => {
   assert.deepEqual(selectChannel(release), { paused: false, release });
   assert.deepEqual(pauseChannel({ paused: false, release }), { paused: true, release });
 });
-test('R2 upload sends the object in Cloudflare body form field', async () => {
+test('R2 channel upload sends raw JSON with content type and no-store', async () => {
   let uploaded;
   const store = r2Store({ stage: 'staging', accountId: 'a'.repeat(32), token: 'test', fetchImpl: async (url, request) => {
     uploaded = { url, request };
     return new Response('{}', { status: 200 });
   } });
-  await store.put('channels/pilot.json', Buffer.from('test'), 'application/json', 'no-store');
+  const bytes = Buffer.from(JSON.stringify({ paused: true, release: null }));
+  await store.put('channels/pilot.json', bytes, 'application/json', 'no-store');
   assert.match(uploaded.url, /mixing-pal-staging-releases\/objects\/channels\/pilot.json$/);
-  assert.equal((await uploaded.request.body.get('body').text()), 'test');
+  const request = new Request(uploaded.url, uploaded.request);
+  assert.equal(request.method, 'PUT');
+  assert.equal(await request.text(), bytes.toString());
+  assert.equal(request.headers.get('Content-Type'), 'application/json');
+  assert.equal(request.headers.get('Content-Length'), String(bytes.length));
+  assert.equal(request.headers.get('Cache-Control'), 'no-store');
 });
 test('DMG app version mismatch aborts publication and detaches image', async () => {
   const commands = [];
