@@ -35,3 +35,17 @@ it("does not save while an update installs", async () => {
   await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
   expect(invoke).not.toHaveBeenCalledWith("set_experience", expect.anything());
 });
+
+it("keeps a choice made before the stored level arrives", async () => {
+  let answerRead!: (value: null) => void;
+  vi.mocked(invoke).mockImplementation(async (cmd) => {
+    if (cmd === "get_experience") return new Promise((resolve) => { answerRead = resolve; });
+    return null;
+  });
+  render(<Screen busy={createBusyState()} />);
+  fireEvent.click(screen.getByRole("button", { name: /New to Live/ }));
+  await screen.findByText("new_to_live");
+  answerRead(null);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.getByText("new_to_live")).toBeTruthy();
+});

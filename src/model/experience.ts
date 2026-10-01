@@ -17,8 +17,9 @@ export function useExperience(busy: BusyState) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // A choice made while this read was in flight is newer than the read.
     invoke<Experience | null>("get_experience")
-      .then(setExperience)
+      .then((stored) => setExperience((current) => (current === undefined ? stored : current)))
       .catch((e) => setError(String(e)));
   }, []);
 

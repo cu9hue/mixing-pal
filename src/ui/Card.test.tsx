@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Card } from "./Card";
 import { emptySet } from "../live/apply";
 import { AccountState } from "../model/account";
+import { ExperienceState } from "../model/experience";
 
 const signedOutAccount: AccountState = {
   view: { access: "signed_out", capture: false },
@@ -12,11 +13,14 @@ const signedOutAccount: AccountState = {
   observe: () => () => {},
 };
 
+const experience: ExperienceState = { experience: "finishes_tracks", error: null, choose: async () => {} };
+
 describe("a signed-out card", () => {
   it("shows sign-in without Live setup or chat", () => {
     const html = renderToStaticMarkup(
       <Card
         account={signedOutAccount}
+        experience={experience}
         state={emptySet()}
         lastSeen={null}
         connected={false}
@@ -48,7 +52,7 @@ describe("a signed-out card", () => {
 it.each(["active", "expired", "revoked"] as const)("keeps the %s account panel out of the chat view", (access) => {
   const html = renderToStaticMarkup(<Card
     account={{ ...signedOutAccount, view: { access, capture: false, can_ask: false, service_paused: true, email: "producer@example.com" } }}
-    state={emptySet()} lastSeen={null} connected={false} nudge={null}
+    experience={experience} state={emptySet()} lastSeen={null} connected={false} nudge={null}
     onDismissNudge={() => {}} onTurnRunningChange={() => {}} onAnswer={() => {}}
     onCollapse={() => {}} onShowSetup={() => {}} settingsOpen={false} onCloseSettings={() => {}}
   />);

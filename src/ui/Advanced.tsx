@@ -8,7 +8,7 @@ import wireVersion from "../../shared/wire-version.json";
 import { version as appVersion } from "../../package.json";
 import { AccountState } from "../model/account";
 import { AccountPanel } from "./AccountPanel";
-import { EXPERIENCES, useExperience } from "../model/experience";
+import { EXPERIENCES, ExperienceState } from "../model/experience";
 
 interface SettingsView {
   base_url: string;
@@ -25,17 +25,19 @@ interface ConnectorView {
 // Public builds keep account access as the only model transport.
 export function Advanced({
   account,
+  experience,
   updates,
   scriptVersion,
   onClose,
 }: {
   account: AccountState;
+  /** App's, so a choice made here also ends the setup step. */
+  experience: ExperienceState;
   updates?: Updates;
   scriptVersion: number | null;
   onClose: () => void;
 }) {
   const operations = useBusyState();
-  const experience = useExperience(operations);
   const [view, setView] = useState<SettingsView | null>(null);
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);

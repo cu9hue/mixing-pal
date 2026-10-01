@@ -304,6 +304,7 @@ export default function App() {
       <div className={view === "card" ? undefined : "card-slot--hidden"}>
         <Card
           account={account}
+          experience={experience}
           updates={updates}
           onOpenSettings={() => setSettingsOpen(true)}
           state={state}

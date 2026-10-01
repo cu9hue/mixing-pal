@@ -233,7 +233,10 @@ await setup.getByRole('button',{name:'Join the free pilot'}).click();
 await setup.getByRole('button',{name:'Got it',exact:true}).click();
 await setup.getByText('How do you work in Live?',{exact:true}).waitFor();
 await page.screenshot({path:`${artifacts}/fresh-experience.png`});
-await setup.getByRole('button',{name:/New to Live/}).click();
+// Choosing in Settings must end the setup step too: both read App's state.
+await page.evaluate(()=>window.emitFixture('menu://settings'));
+await page.getByLabel('New to Live').check();
+await page.getByRole('button',{name:'Done',exact:true}).click();
 await page.locator('.card__main').waitFor({state:'visible'});
 assert.equal(await page.evaluate(()=>window.experience),'new_to_live','setup saves the chosen level');
 assert.equal(await page.locator('.setup').count(),0,'install setup ends before the set goal');

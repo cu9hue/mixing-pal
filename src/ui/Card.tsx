@@ -9,10 +9,12 @@ import { Conversation } from "./Conversation";
 import { Connection } from "./Connection";
 import { Advanced } from "./Advanced";
 import { AccountState } from "../model/account";
+import { ExperienceState } from "../model/experience";
 import { AccountPanel } from "./AccountPanel";
 
 export function Card({
   account,
+  experience,
   updates,
   onOpenSettings,
   state,
@@ -28,6 +30,7 @@ export function Card({
   onCloseSettings,
 }: {
   account: AccountState;
+  experience: ExperienceState;
   updates?: Updates;
   onOpenSettings?: () => void;
   state: SetState;
@@ -61,7 +64,7 @@ export function Card({
           in Conversation's state, the same reason App hides the card. */}
       {settingsOpen && (
         <div className="card__settings">
-          <Advanced updates={updates} account={account} scriptVersion={state.scriptVersion} onClose={onCloseSettings} />
+          <Advanced updates={updates} account={account} experience={experience} scriptVersion={state.scriptVersion} onClose={onCloseSettings} />
         </div>
       )}
       <div className={`card__main${settingsOpen ? " card__main--hidden" : ""}`}>
