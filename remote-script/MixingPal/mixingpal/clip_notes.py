@@ -4,8 +4,7 @@ from .clip_replies import notes_window_reply, session_clips_reply, session_snaps
 
 
 class ClipNotesHandler(AbletonOSCHandler):
-    """Bounded session reads with note windows and content snapshots.
-    Snapshot checks keep note pages from different edits out of one answer."""
+    """Snapshot checks keep note pages from different edits out of one answer."""
 
     def __init__(self, manager):
         super().__init__(manager)

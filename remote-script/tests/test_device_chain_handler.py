@@ -1,4 +1,3 @@
-"""Exercise the registered device-chain pager without Live."""
 import importlib.util
 from pathlib import Path
 import sys

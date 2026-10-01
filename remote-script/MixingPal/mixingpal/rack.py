@@ -4,18 +4,8 @@ from .rack_paths import NAME_CAP, build_window, chains_of, parse_path, resolve
 
 
 class RackHandler(AbletonOSCHandler):
-    """Opens Racks.
-
-    `track.devices` is top-level only, so without this a loaded Drum Rack is
-    one device named "Drum Rack" and the compressor on the kick pad does not
-    exist as far as the app is concerned. Lists rack chains with bounded device-name pages, and identifies any
-    device by path.
-
-    Returning None sends no reply at all (see `osc_server.process_message`'s
-    `if rv is not None`), which is the same thing a raise inside a handler
-    produces. Both are byte-identical to a lost datagram from the client's
-    side, and that equivalence is documented rather than worked around.
-    """
+    """Returning None sends no reply, just like a raise inside a handler.
+    Both are indistinguishable from a lost datagram to the client."""
 
     def __init__(self, manager):
         super().__init__(manager)

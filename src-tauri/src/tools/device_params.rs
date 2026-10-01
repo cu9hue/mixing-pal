@@ -10,10 +10,8 @@ use std::time::Duration;
 /// Deliberately equal to `clip_notes::QUERY_TIMEOUT`; see that constant.
 pub const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// A prompt-token cap, NOT a datagram cap -- which is why it lives here and
-/// not in `osc/budget.rs`. Operator has about 130 parameters and large
-/// third-party synths reach about 300. A later page can recover the tail
-/// without spending several thousand tokens on every read.
+/// A prompt-token cap, not a datagram cap, so it lives here instead of `osc/budget.rs`.
+/// Later pages recover the tail without spending several thousand tokens on every read.
 pub const MAX_PARAMS: usize = 256;
 
 /// Floor for halve-and-retry, mirroring `clip_notes::MIN_WINDOW_BEATS`.
@@ -269,10 +267,7 @@ pub async fn get_device_params(
     // parameter count differs. Identical twins with identical counts still
     // defeat it -- recorded in the spec's Known limits, not papered over.
     let observed = device_identity(q, track, path, timeout).await;
-    // `total` was read in the same moment as `device_name`, so it stays
-    // consistent with it. The parameters were not, and once the
-    // identity is in doubt there is no way to say which device they belong
-    // to -- so both branches below drop them.
+    // Once identity is in doubt, the parameters cannot be attributed to a device.
     let verified = matches!(&observed, Some((name, count)) if *name == device_name && *count == total);
     match observed {
         Some((name, count)) if name == device_name && count == total => {}

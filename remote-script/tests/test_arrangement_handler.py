@@ -1,5 +1,3 @@
-"""Exercise the registered handlers without Live's control-surface runtime."""
-
 import importlib.util
 from pathlib import Path
 import sys

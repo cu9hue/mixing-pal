@@ -38,7 +38,6 @@ from ..abletonosc.handler import AbletonOSCHandler
 # path. A stale script knows no such address, so the app never learns which
 # set is open and nothing per-set can be saved; the banner asks for the
 # reinstall.
-# Version 13 adds paged session/device lists and rack device continuation.
 WIRE_VERSION = 13
 
 

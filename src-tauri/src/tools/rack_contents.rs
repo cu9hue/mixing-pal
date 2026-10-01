@@ -43,7 +43,6 @@ pub struct RackChain {
     pub muted: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub soloed: bool,
-    /// Fenced device names, starting at `device_offset` in chain order.
     pub devices: Vec<String>,
     /// The chain's real device count, which exceeds `devices.len()` when the
     /// handler cut the list back to fit one datagram.
@@ -103,22 +102,8 @@ fn string_or_nil_at(reply: &[OscType], i: usize) -> Option<Option<String>> {
     }
 }
 
-/// Decodes `(track, path, start, device_offset, total_chains, can_have_chains, *records)`.
-///
-/// Each record is `name, note, mute, solo, sample_name, total_devices, reported_devices`
-/// followed by exactly `reported_devices` `(device_name, is_rack)` pairs, so a record announces its
-/// own length and a stream of variable-length records needs no separator.
-///
-/// Fails closed on anything that does not line up. A record claiming more
-/// names than the reply can hold means the stream was truncated in transit
-/// or forged; either way every following byte becomes unattributable, so the
-/// whole window is refused rather than yielding the prefix. Half a rack
-/// presented as a whole one is worse than no rack at all.
-///
-/// The `expect_start` check is defence in depth, not the thing that catches
-/// a mis-attributed reply: this address is `KeyArity::Args(4)`, so a reply
-/// echoing a different start matches no pending entry and
-/// `RequestTable::resolve` drops it first. Both offsets are part of that key.
+/// A malformed variable-length record makes every following byte unattributable,
+/// so the whole window is refused rather than yielding a misleading prefix.
 fn decode_window(reply: &[OscType], expect_start: usize) -> Option<(usize, bool, Vec<RackChain>)> {
     if usize::try_from(int_at(reply, 2)?).ok()? != expect_start {
         return None;
@@ -320,7 +305,6 @@ mod tests {
     use super::*;
     use rosc::OscType::{Int, String as S};
 
-    /// `(track, path, start, device_offset, total_chains, can_have_chains, *records)`.
     fn reply(start: i32, total: i32, is_rack: bool, records: Vec<Vec<OscType>>) -> Vec<OscType> {
         let mut out = vec![
             Int(0),
