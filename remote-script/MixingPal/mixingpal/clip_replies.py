@@ -47,15 +47,30 @@ def session_clips_reply(track_index, start, limit, slots):
     return (track_index, start, len(slots), *names)
 
 
+def session_fingerprint_reply(track_index, slots):
+    names = tuple(str(slot.clip.name)[:120] if slot.clip else None for slot in slots)
+    digest = hashlib.sha256(json.dumps(names, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return (track_index, len(slots), digest)
+
+
 def _note_attributes(note):
     return (note.pitch, note.start_time, note.duration, note.velocity, note.mute)
+
+
+def source_note_range(clip):
+    """Absolute clip beats covering markers and the enabled loop, not duration."""
+    start, end = float(clip.start_marker), float(clip.end_marker)
+    if clip.looping:
+        start = min(start, float(clip.loop_start))
+        end = max(end, float(clip.loop_end))
+    return start, end
 
 
 def session_snapshot_reply(track_index, clip_index, clip, notes):
     length = float(clip.length)
     looping = bool(clip.looping)
     start, end = (float(clip.loop_start), float(clip.loop_end)) if looping else (0.0, 0.0)
-    metadata = (length, looping, start, end)
+    metadata = (length, looping, start, end, float(clip.start_marker), float(clip.end_marker))
     digest = hashlib.sha256(json.dumps(metadata, separators=(",", ":")).encode("utf-8"))
     for note in notes:
         digest.update(json.dumps(_note_attributes(note), separators=(",", ":")).encode("utf-8"))

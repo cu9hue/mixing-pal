@@ -3,7 +3,7 @@ from ..abletonosc.handler import AbletonOSCHandler
 from .arrangement_replies import (
     arrangement_reply, cue_points_reply, identity_reply, timeline_fingerprint_reply,
     window_of)
-from .clip_replies import notes_window_reply, num_notes_reply
+from .clip_replies import notes_window_reply, session_snapshot_reply, source_note_range
 
 
 class ArrangementHandler(AbletonOSCHandler):
@@ -152,8 +152,9 @@ class ArrangementHandler(AbletonOSCHandler):
             clip = arrangement_clip_at(params)
             if clip is None or not bool(getattr(clip, "is_midi_clip", False)):
                 return None
-            notes = clip.get_notes_extended(0, 128, 0.0, float(clip.length))
-            return num_notes_reply(int(params[0]), int(params[1]), notes)
+            start, end = source_note_range(clip)
+            notes = clip.get_notes_extended(0, 128, start, end - start)
+            return session_snapshot_reply(int(params[0]), int(params[1]), clip, notes)
 
         def arrangement_notes_window(params: Tuple[Any]):
             if len(params) != 7:

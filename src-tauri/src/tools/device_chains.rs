@@ -68,7 +68,38 @@ fn decode_page(
     Some((total, devices))
 }
 
+const FINGERPRINT: &str = "/live/mixingpal/get/device_chain/fingerprint";
+
+async fn fingerprint(q: &LiveQuery, track: i32, timeout: Duration) -> Option<(usize, String)> {
+    let reply = q
+        .query(FINGERPRINT, vec![OscType::Int(track)], timeout)
+        .await
+        .ok()?;
+    let [OscType::Int(actual), OscType::Int(total), OscType::String(digest)] = reply.as_slice() else {
+        return None;
+    };
+    if *actual != track || digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((usize::try_from(*total).ok()?, digest.clone()))
+}
+
 async fn read_track(
+    q: Arc<LiveQuery>,
+    track: i32,
+    offset: usize,
+    limit: usize,
+    timeout: Duration,
+) -> Option<TrackChain> {
+    let before = fingerprint(&q, track, timeout).await?;
+    let result = read_track_pages(q.clone(), track, offset, limit, timeout).await?;
+    if result.total_devices != before.0 || fingerprint(&q, track, timeout).await? != before {
+        return None;
+    }
+    Some(result)
+}
+
+async fn read_track_pages(
     q: Arc<LiveQuery>,
     track: i32,
     offset: usize,
@@ -174,6 +205,8 @@ mod tests {
         chains: Vec<Vec<String>>,
         silent: Option<(i32, i32)>,
         changed_total: bool,
+        reorder: bool,
+        bad_fingerprint: Option<&'static str>,
         hold_until: usize,
     }
 
@@ -192,10 +225,24 @@ mod tests {
             }
         });
         tokio::spawn(async move {
+            let mut pages_read = false;
             let mut pending = Vec::new();
             let mut received = 0;
             loop {
                 let request = live.recv().await.unwrap();
+                if request.addr == FINGERPRINT {
+                    let OscType::Int(track) = request.args[0] else { panic!("bad track") };
+                    if fake.bad_fingerprint == Some("missing") && pages_read { continue; }
+                    let digest = if pages_read && fake.reorder { "b" } else { "a" };
+                    live.send_to(port, FINGERPRINT, vec![
+                        OscType::Int(track),
+                        OscType::Int(fake.chains[track as usize].len() as i32),
+                        if fake.bad_fingerprint == Some("malformed") && pages_read {
+                                OscType::Int(0)
+                            } else { OscType::String(digest.repeat(64)) },
+                    ]).await.unwrap();
+                    continue;
+                }
                 assert_eq!(request.addr, ADDRESS);
                 pending.push(request);
                 received += 1;
@@ -211,7 +258,8 @@ mod tests {
                     if fake.silent == Some((*track, *offset)) {
                         continue;
                     }
-                    let names = &fake.chains[*track as usize];
+                    let mut names = fake.chains[*track as usize].clone();
+                    if fake.reorder && *offset > 0 { names.swap(0, 3); }
                     let total = names.len() as i32 + i32::from(fake.changed_total && *offset > 0);
                     let mut reply = vec![
                         OscType::Int(*track),
@@ -227,6 +275,7 @@ mod tests {
                         reply.push(OscType::String(name.clone()));
                         reply.push(OscType::Bool(index % 2 == 1));
                     }
+                    pages_read = true;
                     live.send_to(port, ADDRESS, reply).await.unwrap();
                 }
             }
@@ -236,6 +285,34 @@ mod tests {
 
     fn names(count: usize) -> Vec<String> {
         (0..count).map(|i| format!("Device{i}")).collect()
+    }
+
+    #[tokio::test]
+    async fn unreadable_final_fingerprint_discards_unverified_pages() {
+        for bad in ["missing", "malformed"] {
+            let q = fake_live(FakeLive {
+                chains: vec![names(8)],
+                bad_fingerprint: Some(bad),
+                ..Default::default()
+            })
+            .await;
+            let map = get_device_chains(q, 1, FAST).await;
+            assert_eq!(map.missing, vec![0]);
+            assert!(map.tracks.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_same_count_reorder_discards_the_spliced_chain() {
+        let q = fake_live(FakeLive {
+            chains: vec![names(8)],
+            reorder: true,
+            ..Default::default()
+        })
+        .await;
+        let map = get_device_chains(q, 1, FAST).await;
+        assert_eq!(map.missing, vec![0]);
+        assert!(map.tracks.is_empty());
     }
 
     #[tokio::test]

@@ -107,6 +107,10 @@ pub const ARRANGEMENT_NOTES: NoteAddresses = NoteAddresses {
 pub struct ClipNotes {
     pub notes: Vec<Note>,
     pub length_beats: f64,
+    /// Source beat at the placement/launch start; notes retain absolute clip beats.
+    pub source_start_beats: Option<f64>,
+    /// Absolute source bounds covered by this read (markers and enabled loop).
+    pub note_range: Option<LoopRegion>,
     pub loop_region: Option<LoopRegion>,
     pub loop_state_known: bool,
     /// Set when at least one window never answered even at the floor. The
@@ -252,7 +256,7 @@ pub fn decode_notes(args: &[OscType], expect_window: u32) -> Option<Vec<Note>> {
         .collect()
 }
 
-/// Fetches every note in a clip, paging by time window.
+/// Fetches notes across the source markers and enabled loop, paging by time window.
 ///
 /// Every window of a round goes out before any of them is awaited, so a
 /// clip that needs six windows costs one Live tick, not six:
@@ -312,21 +316,18 @@ pub async fn get_notes_at(
                     .and_then(|r| r.get(2))
                     .and_then(as_f64)
                     .unwrap_or(0.0),
+                source_start_beats: None,
+                note_range: None,
                 loop_region: None,
                 loop_state_known: false,
                 missing_reason: Some(status.clone()),
             });
         }
     }
-    let session = addrs.num_notes == SESSION_NOTES.num_notes;
-    let snapshot = session
-        .then(|| {
-            count_reply
-                .as_ref()
-                .ok()
-                .and_then(|r| decode_session_snapshot(r))
-        })
-        .flatten();
+    let snapshot = count_reply
+        .as_ref()
+        .ok()
+        .and_then(|r| decode_session_snapshot(r));
     // A reply that arrived but whose length value can't be read is not "the
     // clip is empty" -- unwrap_or(0.0) would turn an unreadable reply into a
     // fabricated zero-span window, which returns {notes: [], missing_reason:
@@ -342,15 +343,26 @@ pub async fn get_notes_at(
     // The count is a HINT, not data: it only decides how wide the first
     // windows are. Every way it can be absent -- a Remote Script too old to
     // know the endpoint, a dropped datagram, a reply this decoder refuses
-    // -- falls back to 0, one window over the whole clip narrowed by
-    // halve-and-retry. A wrong count costs round trips, never correctness.
+    // -- falls back to 0 and narrows by halve-and-retry. The snapshot also
+    // supplies source bounds; without those the legacy [0, length) read is
+    // partial and must report coherence_unavailable.
     let est_notes = count_reply
         .ok()
         .and_then(|r| r.get(2).and_then(as_i32))
         .map(usable_note_estimate)
         .unwrap_or(0);
 
-    let mut pending: Vec<(f32, f32)> = note_windows(length, est_notes);
+    let range = snapshot.as_ref().map(|s| s.note_range());
+    let range_start = range.as_ref().map_or(0.0, |r| r.start_beats as f32);
+    let range_end = range.as_ref().map_or(length, |r| r.end_beats as f32);
+    let mut pending: Vec<(f32, f32)> = note_windows(range_end - range_start, est_notes)
+        .into_iter()
+        .map(|(start, span)| {
+            let end = range_start + (start + span);
+            let start = range_start + start;
+            (start, end - start)
+        })
+        .collect();
     let mut notes: Vec<Note> = Vec::new();
     let mut missing_reason = None;
     let mut windows_used = 0usize;
@@ -442,7 +454,7 @@ pub async fn get_notes_at(
         pending = next;
     }
 
-    if session {
+    {
         let status = match &snapshot {
             Some(before) => {
                 let after = q
@@ -487,6 +499,8 @@ pub async fn get_notes_at(
     Ok(ClipNotes {
         notes,
         length_beats: f64::from(length),
+        source_start_beats: snapshot.as_ref().map(|s| s.start_marker),
+        note_range: range,
         loop_region: snapshot.as_ref().and_then(|s| s.loop_region.clone()),
         loop_state_known: snapshot.is_some(),
         missing_reason,
@@ -497,11 +511,28 @@ pub async fn get_notes_at(
 struct SessionSnapshot {
     digest: String,
     length: f64,
+    start_marker: f64,
+    end_marker: f64,
     loop_region: Option<LoopRegion>,
 }
 
+impl SessionSnapshot {
+    fn note_range(&self) -> LoopRegion {
+        LoopRegion {
+            start_beats: self
+                .loop_region
+                .as_ref()
+                .map_or(self.start_marker, |r| self.start_marker.min(r.start_beats)),
+            end_beats: self
+                .loop_region
+                .as_ref()
+                .map_or(self.end_marker, |r| self.end_marker.max(r.end_beats)),
+        }
+    }
+}
+
 fn decode_session_snapshot(reply: &[OscType]) -> Option<SessionSnapshot> {
-    if reply.len() != 8 {
+    if reply.len() != 10 {
         return None;
     }
     let digest = match &reply[3] {
@@ -516,6 +547,11 @@ fn decode_session_snapshot(reply: &[OscType]) -> Option<SessionSnapshot> {
     if !length.is_finite() || length < 0.0 {
         return None;
     }
+    let start_marker = as_f64(&reply[8])?;
+    let end_marker = as_f64(&reply[9])?;
+    if !start_marker.is_finite() || !end_marker.is_finite() || end_marker < start_marker {
+        return None;
+    }
     let loop_region = decode_loop_region(&reply[5..])?;
     if loop_region
         .as_ref()
@@ -526,6 +562,8 @@ fn decode_session_snapshot(reply: &[OscType]) -> Option<SessionSnapshot> {
     Some(SessionSnapshot {
         digest,
         length,
+        start_marker,
+        end_marker,
         loop_region,
     })
 }
@@ -670,6 +708,7 @@ mod tests {
         answers_num_notes: bool,
         num_notes_status: Option<&'static str>,
         changed_snapshot: Option<&'static str>,
+        source_markers: Option<(bool, f32, f32, f32, f32)>,
     }
 
     /// Spawns the fake, plus the receive loop the query path needs, and
@@ -709,7 +748,7 @@ mod tests {
                     _ => 0.0,
                 };
                 match req.addr.as_str() {
-                    "/live/clip/get/length" => {
+                    "/live/clip/get/length" | "/live/arrangement_clip/get/length" => {
                         let length_arg = if fake.malformed_length {
                             OscType::String("not a number".to_string())
                         } else {
@@ -718,19 +757,15 @@ mod tests {
                         let _ = live
                             .send_to(
                                 app_port,
-                                "/live/clip/get/length",
+                                &req.addr,
                                 vec![req.args[0].clone(), req.args[1].clone(), length_arg],
                             )
                             .await;
                     }
-                    "/live/clip/get/num_notes" if fake.answers_num_notes => {
-                        let changed = seen
-                            .lock()
-                            .unwrap()
-                            .get(SESSION_NOTES.num_notes)
-                            .copied()
-                            .unwrap_or(0)
-                            > 1;
+                    "/live/clip/get/num_notes" | "/live/arrangement_clip/get/num_notes"
+                        if fake.answers_num_notes =>
+                    {
+                        let changed = seen.lock().unwrap().get(&req.addr).copied().unwrap_or(0) > 1;
                         if changed && fake.changed_snapshot == Some("missing") {
                             continue;
                         }
@@ -738,7 +773,7 @@ mod tests {
                             let _ = live
                                 .send_to(
                                     app_port,
-                                    SESSION_NOTES.num_notes,
+                                    &req.addr,
                                     vec![
                                         req.args[0].clone(),
                                         req.args[1].clone(),
@@ -751,7 +786,7 @@ mod tests {
                         let _ = live
                             .send_to(
                                 app_port,
-                                "/live/clip/get/num_notes",
+                                &req.addr,
                                 vec![
                                     req.args[0].clone(),
                                     req.args[1].clone(),
@@ -771,20 +806,26 @@ mod tests {
                                     } else {
                                         OscType::Float(fake.length)
                                     },
-                                    OscType::Bool(true),
+                                    OscType::Bool(fake.source_markers.map_or(true, |m| m.0)),
                                     OscType::Float(
                                         if changed && fake.changed_snapshot == Some("loop") {
                                             1.0
                                         } else {
-                                            0.0
+                                            fake.source_markers.map_or(0.0, |m| m.3)
                                         },
                                     ),
-                                    OscType::Float(fake.length),
+                                    OscType::Float(
+                                        fake.source_markers.map_or(fake.length, |m| m.4),
+                                    ),
+                                    OscType::Float(fake.source_markers.map_or(0.0, |m| m.1)),
+                                    OscType::Float(
+                                        fake.source_markers.map_or(fake.length, |m| m.2),
+                                    ),
                                 ],
                             )
                             .await;
                     }
-                    "/live/clip/get/notes_window" => {
+                    "/live/clip/get/notes_window" | "/live/arrangement_clip/get/notes_window" => {
                         let (start, span) = (f(5), f(6));
                         let silent = fake.silent_all
                             || fake
@@ -821,15 +862,11 @@ mod tests {
                                     continue;
                                 }
                                 for reply in held.drain(..) {
-                                    let _ = live
-                                        .send_to(app_port, "/live/clip/get/notes_window", reply)
-                                        .await;
+                                    let _ = live.send_to(app_port, &req.addr, reply).await;
                                 }
                             }
                             None => {
-                                let _ = live
-                                    .send_to(app_port, "/live/clip/get/notes_window", reply)
-                                    .await;
+                                let _ = live.send_to(app_port, &req.addr, reply).await;
                             }
                         }
                     }
@@ -839,6 +876,56 @@ mod tests {
         });
 
         (Arc::new(LiveQuery::new(app, table)), counts)
+    }
+
+    #[tokio::test]
+    async fn source_note_windows_cover_nonzero_loops_and_unlooped_markers() {
+        for addresses in [SESSION_NOTES, ARRANGEMENT_NOTES] {
+            for (markers, times, bounds) in [
+                ((true, 8.0, 12.0, 8.0, 12.0), vec![8.0, 11.5], (8.0, 12.0)),
+                ((false, 8.0, 12.0, 8.0, 12.0), vec![8.0, 11.5], (8.0, 12.0)),
+                (
+                    (true, 6.0, 12.0, 8.0, 12.0),
+                    vec![6.0, 8.0, 11.5],
+                    (6.0, 12.0),
+                ),
+                (
+                    (true, 10.0, 14.0, 8.0, 12.0),
+                    vec![8.0, 11.5, 13.0],
+                    (8.0, 14.0),
+                ),
+                ((false, -2.0, 2.0, -2.0, 2.0), vec![-2.0, 1.5], (-2.0, 2.0)),
+            ] {
+                let (q, _) = spawn(FakeLive {
+                    length: 4.0,
+                    notes: times.iter().map(|at| (*at, 60)).collect(),
+                    silent: vec![],
+                    silent_all: false,
+                    full_reply: None,
+                    malformed_length: false,
+                    hold_notes_until: None,
+                    answers_num_notes: true,
+                    num_notes_status: None,
+                    changed_snapshot: None,
+                    source_markers: Some(markers),
+                })
+                .await;
+                let result = get_notes_at(q, addresses, 0, 0, FAST).await.unwrap();
+                assert_eq!(result.source_start_beats, Some(markers.1 as f64));
+                assert_eq!(
+                    result.note_range,
+                    Some(LoopRegion {
+                        start_beats: bounds.0,
+                        end_beats: bounds.1
+                    })
+                );
+                assert_eq!(
+                    result.notes.iter().map(|n| n.start).collect::<Vec<_>>(),
+                    times.iter().map(|at| f64::from(*at)).collect::<Vec<_>>()
+                );
+                assert_eq!(result.missing_reason, None);
+            }
+        }
     }
 
     const FAST: Duration = Duration::from_millis(80);
@@ -855,6 +942,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -882,6 +970,7 @@ mod tests {
                 answers_num_notes: true,
                 num_notes_status: Some(status),
                 changed_snapshot: None,
+                source_markers: None,
                 hold_notes_until: None,
             })
             .await;
@@ -907,6 +996,7 @@ mod tests {
                 answers_num_notes: true,
                 num_notes_status: None,
                 changed_snapshot: Some(change),
+                source_markers: None,
                 hold_notes_until: None,
             })
             .await;
@@ -937,6 +1027,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1050,6 +1141,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: Some(2),
         })
         .await;
@@ -1091,6 +1183,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1138,6 +1231,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1178,6 +1272,7 @@ mod tests {
             answers_num_notes: false,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1217,6 +1312,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1248,6 +1344,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1302,6 +1399,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1330,6 +1428,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1358,6 +1457,7 @@ mod tests {
             answers_num_notes: true,
             num_notes_status: None,
             changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;

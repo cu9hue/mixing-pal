@@ -185,7 +185,7 @@ fn recovery_evidence(value: &serde_json::Value, remaining: &mut usize) -> serde_
                         out.insert(format!("{key}_omitted"), omitted.into());
                     }
                 } else if *remaining > 0
-                    && matches!(key.as_str(), "value" | "scope" | "coverage" | "loop_region")
+                    && matches!(key.as_str(), "value" | "scope" | "coverage" | "loop_region" | "note_range")
                 {
                     out.insert(key.clone(), recovery_evidence(value, remaining));
                 }
@@ -330,6 +330,7 @@ mod tests {
             "fresh": true, "missing_reason": "partial", "queried_at": 123,
             "value": {"scope": {"track": 3, "offset": 12}, "missing": [7, 9],
                 "next_offset": 64, "note_offset": 1024, "next_note_offset": 2048,
+                "note_range": {"start_beats":8.0,"end_beats":14.0},
                 "tracks": tracks}
         });
         let TraceStep::Tool { result, .. } = TraceStep::tool(
@@ -350,6 +351,8 @@ mod tests {
         assert_eq!(evidence["value"]["scope"]["track"], 3);
         assert_eq!(evidence["value"]["missing"], serde_json::json!([7, 9]));
         assert_eq!(evidence["value"]["next_note_offset"], 2048);
+        assert_eq!(evidence["value"]["note_range"]["start_beats"], 8.0);
+        assert_eq!(evidence["value"]["note_range"]["end_beats"], 14.0);
         assert_eq!(evidence["value"]["tracks"][0]["next_clip_index"], 512);
         assert_eq!(
             evidence["value"]["tracks"][0]["chains"][0]["next_device_offset"],

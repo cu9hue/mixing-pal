@@ -1,6 +1,6 @@
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
-from .clip_replies import notes_window_reply, session_clips_reply, session_snapshot_reply
+from .clip_replies import notes_window_reply, session_clips_reply, session_snapshot_reply, session_fingerprint_reply, source_note_range
 
 
 class ClipNotesHandler(AbletonOSCHandler):
@@ -96,7 +96,8 @@ class ClipNotesHandler(AbletonOSCHandler):
                 return (track_index, clip_index, "empty_slot")
             if not bool(clip.is_midi_clip):
                 return (track_index, clip_index, "not_midi_clip")
-            notes = clip.get_notes_extended(0, 128, 0.0, clip.length)
+            start, end = source_note_range(clip)
+            notes = clip.get_notes_extended(0, 128, start, end - start)
             return session_snapshot_reply(track_index, clip_index, clip, notes)
 
         def loop_region(params: Tuple[Any]):
@@ -126,6 +127,21 @@ class ClipNotesHandler(AbletonOSCHandler):
             track = self.song.tracks[track_index]
             slots = () if bool(getattr(track, "is_foldable", False)) else track.clip_slots
             return session_clips_reply(track_index, start, limit, slots)
+
+        def session_fingerprint(params):
+            if len(params) != 1:
+                return None
+            try:
+                track_index = int(params[0])
+                if not 0 <= track_index < len(self.song.tracks):
+                    return None
+                track = self.song.tracks[track_index]
+                slots = () if bool(getattr(track, "is_foldable", False)) else track.clip_slots
+                return session_fingerprint_reply(track_index, slots)
+            except (TypeError, ValueError, OverflowError, AttributeError, RuntimeError):
+                return None
+
+        self.osc_server.add_handler("/live/mixingpal/get/session/fingerprint", session_fingerprint)
 
         self.osc_server.add_handler("/live/mixingpal/get/session/clips", session_clips)
 

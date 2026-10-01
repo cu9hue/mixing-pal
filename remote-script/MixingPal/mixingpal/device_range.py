@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
 from .rack_paths import parse_path, resolve, NAME_CAP, MAX_REPLY_BYTES, osc_string_bytes
@@ -20,6 +23,23 @@ class DeviceRangeHandler(AbletonOSCHandler):
         self.class_identifier = "device_range"
 
     def init_api(self):
+        def device_chain_fingerprint(params):
+            if len(params) != 1:
+                return None
+            try:
+                track = int(params[0])
+                if track < 0 or track >= len(self.song.tracks):
+                    return None
+                records = tuple((str(device.name)[:NAME_CAP], bool(device.can_have_chains))
+                                for device in self.song.tracks[track].devices)
+            except (TypeError, ValueError, OverflowError, AttributeError, RuntimeError):
+                return None
+            digest = hashlib.sha256(json.dumps(records, separators=(",", ":")).encode("utf-8"))
+            return (track, len(records), digest.hexdigest())
+
+        self.osc_server.add_handler(
+            "/live/mixingpal/get/device_chain/fingerprint", device_chain_fingerprint)
+
         def device_chain(params):
             if len(params) != 3:
                 return None

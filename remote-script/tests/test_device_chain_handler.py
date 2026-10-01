@@ -51,6 +51,33 @@ class DeviceChainHandlerTests(unittest.TestCase):
             offset += count
         self.assertEqual(callback((0, 100, 256)), (0, 100, 100))
 
+    def test_digest_covers_order_names_and_rack_flags_outside_the_page(self):
+        devices = [N(name=str(i), can_have_chains=False) for i in range(5)]
+        callback = handler_for(devices)["/live/mixingpal/get/device_chain/fingerprint"]
+        first = callback((0,))
+        devices[3], devices[4] = devices[4], devices[3]
+        reordered = callback((0,))
+        self.assertNotEqual(first[2], reordered[2])
+        devices[4].name = "renamed"
+        renamed = callback((0,))
+        self.assertNotEqual(reordered[2], renamed[2])
+        devices[4].can_have_chains = True
+        self.assertNotEqual(renamed[2], callback((0,))[2])
+
+    def test_fingerprint_validates_scope_and_empty_track(self):
+        callback = handler_for([])["/live/mixingpal/get/device_chain/fingerprint"]
+        empty = callback((0,))
+        self.assertEqual(empty[:2], (0, 0))
+        self.assertRegex(empty[2], r"^[0-9a-f]{64}$")
+        self.assertEqual(empty, callback((0,)))
+        for args in [(), (0, 1), (-1,), (1,), ("bad",)]:
+            self.assertIsNone(callback(args))
+
+    def test_unreadable_device_metadata_has_no_fingerprint(self):
+        callback = handler_for([N(name="missing rack flag")])[
+            "/live/mixingpal/get/device_chain/fingerprint"]
+        self.assertIsNone(callback((0,)))
+
     def test_empty_track_is_a_real_empty_page_and_invalid_scope_is_rejected(self):
         callbacks = handler_for([])
         address = "/live/mixingpal/get/device_chain"

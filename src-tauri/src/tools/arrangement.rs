@@ -905,7 +905,10 @@ pub(crate) mod tests {
                             .send_to(
                                 app_port,
                                 &req.addr,
-                                vec![req.args[0].clone(), req.args[1].clone(), OscType::Int(1)],
+                                vec![req.args[0].clone(), req.args[1].clone(), OscType::Int(1),
+                                    OscType::String("a".repeat(64)), OscType::Float(8.0),
+                                    OscType::Bool(false), OscType::Float(0.0), OscType::Float(0.0),
+                                    OscType::Float(0.0), OscType::Float(8.0)],
                             )
                             .await;
                     }

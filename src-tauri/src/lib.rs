@@ -366,6 +366,13 @@ fn handle_inbound(
             | "/live/arrangement_clip/get/length"
             | "/live/arrangement_clip/get/num_notes"
             | "/live/arrangement_clip/get/notes_window"
+            | "/live/mixingpal/get/session/clips"
+            | "/live/mixingpal/get/session/fingerprint"
+            | "/live/mixingpal/get/device_chain"
+            | "/live/mixingpal/get/device_chain/fingerprint"
+            | "/live/mixingpal/get/rack/chains_range"
+            | "/live/mixingpal/get/arrangement/fingerprint"
+            | "/live/mixingpal/get/clip/loop_region"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
@@ -1613,6 +1620,13 @@ mod tests {
         "/live/arrangement_clip/get/length",
         "/live/arrangement_clip/get/num_notes",
         "/live/arrangement_clip/get/notes_window",
+        "/live/mixingpal/get/session/clips",
+        "/live/mixingpal/get/session/fingerprint",
+        "/live/mixingpal/get/device_chain",
+        "/live/mixingpal/get/device_chain/fingerprint",
+        "/live/mixingpal/get/rack/chains_range",
+        "/live/mixingpal/get/arrangement/fingerprint",
+        "/live/mixingpal/get/clip/loop_region",
     ];
 
     #[test]

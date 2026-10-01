@@ -29,8 +29,7 @@ pub struct TrackClips {
     /// fabricated answer where the truth is a gap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub midi: Option<bool>,
-    /// Filled slots only. Empty means the track really has no clips -- never
-    /// "we could not read it", which is what `ClipMap::missing` says instead.
+    /// Filled slots in this page; consult missing and next_slot before inferring emptiness.
     pub clips: Vec<Clip>,
     pub total_slots: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -83,8 +82,7 @@ fn decode_clips(reply: &[OscType]) -> Option<TrackClips> {
 
 /// `/live/track/get/has_midi_input` replies `(track_index, flag)`.
 ///
-/// Accepts both encodings of the flag, for the same reason
-/// `device_chains::decode_flags` does.
+/// Accepts both boolean and integer OSC encodings.
 fn decode_midi_flag(reply: &[OscType]) -> Option<bool> {
     match reply.get(1)? {
         OscType::Bool(b) => Some(*b),
@@ -97,7 +95,41 @@ const SESSION_PAGE: &str = "/live/mixingpal/get/session/clips";
 const PAGE_SIZE: i32 = 16;
 const MAX_PAGES: usize = 64;
 
+const FINGERPRINT: &str = "/live/mixingpal/get/session/fingerprint";
+
+async fn fingerprint(q: &LiveQuery, track: i32, timeout: Duration) -> Option<(usize, String)> {
+    let reply = q
+        .query(FINGERPRINT, vec![OscType::Int(track)], timeout)
+        .await
+        .ok()?;
+    let [OscType::Int(actual), OscType::Int(total), OscType::String(digest)] = reply.as_slice() else {
+        return None;
+    };
+    if *actual != track || digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((usize::try_from(*total).ok()?, digest.clone()))
+}
+
 async fn read_track(
+    q: &LiveQuery,
+    track: i32,
+    start_slot: i32,
+    timeout: Duration,
+) -> (Option<TrackClips>, bool) {
+    let Some(before) = fingerprint(q, track, timeout).await else {
+        return (None, true);
+    };
+    let result = read_track_pages(q, track, start_slot, timeout).await;
+    if result.0.as_ref().is_some_and(|entry| entry.total_slots != before.0)
+        || fingerprint(q, track, timeout).await.as_ref() != Some(&before)
+    {
+        return (None, true);
+    }
+    result
+}
+
+async fn read_track_pages(
     q: &LiveQuery,
     track: i32,
     start_slot: i32,
@@ -312,6 +344,8 @@ mod tests {
         silent_page: Option<usize>,
         malformed_page: Option<usize>,
         changed_total_page: Option<usize>,
+        move_clip_between_pages: bool,
+        bad_fingerprint: Option<&'static str>,
     }
 
     async fn fake_live(fake: FakeLive) -> Arc<LiveQuery> {
@@ -333,6 +367,7 @@ mod tests {
         });
 
         tokio::spawn(async move {
+            let mut pages_read = false;
             let mut held_clips: Vec<i32> = Vec::new();
             let mut held_pages: Vec<Vec<OscType>> = Vec::new();
             let mut held_midi: Vec<i32> = Vec::new();
@@ -346,6 +381,18 @@ mod tests {
                     _ => continue,
                 };
                 match req.addr.as_str() {
+                    FINGERPRINT => {
+                        if fake.bad_fingerprint == Some("missing") && pages_read { continue; }
+                        let digest = if pages_read && fake.move_clip_between_pages { "b" } else { "a" };
+                        live.send_to(app_port, FINGERPRINT, vec![
+                            OscType::Int(track),
+                            OscType::Int(fake.clips.get(track as usize).map_or(0, Vec::len) as i32),
+                            if fake.bad_fingerprint == Some("malformed") && pages_read {
+                                OscType::Int(0)
+                            } else { OscType::String(digest.repeat(64)) },
+                        ]).await.unwrap();
+                        continue;
+                    }
                     "/live/track/get/clips/name" if !fake.paged_only => {
                         if fake.silent.contains(&track) {
                             continue; // the reply Live could not send
@@ -367,7 +414,8 @@ mod tests {
                             Some(OscType::Int(v)) => *v as usize,
                             _ => continue,
                         };
-                        let slots = fake.clips.get(track as usize).cloned().unwrap_or_default();
+                        let mut slots = fake.clips.get(track as usize).cloned().unwrap_or_default();
+                        if fake.move_clip_between_pages && start > 0 { slots.swap(0, 16); }
                         let mut reply = vec![
                             OscType::Int(track),
                             OscType::Int(start as i32),
@@ -384,6 +432,7 @@ mod tests {
                         if fake.changed_total_page == Some(start) {
                             reply[2] = OscType::Int(slots.len() as i32 + 1);
                         }
+                        pages_read = true;
                         held_pages.push(reply);
                     }
                     "/live/track/get/has_midi_input" => {
@@ -436,6 +485,36 @@ mod tests {
 
     fn slots(names: &[Option<&str>]) -> Vec<Option<String>> {
         names.iter().map(|n| n.map(String::from)).collect()
+    }
+
+    #[tokio::test]
+    async fn unreadable_final_fingerprint_discards_unverified_pages() {
+        for bad in ["missing", "malformed"] {
+            let q = fake_live(FakeLive {
+                clips: vec![vec![Some("clip".into()); 32]],
+                bad_fingerprint: Some(bad),
+                ..Default::default()
+            })
+            .await;
+            let map = get_clips(q, 1, Duration::from_millis(100)).await;
+            assert_eq!(map.missing, vec![0]);
+            assert!(map.tracks.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn moving_a_clip_between_pages_does_not_invent_an_empty_track() {
+        let mut clips = vec![None; 32];
+        clips[16] = Some("moved".into());
+        let q = fake_live(FakeLive {
+            clips: vec![clips],
+            move_clip_between_pages: true,
+            ..Default::default()
+        })
+        .await;
+        let map = get_clips(q, 1, QUERY_TIMEOUT).await;
+        assert_eq!(map.missing, vec![0]);
+        assert!(map.tracks.is_empty());
     }
 
     #[tokio::test]

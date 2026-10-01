@@ -109,7 +109,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clip_notes",
-                "description": "Every MIDI note in one session-view clip. start and duration are raw quarter-note beats from the clip's start. When the song's current signature is known, use each note's clip_position in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit, computed from the song signature (bar_positions_assume_current_signature). A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. The result also gives source_length_beats and loop_region, with readable start_position/end_position when possible. A note with mute true does not sound and must be excluded from rhythm or harmony claims. source_length_beats is the source clip length, not a finite playback span: when looping is true, its source notes repeat while the clip is launched. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read. Source notes and loop state are checked before and after the read; clip_changed means discard and retry after the clip is stable. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
+                "description": "MIDI notes in the source note_range of one session-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker, not necessarily zero. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. When the song's current signature is known, use each note's clip_position in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit, computed from the song signature (bar_positions_assume_current_signature). A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. The result also gives source_length_beats and loop_region, with readable start_position/end_position when possible. A note with mute true does not sound and must be excluded from rhythm or harmony claims. source_length_beats is the source clip length, not a finite playback span: when looping is true, its source notes repeat while the clip is launched. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read. Source notes and loop state are checked before and after the read; clip_changed means discard and retry after the clip is stable. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -125,7 +125,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clips",
-                "description": "Every session-view clip in the set: for each track, the slot index and name of each clip it holds, and whether the track is MIDI. Queried from Live at call time; slot names are read in bounded pages per track. Call this first to find out which clips exist and what their slot indices are, then use get_clip_notes to read one. Slot indices are the real ones and have gaps, because a producer's session grid does. An empty list means no filled slots in the returned scope; check missing and next_slot before claiming the whole track is empty. Arrangement-view clips are not covered. A track whose midi field is absent had its clips read but its kind unknown. Tracks that did not answer are listed separately under missing. Read in bounded pages. A next_slot means more slots remain: call again with that track and start_slot set to next_slot. Group tracks have no direct clips.",
+                "description": "Every session-view clip in the set: for each track, the slot index and name of each clip it holds, and whether the track is MIDI. Queried from Live at call time; slot names are read in bounded pages per track. Call this first to find out which clips exist and what their slot indices are, then use get_clip_notes to read one. Slot indices are the real ones and have gaps, because a producer's session grid does. An empty list means no filled slots in the returned scope; check missing and next_slot before claiming the whole track is empty. Arrangement-view clips are not covered. A track whose midi field is absent had its clips read but its kind unknown. Tracks that did not answer are listed separately under missing. The combined map also has an output byte budget. A next_slot means more slots remain: call again with that track and start_slot set to next_slot. Group tracks have no direct clips.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -157,7 +157,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "Every MIDI note in one arrangement-view clip. start and duration are raw quarter-note beats. Each note's start is measured from the start of the clip, not from the start of the song: its position on the timeline is result.start_beats + note.start. When the current signature is known, use clip_position (relative) or timeline_position (absolute) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes one-based bar_start and length_bars. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
+                "description": "MIDI notes in the source note_range of one arrangement-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. timeline_position is provided only for notes on the first pass within the placement: result.start_beats + note.start - source_start_beats. Notes before the start marker may sound on a later loop; absence of timeline_position does not mean they never play. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes one-based bar_start and length_bars. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -173,7 +173,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_chains",
-                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device, marked [rack]; call get_rack_contents on it to see what is inside. Whether a device is switched on or bypassed is not reported. Queried from Live at call time in bounded pages. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. An empty list means no devices in the returned scope; check missing and next_device_offset before claiming the whole track is empty. Tracks that did not answer are listed separately under missing. Read in bounded pages. Device indices equal device_offset plus the position in the returned list. If next_device_offset is present, request that track with device_offset set to it. An empty page describes only the returned scope.",
+                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device, marked [rack]; call get_rack_contents on it to see what is inside. Whether a device is switched on or bypassed is not reported. Queried from Live at call time in bounded pages. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. An empty list means no devices in the returned scope; check missing and next_device_offset before claiming the whole track is empty. Tracks that did not answer are listed separately under missing. The combined map also has an output byte budget. Device indices equal device_offset plus the position in the returned list. If next_device_offset is present, request that track with device_offset set to it. An empty page describes only the returned scope.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -451,6 +451,23 @@ fn notes_payload(
     payload
 }
 
+fn arrangement_note_payload(
+    notes: &clip_notes::ClipNotes,
+    signature: Option<(i64, i64)>,
+    start: f64,
+    length: f64,
+) -> serde_json::Value {
+    let mut payload = notes_payload(&notes.notes, signature, notes.source_start_beats.map(|source| start - source));
+    for (item, note) in payload.as_array_mut().unwrap().iter_mut().zip(&notes.notes) {
+        let first_pass = notes.source_start_beats.is_some_and(|source| {
+            note.start >= source && note.start - source < length
+                && notes.loop_region.as_ref().is_none_or(|region| note.start < region.end_beats)
+        });
+        if !first_pass { item.as_object_mut().unwrap().remove("timeline_position"); }
+    }
+    payload
+}
+
 fn loop_region_payload(
     start_beats: f64,
     end_beats: f64,
@@ -681,6 +698,52 @@ fn rack_payload(r: &rack_contents::RackContents) -> serde_json::Value {
     payload
 }
 
+const MAX_MAP_BYTES: usize = 128 * 1024;
+// Leave room for continuation fields and the ToolResult envelope/reasons.
+const MAP_METADATA_RESERVE: usize = 24 * 1024;
+
+fn fitting_prefix<T: serde::Serialize>(items: &[T], budget: &mut usize) -> usize {
+    items.iter().take_while(|item| {
+        let bytes = serde_json::to_vec(item).unwrap().len() + 1;
+        if bytes > *budget { return false; }
+        *budget -= bytes;
+        true
+    }).count()
+}
+
+fn trim_clip_map_for_model(map: &mut clips::ClipMap) -> bool {
+    let pages: Vec<_> = map.tracks.iter_mut().map(|track| std::mem::take(&mut track.clips)).collect();
+    let mut budget = MAX_MAP_BYTES.saturating_sub(MAP_METADATA_RESERVE + serde_json::to_vec(map).unwrap().len());
+    let mut trimmed = false;
+    for (track, mut page) in map.tracks.iter_mut().zip(pages) {
+        let keep = fitting_prefix(&page, &mut budget);
+        if keep < page.len() {
+            track.next_slot = Some(page[keep].slot);
+            page.truncate(keep);
+            trimmed = true;
+        }
+        track.clips = page;
+    }
+    trimmed
+}
+
+fn trim_chain_map_for_model(map: &mut device_chains::ChainMap) -> bool {
+    let pages: Vec<_> = map.tracks.iter_mut().map(|track| std::mem::take(&mut track.devices)).collect();
+    let mut budget = MAX_MAP_BYTES.saturating_sub(MAP_METADATA_RESERVE + serde_json::to_vec(map).unwrap().len());
+    let mut trimmed = false;
+    for (track, mut page) in map.tracks.iter_mut().zip(pages) {
+        let keep = fitting_prefix(&page, &mut budget);
+        if keep < page.len() {
+            track.next_device_offset = Some(track.device_offset + keep);
+            track.truncated = true;
+            page.truncate(keep);
+            trimmed = true;
+        }
+        track.devices = page;
+    }
+    trimmed
+}
+
 /// Assembles `get_device_chains`'s `missing_reason` from the three things
 /// that can go partly wrong: a set larger than the fan-out cap, tracks that
 /// did not answer at all, and tracks whose device names arrived without
@@ -882,6 +945,8 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                         "notes": notes_payload(&notes.notes, signature, None),
                         "count": notes.notes.len(),
                         "source_length_beats": notes.length_beats,
+                        "source_start_beats": notes.source_start_beats,
+                        "note_range": notes.note_range.as_ref().map(|range| loop_region_payload(range.start_beats, range.end_beats, signature)),
                         "looping": notes.loop_state_known.then_some(notes.loop_region.is_some()),
                         "loop_region": notes.loop_region.map(|region| {
                             loop_region_payload(region.start_beats, region.end_beats, signature)
@@ -937,7 +1002,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 .map(|t| track_identity(&ctx.coalescer, t))
                 .collect();
 
-            let map = clips::get_clips_range(query, selected.start as i32, (selected.end - selected.start) as i32, start_slot as i32, clips::QUERY_TIMEOUT).await;
+            let mut map = clips::get_clips_range(query, selected.start as i32, (selected.end - selected.start) as i32, start_slot as i32, clips::QUERY_TIMEOUT).await;
 
             let after_count = track_count(&ctx.coalescer);
             let after: Vec<Option<serde_json::Value>> = selected.clone()
@@ -947,9 +1012,13 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 return ToolResult::missing("topology_changed");
             }
 
+            let output_limited = trim_clip_map_for_model(&mut map);
             let mut missing_reason = clip_map_reasons(
                 if track.is_some() { 1 } else { num_tracks },
                 if track.is_some() { 1 } else { read_tracks }, &map.missing, &map.midi_missing);
+            if output_limited {
+                missing_reason = joined_reason(missing_reason, Some("model_output_limited: continue each track using next_slot".into()));
+            }
             if map.tracks.iter().any(|t| t.next_slot.is_some()) {
                 missing_reason = joined_reason(missing_reason, Some("session_slots_partial: continue each track from next_slot using track and start_slot".into()));
             }
@@ -1104,8 +1173,10 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                     let mut payload = json!({
                         "note_offset": note_offset,
                         "next_note_offset": next_note_offset,
-                        "notes": notes_payload(&result.notes.notes, signature, Some(result.start)),
+                        "notes": arrangement_note_payload(&result.notes, signature, result.start, result.length),
                         "count": result.notes.notes.len(),
+                        "source_start_beats": result.notes.source_start_beats,
+                        "note_range": result.notes.note_range.as_ref().map(|range| loop_region_payload(range.start_beats, range.end_beats, signature)),
                         "name": result.name,
                         "start_beats": result.start,
                         "length_beats": result.length,
@@ -1171,7 +1242,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 .map(|t| track_identity(&ctx.coalescer, t))
                 .collect();
 
-            let map = device_chains::get_device_chains_range(
+            let mut map = device_chains::get_device_chains_range(
                 query, selected.start as i32, selected.end as i32, device_offset, 256,
                 device_chains::QUERY_TIMEOUT,
             )
@@ -1188,9 +1259,13 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 return ToolResult::missing("topology_changed");
             }
 
+            let output_limited = trim_chain_map_for_model(&mut map);
             let mut missing_reason = chain_map_reasons(
                 if track.is_some() { 1 } else { num_tracks },
                 if track.is_some() { 1 } else { read_tracks }, &map.missing, &map.flags_missing);
+            if output_limited {
+                missing_reason = joined_reason(missing_reason, Some("model_output_limited: continue each track using next_device_offset".into()));
+            }
             if map.tracks.iter().any(|t| t.next_device_offset.is_some()) {
                 missing_reason = joined_reason(missing_reason, Some("device_list_partial: continue each track using next_device_offset".into()));
             }
@@ -2071,6 +2146,13 @@ mod tests {
                         req.args[0].clone(),
                         req.args[1].clone(),
                         rosc::OscType::Int(1),
+                        rosc::OscType::String("a".repeat(64)),
+                        rosc::OscType::Float(8.0),
+                        rosc::OscType::Bool(false),
+                        rosc::OscType::Float(0.0),
+                        rosc::OscType::Float(0.0),
+                        rosc::OscType::Float(0.0),
+                        rosc::OscType::Float(8.0),
                     ],
                     "/live/arrangement_clip/get/notes_window" => vec![
                         req.args[0].clone(),

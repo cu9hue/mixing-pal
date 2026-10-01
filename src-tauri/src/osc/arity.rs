@@ -80,6 +80,8 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // whole-timeline generation marker, so it is deliberately outside
         // the request key.
         | "/live/mixingpal/get/arrangement/fingerprint"
+        | "/live/mixingpal/get/session/fingerprint"
+        | "/live/mixingpal/get/device_chain/fingerprint"
         | "/live/return/get/volume"
         | "/live/return/get/panning"
         | "/live/return/get/name" => KeyArity::Args(1),
