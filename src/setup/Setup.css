@@ -114,6 +114,41 @@
   outline-offset: 2px;
 }
 
+.setup__choices {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.setup__choice {
+  display: block;
+  text-align: left;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 12px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.setup__choice:hover {
+  border-color: var(--border-strong);
+}
+
+.setup__choice-label {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.setup__choice-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 13.5px;
+  color: var(--text-muted);
+}
+
 .setup__secondary {
   background: none;
   border: none;

@@ -546,7 +546,7 @@ mod tests {
         fixture.route("POST", "/v1/completions", 200, json!({ "text": "raw```note", "tool_calls": [], "capture": false })).await;
         let turn = Uuid::new_v4();
         let request = Uuid::new_v4();
-        let body = crate::model::build_body(&crate::settings::Settings::default(), &[]).unwrap();
+        let body = crate::model::build_body(&crate::settings::Settings::default(), crate::settings::Experience::default(), &[]).unwrap();
         let out = proxy.complete(body.clone(), turn, request, 1, None).await.unwrap();
         assert_eq!(out["text"], "raw```note");
         proxy.event(turn, event("tool", json!({ "secret": "clip notes" }))).await.unwrap();

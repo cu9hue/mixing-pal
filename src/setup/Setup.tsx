@@ -3,10 +3,12 @@ import { SetupStep } from "./step";
 import {
   ConnectedScreen,
   ControlSurfaceScreen,
+  ExperienceScreen,
   InstallScreen,
   OpenLiveScreen,
 } from "./screens";
 import { AccountState } from "../model/account";
+import { ExperienceState } from "../model/experience";
 import { AccountPanel } from "../ui/AccountPanel";
 
 const TICK: Record<SetupStep, number> = {
@@ -15,11 +17,13 @@ const TICK: Record<SetupStep, number> = {
   open_live: 2,
   control_surface: 3,
   connected: 3,
-  done: 3,
+  experience: 4,
+  done: 4,
 };
 
 export function Setup({
   account,
+  experience,
   step,
   folder,
   trackCount,
@@ -29,6 +33,7 @@ export function Setup({
   onExit,
 }: {
   account: AccountState;
+  experience: ExperienceState;
   step: SetupStep;
   folder: string;
   trackCount: number;
@@ -44,7 +49,7 @@ export function Setup({
   return (
     <div className="setup" data-tauri-drag-region>
       <div className="setup__bar">
-        {[0, 1, 2, 3].map((i) => (
+        {[0, 1, 2, 3, 4].map((i) => (
           <span
             key={i}
             className={`setup__tick ${
@@ -66,9 +71,10 @@ export function Setup({
             onContinue={onAcknowledgeConnected}
           />
         )}
+        {step === "experience" && <ExperienceScreen experience={experience} />}
         {step === "account" && (
           <>
-            <div className="setup__label">Step 1 of 4</div>
+            <div className="setup__label">Step 1 of 5</div>
             <AccountPanel account={account} />
           </>
         )}

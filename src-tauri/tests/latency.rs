@@ -16,7 +16,7 @@ mod common;
 
 use std::time::Duration;
 
-use mixing_pal_lib::eval_api::Settings;
+use mixing_pal_lib::eval_api::{Experience, Settings};
 use serde_json::{json, Value};
 
 use common::Turn;
@@ -69,7 +69,7 @@ async fn each_provider_round_trip_is_timed() {
     mount_one_read_then_answer(&server).await;
     let context = common::context("eval-context.txt");
 
-    let turn = common::ask_with(&mock_settings(&server), None, fixture(), &context, "what is on track 0?").await;
+    let turn = common::ask_with(&mock_settings(&server), Experience::default(), None, fixture(), &context, "what is on track 0?").await;
 
     assert_eq!(turn.called, vec!["get_track_detail"]);
     assert_eq!(turn.round_trip_ms.len(), 2, "one reading per round trip: {:?}", turn.round_trip_ms);
@@ -89,7 +89,7 @@ async fn a_failed_round_trip_is_still_timed() {
         .await;
     let context = common::context("eval-context.txt");
 
-    let turn = common::ask_with(&mock_settings(&server), None, fixture(), &context, "what is on track 0?").await;
+    let turn = common::ask_with(&mock_settings(&server), Experience::default(), None, fixture(), &context, "what is on track 0?").await;
 
     assert!(turn.error.is_some());
     assert_eq!(turn.round_trip_ms.len(), 1, "the failed round trip counts: {:?}", turn.round_trip_ms);

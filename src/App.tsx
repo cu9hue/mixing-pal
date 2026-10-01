@@ -1,4 +1,5 @@
 import { BusyContext, createBusyState, useUpdates } from "./model/updates";
+import { useExperience } from "./model/experience";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -20,6 +21,7 @@ import { useAccount } from "./model/account";
 export default function App() {
   const busy = useRef(createBusyState()).current;
   const updates = useUpdates(busy);
+  const experience = useExperience(busy);
   const account = useAccount();
   const [state, setState] = useState(emptySet());
   const [lastSeen, setLastSeen] = useState<number | null>(null);
@@ -112,6 +114,7 @@ export default function App() {
     deltasArriving: wireReady(connected, state.scriptVersion, wireVersion.version),
     connectedAcknowledged,
     hasAccount: account.view?.access === "active" || account.view?.access === "development",
+    experienceChosen: experience.experience != null,
   };
 
   const setupNeeded = needsSetup({ connectorInstalled, connectorCurrent, setupDone });
@@ -278,6 +281,7 @@ export default function App() {
       {view === "setup" && (
         <Setup
           account={account}
+          experience={experience}
           step={step}
           folder={folder}
           trackCount={trackNames.length}

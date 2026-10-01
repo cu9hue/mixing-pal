@@ -181,6 +181,21 @@ Ordered. Each item says what, why, size, and what it waits on.
    target when the default changes. Item 6's craft evals are re-opened
    against it next: scenarios one to four first.
 
+8. **Experience level and readable answers.** Built 2026-10-01; the paid
+   evals have not run yet. Setup's last step asks "How do you work in
+   Live?": New to Live, I finish tracks, or I mix for other people. Settings
+   can change the answer. The answer is stored in `preferences.json`, and
+   it adds a short section to the system prompt. "I finish tracks" adds
+   nothing, so a producer who never chose gets the same prompt as before.
+   The level changes the words, not the advice. Every level also got
+   shorter answers: short sentences, plain words, the move in bold, and
+   about 120 words. The answer text in the card is a size larger, with
+   more space between paragraphs. There is no dyslexia font, because
+   studies don't show one helps. Craft scenario six asks scenario one's
+   question at New to Live. `MIXINGPAL_EVAL_EXPERIENCE` runs the honesty
+   evals at a chosen level. Next: run scenarios one to four and six, and the
+   honesty evals at `new_to_live`.
+
 ## When the waitlist says go
 
 All specced or named already. The order is fixed by the gate.

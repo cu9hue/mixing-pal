@@ -8,11 +8,20 @@ const DONE: SetupFacts = {
   deltasArriving: true,
   connectedAcknowledged: true,
   hasAccount: true,
+  experienceChosen: true,
 };
 
 describe("currentStep", () => {
   it("finishes after the Live connection is acknowledged", () => {
     expect(currentStep(DONE)).toBe("done");
+  });
+
+  // Last, so the connected screen's proof comes before the question.
+  it("asks how she works once Live is connected and acknowledged", () => {
+    expect(currentStep({ ...DONE, experienceChosen: false })).toBe("experience");
+    expect(
+      currentStep({ ...DONE, experienceChosen: false, connectedAcknowledged: false }),
+    ).toBe("connected");
   });
 
   it("asks a new user to sign in before setting up Live", () => {
@@ -24,6 +33,7 @@ describe("currentStep", () => {
         deltasArriving: false,
         connectedAcknowledged: false,
         hasAccount: false,
+        experienceChosen: false,
       }),
     ).toBe("account");
   });

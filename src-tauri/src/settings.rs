@@ -170,6 +170,24 @@ mod tests {
         assert!(!json.contains("sk-secret"), "serialised view leaked the key: {json}");
     }
 
+    #[test]
+    fn experience_round_trips_and_is_none_until_chosen() {
+        let dir = scratch();
+        assert_eq!(load_experience(&dir), None);
+        save_experience(&dir, Experience::NewToLive).unwrap();
+        assert_eq!(load_experience(&dir), Some(Experience::NewToLive));
+        let raw = std::fs::read_to_string(dir.join(PREFERENCES_FILE)).unwrap();
+        assert_eq!(raw, r#"{"experience":"new_to_live"}"#, "the webview's union depends on these names");
+    }
+
+    #[test]
+    fn saving_settings_leaves_the_experience_alone() {
+        let dir = scratch();
+        save_experience(&dir, Experience::MixesForOthers).unwrap();
+        save(&dir, &Settings::default()).unwrap();
+        assert_eq!(load_experience(&dir), Some(Experience::MixesForOthers));
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_settings_file_is_not_readable_by_other_users() {
@@ -201,4 +219,33 @@ pub fn load_update_channel(dir: &Path) -> crate::updates::Channel {
 pub fn save_update_channel(dir: &Path, channel: crate::updates::Channel) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     std::fs::write(dir.join("updates.json"), serde_json::to_vec(&serde_json::json!({"channel": channel}))?)
+}
+
+/// How much the producer already knows. It picks the terms the model may
+/// assume, not how long the answer is: every level gets the same short answer.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Experience {
+    NewToLive,
+    /// Today's prompt with nothing added, so a producer who never chose gets
+    /// the answers they already had.
+    #[default]
+    FinishesTracks,
+    MixesForOthers,
+}
+
+pub const PREFERENCES_FILE: &str = "preferences.json";
+
+/// None until the producer has chosen, which is what keeps the setup step
+/// open. Its own file for the same reason the update channel has one.
+pub fn load_experience(dir: &Path) -> Option<Experience> {
+    #[derive(Deserialize)]
+    struct Preferences { experience: Experience }
+    std::fs::read(dir.join(PREFERENCES_FILE)).ok()
+        .and_then(|bytes| serde_json::from_slice::<Preferences>(&bytes).ok())
+        .map(|p| p.experience)
+}
+pub fn save_experience(dir: &Path, experience: Experience) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join(PREFERENCES_FILE), serde_json::to_vec(&serde_json::json!({"experience": experience}))?)
 }

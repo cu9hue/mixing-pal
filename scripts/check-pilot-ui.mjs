@@ -29,6 +29,7 @@ localStorage.setItem('copilot.setupDone','1');
 if (location.search.includes('fresh')) localStorage.removeItem('copilot.setupDone');
 window.emitFixture=emit; window.saved=[]; window.savedThreads={}; window.requests=[]; window.shared=[];
 window.account={access:'signed_out',capture:false};
+window.experience=location.search.includes('fresh')?null:'finishes_tracks';
 const active={id:'producer',email:'invited@example.com',access:'active',capture:false,consent_epoch:0,remaining_micro_usd:5000000,period_end:Date.now()+86400000};
 const access=new URLSearchParams(location.search).get('access');
 if(access)window.account={...active,access,capture:true};
@@ -52,6 +53,8 @@ if(cmd==='connector_status')return {folder:'MixingPal',installed:true};
 if(cmd==='live_is_running')return true;
 if(cmd==='connection_status')return {status:'bound'};
 if(cmd==='get_settings')return {base_url:'',model:'',has_key:false};
+if(cmd==='get_experience')return window.experience;
+if(cmd==='set_experience'){window.experience=args.experience;return null;}
 if(cmd==='set_window_mode'){window.geometry=args;return window.resizeNative(args);}
 if(cmd==='load_thread'){
   if(window.savedThreads[args.setId])return window.savedThreads[args.setId];
@@ -158,6 +161,9 @@ await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
 await page.waitForFunction(()=>!!window.finishModel);
 assert.equal(await page.evaluate(()=>window.requests.find(x=>x.cmd==='model_complete').args.captureEpoch),null);
 await page.evaluate(()=>window.emitFixture('menu://settings'));
+assert.equal(await page.getByLabel('I finish tracks').isChecked(),true,'settings shows the stored level');
+await page.getByRole('radiogroup',{name:'How you work in Live'}).scrollIntoViewIfNeeded();
+await page.screenshot({path:`${artifacts}/settings-answers.png`});
 await page.getByLabel('Share advice and outcomes to help improve Mixing Pal').check();
 await page.evaluate(()=>window.finishModel());
 await page.waitForTimeout(100);
@@ -225,7 +231,11 @@ await setup.getByRole('button',{name:'Sign in',exact:true}).click();
 await setup.getByLabel('Invitation code').fill('example-invite-code');
 await setup.getByRole('button',{name:'Join the free pilot'}).click();
 await setup.getByRole('button',{name:'Got it',exact:true}).click();
+await setup.getByText('How do you work in Live?',{exact:true}).waitFor();
+await page.screenshot({path:`${artifacts}/fresh-experience.png`});
+await setup.getByRole('button',{name:/New to Live/}).click();
 await page.locator('.card__main').waitFor({state:'visible'});
+assert.equal(await page.evaluate(()=>window.experience),'new_to_live','setup saves the chosen level');
 assert.equal(await page.locator('.setup').count(),0,'install setup ends before the set goal');
 await page.getByLabel('Goal (optional)',{exact:true}).waitFor();
 await page.getByRole('button',{name:'Start chatting',exact:true}).click();

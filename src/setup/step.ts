@@ -3,6 +3,7 @@ export type SetupStep =
   | "open_live"
   | "control_surface"
   | "connected"
+  | "experience"
   | "account"
   | "done";
 
@@ -15,6 +16,9 @@ export interface SetupFacts {
   deltasArriving: boolean;
   connectedAcknowledged: boolean;
   hasAccount: boolean;
+  /** False while Rust has not answered, so the question shows rather than
+      setup finishing early. */
+  experienceChosen: boolean;
 }
 
 /**
@@ -44,6 +48,7 @@ export function currentStep(facts: SetupFacts): SetupStep {
   }
 
   if (!facts.connectedAcknowledged) return "connected";
+  if (!facts.experienceChosen) return "experience";
   return "done";
 }
 
