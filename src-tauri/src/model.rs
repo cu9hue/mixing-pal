@@ -1091,7 +1091,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        // A producer who never chose gets today's prompt, byte for byte.
+        // A producer who never chose gets `SYSTEM_PROMPT`, byte for byte.
         assert_eq!(first(Experience::FinishesTracks), SYSTEM_PROMPT);
         for (e, section) in [
             (Experience::NewToLive, NEW_TO_LIVE),

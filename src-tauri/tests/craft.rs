@@ -993,10 +993,8 @@ async fn is_the_mix_okay() {
     .await;
 }
 
-// Scenario 6. Scenario 1's question from a producer new to Live. The advice
-// keeps its shape and its honesty; only the words change. The answer must
-// also stay short: the prompt's soft cap is 120 words, and 180 gives it
-// slack without allowing a lecture.
+// Scenario 6. Scenario 1's question from a producer new to Live. The 180-word
+// limit gives the prompt's 120-word soft cap slack without allowing a lecture.
 const DROP_FOR_A_NEWCOMER: Scenario = Scenario {
     question: "why does the drop fall flat?",
     goal: None,

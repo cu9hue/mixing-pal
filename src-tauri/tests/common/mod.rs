@@ -45,9 +45,8 @@ pub fn settings() -> Settings {
     }
 }
 
-/// The level the honesty evals run at: MIXINGPAL_EVAL_EXPERIENCE, named as
-/// the app stores it (new_to_live, finishes_tracks, mixes_for_others), or
-/// the app's default when unset.
+/// The level `ask` runs at: MIXINGPAL_EVAL_EXPERIENCE, named as the app
+/// stores it (e.g. new_to_live), or the app's default when unset.
 pub fn experience() -> Experience {
     match std::env::var("MIXINGPAL_EVAL_EXPERIENCE") {
         Ok(name) => serde_json::from_value(json!(name))
