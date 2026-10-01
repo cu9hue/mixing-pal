@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(sent["body"], body);
         assert_eq!(sent["turn_id"], turn.to_string());
         assert_eq!(sent["request_id"], request.to_string());
-        assert_eq!(sent["wire_version"], 12);
+        assert_eq!(sent["wire_version"], serde_json::from_str::<Value>(include_str!("../../shared/wire-version.json")).unwrap()["version"]);
     }
 
     #[tokio::test]

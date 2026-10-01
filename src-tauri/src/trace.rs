@@ -84,7 +84,7 @@ impl TraceStep {
             at,
             name,
             args: prepare_value(&args, redact),
-            result: prepare_value(&result, redact),
+            result: prepare_tool_result(&result, redact),
             duration_ms,
         }
     }
@@ -105,6 +105,102 @@ fn prepare_value(value: &serde_json::Value, needle: &str) -> serde_json::Value {
         "original_bytes": serialized.len(),
         "preview": preview,
     })
+}
+
+fn prepare_tool_result(value: &serde_json::Value, needle: &str) -> serde_json::Value {
+    let redacted = redact_value(value, needle);
+    let serialized = serde_json::to_string(&redacted).unwrap_or_default();
+    if serialized.len() <= MAX_VALUE_CHARS {
+        return redacted;
+    }
+    let preview: String = serialized.chars().take(PREVIEW_CHARS).collect();
+    let mut prepared = serde_json::json!({
+        "truncated": true, "original_bytes": serialized.len(), "preview": preview,
+    });
+    for field in ["fresh", "fresh_as_of", "queried_at", "missing_reason"] {
+        if let Some(value) = redacted.get(field) {
+            let mut remaining = 1;
+            prepared[field] = recovery_evidence(value, &mut remaining);
+        }
+    }
+    let mut budget = 128;
+    loop {
+        let mut remaining = budget;
+        prepared["evidence"] = recovery_evidence(&redacted, &mut remaining);
+        if serde_json::to_vec(&prepared).unwrap_or_default().len() <= MAX_VALUE_CHARS {
+            break;
+        }
+        budget /= 2;
+        if budget == 0 {
+            prepared["evidence"] = serde_json::json!({"omitted": true});
+            prepared["preview"] = serde_json::Value::String(serialized.chars().take(80).collect());
+            break;
+        }
+    }
+    prepared
+}
+
+fn recovery_evidence(value: &serde_json::Value, remaining: &mut usize) -> serde_json::Value {
+    use serde_json::{Map, Value};
+    if *remaining == 0 {
+        return Value::Null;
+    }
+    *remaining -= 1;
+    match value {
+        Value::Object(fields) => {
+            let mut out = Map::new();
+            // Keep status and continuation fields before spending the budget on records.
+            for (key, value) in fields
+                .iter()
+                .filter(|(_, v)| !v.is_array() && !v.is_object())
+            {
+                if *remaining == 0 {
+                    break;
+                }
+                out.insert(
+                    key.chars().take(64).collect(),
+                    recovery_evidence(value, remaining),
+                );
+            }
+            for (key, value) in fields.iter().filter(|(_, v)| v.is_array() || v.is_object()) {
+                if let Value::Array(items) = value {
+                    let keep = matches!(
+                        key.as_str(),
+                        "tracks" | "chains" | "missing" | "flags_missing" | "changed"
+                    );
+                    let mut shown = Vec::new();
+                    if keep {
+                        for item in items.iter().take(8) {
+                            if *remaining == 0 {
+                                break;
+                            }
+                            shown.push(recovery_evidence(item, remaining));
+                        }
+                    }
+                    let omitted = items.len() - shown.len();
+                    if keep {
+                        out.insert(key.clone(), Value::Array(shown));
+                    }
+                    if omitted > 0 {
+                        out.insert(format!("{key}_omitted"), omitted.into());
+                    }
+                } else if *remaining > 0
+                    && matches!(key.as_str(), "value" | "scope" | "coverage" | "loop_region")
+                {
+                    out.insert(key.clone(), recovery_evidence(value, remaining));
+                }
+            }
+            Value::Object(out)
+        }
+        Value::String(text) => {
+            let mut excerpt: String = text.chars().take(160).collect();
+            if text.chars().nth(160).is_some() {
+                excerpt.push_str("… [truncated]");
+            }
+            Value::String(excerpt)
+        }
+        other => other.clone(),
+    }
 }
 
 fn redact_value(value: &serde_json::Value, needle: &str) -> serde_json::Value {
@@ -217,6 +313,80 @@ mod tests {
             }
             other => panic!("expected Tool, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn large_tool_results_keep_bounded_recovery_evidence() {
+        let tracks: Vec<_> = (0..40)
+            .map(|track| {
+                serde_json::json!({
+                    "track": track, "truncated": true, "next_clip_index": 512,
+                    "next_slot": 64, "clips": ["x".repeat(5000)],
+                    "chains": [{"device_offset": 32, "next_device_offset": 64}]
+                })
+            })
+            .collect();
+        let input = serde_json::json!({
+            "fresh": true, "missing_reason": "partial", "queried_at": 123,
+            "value": {"scope": {"track": 3, "offset": 12}, "missing": [7, 9],
+                "next_offset": 64, "note_offset": 1024, "next_note_offset": 2048,
+                "tracks": tracks}
+        });
+        let TraceStep::Tool { result, .. } = TraceStep::tool(
+            1,
+            "get_arrangement".into(),
+            serde_json::json!({}),
+            input,
+            5,
+            "",
+        ) else {
+            panic!("tool step expected")
+        };
+        let evidence = &result["evidence"];
+        assert_eq!(result["fresh"], true);
+        assert_eq!(result["missing_reason"], "partial");
+        assert_eq!(evidence["fresh"], true);
+        assert_eq!(evidence["missing_reason"], "partial");
+        assert_eq!(evidence["value"]["scope"]["track"], 3);
+        assert_eq!(evidence["value"]["missing"], serde_json::json!([7, 9]));
+        assert_eq!(evidence["value"]["next_note_offset"], 2048);
+        assert_eq!(evidence["value"]["tracks"][0]["next_clip_index"], 512);
+        assert_eq!(
+            evidence["value"]["tracks"][0]["chains"][0]["next_device_offset"],
+            64
+        );
+        let shown = evidence["value"]["tracks"].as_array().unwrap().len();
+        assert_eq!(evidence["value"]["tracks_omitted"], 40 - shown);
+        assert_eq!(evidence["value"]["tracks"][0]["clips_omitted"], 1);
+        assert!(serde_json::to_string(&result).unwrap().len() <= MAX_VALUE_CHARS);
+    }
+
+    #[test]
+    fn unicode_tool_evidence_stays_inside_the_byte_limit_and_redacts() {
+        let input = serde_json::json!({
+            "fresh": false, "fresh_as_of": 123, "missing_reason": "😀".repeat(1000),
+            "value": { "scope": { "track": 2 }, "tracks": (0..100).map(|track|
+                serde_json::json!({"track": track, "name": "😀secret".repeat(500),
+                    "next_slot": 64, "truncated": true, "clips": ["secret".repeat(5000)]})
+            ).collect::<Vec<_>>() }
+        });
+        let TraceStep::Tool { result, .. } = TraceStep::tool(
+            1,
+            "get_clips".into(),
+            serde_json::json!({}),
+            input,
+            5,
+            "secret",
+        ) else {
+            panic!("expected tool")
+        };
+        let serialized = serde_json::to_string(&result).unwrap();
+        assert!(serialized.len() <= MAX_VALUE_CHARS);
+        assert!(!serialized.contains("secret"));
+        assert_eq!(result["fresh"], false);
+        assert_eq!(result["fresh_as_of"], 123);
+        assert!(result["missing_reason"].as_str().unwrap().ends_with("… [truncated]"));
+        assert_eq!(result["evidence"]["value"]["tracks"][0]["next_slot"], 64);
     }
 
     #[test]

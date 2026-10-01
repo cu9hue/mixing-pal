@@ -1,34 +1,11 @@
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
-from .clip_replies import notes_window_reply, num_notes_reply
+from .clip_replies import notes_window_reply, session_clips_reply, session_snapshot_reply
 
 
 class ClipNotesHandler(AbletonOSCHandler):
-    """Two endpoints that together let a clip be read in one pass.
-
-    `/live/clip/get/num_notes` reports how many notes a clip holds, so the
-    client can size its windows up front instead of discovering them by
-    timing out. `/live/clip/get/notes_window` is upstream's ranged note
-    query with the window echoed back, so a window the client gave up on
-    cannot resolve a different window's request.
-
-    Note queries are ranged because a reply past the 9216-byte macOS UDP cap
-    makes sendto raise and the client receives nothing at all -- silence
-    indistinguishable from a lost datagram. Without a count the client
-    cannot know how wide a window may be, and can only find out by asking
-    for one Live cannot answer and waiting out its timeout.
-
-    Counting is not free -- `get_notes_extended` materialises every note
-    just to take its length -- but it is cheaper for LIVE than the
-    discovery it removes: each unanswerable probe runs that same extraction
-    inside Live's tick and only then fails at the send.
-
-    The range mirrors exactly what the client will go on to tile: pitches
-    0..128 (upstream's 127 default silently omits pitch 127) over
-    [0, clip.length), which is the same span `/live/clip/get/length`
-    reports. Counting a wider range would over-report and cost the client
-    windows it does not need.
-    """
+    """Bounded session reads with note windows and content snapshots.
+    Snapshot checks keep note pages from different edits out of one answer."""
 
     def __init__(self, manager):
         super().__init__(manager)
@@ -108,11 +85,20 @@ class ClipNotesHandler(AbletonOSCHandler):
             if indices is None:
                 return None
             track_index, clip_index = indices
-            clip = clip_at(track_index, clip_index)
-            if clip is None or not bool(getattr(clip, "is_midi_clip", False)):
+            tracks = self.song.tracks
+            if not 0 <= track_index < len(tracks):
                 return None
+            track = tracks[track_index]
+            slots = () if bool(getattr(track, "is_foldable", False)) else track.clip_slots
+            if not 0 <= clip_index < len(slots):
+                return None
+            clip = slots[clip_index].clip
+            if clip is None:
+                return (track_index, clip_index, "empty_slot")
+            if not bool(clip.is_midi_clip):
+                return (track_index, clip_index, "not_midi_clip")
             notes = clip.get_notes_extended(0, 128, 0.0, clip.length)
-            return num_notes_reply(track_index, clip_index, notes)
+            return session_snapshot_reply(track_index, clip_index, clip, notes)
 
         def loop_region(params: Tuple[Any]):
             indices = clip_indices(params)
@@ -128,6 +114,21 @@ class ClipNotesHandler(AbletonOSCHandler):
             else:
                 start, end = 0.0, 0.0
             return (track_index, clip_index, looping, start, end)
+
+        def session_clips(params: Tuple[Any]):
+            if len(params) != 3:
+                return None
+            try:
+                track_index, start, limit = map(int, params)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if not 0 <= track_index < len(self.song.tracks) or start < 0 or limit < 1:
+                return None
+            track = self.song.tracks[track_index]
+            slots = () if bool(getattr(track, "is_foldable", False)) else track.clip_slots
+            return session_clips_reply(track_index, start, limit, slots)
+
+        self.osc_server.add_handler("/live/mixingpal/get/session/clips", session_clips)
 
         self.osc_server.add_handler(
             "/live/clip/get/notes_window", notes_window)

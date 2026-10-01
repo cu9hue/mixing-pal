@@ -12,9 +12,8 @@ pub const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A prompt-token cap, NOT a datagram cap -- which is why it lives here and
 /// not in `osc/budget.rs`. Operator has about 130 parameters and large
-/// third-party synths reach about 300; past this the tail is reported as a
-/// truncation marker rather than spent as several thousand tokens of synth
-/// internals.
+/// third-party synths reach about 300. A later page can recover the tail
+/// without spending several thousand tokens on every read.
 pub const MAX_PARAMS: usize = 256;
 
 /// Floor for halve-and-retry, mirroring `clip_notes::MIN_WINDOW_BEATS`.
@@ -43,6 +42,7 @@ pub struct DeviceParams {
     /// The device's real parameter count, even when `truncated`.
     pub total: usize,
     pub truncated: bool,
+    pub next_offset: Option<usize>,
     pub missing_reason: Option<String>,
 }
 
@@ -200,6 +200,7 @@ pub async fn get_device_params(
     q: &LiveQuery,
     track: i32,
     path: &DevicePath,
+    offset: usize,
     timeout: Duration,
 ) -> Result<DeviceParams, QueryError> {
     // No reply here is also how "there is no device at that path" arrives:
@@ -210,8 +211,10 @@ pub async fn get_device_params(
         return Err(QueryError::NoReply);
     };
 
-    let wanted = total.min(MAX_PARAMS);
-    let mut queue: VecDeque<(usize, usize)> = param_string_windows(wanted).into_iter().collect();
+    let end = offset.saturating_add(MAX_PARAMS).min(total);
+    let wanted = end.saturating_sub(offset);
+    let mut queue: VecDeque<(usize, usize)> = param_string_windows(wanted)
+        .into_iter().map(|(start, span)| (offset + start, span)).collect();
     let mut params: Vec<Param> = Vec::new();
     let mut missing_reason = None;
     let mut windows_used = 0usize;
@@ -266,10 +269,11 @@ pub async fn get_device_params(
     // parameter count differs. Identical twins with identical counts still
     // defeat it -- recorded in the spec's Known limits, not papered over.
     let observed = device_identity(q, track, path, timeout).await;
-    // `total` and `truncated` were read in the same moment as `device_name`,
-    // so they stay consistent with it. The parameters were not, and once the
+    // `total` was read in the same moment as `device_name`, so it stays
+    // consistent with it. The parameters were not, and once the
     // identity is in doubt there is no way to say which device they belong
     // to -- so both branches below drop them.
+    let verified = matches!(&observed, Some((name, count)) if *name == device_name && *count == total);
     match observed {
         Some((name, count)) if name == device_name && count == total => {}
         // Observed different: something really did move under the loop.
@@ -295,11 +299,18 @@ pub async fn get_device_params(
     }
 
     params.sort_by_key(|p| p.index);
+    let mut next = offset;
+    for param in &params {
+        if param.index != next { break; }
+        next += 1;
+    }
+    let next_offset = (verified && next < total).then_some(next);
     Ok(DeviceParams {
         device: device_name,
         params,
         total,
-        truncated: total > wanted,
+        truncated: next_offset.is_some(),
+        next_offset,
         missing_reason,
     })
 }
@@ -558,7 +569,7 @@ mod tests {
     async fn reads_a_small_device_in_one_window() {
         let (q, counts, _guard) = fake_live(fake(3)).await;
         let path = path0();
-        let d = get_device_params(&q, 1, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 1, &path, 0, FAST).await.unwrap();
 
         assert_eq!(d.device, "«EQ Eight»");
         assert_eq!(d.total, 3);
@@ -594,7 +605,7 @@ mod tests {
     async fn a_device_with_no_parameters_is_empty_not_missing() {
         let (q, _, _guard) = fake_live(fake(0)).await;
         let path = path0();
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
 
         assert!(d.params.is_empty());
         assert_eq!(d.total, 0);
@@ -624,7 +635,7 @@ mod tests {
         let (q, counts, _guard) = fake_live(f).await;
         let path = path0();
 
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
 
         assert!(
             !d.params.is_empty(),
@@ -647,7 +658,7 @@ mod tests {
         let (q, _, _guard) = fake_live(f).await;
         let path = path0();
 
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
         assert_eq!(d.missing_reason.as_deref(), Some("too_large"));
         assert!(d.params.is_empty());
     }
@@ -661,7 +672,7 @@ mod tests {
         let (q, _, _guard) = fake_live(f).await;
         let path = path0();
 
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
         assert_eq!(d.missing_reason.as_deref(), Some("malformed_reply"));
         assert!(d.params.is_empty());
     }
@@ -678,7 +689,7 @@ mod tests {
         let (q, _, _guard) = fake_live(f).await;
         let path = path0();
 
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
         assert!(d.params.is_empty());
         assert_eq!(d.missing_reason.as_deref(), Some("too_large"));
     }
@@ -687,7 +698,7 @@ mod tests {
     async fn a_device_past_the_cap_is_truncated_and_says_so() {
         let (q, _, _guard) = fake_live(fake(300)).await;
         let path = path0();
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
 
         assert_eq!(d.total, 300, "total is the real count, not the capped one");
         assert_eq!(d.params.len(), MAX_PARAMS);
@@ -707,7 +718,7 @@ mod tests {
         let (q, _, _guard) = fake_live(f).await;
         let path = path0();
 
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
         for text in [&d.device, &d.params[0].name, &d.params[0].value] {
             assert_eq!(text.matches('«').count(), 1, "{text:?}");
             assert_eq!(text.matches('»').count(), 1, "{text:?}");
@@ -726,7 +737,7 @@ mod tests {
         let (q, _, _guard) = fake_live(f).await;
         let path = path0();
 
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
         assert_eq!(d.missing_reason.as_deref(), Some("topology_changed"));
         assert!(
             d.params.is_empty(),
@@ -745,7 +756,7 @@ mod tests {
         let (q, _, _guard) = fake_live(f).await;
         let path = path0();
 
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
         assert_eq!(d.missing_reason.as_deref(), Some("topology_changed"));
         assert!(
             d.params.is_empty(),
@@ -764,7 +775,7 @@ mod tests {
         let (q, _, _guard) = fake_live(f).await;
         let path = path0();
 
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
         assert_eq!(
             d.missing_reason.as_deref(),
             Some("device_identity_unverified")
@@ -782,7 +793,7 @@ mod tests {
         let (q, _, _guard) = fake_live(f).await;
         let path = path0();
 
-        let d = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let d = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
         assert_eq!(d.missing_reason.as_deref(), Some("malformed_reply"));
         assert!(d.params.is_empty());
     }
@@ -797,7 +808,7 @@ mod tests {
         let path = DevicePath::parse(Some(&serde_json::json!([9]))).unwrap();
 
         assert_eq!(
-            get_device_params(&q, 0, &path, FAST).await,
+            get_device_params(&q, 0, &path, 0, FAST).await,
             Err(QueryError::NoReply)
         );
     }
@@ -814,7 +825,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_device_params(&q, 0, &path, FAST).await.unwrap();
+        let out = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
         assert_eq!(out.params.len(), 4);
         let c = counts.lock().unwrap();
         assert_eq!(c["/live/mixingpal/get/device/identity"], 2);
@@ -832,7 +843,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0, 4, 1]))).unwrap();
-        let _ = get_device_params(&q, 3, &path, FAST).await;
+        let _ = get_device_params(&q, 3, &path, 0, FAST).await;
         let seen = requests.lock().unwrap();
         assert!(
             !seen.is_empty(),
@@ -843,4 +854,30 @@ mod tests {
             Some(OscType::String(s)) if s == "0.4.1"
         )));
     }
+    #[tokio::test]
+    async fn an_offset_recovers_the_tail_without_reading_the_first_page() {
+        let (q, counts, _guard) = fake_live(fake(300)).await;
+        let path = path0();
+        let tail = get_device_params(&q, 0, &path, 256, FAST).await.unwrap();
+        assert_eq!(tail.params.first().unwrap().index, 256);
+        assert_eq!(tail.params.len(), 44);
+        assert!(!tail.truncated);
+        assert_eq!(*counts.lock().unwrap().get("/live/device/get/parameters/name_range").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn page_cursor_finishes_a_large_device_and_stops_at_the_end() {
+        let (q, _, _guard) = fake_live(fake(300)).await;
+        let path = path0();
+        let first = get_device_params(&q, 0, &path, 0, FAST).await.unwrap();
+        assert_eq!(first.next_offset, Some(256));
+        let tail = get_device_params(&q, 0, &path, first.next_offset.unwrap(), FAST).await.unwrap();
+        assert_eq!(tail.params.last().unwrap().index, 299);
+        assert_eq!(tail.next_offset, None);
+        let beyond = get_device_params(&q, 0, &path, 999, FAST).await.unwrap();
+        assert!(beyond.params.is_empty());
+        assert_eq!(beyond.next_offset, None);
+        assert!(!beyond.truncated);
+    }
+
 }

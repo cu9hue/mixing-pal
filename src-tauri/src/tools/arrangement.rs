@@ -72,6 +72,8 @@ pub struct TrackArrangement {
     pub clips: Vec<ArrangementClip>,
     /// The read stopped before the track's real clip count was reached.
     pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_clip_index: Option<usize>,
     /// Two pages of this track reported different clip counts, so the
     /// timeline moved while it was being read. The clips listed are real
     /// records Live sent, but an insertion earlier in the timeline shifts
@@ -119,7 +121,10 @@ fn decode_page(
     let total = usize::try_from(int_at(2)?).ok()?;
 
     let fields = reply.get(3..)?;
-    if fields.len() % 8 != 0 {
+    if fields.len() % 8 != 0
+        || fields.len() / 8 > REQUEST_SPAN
+        || fields.len() / 8 > total.saturating_sub(start)
+    {
         return None;
     }
     let mut clips = Vec::with_capacity(fields.len() / 8);
@@ -221,7 +226,7 @@ async fn timeline_fingerprint(
 /// that keeps the clips already collected and marks the track `truncated`:
 /// they are real records Live sent, and filing the whole track under
 /// `missing` would throw away a partial read the model can still use.
-pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<TrackArrangement> {
+async fn read_track_from(q: &LiveQuery, track: i32, offset: usize, timeout: Duration) -> Option<TrackArrangement> {
     let mut clips: Vec<ArrangementClip> = Vec::new();
     let mut windows = 0usize;
     let mut truncated = false;
@@ -241,7 +246,7 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
                 "/live/mixingpal/get/arrangement",
                 vec![
                     OscType::Int(track),
-                    OscType::Int(clips.len() as i32),
+                    OscType::Int((offset + clips.len()) as i32),
                     OscType::Int(REQUEST_SPAN as i32),
                 ],
                 timeout,
@@ -249,7 +254,7 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
             .await
             .ok()
             .as_deref()
-            .and_then(|reply| decode_page(reply, clips.len()));
+            .and_then(|reply| decode_page(reply, offset + clips.len()));
 
         let Some((_, total, page)) = page else {
             if windows == 1 {
@@ -276,7 +281,7 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
                 // assumed: a total that shrank can already be covered by
                 // what arrived, and claiming a gap nobody observed is the
                 // same class of error as filling one in.
-                truncated = clips.len() < total;
+                truncated = offset + clips.len() < total;
                 break;
             }
             Some(_) => {}
@@ -285,7 +290,7 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
         let empty_page = page.is_empty();
         clips.extend(page);
 
-        if clips.len() >= total {
+        if offset + clips.len() >= total {
             break;
         }
         // A page that advanced nothing while the total says there is more
@@ -317,6 +322,7 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
 
     Some(TrackArrangement {
         track,
+        next_clip_index: truncated.then_some(offset + clips.len()),
         clips,
         truncated,
         changed,
@@ -334,22 +340,32 @@ pub async fn read_track(q: &LiveQuery, track: i32, timeout: Duration) -> Option<
 ///
 /// Never returns `Err`. One track failing is one track's worth of missing
 /// data, not a failed read of the set.
+#[cfg(test)]
 pub async fn get_arrangement(
     q: Arc<LiveQuery>,
     num_tracks: i32,
     timeout: Duration,
 ) -> ArrangementMap {
-    let handles: Vec<_> = (0..num_tracks)
+    get_arrangement_range(q, 0..num_tracks, 0, timeout).await
+}
+
+pub async fn get_arrangement_range(
+    q: Arc<LiveQuery>,
+    tracks: std::ops::Range<i32>,
+    offset: usize,
+    timeout: Duration,
+) -> ArrangementMap {
+    let handles: Vec<_> = tracks
         .map(|track| {
             let q = q.clone();
-            tokio::spawn(async move { read_track(&q, track, timeout).await })
+            (track, tokio::spawn(async move { read_track_from(&q, track, offset, timeout).await }))
         })
         .collect();
 
     let mut tracks = Vec::new();
     let mut missing = Vec::new();
     let mut changed = Vec::new();
-    for (index, handle) in handles.into_iter().enumerate() {
+    for (track, handle) in handles {
         match handle.await {
             Ok(Some(entry)) => {
                 if entry.changed {
@@ -357,7 +373,7 @@ pub async fn get_arrangement(
                 }
                 tracks.push(entry);
             }
-            _ => missing.push(index as i32),
+            _ => missing.push(track),
         }
     }
     ArrangementMap {
@@ -529,7 +545,7 @@ pub async fn get_arrangement_notes(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::osc::requests::RequestTable;
     use crate::osc::socket::OscSocket;
@@ -684,28 +700,43 @@ mod tests {
         assert!(clips.is_empty());
     }
 
+    #[test]
+    fn a_page_cannot_return_more_clips_than_its_total_or_requested_span() {
+        for (total, count) in [(0, 1), (100, REQUEST_SPAN + 1)] {
+            let mut reply = vec![OscType::Int(0), OscType::Int(0), OscType::Int(total)];
+            for _ in 0..count {
+                reply.extend([
+                    OscType::String(String::new()), OscType::Float(0.0), OscType::Float(4.0),
+                    OscType::Bool(false), OscType::Bool(true), OscType::Bool(false),
+                    OscType::Float(0.0), OscType::Float(0.0),
+                ]);
+            }
+            assert!(decode_page(&reply, 0).is_none(), "total={total} returned={count}");
+        }
+    }
+
     /// `timelines[i]` is track i's clips as (name, start, end). `silent`
     /// names tracks that get no reply at all, which is what a lost datagram
     /// looks like from the client's side. `page` is how many records the
     /// fake returns per reply, so a track longer than one page exercises the
     /// paging loop.
     #[derive(Default)]
-    struct FakeLive {
-        timelines: Vec<Vec<(String, f32, f32)>>,
-        silent: Vec<i32>,
-        page: usize,
-        hold_until_all_arrive: Option<usize>,
+    pub(crate) struct FakeLive {
+        pub(crate) timelines: Vec<Vec<(String, f32, f32)>>,
+        pub(crate) silent: Vec<i32>,
+        pub(crate) page: usize,
+        pub(crate) hold_until_all_arrive: Option<usize>,
         /// Answers at most this many page requests and then goes silent, so
         /// a LATER page fails while earlier ones already landed. Counted
         /// across every track, so the tests using it read one track.
-        answer_at_most: Option<usize>,
+        pub(crate) answer_at_most: Option<usize>,
         /// The clip count reported on every page after the first. A
         /// producer inserting a clip mid-read is what makes the pages
         /// disagree in Live.
-        total_after_first: Option<i32>,
+        pub(crate) total_after_first: Option<i32>,
     }
 
-    async fn fake_live(fake: FakeLive) -> Arc<LiveQuery> {
+    pub(crate) async fn fake_live(fake: FakeLive) -> Arc<LiveQuery> {
         let live = OscSocket::bind_to(0, 0).await.unwrap();
         let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
         let app_port = app.local_port();

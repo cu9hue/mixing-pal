@@ -1,6 +1,6 @@
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
-from .rack_paths import parse_path, resolve
+from .rack_paths import parse_path, resolve, NAME_CAP, MAX_REPLY_BYTES, osc_string_bytes
 
 
 class DeviceRangeHandler(AbletonOSCHandler):
@@ -20,6 +20,29 @@ class DeviceRangeHandler(AbletonOSCHandler):
         self.class_identifier = "device_range"
 
     def init_api(self):
+        def device_chain(params):
+            if len(params) != 3:
+                return None
+            try:
+                track, start, span = (int(value) for value in params)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if track < 0 or track >= len(self.song.tracks) or start < 0 or span <= 0:
+                return None
+            devices = self.song.tracks[track].devices
+            reply = [track, start, len(devices)]
+            used = 0
+            for device in devices[start:start + min(span, 256)]:
+                name = str(device.name)[:NAME_CAP]
+                size = osc_string_bytes(name) + 6
+                if used + size > MAX_REPLY_BYTES:
+                    break
+                reply.extend((name, bool(device.can_have_chains)))
+                used += size
+            return tuple(reply)
+
+        self.osc_server.add_handler("/live/mixingpal/get/device_chain", device_chain)
+
         def window_for(params):
             """(track_index, raw_path, start, window) or None.
 

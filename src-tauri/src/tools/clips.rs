@@ -32,6 +32,9 @@ pub struct TrackClips {
     /// Filled slots only. Empty means the track really has no clips -- never
     /// "we could not read it", which is what `ClipMap::missing` says instead.
     pub clips: Vec<Clip>,
+    pub total_slots: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_slot: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -72,6 +75,8 @@ fn decode_clips(reply: &[OscType]) -> Option<TrackClips> {
     Some(TrackClips {
         track,
         midi: None,
+        total_slots: reply.len() - 1,
+        next_slot: None,
         clips,
     })
 }
@@ -88,63 +93,115 @@ fn decode_midi_flag(reply: &[OscType]) -> Option<bool> {
     }
 }
 
-/// Fetches every track's session clips and MIDI flag, all tracks and both
-/// addresses concurrently.
-///
-/// Concurrency is the point, not an optimisation, and the reasoning is
-/// `device_chains::get_device_chains`'s: `abletonosc/osc_server.py` drains
-/// its socket until it blocks, so every pending request is served inside a
-/// single Live tick (~100 ms). Both addresses are `KeyArity::Args(1)`, so
-/// each reply carries the track index that identifies it -- which is what
-/// makes 2N in flight safe here and unsafe for clip notes.
-///
-/// Never returns `Err`. One track failing is one track's worth of missing
-/// data, not a failed read of the set.
-pub async fn get_clips(q: Arc<LiveQuery>, num_tracks: i32, timeout: Duration) -> ClipMap {
-    // Spawn every request for BOTH addresses first, so all 2N are in flight
-    // before anything is awaited -- awaiting in order below does not
-    // serialise anything, the requests already went out.
-    fn spawn_all(
-        q: &Arc<LiveQuery>,
-        addr: &'static str,
-        num_tracks: i32,
-        timeout: Duration,
-    ) -> Vec<tokio::task::JoinHandle<Result<Vec<OscType>, crate::osc::query::QueryError>>> {
-        (0..num_tracks)
-            .map(|track| {
-                let q = q.clone();
-                tokio::spawn(async move { q.query(addr, vec![OscType::Int(track)], timeout).await })
-            })
-            .collect()
-    }
-    let clip_handles = spawn_all(&q, "/live/track/get/clips/name", num_tracks, timeout);
-    let midi_handles = spawn_all(&q, "/live/track/get/has_midi_input", num_tracks, timeout);
+const SESSION_PAGE: &str = "/live/mixingpal/get/session/clips";
+const PAGE_SIZE: i32 = 16;
+const MAX_PAGES: usize = 64;
 
-    let mut flags: Vec<Option<bool>> = Vec::with_capacity(midi_handles.len());
-    for handle in midi_handles {
-        flags.push(match handle.await {
-            Ok(Ok(reply)) => decode_midi_flag(&reply),
-            _ => None,
+async fn read_track(
+    q: &LiveQuery,
+    track: i32,
+    start_slot: i32,
+    timeout: Duration,
+) -> (Option<TrackClips>, bool) {
+    let mut entry: Option<TrackClips> = None;
+    let mut start = start_slot;
+    for _ in 0..MAX_PAGES {
+        let reply = q
+            .query(
+                SESSION_PAGE,
+                vec![
+                    OscType::Int(track),
+                    OscType::Int(start),
+                    OscType::Int(PAGE_SIZE),
+                ],
+                timeout,
+            )
+            .await;
+        let page = reply.ok().and_then(|reply| {
+            let [OscType::Int(actual_track), OscType::Int(actual_start), OscType::Int(total), body @ ..] = reply.as_slice() else { return None; };
+            if *actual_track != track || *actual_start != start || *total < 0 || body.len() != (*total - start).clamp(0, PAGE_SIZE) as usize { return None; }
+            let mut args = vec![OscType::Int(track)];
+            args.extend_from_slice(body);
+            let mut page = decode_clips(&args)?;
+            for clip in &mut page.clips { clip.slot += start; }
+            page.total_slots = *total as usize;
+            Some((page, body.len() as i32))
         });
+        let Some((page, count)) = page else {
+            if let Some(entry) = &mut entry {
+                entry.next_slot = Some(start);
+            }
+            return (entry, true);
+        };
+        if entry
+            .as_ref()
+            .is_some_and(|entry| entry.total_slots != page.total_slots)
+        {
+            return (None, true);
+        }
+        let combined = entry.get_or_insert(TrackClips {
+            track,
+            midi: None,
+            clips: Vec::new(),
+            total_slots: page.total_slots,
+            next_slot: None,
+        });
+        combined.clips.extend(page.clips);
+        start += count;
+        if start as usize >= combined.total_slots {
+            combined.next_slot = None;
+            return (entry, false);
+        }
+        combined.next_slot = Some(start);
     }
+    (entry, false)
+}
 
+#[cfg(test)]
+pub async fn get_clips(q: Arc<LiveQuery>, num_tracks: i32, timeout: Duration) -> ClipMap {
+    get_clips_range(q, 0, num_tracks, 0, timeout).await
+}
+
+pub async fn get_clips_range(
+    q: Arc<LiveQuery>,
+    first_track: i32,
+    num_tracks: i32,
+    start_slot: i32,
+    timeout: Duration,
+) -> ClipMap {
+    let handles: Vec<_> = (first_track..first_track.saturating_add(num_tracks))
+        .map(|track| {
+            let q = q.clone();
+            tokio::spawn(async move {
+                let (page, flag) = tokio::join!(
+                    read_track(&q, track, start_slot, timeout),
+                    q.query(
+                        "/live/track/get/has_midi_input",
+                        vec![OscType::Int(track)],
+                        timeout
+                    ),
+                );
+                (page, flag.ok().as_deref().and_then(decode_midi_flag))
+            })
+        })
+        .collect();
     let mut tracks = Vec::new();
     let mut missing = Vec::new();
     let mut midi_missing = Vec::new();
-    for (track, handle) in clip_handles.into_iter().enumerate() {
-        let index = track as i32;
+    for (offset, handle) in handles.into_iter().enumerate() {
+        let track = first_track + offset as i32;
         match handle.await {
-            Ok(Ok(reply)) => match decode_clips(&reply) {
-                Some(mut entry) => {
-                    entry.midi = flags.get(track).copied().flatten();
-                    if entry.midi.is_none() {
-                        midi_missing.push(index);
-                    }
-                    tracks.push(entry);
+            Ok(((Some(mut entry), failed), midi)) => {
+                entry.midi = midi;
+                if midi.is_none() {
+                    midi_missing.push(track);
                 }
-                None => missing.push(index),
-            },
-            Ok(Err(_)) | Err(_) => missing.push(index),
+                if failed {
+                    missing.push(track);
+                }
+                tracks.push(entry);
+            }
+            _ => missing.push(track),
         }
     }
     ClipMap {
@@ -251,6 +308,10 @@ mod tests {
         silent: Vec<i32>,
         silent_midi: Vec<i32>,
         hold_until_all_arrive: Option<usize>,
+        paged_only: bool,
+        silent_page: Option<usize>,
+        malformed_page: Option<usize>,
+        changed_total_page: Option<usize>,
     }
 
     async fn fake_live(fake: FakeLive) -> Arc<LiveQuery> {
@@ -273,6 +334,7 @@ mod tests {
 
         tokio::spawn(async move {
             let mut held_clips: Vec<i32> = Vec::new();
+            let mut held_pages: Vec<Vec<OscType>> = Vec::new();
             let mut held_midi: Vec<i32> = Vec::new();
             loop {
                 let req = match live.recv().await {
@@ -284,11 +346,45 @@ mod tests {
                     _ => continue,
                 };
                 match req.addr.as_str() {
-                    "/live/track/get/clips/name" => {
+                    "/live/track/get/clips/name" if !fake.paged_only => {
                         if fake.silent.contains(&track) {
                             continue; // the reply Live could not send
                         }
                         held_clips.push(track);
+                    }
+                    "/live/mixingpal/get/session/clips" => {
+                        if fake.silent.contains(&track) {
+                            continue;
+                        }
+                        let start = match req.args.get(1) {
+                            Some(OscType::Int(v)) => *v as usize,
+                            _ => continue,
+                        };
+                        if fake.silent_page == Some(start) {
+                            continue;
+                        }
+                        let limit = match req.args.get(2) {
+                            Some(OscType::Int(v)) => *v as usize,
+                            _ => continue,
+                        };
+                        let slots = fake.clips.get(track as usize).cloned().unwrap_or_default();
+                        let mut reply = vec![
+                            OscType::Int(track),
+                            OscType::Int(start as i32),
+                            OscType::Int(slots.len() as i32),
+                        ];
+                        reply.extend(slots.iter().skip(start).take(limit).map(|s| {
+                            s.as_ref()
+                                .map(|s| OscType::String(s.clone()))
+                                .unwrap_or(OscType::Nil)
+                        }));
+                        if fake.malformed_page == Some(start) {
+                            reply.pop();
+                        }
+                        if fake.changed_total_page == Some(start) {
+                            reply[2] = OscType::Int(slots.len() as i32 + 1);
+                        }
+                        held_pages.push(reply);
                     }
                     "/live/track/get/has_midi_input" => {
                         if fake.silent_midi.contains(&track) {
@@ -299,9 +395,14 @@ mod tests {
                     _ => continue,
                 }
                 if let Some(expect) = fake.hold_until_all_arrive {
-                    if held_clips.len() + held_midi.len() < expect {
+                    if held_clips.len() + held_pages.len() + held_midi.len() < expect {
                         continue; // answer nothing until every request is in
                     }
+                }
+                for reply in held_pages.drain(..) {
+                    let _ = live
+                        .send_to(app_port, "/live/mixingpal/get/session/clips", reply)
+                        .await;
                 }
                 for t in held_clips.drain(..) {
                     let mut reply = vec![OscType::Int(t)];
@@ -335,6 +436,80 @@ mod tests {
 
     fn slots(names: &[Option<&str>]) -> Vec<Option<String>> {
         names.iter().map(|n| n.map(String::from)).collect()
+    }
+
+    #[tokio::test]
+    async fn large_session_tracks_are_read_in_pages_without_losing_slot_indices() {
+        let mut clips = vec![Some("long clip name".repeat(9)); 300];
+        clips[17] = None;
+        clips[299] = Some("".into());
+        let q = fake_live(FakeLive {
+            clips: vec![clips],
+            midi: vec![false],
+            paged_only: true,
+            ..Default::default()
+        })
+        .await;
+        let map = get_clips(q, 1, Duration::from_millis(100)).await;
+        assert!(map.missing.is_empty());
+        assert_eq!(map.tracks[0].midi, Some(false));
+        assert_eq!(map.tracks[0].clips.len(), 299);
+        assert_eq!(map.tracks[0].clips.last().unwrap().slot, 299);
+    }
+
+    #[tokio::test]
+    async fn bounded_session_reads_expose_a_slot_that_recovers_the_tail() {
+        let q = fake_live(FakeLive {
+            clips: vec![vec![], vec![Some("clip".into()); 1050]],
+            midi: vec![false, true],
+            paged_only: true,
+            ..Default::default()
+        })
+        .await;
+        let first = get_clips_range(q.clone(), 1, 1, 0, QUERY_TIMEOUT).await;
+        let track = &first.tracks[0];
+        assert_eq!(track.track, 1);
+        assert_eq!(track.total_slots, 1050);
+        assert_eq!(track.clips.len(), 1024);
+        assert_eq!(track.next_slot, Some(1024));
+        let tail = get_clips_range(q, 1, 1, track.next_slot.unwrap(), QUERY_TIMEOUT).await;
+        assert_eq!(tail.tracks[0].clips.len(), 26);
+        assert_eq!(tail.tracks[0].clips[0].slot, 1024);
+        assert_eq!(tail.tracks[0].next_slot, None);
+    }
+
+    #[tokio::test]
+    async fn lost_or_short_session_pages_keep_read_data_and_report_the_gap() {
+        for malformed in [false, true] {
+            let q = fake_live(FakeLive {
+                clips: vec![vec![Some("clip".into()); 40]],
+                midi: vec![true],
+                paged_only: true,
+                silent_page: (!malformed).then_some(16),
+                malformed_page: malformed.then_some(16),
+                ..Default::default()
+            })
+            .await;
+            let map = get_clips(q, 1, Duration::from_millis(100)).await;
+            assert_eq!(map.missing, vec![0]);
+            assert_eq!(map.tracks[0].clips.len(), 16);
+            assert_eq!(map.tracks[0].next_slot, Some(16));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_scene_count_change_does_not_merge_two_session_grids() {
+        let q = fake_live(FakeLive {
+            clips: vec![vec![Some("clip".into()); 40]],
+            midi: vec![true],
+            paged_only: true,
+            changed_total_page: Some(16),
+            ..Default::default()
+        })
+        .await;
+        let map = get_clips(q, 1, QUERY_TIMEOUT).await;
+        assert_eq!(map.missing, vec![0]);
+        assert!(map.tracks.is_empty());
     }
 
     #[tokio::test]

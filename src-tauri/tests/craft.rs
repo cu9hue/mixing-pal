@@ -62,6 +62,35 @@ async fn read(ctx: &ToolContext, name: &str, args: Value) -> Value {
 }
 
 #[tokio::test]
+async fn note_output_pages_recover_the_tail_through_both_tools() {
+    let mut f = fixture();
+    let notes: Vec<Value> = (0..1025).map(|i| json!({
+        "pitch": i % 128, "start": i as f64 / 300.0, "velocity":100
+    })).collect();
+    f["tracks"][0]["notes"]["0"] = json!(notes);
+    f["tracks"][0]["arrangementNotes"]["0"] = json!(notes);
+    f["tracks"][0]["arrangement"][0]["length"] = json!(4.0);
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f).await))),
+    };
+    for (name, mut args) in [
+        ("get_clip_notes", json!({"track":0,"clip":0})),
+        ("get_arrangement_notes", json!({"track":0,"index":0})),
+    ] {
+        let first = read(&ctx, name, args.clone()).await;
+        assert_eq!(first["value"]["count"], 1024, "{name}: {first}");
+        assert_eq!(first["value"]["next_note_offset"], 1024, "{name}: {first}");
+        args["note_offset"] = first["value"]["next_note_offset"].clone();
+        let tail = read(&ctx, name, args).await;
+        assert!(tail["missing_reason"].is_null(), "{name}: {tail}");
+        assert_eq!(tail["value"]["count"], 1, "{name}: {tail}");
+        assert!(tail["value"]["next_note_offset"].is_null());
+        assert!((tail["value"]["notes"][0]["start"].as_f64().unwrap() - 1024.0 / 300.0).abs() < 0.00001);
+    }
+}
+
+#[tokio::test]
 async fn the_fake_live_serves_the_craft_fixture_in_full() {
     // The honesty fixture is deliberately broken. This one must not be: a
     // craft scenario that fails because a read came back missing is not a

@@ -49,6 +49,10 @@ class ArrangementHandler(AbletonOSCHandler):
                 return None
             return tracks[index]
 
+        def clips_of(track):
+            # Live raises on group arrangement_clips; their children own the placements.
+            return () if track.is_foldable else track.arrangement_clips
+
         def arrangement(params: Tuple[Any]):
             if len(params) != 3:
                 return None
@@ -64,7 +68,7 @@ class ArrangementHandler(AbletonOSCHandler):
             # `window_of` reads clip properties only inside the window, so a
             # page costs three property reads per clip DELIVERED rather than
             # three per clip on the track.
-            clips = track.arrangement_clips
+            clips = clips_of(track)
             records = window_of(clips, start, span)
             return arrangement_reply(track_index, start, len(clips), records)
 
@@ -81,7 +85,7 @@ class ArrangementHandler(AbletonOSCHandler):
             track = track_at(track_index)
             if track is None:
                 return None
-            return timeline_fingerprint_reply(track_index, track.arrangement_clips)
+            return timeline_fingerprint_reply(track_index, clips_of(track))
 
         self.osc_server.add_handler(
             "/live/mixingpal/get/arrangement/fingerprint", arrangement_fingerprint)
@@ -101,7 +105,7 @@ class ArrangementHandler(AbletonOSCHandler):
             track = track_at(track_index)
             if track is None:
                 return None
-            clips = track.arrangement_clips
+            clips = clips_of(track)
             if index < 0 or index >= len(clips):
                 return None
             return clips[index]
