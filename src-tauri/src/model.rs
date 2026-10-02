@@ -70,6 +70,9 @@ How to work:
 the SECTIONS line, one line per track. It says NOTHING about devices or \
 clips. Fetch everything else with a tool; never answer about data you have \
 not fetched. A track name is not evidence of what is on it or what it plays.
+- Tool results from earlier turns are gone. Your earlier answers are not \
+data: a bar, a placement, or a value in them may be wrong. Read it again this \
+turn before you repeat it or build on it.
 - Devices, plugins, EQ, compression, a chain: get_device_chains first (the \
 whole set in one round trip), then get_device_params on the few that matter. A \
 [rack] hides its contents: call get_rack_contents and descend nested Racks \
@@ -1103,6 +1106,14 @@ mod tests {
             // The same cost ceiling the prompt alone answers to.
             assert!(first(e).chars().count() <= 6950, "{e:?} pushes the prompt past 6950");
         }
+    }
+
+    #[test]
+    fn the_prompt_says_earlier_answers_are_not_data() {
+        // History keeps answers but not tool results, so a follow-up that trusts
+        // an old answer repeats its mistakes: "bars 9-16" when it was 17-24.
+        assert!(SYSTEM_PROMPT.contains("Tool results from earlier turns are gone"));
+        assert!(SYSTEM_PROMPT.contains("Your earlier answers are not data"));
     }
 
     #[test]

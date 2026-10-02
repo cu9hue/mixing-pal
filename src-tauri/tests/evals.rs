@@ -17,6 +17,7 @@
 
 mod common;
 use common::Turn;
+use mixing_pal_lib::eval_api::ChatMessage;
 
 use serde_json::Value;
 
@@ -246,4 +247,34 @@ async fn an_arrangement_question_reads_the_timeline_before_answering() {
         "the answer should point at where the gap is: {}",
         turn.answer
     );
+}
+
+#[tokio::test]
+async fn a_follow_up_reads_the_timeline_again_instead_of_trusting_an_old_answer() {
+    // History keeps answers, not tool results. This answer is wrong: «Take 3»
+    // sits at beat 64, bar 17, so repeating bar 9 is the failure under test.
+    let msg = |role: &str, text: &str| ChatMessage {
+        role: role.into(),
+        content: Some(text.into()),
+        tool_calls: None,
+        tool_call_id: None,
+    };
+    let history = [
+        msg("user", "what's on the vox?"),
+        msg("assistant", "«Vox» has one clip, «Take 3». It comes in at bar 9 and plays through bar 16."),
+    ];
+    let turn = common::ask_after(
+        &common::settings(),
+        common::experience(),
+        None,
+        fixture(),
+        &history,
+        &common::context("eval-context.txt"),
+        "where does the vox come in again? I want a riser in the bar before it.",
+    )
+    .await;
+    assert!(turn.error.is_none(), "the provider answered: {}", turn.error.as_deref().unwrap_or(""));
+    assert!(!turn.truncated, "ran out of round trips: {:?}", turn.called);
+    assert!(turn.called.contains(&"get_arrangement".to_string()), "{:?}", turn.called);
+    assert!(turn.answer.contains("17"), "the answer should put the vox at bar 17: {}", turn.answer);
 }

@@ -33,7 +33,7 @@ App 0.2.4, wire version 12. Shipped:
   one nudge rule (unnamed tracks), and the thread view.
 - An unsigned `.dmg`, with `docs/opening-an-unsigned-build.md` for getting past
   Gatekeeper.
-- Prompt guardrails and six honesty evals (`src-tauri/tests/evals.rs`), plus
+- Prompt guardrails and seven honesty evals (`src-tauri/tests/evals.rs`), plus
   the craft layer: the "What a good answer is" prompt section and five
   judge-scored craft evals (`src-tauri/tests/craft.rs`). The honesty evals
   and craft scenarios one to four have not yet run against a real model.

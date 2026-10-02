@@ -909,6 +909,20 @@ pub async fn ask_with(
     context: &str,
     question: &str,
 ) -> Turn {
+    ask_after(s, experience, temperature, f, &[], context, question).await
+}
+
+/// `ask_with` after earlier turns. `history` is what `Conversation.tsx`
+/// keeps: her questions and the answers as plain text, no tool results.
+pub async fn ask_after(
+    s: &Settings,
+    experience: Experience,
+    temperature: Option<f64>,
+    f: Value,
+    history: &[ChatMessage],
+    context: &str,
+    question: &str,
+) -> Turn {
     let turn_started = std::time::Instant::now();
     let ctx = ToolContext {
         coalescer: mirror(&f),
@@ -916,12 +930,13 @@ pub async fn ask_with(
     };
     let http = client();
 
-    let mut messages = vec![ChatMessage {
+    let mut messages = history.to_vec();
+    messages.push(ChatMessage {
         role: "user".into(),
         content: Some(format!("{context}\n\n---\n\n{question}")),
         tool_calls: None,
         tool_call_id: None,
-    }];
+    });
     let mut called: Vec<String> = Vec::new();
     let mut calls: Vec<ToolCallRecord> = Vec::new();
     let mut round_trip_ms: Vec<u64> = Vec::new();
