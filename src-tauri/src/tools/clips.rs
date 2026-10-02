@@ -93,7 +93,7 @@ fn decode_midi_flag(reply: &[OscType]) -> Option<bool> {
 
 const SESSION_PAGE: &str = "/live/mixingpal/get/session/clips";
 const PAGE_SIZE: i32 = 16;
-const MAX_PAGES: usize = 64;
+pub const MAX_PAGES: usize = 64;
 
 const FINGERPRINT: &str = "/live/mixingpal/get/session/fingerprint";
 
@@ -115,12 +115,13 @@ async fn read_track(
     q: &LiveQuery,
     track: i32,
     start_slot: i32,
+    max_pages: usize,
     timeout: Duration,
 ) -> (Option<TrackClips>, bool) {
     let Some(before) = fingerprint(q, track, timeout).await else {
         return (None, true);
     };
-    let result = read_track_pages(q, track, start_slot, timeout).await;
+    let result = read_track_pages(q, track, start_slot, max_pages, timeout).await;
     if result.0.as_ref().is_some_and(|entry| entry.total_slots != before.0)
         || fingerprint(q, track, timeout).await.as_ref() != Some(&before)
     {
@@ -133,11 +134,12 @@ async fn read_track_pages(
     q: &LiveQuery,
     track: i32,
     start_slot: i32,
+    max_pages: usize,
     timeout: Duration,
 ) -> (Option<TrackClips>, bool) {
     let mut entry: Option<TrackClips> = None;
     let mut start = start_slot;
-    for _ in 0..MAX_PAGES {
+    for _ in 0..max_pages {
         let reply = q
             .query(
                 SESSION_PAGE,
@@ -191,7 +193,7 @@ async fn read_track_pages(
 
 #[cfg(test)]
 pub async fn get_clips(q: Arc<LiveQuery>, num_tracks: i32, timeout: Duration) -> ClipMap {
-    get_clips_range(q, 0, num_tracks, 0, timeout).await
+    get_clips_range(q, 0, num_tracks, 0, MAX_PAGES, timeout).await
 }
 
 pub async fn get_clips_range(
@@ -199,6 +201,7 @@ pub async fn get_clips_range(
     first_track: i32,
     num_tracks: i32,
     start_slot: i32,
+    max_pages: usize,
     timeout: Duration,
 ) -> ClipMap {
     let handles: Vec<_> = (first_track..first_track.saturating_add(num_tracks))
@@ -206,7 +209,7 @@ pub async fn get_clips_range(
             let q = q.clone();
             tokio::spawn(async move {
                 let (page, flag) = tokio::join!(
-                    read_track(&q, track, start_slot, timeout),
+                    read_track(&q, track, start_slot, max_pages, timeout),
                     q.query(
                         "/live/track/get/has_midi_input",
                         vec![OscType::Int(track)],
@@ -503,6 +506,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_overview_keeps_fingerprint_and_missing_page_checks() {
+        for (changed, silent, malformed, bad_fingerprint) in [
+            (true, None, None, None),
+            (false, Some(0), None, None),
+            (false, None, Some(0), None),
+            (false, None, None, Some("missing")),
+            (false, None, None, Some("malformed")),
+        ] {
+            let q = fake_live(FakeLive {
+                clips: vec![vec![Some("clip".into()); 32]],
+                move_clip_between_pages: changed,
+                silent_page: silent,
+                malformed_page: malformed,
+                bad_fingerprint,
+                ..Default::default()
+            }).await;
+            let map = get_clips_range(q, 0, 1, 0, 1, Duration::from_millis(100)).await;
+            assert_eq!(map.missing, vec![0]);
+            assert!(map.tracks.is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn moving_a_clip_between_pages_does_not_invent_an_empty_track() {
         let mut clips = vec![None; 32];
         clips[16] = Some("moved".into());
@@ -545,13 +571,13 @@ mod tests {
             ..Default::default()
         })
         .await;
-        let first = get_clips_range(q.clone(), 1, 1, 0, QUERY_TIMEOUT).await;
+        let first = get_clips_range(q.clone(), 1, 1, 0, MAX_PAGES, QUERY_TIMEOUT).await;
         let track = &first.tracks[0];
         assert_eq!(track.track, 1);
         assert_eq!(track.total_slots, 1050);
         assert_eq!(track.clips.len(), 1024);
         assert_eq!(track.next_slot, Some(1024));
-        let tail = get_clips_range(q, 1, 1, track.next_slot.unwrap(), QUERY_TIMEOUT).await;
+        let tail = get_clips_range(q, 1, 1, track.next_slot.unwrap(), MAX_PAGES, QUERY_TIMEOUT).await;
         assert_eq!(tail.tracks[0].clips.len(), 26);
         assert_eq!(tail.tracks[0].clips[0].slot, 1024);
         assert_eq!(tail.tracks[0].next_slot, None);

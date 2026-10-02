@@ -125,7 +125,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clips",
-                "description": "Every session-view clip in the set: for each track, the slot index and name of each clip it holds, and whether the track is MIDI. Queried from Live at call time; slot names are read in bounded pages per track. Call this first to find out which clips exist and what their slot indices are, then use get_clip_notes to read one. Slot indices are the real ones and have gaps, because a producer's session grid does. An empty list means no filled slots in the returned scope; check missing and next_slot before claiming the whole track is empty. Arrangement-view clips are not covered. A track whose midi field is absent had its clips read but its kind unknown. Tracks that did not answer are listed separately under missing. The combined map also has an output byte budget. A next_slot means more slots remain: call again with that track and start_slot set to next_slot. Group tracks have no direct clips.",
+                "description": "Session-view clip overview: by default, reads the first 16 slots of each track and returns filled slots with their index and name, plus whether the track is MIDI. Supply track to read up to 1024 slots of that track, beginning at start_slot (default 0). Queried from Live at call time; slot names are read in bounded pages per track. Call this first to find out which clips exist and what their slot indices are, then use get_clip_notes to read one. Slot indices are the real ones and have gaps, because a producer's session grid does. An empty list means no filled slots in the returned scope; check missing and next_slot before claiming the whole track is empty. Arrangement-view clips are not covered. A track whose midi field is absent had its clips read but its kind unknown. Tracks that did not answer are listed separately under missing. The combined map also has an output byte budget. A next_slot means more slots remain: call again with that track and start_slot set to next_slot. Group tracks have no direct clips.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1002,7 +1002,8 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 .map(|t| track_identity(&ctx.coalescer, t))
                 .collect();
 
-            let mut map = clips::get_clips_range(query, selected.start as i32, (selected.end - selected.start) as i32, start_slot as i32, clips::QUERY_TIMEOUT).await;
+            let max_pages = if track.is_some() { clips::MAX_PAGES } else { 1 };
+            let mut map = clips::get_clips_range(query, selected.start as i32, (selected.end - selected.start) as i32, start_slot as i32, max_pages, clips::QUERY_TIMEOUT).await;
 
             let after_count = track_count(&ctx.coalescer);
             let after: Vec<Option<serde_json::Value>> = selected.clone()

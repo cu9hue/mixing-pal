@@ -181,6 +181,11 @@ fn arrangement_clip_exists(track: &Value, index: Option<i32>) -> bool {
 /// `shared/craft-set.json` describes every device, and `craft.rs` checks
 /// that it reads in full.
 pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
+    fake_live_recording(f, Arc::new(Mutex::new(Vec::new()))).await
+}
+
+/// Record received addresses to check transport work through the real tools.
+pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) -> Arc<LiveQuery> {
     let live = OscSocket::bind_to(0, 0).await.unwrap();
     let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
     let app_port = app.local_port();
@@ -206,6 +211,7 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            requests.lock().unwrap().push(req.addr.clone());
             let int_at = |n: usize| match req.args.get(n) {
                 Some(OscType::Int(v)) => Some(*v),
                 _ => None,
