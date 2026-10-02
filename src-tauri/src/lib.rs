@@ -29,7 +29,7 @@ pub mod bench_api {
     pub use crate::osc::requests::RequestTable;
     pub use crate::osc::socket::OscSocket;
     pub use crate::tools::clip_notes::{decode_notes, get_clip_notes, Note};
-    pub use crate::tools::device_chains::get_device_chains;
+    pub use crate::tools::device_chains::get_device_chains_range;
     pub use crate::tools::device_params::get_device_params;
     pub use crate::tools::path::DevicePath;
     pub use crate::tools::fence::fence;
