@@ -1,6 +1,5 @@
 use crate::osc::query::{LiveQuery, QueryError};
 use crate::tools::device_chains::RACK_SUFFIX;
-use crate::tools::device_params::device_identity;
 use crate::tools::fence::fence;
 use crate::tools::path::DevicePath;
 use rosc::OscType;
@@ -10,11 +9,8 @@ use std::time::Duration;
 /// Deliberately equal to `clip_notes::QUERY_TIMEOUT`; see that constant.
 pub const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// A prompt-token cap, NOT a datagram cap — which is why it lives here and
-/// not in `osc/budget.rs`. A Drum Rack has 128 pads and a fully loaded one
-/// is legal, but a working kit runs eight to twenty-four. Past this the
-/// tail is reported as a truncation marker rather than spent as several
-/// thousand tokens of pad names.
+/// Bounds one model response. More chains, including layered drum pads,
+/// remain reachable through the next offset.
 pub const MAX_CHAINS: usize = 128;
 
 /// Chains asked for per request. The handler returns at most this many and
@@ -46,11 +42,12 @@ pub struct RackChain {
     pub muted: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub soloed: bool,
-    /// Fenced device names, in chain order.
     pub devices: Vec<String>,
     /// The chain's real device count, which exceeds `devices.len()` when the
     /// handler cut the list back to fit one datagram.
     pub total_devices: usize,
+    pub device_offset: usize,
+    pub next_device_offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -69,6 +66,7 @@ pub struct RackContents {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_rack: Option<bool>,
     pub truncated: bool,
+    pub next_offset: Option<usize>,
     pub missing_reason: Option<String>,
 }
 
@@ -103,31 +101,18 @@ fn string_or_nil_at(reply: &[OscType], i: usize) -> Option<Option<String>> {
     }
 }
 
-/// Decodes `(track, path, start, total_chains, can_have_chains, *records)`.
-///
-/// Each record is `name, note, mute, solo, sample_name, total_devices, reported_devices`
-/// followed by exactly `reported_devices` `(device_name, is_rack)` pairs, so a record announces its
-/// own length and a stream of variable-length records needs no separator.
-///
-/// Fails closed on anything that does not line up. A record claiming more
-/// names than the reply can hold means the stream was truncated in transit
-/// or forged; either way every following byte becomes unattributable, so the
-/// whole window is refused rather than yielding the prefix. Half a rack
-/// presented as a whole one is worse than no rack at all.
-///
-/// The `expect_start` check is defence in depth, not the thing that catches
-/// a mis-attributed reply: this address is `KeyArity::Args(3)`, so a reply
-/// echoing a different start matches no pending entry and
-/// `RequestTable::resolve` drops it first.
+/// A malformed variable-length record makes every following byte unattributable,
+/// so the whole window is refused rather than yielding a misleading prefix.
 fn decode_window(reply: &[OscType], expect_start: usize) -> Option<(usize, bool, Vec<RackChain>)> {
     if usize::try_from(int_at(reply, 2)?).ok()? != expect_start {
         return None;
     }
-    let total_chains = usize::try_from(int_at(reply, 3)?).ok()?;
-    let is_rack = int_at(reply, 4)? != 0;
+    let device_offset = usize::try_from(int_at(reply, 3)?).ok()?;
+    let total_chains = usize::try_from(int_at(reply, 4)?).ok()?;
+    let is_rack = int_at(reply, 5)? != 0;
 
     let mut chains = Vec::new();
-    let mut i = 5;
+    let mut i = 6;
     let mut index = expect_start;
     while i < reply.len() {
         let name = str_at(reply, i)?;
@@ -160,10 +145,28 @@ fn decode_window(reply: &[OscType], expect_start: usize) -> Option<(usize, bool,
             soloed,
             devices,
             total_devices,
+            device_offset,
+            next_device_offset: (device_offset.saturating_add(reported) < total_devices)
+                .then_some(device_offset.saturating_add(reported)),
         });
         index += 1;
     }
     Some((total_chains, is_rack, chains))
+}
+
+async fn fingerprint(q: &LiveQuery, track: i32, path: &DevicePath, timeout: Duration) -> Option<(usize, String)> {
+    let wire = path.wire();
+    let reply = q.query(
+        "/live/mixingpal/get/rack/fingerprint",
+        vec![OscType::Int(track), OscType::String(wire.clone())], timeout,
+    ).await.ok()?;
+    let [OscType::Int(actual), OscType::String(actual_path), OscType::Int(total), OscType::String(digest)] = reply.as_slice() else {
+        return None;
+    };
+    if *actual != track || *actual_path != wire || digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((usize::try_from(*total).ok()?, digest.clone()))
 }
 
 /// Lists one rack's chains, paged.
@@ -178,12 +181,11 @@ pub async fn get_rack_contents(
     q: &LiveQuery,
     track: i32,
     path: &DevicePath,
+    offset: usize,
+    device_offset: usize,
     timeout: Duration,
 ) -> Result<RackContents, QueryError> {
-    // Same bracket the parameter read uses. No reply is also how "there is
-    // no device at that path" arrives: the Remote Script raises inside Live
-    // and sends nothing, byte-identical to a lost datagram.
-    let Some(before) = device_identity(q, track, path, timeout).await else {
+    let Some(before) = fingerprint(q, track, path, timeout).await else {
         return Err(QueryError::NoReply);
     };
 
@@ -192,7 +194,7 @@ pub async fn get_rack_contents(
     let mut is_rack: Option<bool> = None;
     let mut missing_reason: Option<String> = None;
     let mut windows = 0usize;
-    let mut start = 0usize;
+    let mut start = offset;
     let mut first = true;
     let mut cleared = false;
 
@@ -215,11 +217,12 @@ pub async fn get_rack_contents(
 
         let reply = match q
             .query(
-                "/live/mixingpal/get/rack/chains",
+                "/live/mixingpal/get/rack/chains_range",
                 vec![
                     OscType::Int(track),
                     OscType::String(path.wire()),
                     OscType::Int(start as i32),
+                    OscType::Int(device_offset as i32),
                     OscType::Int(span as i32),
                 ],
                 timeout,
@@ -268,13 +271,8 @@ pub async fn get_rack_contents(
         }
     }
 
-    // The listing was read across several seconds while the producer was, by
-    // definition, working in Live. `device_identity` returns the same pair
-    // the parameter read brackets on, and it cannot tell two same-named
-    // devices with the same parameter count apart — recorded in the spec's
-    // Known limits, not papered over here.
-    match device_identity(q, track, path, timeout).await {
-        Some(after) if after == before => {}
+    match fingerprint(q, track, path, timeout).await {
+        Some(after) if after == before && total_chains.is_none_or(|total| total == before.0) => {}
         Some(_) => {
             chains.clear();
             cleared = true;
@@ -287,7 +285,7 @@ pub async fn get_rack_contents(
         None => {
             chains.clear();
             cleared = true;
-            missing_reason = Some("device_identity_unverified".to_string());
+            missing_reason = Some("rack_fingerprint_unverified".to_string());
         }
     }
 
@@ -295,13 +293,15 @@ pub async fn get_rack_contents(
     // flag set wherever the clear happens keeps the two facts from
     // disagreeing -- which they did when each clear site had to remember to
     // say so itself.
-    let truncated = !cleared && total_chains.is_some_and(|t| t > chains.len());
+    let next_offset = (!cleared && total_chains.is_some_and(|t| t > start)).then_some(start);
+    let truncated = next_offset.is_some();
 
     Ok(RackContents {
         chains,
         total_chains,
         is_rack,
         truncated,
+        next_offset,
         missing_reason,
     })
 }
@@ -311,12 +311,12 @@ mod tests {
     use super::*;
     use rosc::OscType::{Int, String as S};
 
-    /// `(track, path, start, total_chains, can_have_chains, *records)`.
     fn reply(start: i32, total: i32, is_rack: bool, records: Vec<Vec<OscType>>) -> Vec<OscType> {
         let mut out = vec![
             Int(0),
             S("0".into()),
             Int(start),
+            Int(0),
             Int(total),
             Int(is_rack as i32),
         ];
@@ -445,13 +445,13 @@ mod tests {
             vec![record("Kick", 36, false, false, None, 9, &["Simpler"])],
         );
         // Claim two names while carrying one.
-        r[11] = Int(2);
+        r[12] = Int(2);
         assert!(decode_window(&r, 0).is_none());
     }
 
     #[test]
     fn a_wrongly_typed_field_anywhere_refuses_the_whole_window() {
-        for corrupt in [5usize, 6, 7, 8, 10, 11, 12, 13] {
+        for corrupt in [6usize, 7, 8, 9, 11, 12, 13, 14] {
             let mut r = reply(
                 0,
                 1,
@@ -545,6 +545,8 @@ mod tests {
             soloed: false,
             devices: vec![],
             total_devices: 0,
+            device_offset: 0,
+            next_device_offset: None,
         };
         let v = serde_json::to_value(&plain).unwrap();
         let obj = v.as_object().unwrap();
@@ -561,6 +563,8 @@ mod tests {
             soloed: true,
             devices: vec![],
             total_devices: 0,
+            device_offset: 0,
+            next_device_offset: None,
         };
         let v = serde_json::to_value(&interesting).unwrap();
         assert_eq!(v["muted"], true);
@@ -582,8 +586,10 @@ mod tests {
     /// generous synthetic byte budget stands in for `MAX_REPLY_BYTES`, since
     /// no test here pushes a record large enough to need shrinking).
     struct FakeRack {
-        name: String,
+        changed_content: bool,
+        bad_fingerprint: Option<(usize, bool)>,
         chains: usize,
+        devices: usize,
         is_rack: bool,
         per_window: usize,
         /// Refuse to answer `/live/mixingpal/get/rack/chains` at all, which is
@@ -592,11 +598,11 @@ mod tests {
         /// Report this many total chains starting with the second window's
         /// reply, modelling a pad deleted mid-page.
         recount_after_first_window: Option<usize>,
-        /// Answer the second and later identity queries with this name,
+        /// Change the fingerprint after the first read,
         /// modelling the device under the path moving mid-read.
-        renamed_after_first_identity: Option<String>,
-        /// Answer the first identity query and then go silent.
-        silent_after_first_identity: bool,
+        renamed_after_first_fingerprint: Option<String>,
+        /// Answer the first fingerprint query and then go silent.
+        silent_after_first_fingerprint: bool,
         /// Go silent on the rack/chains query at this zero-based window
         /// index onward, modelling a reply lost partway through a page.
         silent_from_window: Option<usize>,
@@ -609,14 +615,16 @@ mod tests {
     impl Default for FakeRack {
         fn default() -> Self {
             FakeRack {
-                name: "Drum Rack".into(),
+                changed_content: false,
+                bad_fingerprint: None,
                 chains: 0,
+                devices: 1,
                 is_rack: true,
                 per_window: REQUEST_SPAN,
                 silent_chains: false,
                 recount_after_first_window: None,
-                renamed_after_first_identity: None,
-                silent_after_first_identity: false,
+                renamed_after_first_fingerprint: None,
+                silent_after_first_fingerprint: false,
                 silent_from_window: None,
                 malformed_from_window: None,
             }
@@ -637,8 +645,7 @@ mod tests {
     }
 
     /// The one fake Live stand-in every paging test in this module spawns.
-    /// Answers both `/live/mixingpal/get/device/identity` and
-    /// `/live/mixingpal/get/rack/chains`.
+    /// Answers the rack fingerprint and chain-range endpoints.
     async fn fake_rack(fake: FakeRack) -> (Arc<LiveQuery>, TaskGuard) {
         let live = OscSocket::bind_to(0, 0).await.unwrap();
         let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
@@ -658,7 +665,7 @@ mod tests {
         });
 
         let reply_handle = tokio::spawn(async move {
-            let mut identity_queries = 0usize;
+            let mut fingerprints = 0usize;
             let mut chain_query_index = 0usize;
             loop {
                 let req = match live.recv().await {
@@ -675,29 +682,16 @@ mod tests {
                     _ => continue,
                 };
                 match req.addr.as_str() {
-                    "/live/mixingpal/get/device/identity" => {
-                        identity_queries += 1;
-                        if fake.silent_after_first_identity && identity_queries > 1 {
-                            continue;
-                        }
-                        let name = match &fake.renamed_after_first_identity {
-                            Some(n) if identity_queries > 1 => n.clone(),
-                            _ => fake.name.clone(),
-                        };
-                        let _ = live
-                            .send_to(
-                                app_port,
-                                "/live/mixingpal/get/device/identity",
-                                vec![
-                                    OscType::Int(track),
-                                    OscType::String(path.clone()),
-                                    OscType::String(name),
-                                    OscType::Int(0),
-                                ],
-                            )
-                            .await;
+                    "/live/mixingpal/get/rack/fingerprint" => {
+                        fingerprints += 1;
+                        if fake.bad_fingerprint == Some((fingerprints, false))
+                            || (fake.silent_after_first_fingerprint && fingerprints > 1) { continue; }
+                        let changed = fingerprints > 1 && (fake.changed_content || fake.renamed_after_first_fingerprint.is_some());
+                        let digest = if fake.bad_fingerprint == Some((fingerprints, true)) { Int(0) }
+                            else { S(if changed { "b" } else { "a" }.repeat(64)) };
+                        let _ = live.send_to(app_port, &req.addr, vec![Int(track), S(path.clone()), Int(fake.chains as i32), digest]).await;
                     }
-                    "/live/mixingpal/get/rack/chains" => {
+                    "/live/mixingpal/get/rack/chains_range" => {
                         if fake.silent_chains {
                             continue;
                         }
@@ -714,13 +708,14 @@ mod tests {
                                 OscType::Int(track),
                                 OscType::String(path.clone()),
                                 OscType::Int(i(2)),
+                                OscType::Int(i(3)),
                             ];
                             let _ = live
-                                .send_to(app_port, "/live/mixingpal/get/rack/chains", short)
+                                .send_to(app_port, "/live/mixingpal/get/rack/chains_range", short)
                                 .await;
                             continue;
                         }
-                        let (start, span) = (i(2) as usize, i(3) as usize);
+                        let (start, device_offset, span) = (i(2) as usize, i(3) as usize, i(4) as usize);
                         // The total this window reports -- mirrors
                         // `recount_after_first_window` for windows past the
                         // first, modelling a pad deleted mid-page.
@@ -733,6 +728,7 @@ mod tests {
                             OscType::Int(track),
                             OscType::String(path.clone()),
                             OscType::Int(start as i32),
+                            OscType::Int(device_offset as i32),
                             OscType::Int(total as i32),
                             OscType::Int(fake.is_rack as i32),
                         ];
@@ -742,13 +738,16 @@ mod tests {
                             reply.push(OscType::Int(0));
                             reply.push(OscType::Int(0));
                             reply.push(OscType::Nil);
-                            reply.push(OscType::Int(1));
-                            reply.push(OscType::Int(1));
-                            reply.push(OscType::String("Simpler".into()));
-                            reply.push(OscType::Int(0));
+                            let device_end = (device_offset + 32).min(fake.devices);
+                            reply.push(OscType::Int(fake.devices as i32));
+                            reply.push(OscType::Int(device_end.saturating_sub(device_offset) as i32));
+                            for n in device_offset..device_end {
+                                reply.push(OscType::String(if fake.devices == 1 { "Simpler".into() } else { format!("Device {n}") }));
+                                reply.push(OscType::Int(0));
+                            }
                         }
                         let _ = live
-                            .send_to(app_port, "/live/mixingpal/get/rack/chains", reply)
+                            .send_to(app_port, "/live/mixingpal/get/rack/chains_range", reply)
                             .await;
                     }
                     _ => {}
@@ -760,6 +759,36 @@ mod tests {
             Arc::new(LiveQuery::new(app, table)),
             TaskGuard(vec![recv_handle, reply_handle]),
         )
+    }
+
+    #[tokio::test]
+    async fn a_same_count_chain_edit_discards_the_paged_rack() {
+        let (q, _guard) = fake_rack(FakeRack {
+            chains: 64, changed_content: true, ..Default::default()
+        }).await;
+        let out = get_rack_contents(&q, 0, &DevicePath::parse(Some(&serde_json::json!([0]))).unwrap(), 0, 0, FAST).await.unwrap();
+        assert!(out.chains.is_empty());
+        assert_eq!(out.missing_reason.as_deref(), Some("topology_changed"));
+        assert!(out.next_offset.is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_or_malformed_rack_fingerprints_never_accept_pages() {
+        for request in [1, 2] {
+            for malformed in [false, true] {
+                let (q, _guard) = fake_rack(FakeRack {
+                    chains: 64, bad_fingerprint: Some((request, malformed)), ..Default::default()
+                }).await;
+                let result = get_rack_contents(&q, 0, &DevicePath::parse(Some(&serde_json::json!([0]))).unwrap(), 0, 0, FAST).await;
+                if request == 1 { assert!(result.is_err()); }
+                else {
+                    let out = result.unwrap();
+                    assert!(out.chains.is_empty());
+                    assert_eq!(out.missing_reason.as_deref(), Some("rack_fingerprint_unverified"));
+                    assert!(out.next_offset.is_none());
+                }
+            }
+        }
     }
 
     #[tokio::test]
@@ -775,7 +804,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert_eq!(out.total_chains, Some(50));
         assert_eq!(out.chains.len(), 50);
         assert_eq!(out.chains[49].index, 49);
@@ -792,7 +821,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert_eq!(out.chains.len(), MAX_CHAINS);
         assert_eq!(out.total_chains, Some(128));
         assert!(!out.truncated);
@@ -808,7 +837,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert_eq!(out.is_rack, Some(true));
         assert!(out.chains.is_empty());
         assert_eq!(out.missing_reason, None);
@@ -825,7 +854,7 @@ mod tests {
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
         assert!(matches!(
-            get_rack_contents(&q, 0, &path, FAST).await,
+            get_rack_contents(&q, 0, &path, 0, 0, FAST).await,
             Err(QueryError::NoReply)
         ));
     }
@@ -842,7 +871,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert!(out.chains.is_empty());
         assert_eq!(out.missing_reason.as_deref(), Some("topology_changed"));
     }
@@ -851,12 +880,12 @@ mod tests {
     async fn a_device_that_moved_under_the_loop_drops_the_read() {
         let (q, _guard) = fake_rack(FakeRack {
             chains: 8,
-            renamed_after_first_identity: Some("Other Rack".into()),
+            renamed_after_first_fingerprint: Some("Other Rack".into()),
             ..Default::default()
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert!(out.chains.is_empty());
         assert_eq!(out.missing_reason.as_deref(), Some("topology_changed"));
     }
@@ -867,16 +896,16 @@ mod tests {
         // witnessed, to a producer who knows they touched nothing.
         let (q, _guard) = fake_rack(FakeRack {
             chains: 8,
-            silent_after_first_identity: true,
+            silent_after_first_fingerprint: true,
             ..Default::default()
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert!(out.chains.is_empty());
         assert_eq!(
             out.missing_reason.as_deref(),
-            Some("device_identity_unverified")
+            Some("rack_fingerprint_unverified")
         );
     }
 
@@ -893,7 +922,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert_eq!(
             out.chains.len(),
             8,
@@ -912,7 +941,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert_eq!(
             out.chains.len(),
             8,
@@ -936,7 +965,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert_eq!(out.is_rack, None);
         assert_eq!(out.total_chains, None);
         assert!(out.chains.is_empty());
@@ -955,7 +984,7 @@ mod tests {
         })
         .await;
         let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
-        let out = get_rack_contents(&q, 0, &path, FAST).await.unwrap();
+        let out = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
         assert_eq!(
             out.chains.len(),
             MAX_WINDOWS,
@@ -964,4 +993,44 @@ mod tests {
         assert!(out.total_chains.is_some_and(|t| out.chains.len() < t));
         assert_eq!(out.missing_reason.as_deref(), Some("windows_exhausted"));
     }
+    #[tokio::test]
+    async fn an_offset_recovers_the_tail_without_reading_the_first_page() {
+        let (q, _guard) = fake_rack(FakeRack { chains: 150, ..Default::default() }).await;
+        let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
+        let tail = get_rack_contents(&q, 0, &path, 128, 0, FAST).await.unwrap();
+        assert_eq!(tail.chains.first().unwrap().index, 128);
+        assert_eq!(tail.chains.len(), 22);
+        assert!(!tail.truncated);
+    }
+
+    #[tokio::test]
+    async fn page_cursor_recovers_after_the_window_budget_is_spent() {
+        let (q, _guard) = fake_rack(FakeRack { chains: 20, per_window: 1, ..Default::default() }).await;
+        let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
+        let first = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
+        assert_eq!(first.next_offset, Some(MAX_WINDOWS));
+        let tail = get_rack_contents(&q, 0, &path, first.next_offset.unwrap(), 0, FAST).await.unwrap();
+        assert_eq!(tail.chains.first().unwrap().index, MAX_WINDOWS);
+        assert_eq!(tail.chains.last().unwrap().index, 19);
+        assert_eq!(tail.next_offset, None);
+        let beyond = get_rack_contents(&q, 0, &path, 999, 0, FAST).await.unwrap();
+        assert!(beyond.chains.is_empty());
+        assert_eq!(beyond.next_offset, None);
+        assert!(!beyond.truncated);
+    }
+
+    #[tokio::test]
+    async fn device_names_continue_at_their_absolute_indices() {
+        let (q, _guard) = fake_rack(FakeRack { chains: 1, devices: 40, ..Default::default() }).await;
+        let path = DevicePath::parse(Some(&serde_json::json!([0]))).unwrap();
+        let first = get_rack_contents(&q, 0, &path, 0, 0, FAST).await.unwrap();
+        assert_eq!(first.chains[0].next_device_offset, Some(32));
+        let tail = get_rack_contents(&q, 0, &path, 0, 32, FAST).await.unwrap();
+        assert_eq!(tail.chains[0].index, 0);
+        assert_eq!(tail.chains[0].device_offset, 32);
+        assert_eq!(tail.chains[0].devices.first(), Some(&fence("Device 32")));
+        assert_eq!(tail.chains[0].devices.len(), 8);
+        assert_eq!(tail.chains[0].next_device_offset, None);
+    }
+
 }

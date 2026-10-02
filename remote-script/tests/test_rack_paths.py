@@ -136,6 +136,17 @@ class ChainsOfTests(unittest.TestCase):
         self.assertEqual([(c, n, name, m) for (c, n, name, m, _, _) in got],
                          [(kick, 36, "Kick", False), (hats, 42, "Hats", True)])
 
+    def test_every_layer_of_a_multi_pad_is_listed_and_resolvable(self):
+        a = FakeChain("Body", [FakeDevice("Simpler A")], mute=True)
+        b = FakeChain("Click", [FakeDevice("Simpler B")], solo=True)
+        rack = FakeDevice("Drum Rack", drum_pads=[FakePad(36, "Multi", [a, b])])
+        entries = rack_paths.chains_of(rack)
+        self.assertEqual([(c, n, name, m, solo) for c, n, name, m, solo, _ in entries],
+                         [(a, 36, "Body", True, False), (b, 36, "Click", False, True)])
+        track = FakeTrack([rack])
+        self.assertIs(rack_paths.resolve(track, [0, 0, 0]), a.devices[0])
+        self.assertIs(rack_paths.resolve(track, [0, 1, 0]), b.devices[0])
+
     def test_a_kit_of_entirely_empty_pads_lists_nothing(self):
         rack = FakeDevice("Drum Rack", drum_pads=[FakePad(i, str(i), []) for i in range(128)])
         self.assertEqual(rack_paths.chains_of(rack), [])
@@ -259,6 +270,21 @@ class WindowTests(unittest.TestCase):
 
     def test_a_start_past_the_end_returns_nothing_rather_than_wrapping(self):
         self.assertEqual(rack_paths.build_window(self.entries(3), 10, 8), [])
+
+    def test_device_offset_recovers_names_cut_back_to_fit_the_wire(self):
+        names = [str(i) + "😀" * rack_paths.NAME_CAP for i in range(40)]
+        chain = FakeChain("Wide", [FakeDevice(name) for name in names])
+        entries = [(chain, -1, chain.name, False, False, None)]
+        offset = 0
+        seen = []
+        while offset < len(names):
+            (record,) = rack_paths.build_window(entries, 0, 1, device_offset=offset)
+            self.assertGreater(record[6], 0)
+            self.assertEqual(record[5], 40)
+            self.assertLessEqual(rack_paths.record_bytes(record), rack_paths.MAX_REPLY_BYTES)
+            seen.extend(record[7::2])
+            offset += record[6]
+        self.assertEqual(seen, [name[:rack_paths.NAME_CAP] for name in names])
 
     def test_a_negative_start_and_span_clamp_to_zero_rather_than_wrapping(self):
         # Unexercised by every other test here: an un-clamped negative span

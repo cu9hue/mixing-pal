@@ -17,6 +17,7 @@ pub enum KeyArity {
 // its own line here; everything else is Unknown.
 pub fn key_arity(addr: &str) -> KeyArity {
     match addr {
+        "/live/mixingpal/get/rack/chains_range" => KeyArity::Args(4),
         "/live/song/get/tempo"
         | "/live/song/get/is_playing"
         | "/live/song/get/scale_name"
@@ -79,6 +80,8 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // whole-timeline generation marker, so it is deliberately outside
         // the request key.
         | "/live/mixingpal/get/arrangement/fingerprint"
+        | "/live/mixingpal/get/session/fingerprint"
+        | "/live/mixingpal/get/device_chain/fingerprint"
         | "/live/return/get/volume"
         | "/live/return/get/panning"
         | "/live/return/get/name" => KeyArity::Args(1),
@@ -97,6 +100,7 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // costs two round trips instead of four -- and unlike those two, it
         // resolves a path rather than a top-level index.
         | "/live/mixingpal/get/device/identity"
+        | "/live/mixingpal/get/rack/fingerprint"
         // (track, start, span) out; (track, start, total, *records) back --
         // `arrangement_replies.py`'s own words are "track and start lead
         // because the client's request table keys on the leading arguments
@@ -105,6 +109,8 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // it would never match the reply's third value and no read would
         // ever resolve.
         | "/live/mixingpal/get/arrangement"
+        | "/live/mixingpal/get/session/clips"
+        | "/live/mixingpal/get/device_chain"
         // (track, index) in, (track, index, name, start_time, length) back.
         // Its own address rather than a span-1 page of the map, which is
         // keyed on (track, start): at index == start the two collide, the

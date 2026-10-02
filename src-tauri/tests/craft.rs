@@ -63,6 +63,205 @@ async fn read(ctx: &ToolContext, name: &str, args: Value) -> Value {
 }
 
 #[tokio::test]
+async fn session_overview_bounds_transport_and_keeps_targeted_recovery() {
+    let mut f = fixture();
+    let mut track = f["tracks"][0].clone();
+    track["clips"] = json!((0..256).map(|slot| json!({"slot":slot,"name":"clip"})).collect::<Vec<_>>());
+    f["tracks"] = json!(vec![track; 36]);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live_recording(f, requests.clone()).await))),
+    };
+    let overview = read(&ctx, "get_clips", json!({})).await;
+    assert_eq!(requests.lock().unwrap().iter().filter(|a| a.as_str() == "/live/mixingpal/get/session/clips").count(), 36);
+    assert_eq!(requests.lock().unwrap().len(), 144);
+    assert_eq!(overview["value"]["missing"], json!([]));
+    assert!(overview["missing_reason"].as_str().unwrap().contains("session_slots_partial"));
+    let tracks = overview["value"]["tracks"].as_array().unwrap();
+    assert_eq!(tracks.len(), 36);
+    for track in tracks {
+        assert_eq!(track["total_slots"], 256);
+        assert_eq!(track["next_slot"], 16);
+        assert_eq!(track["clips"].as_array().unwrap().len(), 16);
+        assert_eq!(track["clips"][0]["slot"], 0);
+        assert_eq!(track["clips"][15]["slot"], 15);
+    }
+    let tail = read(&ctx, "get_clips", json!({"track":2,"start_slot":16})).await;
+    assert!(tail["missing_reason"].is_null(), "{tail}");
+    let clips = tail["value"]["tracks"][0]["clips"].as_array().unwrap();
+    assert_eq!(clips.iter().map(|c| c["slot"].as_u64().unwrap()).collect::<Vec<_>>(), (16..256).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn session_overview_distinguishes_empty_scope_and_recovers_multiple_pages() {
+    let mut f = fixture();
+    let mut track = f["tracks"][0].clone();
+    track["midi"] = json!(false);
+    track["clips"] = json!((16..1060).map(|slot| json!({"slot":slot,"name":"audio"})).collect::<Vec<_>>());
+    let mut empty = track.clone();
+    empty["clips"] = json!([]);
+    f["tracks"] = json!([track, empty]);
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f).await))),
+    };
+    let overview = read(&ctx, "get_clips", json!({})).await;
+    let tracks = &overview["value"]["tracks"];
+    assert_eq!(overview["value"]["missing"], json!([]));
+    assert_eq!(tracks[0]["clips"], json!([]));
+    assert_eq!(tracks[0]["midi"], false);
+    assert_eq!(tracks[0]["next_slot"], 16);
+    assert_eq!(tracks[1]["clips"], json!([]));
+    assert!(tracks[1]["next_slot"].is_null());
+    let mut offset = 16;
+    let mut recovered = Vec::new();
+    for _ in 0..3 {
+        let page = read(&ctx, "get_clips", json!({"track":0,"start_slot":offset})).await;
+        assert_eq!(page["value"]["missing"], json!([]));
+        let track = &page["value"]["tracks"][0];
+        recovered.extend(track["clips"].as_array().unwrap().iter().map(|c| c["slot"].as_u64().unwrap()));
+        match track["next_slot"].as_u64() {
+            Some(next) => { assert!(next > offset); offset = next; }
+            None => break,
+        }
+    }
+    assert_eq!(recovered, (16..1060).collect::<Vec<_>>());
+
+    let mut f = fixture();
+    f["tracks"] = json!([]);
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f).await))),
+    };
+    let empty = read(&ctx, "get_clips", json!({})).await;
+    assert!(empty["missing_reason"].is_null(), "{empty}");
+    assert_eq!(empty["value"]["tracks"], json!([]));
+}
+
+#[tokio::test]
+async fn note_output_pages_recover_the_tail_through_both_tools() {
+    let mut f = fixture();
+    let notes: Vec<Value> = (0..1025).map(|i| json!({
+        "pitch": i % 128, "start": i as f64 / 300.0, "velocity":100
+    })).collect();
+    f["tracks"][0]["notes"]["0"] = json!(notes);
+    f["tracks"][0]["arrangementNotes"]["0"] = json!(notes);
+    f["tracks"][0]["arrangement"][0]["length"] = json!(4.0);
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f).await))),
+    };
+    for (name, mut args) in [
+        ("get_clip_notes", json!({"track":0,"clip":0})),
+        ("get_arrangement_notes", json!({"track":0,"index":0})),
+    ] {
+        let first = read(&ctx, name, args.clone()).await;
+        assert_eq!(first["value"]["count"], 1024, "{name}: {first}");
+        assert_eq!(first["value"]["next_note_offset"], 1024, "{name}: {first}");
+        args["note_offset"] = first["value"]["next_note_offset"].clone();
+        let tail = read(&ctx, name, args).await;
+        assert!(tail["missing_reason"].is_null(), "{name}: {tail}");
+        assert_eq!(tail["value"]["count"], 1, "{name}: {tail}");
+        assert!(tail["value"]["next_note_offset"].is_null());
+        assert!((tail["value"]["notes"][0]["start"].as_f64().unwrap() - 1024.0 / 300.0).abs() < 0.00001);
+    }
+}
+
+#[tokio::test]
+async fn source_markers_preserve_notes_and_first_pass_timeline_positions() {
+    let mut f = fixture();
+    let notes = json!([
+        {"pitch":60,"start":8.0,"velocity":100},
+        {"pitch":64,"start":10.0,"velocity":100},
+        {"pitch":67,"start":12.5,"velocity":100}
+    ]);
+    f["tracks"][0]["notes"]["0"] = notes.clone();
+    f["tracks"][0]["arrangementNotes"]["0"] = notes;
+    for key in ["clips", "arrangement"] {
+        f["tracks"][0][key][0]["sourceStart"] = json!(10.0);
+        f["tracks"][0][key][0]["sourceEnd"] = json!(14.0);
+        f["tracks"][0][key][0]["loop"] = json!([8.0,12.0]);
+    }
+    f["tracks"][0]["arrangement"][0]["start"] = json!(32.0);
+    f["tracks"][0]["arrangement"][0]["length"] = json!(4.0);
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f).await))),
+    };
+    for (tool, args) in [("get_clip_notes", json!({"track":0,"clip":0})),
+                         ("get_arrangement_notes", json!({"track":0,"index":0}))] {
+        let result = read(&ctx, tool, args).await;
+        assert!(result["missing_reason"].is_null(), "{tool}: {result}");
+        let value = &result["value"];
+        assert_eq!(value["source_start_beats"], 10.0);
+        assert_eq!(value["note_range"]["start_beats"], 8.0);
+        assert_eq!(value["note_range"]["end_beats"], 14.0);
+        assert_eq!(value["count"], 3);
+        assert_eq!(value["notes"][0]["start"], 8.0);
+        if tool == "get_arrangement_notes" {
+            assert!(value["notes"][0].get("timeline_position").is_none());
+            assert_eq!(value["notes"][1]["timeline_position"], "9.1.1");
+            assert!(value["notes"][2].get("timeline_position").is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn large_maps_fit_the_proxy_and_keep_recoverable_offsets() {
+    let mut f = fixture();
+    let mut track = f["tracks"][0].clone();
+    track["clips"] = json!((0..256).map(|slot| json!({"slot":slot,"name":"🎹".repeat(120)})).collect::<Vec<_>>());
+    track["devices"] = json!(vec!["x".repeat(120); 256]);
+    track["racks"] = json!(vec![false; 256]);
+    f["tracks"] = json!(vec![track; 64]);
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f).await))),
+    };
+    for (tool, records, cursor, offset) in [
+        ("get_clips", "clips", "next_slot", "start_slot"),
+        ("get_device_chains", "devices", "next_device_offset", "device_offset"),
+    ] {
+        let first = read(&ctx, tool, json!({})).await;
+        let content = serde_json::to_string(&first).unwrap();
+        let request = json!({"body":{"messages":[{"role":"tool","content":content}]}});
+        assert!(serde_json::to_vec(&request).unwrap().len() < 1_048_576, "{tool} exceeds proxy limit");
+        assert_eq!(first["value"]["tracks"].as_array().unwrap().len(), 64);
+        assert_eq!(first["value"]["missing"], json!([]));
+        let partial = first["value"]["tracks"].as_array().unwrap().iter()
+            .find(|track| track[cursor].as_u64().is_some_and(|n| n < 256)).expect("output must be paged");
+        let start = partial[cursor].as_u64().unwrap();
+        if tool == "get_clips" {
+            assert!(first["missing_reason"].as_str().unwrap().contains("model_output_limited"));
+            let trimmed = first["value"]["tracks"].as_array().unwrap().iter()
+                .find(|track| track[cursor].as_u64().is_some_and(|n| n < 16)).expect("byte cap must precede transport cursor");
+            let mut recovered = trimmed[records].as_array().unwrap().clone();
+            let mut next = trimmed[cursor].as_u64();
+            while let Some(offset) = next {
+                let page = read(&ctx, tool, json!({"track":trimmed["track"],"start_slot":offset})).await;
+                assert_eq!(page["value"]["missing"], json!([]));
+                let track = &page["value"]["tracks"][0];
+                recovered.extend(track[records].as_array().unwrap().iter().cloned());
+                next = track[cursor].as_u64();
+                assert!(next.is_none_or(|n| n > offset));
+            }
+            assert_eq!(recovered.iter().map(|c| c["slot"].as_u64().unwrap()).collect::<Vec<_>>(), (0..256).collect::<Vec<_>>());
+            continue;
+        }
+        let mut args = json!({"track":partial["track"]});
+        args[offset] = json!(start);
+        let tail = read(&ctx, tool, args).await;
+        assert!(tail["missing_reason"].is_null(), "{tool}: {tail}");
+        let track = &tail["value"]["tracks"][0];
+        assert_eq!(track[records].as_array().unwrap().len(), 256 - start as usize);
+        assert!(track[cursor].is_null());
+        if records == "clips" { assert_eq!(track[records][0]["slot"], start); }
+        else { assert_eq!(track["device_offset"], start); }
+    }
+}
+
+#[tokio::test]
 async fn the_fake_live_serves_the_craft_fixture_in_full() {
     // The honesty fixture is deliberately broken. This one must not be: a
     // craft scenario that fails because a read came back missing is not a

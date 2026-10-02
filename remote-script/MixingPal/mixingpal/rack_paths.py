@@ -107,9 +107,15 @@ def chains_of(device):
     reaches the client as an answer rather than as silence.
     """
     if getattr(device, "can_have_drum_pads", False):
-        return [(pad.chains[0], pad.note, pad.name, pad.mute, pad.solo,
-                 _sample_name(pad.chains[0]))
-                for pad in device.drum_pads if len(pad.chains) > 0]
+        entries = []
+        for pad in device.drum_pads:
+            layers = list(pad.chains)
+            for chain in layers:
+                # A Multi pad's mute/solo aggregate does not describe each layer.
+                label = pad if len(layers) == 1 else chain
+                entries.append((chain, pad.note, label.name, label.mute,
+                                label.solo, _sample_name(chain)))
+        return entries
     return [(chain, -1, chain.name, chain.mute, chain.solo, None)
             for chain in getattr(device, "chains", [])]
 
@@ -146,7 +152,7 @@ def record_bytes(record):
     return sum(osc_string_bytes(f) if isinstance(f, str) else 5 for f in record)
 
 
-def chain_record(entry, max_names=MAX_DEVICES_PER_CHAIN):
+def chain_record(entry, max_names=MAX_DEVICES_PER_CHAIN, device_offset=0):
     """(name, note, mute, solo, sample_name, total_devices, reported_devices,
     *(device_name, is_rack)).
 
@@ -158,7 +164,8 @@ def chain_record(entry, max_names=MAX_DEVICES_PER_CHAIN):
     """
     chain, note, name, mute, solo, sample_name = entry
     devices = list(chain.devices)
-    reported = devices[:max(0, max_names)]
+    offset = max(0, device_offset)
+    reported = devices[offset:offset + max(0, max_names)]
     names = [field for d in reported for field in (
         str(d.name)[:NAME_CAP], int(bool(getattr(d, "can_have_chains", False))))]
     return (str(name)[:NAME_CAP], int(note), int(bool(mute)), int(bool(solo)),
@@ -166,7 +173,7 @@ def chain_record(entry, max_names=MAX_DEVICES_PER_CHAIN):
             len(devices), len(reported)) + tuple(names)
 
 
-def shrink_to_fit(entry, budget):
+def shrink_to_fit(entry, budget, device_offset=0):
     """Halve a record's device-name list until it fits.
 
     Bottoms out at no names at all, which still reports the chain's own name
@@ -175,14 +182,14 @@ def shrink_to_fit(entry, budget):
     production caller passes MAX_REPLY_BYTES.
     """
     max_names = MAX_DEVICES_PER_CHAIN
-    record = chain_record(entry, max_names)
+    record = chain_record(entry, max_names, device_offset)
     while max_names > 0 and record_bytes(record) > budget:
         max_names //= 2
-        record = chain_record(entry, max_names)
+        record = chain_record(entry, max_names, device_offset)
     return record
 
 
-def build_window(entries, start, span, budget=MAX_REPLY_BYTES):
+def build_window(entries, start, span, budget=MAX_REPLY_BYTES, device_offset=0):
     """Records from entries[start:], at most `span` and at most what fits.
 
     The HANDLER owns the window, not the client. Parameters are uniform enough
@@ -202,12 +209,12 @@ def build_window(entries, start, span, budget=MAX_REPLY_BYTES):
     records = []
     used = 0
     for entry in entries[max(0, start):max(0, start) + max(0, span)]:
-        record = chain_record(entry)
+        record = chain_record(entry, device_offset=device_offset)
         size = record_bytes(record)
         if used + size > budget:
             if records:
                 break
-            record = shrink_to_fit(entry, budget)
+            record = shrink_to_fit(entry, budget, device_offset)
             size = record_bytes(record)
         records.append(record)
         used += size

@@ -29,7 +29,7 @@ pub mod bench_api {
     pub use crate::osc::requests::RequestTable;
     pub use crate::osc::socket::OscSocket;
     pub use crate::tools::clip_notes::{decode_notes, get_clip_notes, Note};
-    pub use crate::tools::device_chains::get_device_chains;
+    pub use crate::tools::device_chains::get_device_chains_range;
     pub use crate::tools::device_params::get_device_params;
     pub use crate::tools::path::DevicePath;
     pub use crate::tools::fence::fence;
@@ -366,6 +366,14 @@ fn handle_inbound(
             | "/live/arrangement_clip/get/length"
             | "/live/arrangement_clip/get/num_notes"
             | "/live/arrangement_clip/get/notes_window"
+            | "/live/mixingpal/get/session/clips"
+            | "/live/mixingpal/get/session/fingerprint"
+            | "/live/mixingpal/get/device_chain"
+            | "/live/mixingpal/get/device_chain/fingerprint"
+            | "/live/mixingpal/get/rack/chains_range"
+            | "/live/mixingpal/get/rack/fingerprint"
+            | "/live/mixingpal/get/arrangement/fingerprint"
+            | "/live/mixingpal/get/clip/loop_region"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
@@ -1638,6 +1646,14 @@ mod tests {
         "/live/arrangement_clip/get/length",
         "/live/arrangement_clip/get/num_notes",
         "/live/arrangement_clip/get/notes_window",
+        "/live/mixingpal/get/session/clips",
+        "/live/mixingpal/get/session/fingerprint",
+        "/live/mixingpal/get/device_chain",
+        "/live/mixingpal/get/device_chain/fingerprint",
+        "/live/mixingpal/get/rack/chains_range",
+        "/live/mixingpal/get/rack/fingerprint",
+        "/live/mixingpal/get/arrangement/fingerprint",
+        "/live/mixingpal/get/clip/loop_region",
     ];
 
     #[test]

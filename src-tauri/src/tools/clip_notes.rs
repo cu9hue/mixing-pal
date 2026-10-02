@@ -107,6 +107,10 @@ pub const ARRANGEMENT_NOTES: NoteAddresses = NoteAddresses {
 pub struct ClipNotes {
     pub notes: Vec<Note>,
     pub length_beats: f64,
+    /// Source beat at the placement/launch start; notes retain absolute clip beats.
+    pub source_start_beats: Option<f64>,
+    /// Absolute source bounds covered by this read (markers and enabled loop).
+    pub note_range: Option<LoopRegion>,
     pub loop_region: Option<LoopRegion>,
     pub loop_state_known: bool,
     /// Set when at least one window never answered even at the floor. The
@@ -252,7 +256,7 @@ pub fn decode_notes(args: &[OscType], expect_window: u32) -> Option<Vec<Note>> {
         .collect()
 }
 
-/// Fetches every note in a clip, paging by time window.
+/// Fetches notes across the source markers and enabled loop, paging by time window.
 ///
 /// Every window of a round goes out before any of them is awaited, so a
 /// clip that needs six windows costs one Live tick, not six:
@@ -302,27 +306,63 @@ pub async fn get_notes_at(
             timeout / COUNT_HINT_TIMEOUT_DIVISOR,
         )
     );
+    if let Some(OscType::String(status)) = count_reply.as_ref().ok().and_then(|r| r.get(2)) {
+        if matches!(status.as_str(), "not_midi_clip" | "empty_slot") {
+            return Ok(ClipNotes {
+                notes: Vec::new(),
+                length_beats: length_reply
+                    .as_ref()
+                    .ok()
+                    .and_then(|r| r.get(2))
+                    .and_then(as_f64)
+                    .unwrap_or(0.0),
+                source_start_beats: None,
+                note_range: None,
+                loop_region: None,
+                loop_state_known: false,
+                missing_reason: Some(status.clone()),
+            });
+        }
+    }
+    let snapshot = count_reply
+        .as_ref()
+        .ok()
+        .and_then(|r| decode_session_snapshot(r));
     // A reply that arrived but whose length value can't be read is not "the
     // clip is empty" -- unwrap_or(0.0) would turn an unreadable reply into a
     // fabricated zero-span window, which returns {notes: [], missing_reason:
     // null}, i.e. an invented "this clip is empty" the reply never said.
-    let length = length_reply?
-        .get(2)
-        .and_then(as_f64)
-        .ok_or(QueryError::NoReply)? as f32;
+    let length = match &snapshot {
+        Some(snapshot) => snapshot.length as f32,
+        None => length_reply?
+            .get(2)
+            .and_then(as_f64)
+            .ok_or(QueryError::NoReply)? as f32,
+    };
 
     // The count is a HINT, not data: it only decides how wide the first
     // windows are. Every way it can be absent -- a Remote Script too old to
     // know the endpoint, a dropped datagram, a reply this decoder refuses
-    // -- falls back to 0, one window over the whole clip narrowed by
-    // halve-and-retry. A wrong count costs round trips, never correctness.
+    // -- falls back to 0 and narrows by halve-and-retry. The snapshot also
+    // supplies source bounds; without those the legacy [0, length) read is
+    // partial and must report coherence_unavailable.
     let est_notes = count_reply
         .ok()
         .and_then(|r| r.get(2).and_then(as_i32))
         .map(usable_note_estimate)
         .unwrap_or(0);
 
-    let mut pending: Vec<(f32, f32)> = note_windows(length, est_notes);
+    let range = snapshot.as_ref().map(|s| s.note_range());
+    let range_start = range.as_ref().map_or(0.0, |r| r.start_beats as f32);
+    let range_end = range.as_ref().map_or(length, |r| r.end_beats as f32);
+    let mut pending: Vec<(f32, f32)> = note_windows(range_end - range_start, est_notes)
+        .into_iter()
+        .map(|(start, span)| {
+            let end = range_start + (start + span);
+            let start = range_start + start;
+            (start, end - start)
+        })
+        .collect();
     let mut notes: Vec<Note> = Vec::new();
     let mut missing_reason = None;
     let mut windows_used = 0usize;
@@ -381,7 +421,16 @@ pub async fn get_notes_at(
                     Some(mut decoded) => {
                         let window_start = start as f64;
                         let window_end = window_start + span as f64;
-                        decoded.retain(|n| n.start >= window_start && n.start < window_end);
+                        // Compare wire coordinates before decimal formatting; otherwise a
+                        // rounded-down boundary note can fall outside its own window.
+                        let mut raw = reply[3..].chunks_exact(5);
+                        decoded.retain(|_| {
+                            let start = match &raw.next().unwrap()[1] {
+                                OscType::Float(value) => f64::from(*value),
+                                value => as_f64(value).unwrap(),
+                            };
+                            start >= window_start && start < window_end
+                        });
                         notes.append(&mut decoded)
                     }
                     None => missing_reason = Some("malformed_reply".to_string()),
@@ -405,6 +454,42 @@ pub async fn get_notes_at(
         pending = next;
     }
 
+    {
+        let status = match &snapshot {
+            Some(before) => {
+                let after = q
+                    .query(
+                        addrs.num_notes,
+                        vec![OscType::Int(track), OscType::Int(clip)],
+                        timeout / COUNT_HINT_TIMEOUT_DIVISOR,
+                    )
+                    .await
+                    .ok();
+                let no_midi_clip = after.as_ref().is_some_and(|r| matches!(r.get(2), Some(OscType::String(status)) if matches!(status.as_str(), "not_midi_clip" | "empty_slot")));
+                if no_midi_clip {
+                    notes.clear();
+                    Some("clip_changed")
+                } else {
+                    match after.and_then(|r| decode_session_snapshot(&r)) {
+                        Some(after) if &after == before => None,
+                        Some(_) => {
+                            notes.clear();
+                            Some("clip_changed")
+                        }
+                        None => Some("coherence_unavailable"),
+                    }
+                }
+            }
+            None => Some("coherence_unavailable"),
+        };
+        if let Some(status) = status {
+            missing_reason = Some(match missing_reason {
+                Some(reason) => format!("{reason}; {status}"),
+                None => status.into(),
+            });
+        }
+    }
+
     notes.sort_by(|a, b| {
         a.start
             .partial_cmp(&b.start)
@@ -414,16 +499,77 @@ pub async fn get_notes_at(
     Ok(ClipNotes {
         notes,
         length_beats: f64::from(length),
-        loop_region: None,
-        loop_state_known: false,
+        source_start_beats: snapshot.as_ref().map(|s| s.start_marker),
+        note_range: range,
+        loop_region: snapshot.as_ref().and_then(|s| s.loop_region.clone()),
+        loop_state_known: snapshot.is_some(),
         missing_reason,
     })
 }
 
-/// Session-view clip notes. The shape the app has always had; the address
-/// family is now explicit so the arrangement read can share everything else.
+#[derive(PartialEq)]
+struct SessionSnapshot {
+    digest: String,
+    length: f64,
+    start_marker: f64,
+    end_marker: f64,
+    loop_region: Option<LoopRegion>,
+}
+
+impl SessionSnapshot {
+    fn note_range(&self) -> LoopRegion {
+        LoopRegion {
+            start_beats: self
+                .loop_region
+                .as_ref()
+                .map_or(self.start_marker, |r| self.start_marker.min(r.start_beats)),
+            end_beats: self
+                .loop_region
+                .as_ref()
+                .map_or(self.end_marker, |r| self.end_marker.max(r.end_beats)),
+        }
+    }
+}
+
+fn decode_session_snapshot(reply: &[OscType]) -> Option<SessionSnapshot> {
+    if reply.len() != 10 {
+        return None;
+    }
+    let digest = match &reply[3] {
+        OscType::String(value)
+            if value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()) =>
+        {
+            value.clone()
+        }
+        _ => return None,
+    };
+    let length = as_f64(&reply[4])?;
+    if !length.is_finite() || length < 0.0 {
+        return None;
+    }
+    let start_marker = as_f64(&reply[8])?;
+    let end_marker = as_f64(&reply[9])?;
+    if !start_marker.is_finite() || !end_marker.is_finite() || end_marker < start_marker {
+        return None;
+    }
+    let loop_region = decode_loop_region(&reply[5..])?;
+    if loop_region
+        .as_ref()
+        .is_some_and(|r| !r.start_beats.is_finite() || !r.end_beats.is_finite())
+    {
+        return None;
+    }
+    Some(SessionSnapshot {
+        digest,
+        length,
+        start_marker,
+        end_marker,
+        loop_region,
+    })
+}
+
 fn decode_loop_region(args: &[OscType]) -> Option<Option<LoopRegion>> {
-    let looping = match args.get(2)? {
+    let looping = match args.first()? {
         OscType::Bool(value) => *value,
         OscType::Int(value) => *value != 0,
         _ => return None,
@@ -431,8 +577,8 @@ fn decode_loop_region(args: &[OscType]) -> Option<Option<LoopRegion>> {
     if !looping {
         return Some(None);
     }
-    let start_beats = as_f64(args.get(3)?)?;
-    let end_beats = as_f64(args.get(4)?)?;
+    let start_beats = as_f64(args.get(1)?)?;
+    let end_beats = as_f64(args.get(2)?)?;
     (end_beats > start_beats).then_some(Some(LoopRegion {
         start_beats,
         end_beats,
@@ -445,22 +591,7 @@ pub async fn get_clip_notes(
     clip: i32,
     timeout: Duration,
 ) -> Result<ClipNotes, QueryError> {
-    let note_query = get_notes_at(q.clone(), SESSION_NOTES, track, clip, timeout);
-    // A stale Remote Script simply has no such endpoint. It must not turn an
-    // otherwise successful note read into the full two-second tool timeout;
-    // the count-hint budget is enough for one Live tick and keeps this
-    // compatibility probe bounded.
-    let loop_query = q.query(
-        "/live/mixingpal/get/clip/loop_region",
-        vec![OscType::Int(track), OscType::Int(clip)],
-        timeout / COUNT_HINT_TIMEOUT_DIVISOR,
-    );
-    let (notes, loop_reply) = tokio::join!(note_query, loop_query);
-    let mut notes = notes?;
-    let loop_region = loop_reply.ok().as_deref().and_then(decode_loop_region);
-    notes.loop_state_known = loop_region.is_some();
-    notes.loop_region = loop_region.flatten();
-    Ok(notes)
+    get_notes_at(q, SESSION_NOTES, track, clip, timeout).await
 }
 
 #[cfg(test)]
@@ -575,6 +706,9 @@ mod tests {
         /// which the version handshake warns about but does not refuse to
         /// run against -- see `Connection.tsx`'s `version_mismatch`.
         answers_num_notes: bool,
+        num_notes_status: Option<&'static str>,
+        changed_snapshot: Option<&'static str>,
+        source_markers: Option<(bool, f32, f32, f32, f32)>,
     }
 
     /// Spawns the fake, plus the receive loop the query path needs, and
@@ -614,7 +748,7 @@ mod tests {
                     _ => 0.0,
                 };
                 match req.addr.as_str() {
-                    "/live/clip/get/length" => {
+                    "/live/clip/get/length" | "/live/arrangement_clip/get/length" => {
                         let length_arg = if fake.malformed_length {
                             OscType::String("not a number".to_string())
                         } else {
@@ -623,25 +757,75 @@ mod tests {
                         let _ = live
                             .send_to(
                                 app_port,
-                                "/live/clip/get/length",
+                                &req.addr,
                                 vec![req.args[0].clone(), req.args[1].clone(), length_arg],
                             )
                             .await;
                     }
-                    "/live/clip/get/num_notes" if fake.answers_num_notes => {
+                    "/live/clip/get/num_notes" | "/live/arrangement_clip/get/num_notes"
+                        if fake.answers_num_notes =>
+                    {
+                        let changed = seen.lock().unwrap().get(&req.addr).copied().unwrap_or(0) > 1;
+                        if changed && fake.changed_snapshot == Some("missing") {
+                            continue;
+                        }
+                        if changed && fake.changed_snapshot == Some("audio") {
+                            let _ = live
+                                .send_to(
+                                    app_port,
+                                    &req.addr,
+                                    vec![
+                                        req.args[0].clone(),
+                                        req.args[1].clone(),
+                                        OscType::String("not_midi_clip".into()),
+                                    ],
+                                )
+                                .await;
+                            continue;
+                        }
                         let _ = live
                             .send_to(
                                 app_port,
-                                "/live/clip/get/num_notes",
+                                &req.addr,
                                 vec![
                                     req.args[0].clone(),
                                     req.args[1].clone(),
-                                    OscType::Int(fake.notes.len() as i32),
+                                    fake.num_notes_status
+                                        .map(|s| OscType::String(s.into()))
+                                        .unwrap_or(OscType::Int(fake.notes.len() as i32)),
+                                    OscType::String(
+                                        if changed && fake.changed_snapshot.is_some() {
+                                            "b"
+                                        } else {
+                                            "a"
+                                        }
+                                        .repeat(64),
+                                    ),
+                                    if fake.malformed_length {
+                                        OscType::String("not a number".into())
+                                    } else {
+                                        OscType::Float(fake.length)
+                                    },
+                                    OscType::Bool(fake.source_markers.map_or(true, |m| m.0)),
+                                    OscType::Float(
+                                        if changed && fake.changed_snapshot == Some("loop") {
+                                            1.0
+                                        } else {
+                                            fake.source_markers.map_or(0.0, |m| m.3)
+                                        },
+                                    ),
+                                    OscType::Float(
+                                        fake.source_markers.map_or(fake.length, |m| m.4),
+                                    ),
+                                    OscType::Float(fake.source_markers.map_or(0.0, |m| m.1)),
+                                    OscType::Float(
+                                        fake.source_markers.map_or(fake.length, |m| m.2),
+                                    ),
                                 ],
                             )
                             .await;
                     }
-                    "/live/clip/get/notes_window" => {
+                    "/live/clip/get/notes_window" | "/live/arrangement_clip/get/notes_window" => {
                         let (start, span) = (f(5), f(6));
                         let silent = fake.silent_all
                             || fake
@@ -678,15 +862,11 @@ mod tests {
                                     continue;
                                 }
                                 for reply in held.drain(..) {
-                                    let _ = live
-                                        .send_to(app_port, "/live/clip/get/notes_window", reply)
-                                        .await;
+                                    let _ = live.send_to(app_port, &req.addr, reply).await;
                                 }
                             }
                             None => {
-                                let _ = live
-                                    .send_to(app_port, "/live/clip/get/notes_window", reply)
-                                    .await;
+                                let _ = live.send_to(app_port, &req.addr, reply).await;
                             }
                         }
                     }
@@ -696,6 +876,56 @@ mod tests {
         });
 
         (Arc::new(LiveQuery::new(app, table)), counts)
+    }
+
+    #[tokio::test]
+    async fn source_note_windows_cover_nonzero_loops_and_unlooped_markers() {
+        for addresses in [SESSION_NOTES, ARRANGEMENT_NOTES] {
+            for (markers, times, bounds) in [
+                ((true, 8.0, 12.0, 8.0, 12.0), vec![8.0, 11.5], (8.0, 12.0)),
+                ((false, 8.0, 12.0, 8.0, 12.0), vec![8.0, 11.5], (8.0, 12.0)),
+                (
+                    (true, 6.0, 12.0, 8.0, 12.0),
+                    vec![6.0, 8.0, 11.5],
+                    (6.0, 12.0),
+                ),
+                (
+                    (true, 10.0, 14.0, 8.0, 12.0),
+                    vec![8.0, 11.5, 13.0],
+                    (8.0, 14.0),
+                ),
+                ((false, -2.0, 2.0, -2.0, 2.0), vec![-2.0, 1.5], (-2.0, 2.0)),
+            ] {
+                let (q, _) = spawn(FakeLive {
+                    length: 4.0,
+                    notes: times.iter().map(|at| (*at, 60)).collect(),
+                    silent: vec![],
+                    silent_all: false,
+                    full_reply: None,
+                    malformed_length: false,
+                    hold_notes_until: None,
+                    answers_num_notes: true,
+                    num_notes_status: None,
+                    changed_snapshot: None,
+                    source_markers: Some(markers),
+                })
+                .await;
+                let result = get_notes_at(q, addresses, 0, 0, FAST).await.unwrap();
+                assert_eq!(result.source_start_beats, Some(markers.1 as f64));
+                assert_eq!(
+                    result.note_range,
+                    Some(LoopRegion {
+                        start_beats: bounds.0,
+                        end_beats: bounds.1
+                    })
+                );
+                assert_eq!(
+                    result.notes.iter().map(|n| n.start).collect::<Vec<_>>(),
+                    times.iter().map(|at| f64::from(*at)).collect::<Vec<_>>()
+                );
+                assert_eq!(result.missing_reason, None);
+            }
+        }
     }
 
     const FAST: Duration = Duration::from_millis(80);
@@ -710,6 +940,9 @@ mod tests {
             full_reply: None,
             malformed_length: false,
             answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -722,6 +955,86 @@ mod tests {
             Some(&1),
             "a clip that fits must cost exactly one round trip"
         );
+    }
+
+    #[tokio::test]
+    async fn audio_and_empty_slots_do_not_retry_note_windows() {
+        for status in ["not_midi_clip", "empty_slot"] {
+            let (q, seen) = spawn(FakeLive {
+                length: 8.0,
+                notes: vec![],
+                silent: vec![],
+                silent_all: true,
+                full_reply: None,
+                malformed_length: false,
+                answers_num_notes: true,
+                num_notes_status: Some(status),
+                changed_snapshot: None,
+                source_markers: None,
+                hold_notes_until: None,
+            })
+            .await;
+            let result = get_clip_notes(q, 0, 0, FAST).await.unwrap();
+            assert_eq!(result.missing_reason.as_deref(), Some(status));
+            assert!(!seen
+                .lock()
+                .unwrap()
+                .contains_key(SESSION_NOTES.notes_window));
+        }
+    }
+
+    #[tokio::test]
+    async fn session_notes_refuse_changed_content_or_loop_snapshots() {
+        for change in ["notes", "loop", "audio", "missing"] {
+            let (q, _) = spawn(FakeLive {
+                length: 4.0,
+                notes: vec![(0.0, 60)],
+                silent: vec![],
+                silent_all: false,
+                full_reply: None,
+                malformed_length: false,
+                answers_num_notes: true,
+                num_notes_status: None,
+                changed_snapshot: Some(change),
+                source_markers: None,
+                hold_notes_until: None,
+            })
+            .await;
+            let result = get_clip_notes(q, 0, 0, FAST).await.unwrap();
+            if change == "missing" {
+                assert_eq!(
+                    result.missing_reason.as_deref(),
+                    Some("coherence_unavailable")
+                );
+            } else {
+                assert_eq!(result.missing_reason.as_deref(), Some("clip_changed"));
+                assert!(result.notes.is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn notes_on_decimal_rounded_window_boundaries_are_not_lost() {
+        let mut notes: Vec<_> = (0..720).map(|i| (i as f32 / 100.0, 60)).collect();
+        notes.push((8.0_f32 / 3.0, 99));
+        let (q, _) = spawn(FakeLive {
+            length: 8.0,
+            notes,
+            silent: vec![],
+            silent_all: false,
+            full_reply: None,
+            malformed_length: false,
+            answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
+            hold_notes_until: None,
+        })
+        .await;
+        let result = get_clip_notes(q, 2, 1, FAST).await.unwrap();
+        assert_eq!(result.notes.len(), 721);
+        assert!(result.notes.iter().any(|n| n.pitch == 99));
+        assert_eq!(result.missing_reason, None);
     }
 
     #[test]
@@ -826,6 +1139,9 @@ mod tests {
             full_reply: None,
             malformed_length: false,
             answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: Some(2),
         })
         .await;
@@ -865,6 +1181,9 @@ mod tests {
             full_reply: None,
             malformed_length: false,
             answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -910,6 +1229,9 @@ mod tests {
             full_reply: None,
             malformed_length: false,
             answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -948,6 +1270,9 @@ mod tests {
             full_reply: None,
             malformed_length: false,
             answers_num_notes: false,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -962,7 +1287,10 @@ mod tests {
             3,
             "the clip still reads, count or no count"
         );
-        assert_eq!(result.missing_reason, None);
+        assert_eq!(
+            result.missing_reason.as_deref(),
+            Some("coherence_unavailable")
+        );
         assert!(
             elapsed < timeout / 2,
             "an absent count must cost a fraction of the timeout, not all of it; \
@@ -982,6 +1310,9 @@ mod tests {
             full_reply: None,
             malformed_length: false,
             answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1011,6 +1342,9 @@ mod tests {
             full_reply: None,
             malformed_length: false,
             answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1063,6 +1397,9 @@ mod tests {
             full_reply: Some(vec![(0.0, 60), (4.0, 63), (12.0, 70)]),
             malformed_length: false,
             answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1089,6 +1426,9 @@ mod tests {
             full_reply: None,
             malformed_length: false,
             answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;
@@ -1115,6 +1455,9 @@ mod tests {
             full_reply: None,
             malformed_length: true,
             answers_num_notes: true,
+            num_notes_status: None,
+            changed_snapshot: None,
+            source_markers: None,
             hold_notes_until: None,
         })
         .await;

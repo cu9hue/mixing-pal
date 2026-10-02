@@ -191,6 +191,11 @@ fn arrangement_clip_exists(track: &Value, index: Option<i32>) -> bool {
 /// `shared/craft-set.json` describes every device, and `craft.rs` checks
 /// that it reads in full.
 pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
+    fake_live_recording(f, Arc::new(Mutex::new(Vec::new()))).await
+}
+
+/// Record received addresses to check transport work through the real tools.
+pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) -> Arc<LiveQuery> {
     let live = OscSocket::bind_to(0, 0).await.unwrap();
     let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
     let app_port = app.local_port();
@@ -216,6 +221,7 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            requests.lock().unwrap().push(req.addr.clone());
             let int_at = |n: usize| match req.args.get(n) {
                 Some(OscType::Int(v)) => Some(*v),
                 _ => None,
@@ -266,6 +272,20 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
+                "/live/mixingpal/get/session/clips" => {
+                    let start = int_at(1).unwrap_or(0).max(0) as i64;
+                    let limit = int_at(2).unwrap_or(16).clamp(1, 16) as i64;
+                    let clips = track["clips"].as_array().unwrap();
+                    let total = clips.iter().map(|c| c["slot"].as_i64().unwrap() + 1).max().unwrap_or(0);
+                    let mut reply = vec![OscType::Int(track_index), OscType::Int(start as i32), OscType::Int(total as i32)];
+                    for slot in start..(start + limit).min(total) {
+                        reply.push(match clips.iter().find(|c| c["slot"].as_i64() == Some(slot)) {
+                            Some(c) => OscType::String(c["name"].as_str().unwrap().chars().take(120).collect()),
+                            None => OscType::Nil,
+                        });
+                    }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
                 "/live/track/get/has_midi_input" => {
                     let flag = track["midi"].as_bool().unwrap_or(true);
                     let _ = live
@@ -275,6 +295,29 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                             vec![OscType::Int(track_index), OscType::Bool(flag)],
                         )
                         .await;
+                }
+                "/live/mixingpal/get/session/fingerprint" | "/live/mixingpal/get/device_chain/fingerprint" => {
+                    use std::hash::{Hash, Hasher};
+                    let session = req.addr.contains("/session/");
+                    let entries = &track[if session { "clips" } else { "devices" }];
+                    let total = if session {
+                        entries.as_array().unwrap().iter().map(|c| c["slot"].as_i64().unwrap() + 1).max().unwrap_or(0)
+                    } else { entries.as_array().unwrap().len() as i64 };
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    entries.to_string().hash(&mut hash);
+                    let digest = format!("{:064x}", hash.finish());
+                    let _ = live.send_to(app_port, &req.addr, vec![OscType::Int(track_index), OscType::Int(total as i32), OscType::String(digest)]).await;
+                }
+                "/live/mixingpal/get/device_chain" => {
+                    let start = int_at(1).unwrap_or(0).max(0) as usize;
+                    let span = int_at(2).unwrap_or(16).clamp(1, 16) as usize;
+                    let devices = track["devices"].as_array().unwrap();
+                    let mut reply = vec![OscType::Int(track_index), OscType::Int(start as i32), OscType::Int(devices.len() as i32)];
+                    for (index, device) in devices.iter().enumerate().skip(start).take(span.min(16)) {
+                        reply.push(OscType::String(device.as_str().unwrap().to_string()));
+                        reply.push(OscType::Bool(track["racks"][index].as_bool().unwrap_or(false)));
+                    }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
                 "/live/track/get/devices/name" => {
                     let mut reply = vec![OscType::Int(track_index)];
@@ -307,7 +350,17 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         .await;
                 }
                 "/live/clip/get/num_notes" => {
-                    if !(slot_is_filled(&track, int_at(1)) && clip_is_midi(&track)) {
+                    let slot_index = int_at(1).unwrap_or(-1) as i64;
+                    let total = track["clips"].as_array().unwrap().iter()
+                        .map(|c| c["slot"].as_i64().unwrap() + 1).max().unwrap_or(0);
+                    if slot_index < 0 || slot_index >= total { continue; }
+                    let status = if !slot_is_filled(&track, int_at(1)) {
+                        Some("empty_slot")
+                    } else if !clip_is_midi(&track) {
+                        Some("not_midi_clip")
+                    } else { None };
+                    if let Some(status) = status {
+                        let _ = live.send_to(app_port, &req.addr, vec![req.args[0].clone(), req.args[1].clone(), OscType::String(status.into())]).await;
                         continue;
                     }
                     let slot = int_at(1).unwrap_or(0).to_string();
@@ -315,6 +368,9 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         .as_array()
                         .map(|n| n.len())
                         .unwrap_or(0);
+                    let clip = track["clips"].as_array().unwrap().iter()
+                        .find(|c| c["slot"].as_i64() == Some(slot_index)).unwrap();
+                    let region = clip["loop"].as_array();
                     let _ = live
                         .send_to(
                             app_port,
@@ -323,6 +379,13 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                                 req.args[0].clone(),
                                 req.args[1].clone(),
                                 OscType::Int(count as i32),
+                                OscType::String("a".repeat(64)),
+                                OscType::Float(4.0),
+                                OscType::Bool(region.is_some()),
+                                OscType::Float(region.map(|r| r[0].as_f64().unwrap() as f32).unwrap_or(0.0)),
+                                OscType::Float(region.map(|r| r[1].as_f64().unwrap() as f32).unwrap_or(0.0)),
+                                OscType::Float(clip["sourceStart"].as_f64().unwrap_or(0.0) as f32),
+                                OscType::Float(clip["sourceEnd"].as_f64().unwrap_or(4.0) as f32),
                             ],
                         )
                         .await;
@@ -478,6 +541,9 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         .as_array()
                         .map(|n| n.len())
                         .unwrap_or(0);
+                    let clip = &track["arrangement"][int_at(1).unwrap() as usize];
+                    let region = clip["loop"].as_array();
+                    let length = clip["length"].as_f64().unwrap();
                     let _ = live
                         .send_to(
                             app_port,
@@ -486,6 +552,13 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                                 req.args[0].clone(),
                                 req.args[1].clone(),
                                 OscType::Int(count as i32),
+                                OscType::String("a".repeat(64)),
+                                OscType::Float(length as f32),
+                                OscType::Bool(region.is_some()),
+                                OscType::Float(region.map(|r| r[0].as_f64().unwrap() as f32).unwrap_or(0.0)),
+                                OscType::Float(region.map(|r| r[1].as_f64().unwrap() as f32).unwrap_or(0.0)),
+                                OscType::Float(clip["sourceStart"].as_f64().unwrap_or(0.0) as f32),
+                                OscType::Float(clip["sourceEnd"].as_f64().unwrap_or(length) as f32),
                             ],
                         )
                         .await;
@@ -517,6 +590,20 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         }
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
+                "/live/mixingpal/get/rack/fingerprint" => {
+                    let Some((path, detail)) = device_detail() else { continue; };
+                    let total = detail["chains"].as_array().map_or(0, Vec::len);
+                    let _ = live.send_to(app_port, &req.addr, vec![
+                        OscType::Int(track_index), OscType::String(path),
+                        OscType::Int(total as i32), OscType::String("a".repeat(64)),
+                    ]).await;
+                }
+                "/live/mixingpal/get/arrangement/fingerprint" => {
+                    let total = track["arrangement"].as_array().map_or(0, Vec::len);
+                    let _ = live.send_to(app_port, &req.addr, vec![
+                        OscType::Int(track_index), OscType::Int(total as i32), OscType::String("a".repeat(64)),
+                    ]).await;
                 }
                 "/live/mixingpal/get/device/identity" => {
                     let Some((path, detail)) = device_detail() else {
@@ -559,7 +646,7 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                     }
                     let _ = live.send_to(app_port, addr, reply).await;
                 }
-                "/live/mixingpal/get/rack/chains" => {
+                "/live/mixingpal/get/rack/chains" | "/live/mixingpal/get/rack/chains_range" => {
                     // `(track, path, start, total_chains, can_have_chains, *records)`,
                     // each record `name, note, mute, solo, sample_name,
                     // total_devices, reported_devices, *(name, is_rack)` --
@@ -574,15 +661,18 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                     let start = int_at(2).unwrap_or(0).max(0) as usize;
-                    let span = int_at(3).unwrap_or(0).max(0) as usize;
+                    let ranged = req.addr.ends_with("chains_range");
+                    let device_offset = if ranged { int_at(3).unwrap_or(0).max(0) as usize } else { 0 };
+                    let span = int_at(if ranged { 4 } else { 3 }).unwrap_or(0).max(0) as usize;
                     let chains = detail["chains"].as_array().cloned().unwrap_or_default();
                     let mut reply = vec![
                         OscType::Int(track_index),
                         OscType::String(path),
                         OscType::Int(start as i32),
-                        OscType::Int(chains.len() as i32),
-                        OscType::Int(is_rack as i32),
                     ];
+                    if ranged { reply.push(OscType::Int(device_offset as i32)); }
+                    reply.push(OscType::Int(chains.len() as i32));
+                    reply.push(OscType::Int(is_rack as i32));
                     for c in chains.iter().skip(start).take(span) {
                         let devices = c["devices"].as_array().cloned().unwrap_or_default();
                         reply.push(OscType::String(c["name"].as_str().unwrap().to_string()));
@@ -591,8 +681,9 @@ pub async fn fake_live(f: Value) -> Arc<LiveQuery> {
                         reply.push(OscType::Int(0));
                         reply.push(OscType::Nil);
                         reply.push(OscType::Int(devices.len() as i32));
-                        reply.push(OscType::Int(devices.len() as i32));
-                        for d in &devices {
+                        let reported = devices.len().saturating_sub(device_offset).min(32);
+                        reply.push(OscType::Int(reported as i32));
+                        for d in devices.iter().skip(device_offset).take(reported) {
                             reply.push(OscType::String(d.as_str().unwrap().to_string()));
                             reply.push(OscType::Int(0));
                         }

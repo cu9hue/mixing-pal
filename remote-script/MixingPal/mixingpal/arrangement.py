@@ -3,7 +3,7 @@ from ..abletonosc.handler import AbletonOSCHandler
 from .arrangement_replies import (
     arrangement_reply, cue_points_reply, identity_reply, timeline_fingerprint_reply,
     window_of)
-from .clip_replies import notes_window_reply, num_notes_reply
+from .clip_replies import notes_window_reply, session_snapshot_reply, source_note_range
 
 
 class ArrangementHandler(AbletonOSCHandler):
@@ -49,6 +49,10 @@ class ArrangementHandler(AbletonOSCHandler):
                 return None
             return tracks[index]
 
+        def clips_of(track):
+            # Live raises on group arrangement_clips; their children own the placements.
+            return () if track.is_foldable else track.arrangement_clips
+
         def arrangement(params: Tuple[Any]):
             if len(params) != 3:
                 return None
@@ -64,7 +68,7 @@ class ArrangementHandler(AbletonOSCHandler):
             # `window_of` reads clip properties only inside the window, so a
             # page costs three property reads per clip DELIVERED rather than
             # three per clip on the track.
-            clips = track.arrangement_clips
+            clips = clips_of(track)
             records = window_of(clips, start, span)
             return arrangement_reply(track_index, start, len(clips), records)
 
@@ -81,7 +85,7 @@ class ArrangementHandler(AbletonOSCHandler):
             track = track_at(track_index)
             if track is None:
                 return None
-            return timeline_fingerprint_reply(track_index, track.arrangement_clips)
+            return timeline_fingerprint_reply(track_index, clips_of(track))
 
         self.osc_server.add_handler(
             "/live/mixingpal/get/arrangement/fingerprint", arrangement_fingerprint)
@@ -101,7 +105,7 @@ class ArrangementHandler(AbletonOSCHandler):
             track = track_at(track_index)
             if track is None:
                 return None
-            clips = track.arrangement_clips
+            clips = clips_of(track)
             if index < 0 or index >= len(clips):
                 return None
             return clips[index]
@@ -148,8 +152,9 @@ class ArrangementHandler(AbletonOSCHandler):
             clip = arrangement_clip_at(params)
             if clip is None or not bool(getattr(clip, "is_midi_clip", False)):
                 return None
-            notes = clip.get_notes_extended(0, 128, 0.0, float(clip.length))
-            return num_notes_reply(int(params[0]), int(params[1]), notes)
+            start, end = source_note_range(clip)
+            notes = clip.get_notes_extended(0, 128, start, end - start)
+            return session_snapshot_reply(int(params[0]), int(params[1]), clip, notes)
 
         def arrangement_notes_window(params: Tuple[Any]):
             if len(params) != 7:

@@ -118,28 +118,29 @@ fn reply_for(set: &Set, addr: &str, args: &[OscType]) -> Option<Vec<OscType>> {
         _ => None,
     });
     match addr {
-        "/live/track/get/devices/name" => {
-            let t = int(0)?;
-            if (t as usize) >= set.tracks {
+        "/live/mixingpal/get/device_chain/fingerprint" => {
+            let track = int(0)?;
+            if track < 0 || track as usize >= set.tracks {
                 return None;
             }
-            let mut out = vec![OscType::Int(t)];
-            for d in 0..set.devices_per_track {
-                out.push(OscType::String(format!("EQ Eight {d}")));
-            }
-            Some(out)
+            Some(vec![
+                OscType::Int(track),
+                OscType::Int(set.devices_per_track as i32),
+                OscType::String("a".repeat(64)),
+            ])
         }
-        // Added by the rack work: one flag per device saying whether it can
-        // hold chains. `get_device_chains` asks for it alongside the names,
-        // so a fake that does not answer it makes every call wait out the
-        // whole timeout.
-        "/live/track/get/devices/can_have_chains" => {
-            let t = int(0)?;
-            if (t as usize) >= set.tracks {
+        "/live/mixingpal/get/device_chain" => {
+            let (track, start, span) = (int(0)?, int(1)?, int(2)?);
+            if track < 0 || track as usize >= set.tracks || start < 0 || span <= 0 {
                 return None;
             }
-            let mut out = vec![OscType::Int(t)];
-            for d in 0..set.devices_per_track {
+            let mut out = vec![
+                OscType::Int(track),
+                OscType::Int(start),
+                OscType::Int(set.devices_per_track as i32),
+            ];
+            for d in (start as usize..set.devices_per_track).take((span as usize).min(256)) {
+                out.push(OscType::String(format!("EQ Eight {d}")));
                 out.push(OscType::Bool(d == 0 && set.racks));
             }
             Some(out)
@@ -151,7 +152,18 @@ fn reply_for(set: &Set, addr: &str, args: &[OscType]) -> Option<Vec<OscType>> {
         ]),
         "/live/clip/get/num_notes" => {
             let count = (set.clip_length_beats as f64 * set.notes_per_beat as f64) as i32;
-            Some(vec![OscType::Int(int(0)?), OscType::Int(int(1)?), OscType::Int(count)])
+            Some(vec![
+                OscType::Int(int(0)?),
+                OscType::Int(int(1)?),
+                OscType::Int(count),
+                OscType::String("b".repeat(64)),
+                OscType::Float(set.clip_length_beats),
+                OscType::Bool(false),
+                OscType::Float(0.0),
+                OscType::Float(0.0),
+                OscType::Float(0.0),
+                OscType::Float(set.clip_length_beats),
+            ])
         }
         "/live/clip/get/notes_window" => {
             let (track, clip, window) = (int(0)?, int(1)?, int(2)?);
@@ -164,15 +176,17 @@ fn reply_for(set: &Set, addr: &str, args: &[OscType]) -> Option<Vec<OscType>> {
             // and the coverage figure this bench reports would be measuring
             // the fake, not the tool.
             let total = (set.clip_length_beats as f64 * set.notes_per_beat as f64) as usize;
-            let (from, to) = (start as f64, (start + span.max(0.0)) as f64);
+            let (from, to) = (f64::from(start), f64::from(start) + f64::from(span.max(0.0)));
             for i in 0..total {
-                let at = i as f64 / set.notes_per_beat as f64 * set.cluster as f64;
-                if at < from || at >= to {
+                // Use the same representable coordinate for selection and reply.
+                let at = (i as f64 / set.notes_per_beat as f64 * set.cluster as f64) as f32;
+                let coordinate = f64::from(at);
+                if coordinate < from || coordinate >= to {
                     continue;
                 }
                 out.extend([
                     OscType::Int(36 + (i % 60) as i32),
-                    OscType::Float(at as f32),
+                    OscType::Float(at),
                     OscType::Float(0.25),
                     OscType::Float(100.0),
                     OscType::Bool(false),
@@ -337,19 +351,31 @@ fn runtime() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
-/// One round trip per track, all in flight at once -- so the whole set
-/// should cost ONE tick no matter how wide it is. Flat lines here are the
-/// property `get_device_chains` is built on; a slope means the fan-out
-/// broke.
+/// Fingerprint, device page, then fingerprint per track. Tracks run
+/// concurrently, so this four-device fixture should cost three ticks
+/// regardless of track count. A slope means the fan-out broke.
 fn bench_device_chains(c: &mut Criterion) {
     let rt = runtime();
     let mut g = c.benchmark_group("round_trips/get_device_chains");
     g.sample_size(20);
     for tracks in [8usize, 40, 128] {
         let r = rt.block_on(rig(Set { tracks, ..Set::default() }));
+        let probe = rt.block_on(get_device_chains_range(
+            r.query.clone(), 0, tracks as i32, 0, 256, TIMEOUT,
+        ));
+        assert!(probe.missing.is_empty(), "missing tracks: {:?}", probe.missing);
+        assert!(probe.flags_missing.is_empty());
+        assert_eq!(probe.tracks.len(), tracks);
+        for (index, chain) in probe.tracks.iter().enumerate() {
+            assert_eq!(chain.track, index as i32);
+            assert_eq!(chain.devices, (0..4).map(|d| format!("«EQ Eight {d}»")).collect::<Vec<_>>());
+            assert_eq!(chain.total_devices, 4);
+            assert!(!chain.truncated);
+            assert_eq!(chain.next_device_offset, None);
+        }
         g.bench_with_input(BenchmarkId::from_parameter(tracks), &tracks, |b, &tracks| {
             b.to_async(&rt).iter(|| async {
-                black_box(get_device_chains(r.query.clone(), tracks as i32, TIMEOUT).await)
+                black_box(get_device_chains_range(r.query.clone(), 0, tracks as i32, 0, 256, TIMEOUT).await)
             })
         });
         eprintln!(
@@ -361,8 +387,8 @@ fn bench_device_chains(c: &mut Criterion) {
     g.finish();
 }
 
-/// Every round trip here is SERIAL: name, then num_parameters, then
-/// name_range and value_string_range per window, then the identity re-read.
+/// Every round trip here is SERIAL: identity, then name_range and
+/// value_string_range per window, then the identity re-read.
 /// The window count is the only part that grows.
 fn bench_device_params(c: &mut Criterion) {
     let rt = runtime();
@@ -372,10 +398,21 @@ fn bench_device_params(c: &mut Criterion) {
     // truncated to MAX_PARAMS but still reporting the real total.
     for params in [130usize, 256, 512] {
         let r = rt.block_on(rig(Set { num_parameters: params, ..Set::default() }));
+        let probe = rt.block_on(get_device_params(&r.query, 0, &device_path(), 0, TIMEOUT)).unwrap();
+        assert_eq!(probe.missing_reason, None);
+        assert_eq!(probe.total, params);
+        assert_eq!(probe.params.len(), params.min(256));
+        assert_eq!(probe.truncated, params > 256);
+        assert_eq!(probe.next_offset, (params > 256).then_some(256));
+        for (index, param) in probe.params.iter().enumerate() {
+            assert_eq!(param.index, index);
+            assert_eq!(param.name, format!("«Oscillator {index} Coarse»"));
+            assert_eq!(param.value, format!("«{}.0 Hz»", 100 + index));
+        }
         let before = r.counters.requests.load(Ordering::Relaxed);
         g.bench_with_input(BenchmarkId::from_parameter(params), &params, |b, _| {
             b.to_async(&rt)
-                .iter(|| async { black_box(get_device_params(&r.query, 0, &device_path(), TIMEOUT).await) })
+                .iter(|| async { black_box(get_device_params(&r.query, 0, &device_path(), 0, TIMEOUT).await.unwrap()) })
         });
         eprintln!(
             "get_device_params/{params}: {} datagrams over the run, {} oversize",
@@ -417,7 +454,16 @@ fn bench_clip_notes(c: &mut Criterion) {
         // One profiling call before the timed loop: how much of the clip
         // came back, and how many probes went unanswered getting there.
         let probe = rt.block_on(get_clip_notes(r.query.clone(), 0, 0, TIMEOUT)).unwrap();
+        assert_eq!(probe.notes.len(), real_notes);
+        assert_eq!(probe.missing_reason, None);
+        assert_eq!(probe.source_start_beats, Some(0.0));
+        assert!(probe.loop_state_known);
+        assert_eq!(probe.loop_region, None);
+        let range = probe.note_range.as_ref().unwrap();
+        assert_eq!(range.start_beats, 0.0);
+        assert_eq!(range.end_beats, 128.0);
         let silent = r.counters.dropped_oversize.load(Ordering::Relaxed);
+        assert_eq!(silent, 0);
         eprintln!(
             "get_clip_notes/{notes_per_beat}npb: clip has {real_notes} notes, returned {} \
              ({:.0}%), missing_reason {:?}, {silent} probes answered with silence",
@@ -431,7 +477,7 @@ fn bench_clip_notes(c: &mut Criterion) {
             &notes_per_beat,
             |b, _| {
                 b.to_async(&rt)
-                    .iter(|| async { black_box(get_clip_notes(r.query.clone(), 0, 0, TIMEOUT).await) })
+                    .iter(|| async { black_box(get_clip_notes(r.query.clone(), 0, 0, TIMEOUT).await.unwrap()) })
             },
         );
     }
@@ -454,6 +500,9 @@ fn bench_clustered_clip_notes(c: &mut Criterion) {
         let r = rt.block_on(rig(set));
 
         let probe = rt.block_on(get_clip_notes(r.query.clone(), 0, 0, TIMEOUT)).unwrap();
+        assert_eq!(probe.notes.len(), real_notes);
+        assert_eq!(probe.missing_reason, None);
+        assert!(probe.loop_state_known);
         eprintln!(
             "get_clip_notes_clustered/{cluster}: {real_notes} notes in the first              {:.0}% of the clip, returned {} ({:.0}%), {} silent probes, {} drain aborts",
             cluster * 100.0,
@@ -468,7 +517,7 @@ fn bench_clustered_clip_notes(c: &mut Criterion) {
             &cluster,
             |b, _| {
                 b.to_async(&rt).iter(|| async {
-                    black_box(get_clip_notes(r.query.clone(), 0, 0, TIMEOUT).await)
+                    black_box(get_clip_notes(r.query.clone(), 0, 0, TIMEOUT).await.unwrap())
                 })
             },
         );

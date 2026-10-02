@@ -109,10 +109,11 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clip_notes",
-                "description": "Every MIDI note in one session-view clip. start and duration are raw quarter-note beats from the clip's start. When the song's current signature is known, use each note's clip_position in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit, computed from the song signature (bar_positions_assume_current_signature). A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. The result also gives source_length_beats and loop_region, with readable start_position/end_position when possible. A note with mute true does not sound and must be excluded from rhythm or harmony claims. source_length_beats is the source clip length, not a finite playback span: when looping is true, its source notes repeat while the clip is launched. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read.",
+                "description": "MIDI notes in the source note_range of one session-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker, not necessarily zero. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. When the song's current signature is known, use each note's clip_position in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit, computed from the song signature (bar_positions_assume_current_signature). A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. The result also gives source_length_beats and loop_region, with readable start_position/end_position when possible. A note with mute true does not sound and must be excluded from rhythm or harmony claims. source_length_beats is the source clip length, not a finite playback span: when looping is true, its source notes repeat while the clip is launched. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read. Source notes and loop state are checked before and after the read; clip_changed means discard and retry after the clip is stable. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "note_offset": {"type":"integer","minimum":0,"description":"Start at this offset in the ordered source notes; use next_note_offset to continue a capped output."},
                         "track": { "type": "integer", "description": "Zero-based track index." },
                         "clip": { "type": "integer", "description": "Zero-based clip slot index within that track." }
                     },
@@ -124,10 +125,13 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clips",
-                "description": "Every session-view clip in the set: for each track, the slot index and name of each clip it holds, and whether the track is MIDI. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which clips exist and what their slot indices are, then use get_clip_notes to read one. Slot indices are the real ones and have gaps, because a producer's session grid does. A track with an empty list genuinely has no clips in its session slots. Arrangement-view clips are not covered. A track whose midi field is absent had its clips read but its kind unknown. Tracks that did not answer are listed separately under missing.",
+                "description": "Session-view clip overview: by default, reads the first 16 slots of each track and returns filled slots with their index and name, plus whether the track is MIDI. Supply track to read up to 1024 slots of that track, beginning at start_slot (default 0). Queried from Live at call time; slot names are read in bounded pages per track. Call this first to find out which clips exist and what their slot indices are, then use get_clip_notes to read one. Slot indices are the real ones and have gaps, because a producer's session grid does. An empty list means no filled slots in the returned scope; check missing and next_slot before claiming the whole track is empty. Arrangement-view clips are not covered. A track whose midi field is absent had its clips read but its kind unknown. Tracks that did not answer are listed separately under missing. The combined map also has an output byte budget. A next_slot means more slots remain: call again with that track and start_slot set to next_slot. Group tracks have no direct clips.",
                 "parameters": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "track": {"type":"integer","minimum":0,"description":"Optional zero-based track index."},
+                        "start_slot": {"type":"integer","minimum":0,"description":"Continue a selected track from next_slot. Requires track."}
+                    },
                     "required": []
                 }
             }
@@ -136,10 +140,15 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement",
-                "description": "Every track's arrangement placements: for each clip, its index, start_beats, length_beats, muted state, MIDI type, and its name when it has one. These are beats, never bar counts. A placement is audible only when muted is false; is_midi false means it is audio and has no MIDI notes. When the current time signature is known, each clip also has one-based bar_start and length_bars; use bar_start when speaking about bars, never start_beats (in 4/4, start_beats 32 is bar 9). A loop_region is present when Live repeats the clip's MIDI: source notes repeat in that region through the clip's length_beats, so an absent note after one loop is not silence. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; one round trip per track covers the set, so calling it is cheap. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. A track with an empty list genuinely has nothing on the timeline, which is normal early in a writing session. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a MIDI clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated.",
+                "description": "Every track's arrangement placements: for each clip, its index, start_beats, length_beats, muted state, MIDI type, and its name when it has one. These are beats, never bar counts. A placement is audible only when muted is false; is_midi false means it is audio and has no MIDI notes. When the current time signature is known, each clip also has one-based bar_start and length_bars; use bar_start when speaking about bars, never start_beats (in 4/4, start_beats 32 is bar 9). A loop_region is present when Live repeats the clip's MIDI: source notes repeat in that region through the clip's length_beats, so an absent note after one loop is not silence. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; placements are read in bounded pages per track. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. An empty list means no placements in the returned scope; check missing, changed, truncated and next_clip_index before claiming the whole timeline is empty. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a MIDI clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated. For a section question, supply start_beats and end_beats to filter overlapping placements before the 512-placement output cap. To recover a truncated track, request its track index with next_clip_index as clip_offset; retain the same range. Group tracks have no direct placements; their child tracks carry them.",
                 "parameters": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "track": {"type":"integer","minimum":0,"description":"Optional zero-based track index; omit to read all tracks."},
+                        "start_beats": {"type":"number","minimum":0,"description":"Optional inclusive range start in beats; supply with end_beats. In 4/4 bars 17–32 are [64,128)."},
+                        "end_beats": {"type":"number","exclusiveMinimum":0,"description":"Exclusive range end in beats. Keeps placements that overlap the range, including clips starting before it."},
+                        "clip_offset": {"type":"integer","minimum":0,"description":"Continue a selected track from next_clip_index. Requires track. Keep the same beat range when continuing."}
+                    },
                     "required": []
                 }
             }
@@ -148,10 +157,11 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "Every MIDI note in one arrangement-view clip. start and duration are raw quarter-note beats. Each note's start is measured from the start of the clip, not from the start of the song: its position on the timeline is result.start_beats + note.start. When the current signature is known, use clip_position (relative) or timeline_position (absolute) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes one-based bar_start and length_bars. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip.",
+                "description": "MIDI notes in the source note_range of one arrangement-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. timeline_position is provided only for notes on the first pass within the placement: result.start_beats + note.start - source_start_beats. Notes before the start marker may sound on a later loop; absence of timeline_position does not mean they never play. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes one-based bar_start and length_bars. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "note_offset": {"type":"integer","minimum":0,"description":"Start at this offset in the ordered source notes; use next_note_offset to continue a capped output."},
                         "track": { "type": "integer", "description": "Zero-based track index." },
                         "index": { "type": "integer", "description": "The clip's position in that track's arrangement, as reported by get_arrangement." }
                     },
@@ -163,10 +173,13 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_chains",
-                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device, marked [rack]; call get_rack_contents on it to see what is inside. Whether a device is switched on or bypassed is not reported. Queried from Live at call time; one round trip covers the whole set, so calling it is cheap. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. A track with an empty list genuinely has no devices on it. Tracks that did not answer are listed separately under missing.",
+                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device, marked [rack]; call get_rack_contents on it to see what is inside. Whether a device is switched on or bypassed is not reported. Queried from Live at call time in bounded pages. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. An empty list means no devices in the returned scope; check missing and next_device_offset before claiming the whole track is empty. Tracks that did not answer are listed separately under missing. The combined map also has an output byte budget. Device indices equal device_offset plus the position in the returned list. If next_device_offset is present, request that track with device_offset set to it. An empty page describes only the returned scope.",
                 "parameters": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "track": {"type":"integer","minimum":0,"description":"Optional zero-based track index."},
+                        "device_offset": {"type":"integer","minimum":0,"description":"Continue a selected track from next_device_offset. Requires track."}
+                    },
                     "required": []
                 }
             }
@@ -175,10 +188,11 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_params",
-                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. The device's on/off switch is itself a parameter, conventionally the first one and named Device On, so a device listed in the chain may be switched off and this is how to find out. On a Rack this returns the Rack's own macros; for the devices inside it use get_rack_contents and then pass a longer path here. A device with more than 256 parameters is truncated and the result says so.",
+                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. The device's on/off switch is itself a parameter, conventionally the first one and named Device On, so a device listed in the chain may be switched off and this is how to find out. On a Rack this returns the Rack's own macros; for the devices inside it use get_rack_contents and then pass a longer path here. A device with more than 256 parameters is truncated and the result says so. Each call returns up to 256 parameters starting at offset (default 0). When next_offset is present, call again with that offset; parameter indices stay absolute.",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "offset": {"type":"integer","minimum":0,"description":"Parameter index to start at; use next_offset to continue a partial read."},
                         "track": { "type": "integer", "description": "Zero-based track index." },
                         "path": {
                             "type": "array",
@@ -194,10 +208,12 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_rack_contents",
-                "description": "What is inside one Rack: each chain in order, the devices on it, and for a Drum Rack the MIDI note of its pad plus sample_name when Live exposes a sample file. Rack devices in a chain are marked [rack], just like top-level devices; keep descending those marked devices before claiming which pads a nested kit contains. A generic device name such as Simpler does not identify the sound; use sample_name or the producer's pad name, and do not claim a hat or kick when neither identifies it. Chains that are muted or soloed are marked; nothing is said about the others. Queried from Live at call time and fetched in pages. Use this when get_device_chains marks a device [rack]. An empty result means either that the device is not a Rack, or that it is an empty one, and the result says which. A rack with more than 128 chains is truncated and the result says so; a chain with more than 32 devices lists only the first 32 names, and its total_devices may exceed the number of names listed. Chain indices from here go into the path of get_device_params to read a device inside the rack, or back into get_rack_contents for a rack nested inside a chain.",
+                "description": "What is inside one Rack: each chain in order, the devices on it, and for a Drum Rack the MIDI note of its pad plus sample_name when Live exposes a sample file. Rack devices in a chain are marked [rack], just like top-level devices; keep descending those marked devices before claiming which pads a nested kit contains. A generic device name such as Simpler does not identify the sound; use sample_name or the producer's pad name, and do not claim a hat or kick when neither identifies it. Chains that are muted or soloed are marked; nothing is said about the others. Queried from Live at call time and fetched in pages. Use this when get_device_chains marks a device [rack]. An empty page describes only the requested scope; use is_rack and total_chains to distinguish a device that is not a Rack from an empty Rack. A rack with more than 128 chains is truncated and the result says so; a chain lists up to 32 devices beginning at device_offset. When next_device_offset is present, repeat with offset set to that chain index and device_offset set to next_device_offset. The device path index is device_offset plus the position in the returned device list. Chain indices from here go into the path of get_device_params to read a device inside the rack, or back into get_rack_contents for a rack nested inside a chain. Each call returns up to 128 chains starting at offset (default 0). When next_offset is present, call again with that offset; chain indices stay absolute.",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "device_offset": {"type":"integer","minimum":0,"description":"Device index within each chain to start listing at. To continue one chain, set offset to its chain index and device_offset to its next_device_offset."},
+                        "offset": {"type":"integer","minimum":0,"description":"Chain index to start at; use next_offset to continue a partial read."},
                         "track": { "type": "integer", "description": "Zero-based track index." },
                         "path": {
                             "type": "array",
@@ -392,7 +408,7 @@ fn trim_notes_for_model(notes: &mut Vec<clip_notes::Note>) -> Option<String> {
     }
     notes.truncate(MAX_NOTES_FOR_MODEL);
     Some(format!(
-        "model_output_truncated_to_first_{MAX_NOTES_FOR_MODEL}_notes: omitted {omitted} later notes"
+        "model_output_limited_to_{MAX_NOTES_FOR_MODEL}_notes: omitted {omitted} later notes"
     ))
 }
 
@@ -431,6 +447,23 @@ fn notes_payload(
         {
             object.insert("timeline_position".into(), json!(position));
         }
+    }
+    payload
+}
+
+fn arrangement_note_payload(
+    notes: &clip_notes::ClipNotes,
+    signature: Option<(i64, i64)>,
+    start: f64,
+    length: f64,
+) -> serde_json::Value {
+    let mut payload = notes_payload(&notes.notes, signature, notes.source_start_beats.map(|source| start - source));
+    for (item, note) in payload.as_array_mut().unwrap().iter_mut().zip(&notes.notes) {
+        let first_pass = notes.source_start_beats.is_some_and(|source| {
+            note.start >= source && note.start - source < length
+                && notes.loop_region.as_ref().is_none_or(|region| note.start < region.end_beats)
+        });
+        if !first_pass { item.as_object_mut().unwrap().remove("timeline_position"); }
     }
     payload
 }
@@ -564,12 +597,20 @@ const MAX_FANOUT_TRACKS: i64 = 512;
 /// returned clip with `get_arrangement_notes`.
 const MAX_ARRANGEMENT_CLIPS_FOR_MODEL: usize = 512;
 
+fn offset_arg(args: &serde_json::Value, name: &str) -> Option<usize> {
+    if args.get(name).is_none() {
+        return Some(0);
+    }
+    int_arg(args, name).filter(|n| (0..=i64::from(i32::MAX)).contains(n)).map(|n| n as usize)
+}
+
 fn trim_arrangement_for_model(map: &mut arrangement::ArrangementMap) -> Option<String> {
     let mut remaining = MAX_ARRANGEMENT_CLIPS_FOR_MODEL;
     let mut omitted = 0usize;
     for track in &mut map.tracks {
         if track.clips.len() > remaining {
             omitted += track.clips.len() - remaining;
+            track.next_clip_index = Some(track.clips[remaining].index as usize);
             track.clips.truncate(remaining);
             track.truncated = true;
         }
@@ -577,7 +618,7 @@ fn trim_arrangement_for_model(map: &mut arrangement::ArrangementMap) -> Option<S
     }
     (omitted > 0).then(|| {
         format!(
-            "model_output_truncated_to_first_{MAX_ARRANGEMENT_CLIPS_FOR_MODEL}_arrangement_clips: omitted {omitted} later placements"
+            "model_output_truncated_to_first_{MAX_ARRANGEMENT_CLIPS_FOR_MODEL}_arrangement_clips: omitted {omitted} later placements; narrow start_beats/end_beats or request a track with its next_clip_index as clip_offset"
         )
     })
 }
@@ -647,7 +688,7 @@ fn chains_moved(
 /// attributes are belt-and-braces and this `if let` is the mechanism that
 /// actually runs. Same reason `chain_map_reasons` below was extracted.
 fn rack_payload(r: &rack_contents::RackContents) -> serde_json::Value {
-    let mut payload = json!({ "chains": r.chains, "truncated": r.truncated });
+    let mut payload = json!({ "chains": r.chains, "truncated": r.truncated, "next_offset": r.next_offset });
     if let Some(total) = r.total_chains {
         payload["total_chains"] = json!(total);
     }
@@ -655,6 +696,52 @@ fn rack_payload(r: &rack_contents::RackContents) -> serde_json::Value {
         payload["is_rack"] = json!(is_rack);
     }
     payload
+}
+
+const MAX_MAP_BYTES: usize = 128 * 1024;
+// Leave room for continuation fields and the ToolResult envelope/reasons.
+const MAP_METADATA_RESERVE: usize = 24 * 1024;
+
+fn fitting_prefix<T: serde::Serialize>(items: &[T], budget: &mut usize) -> usize {
+    items.iter().take_while(|item| {
+        let bytes = serde_json::to_vec(item).unwrap().len() + 1;
+        if bytes > *budget { return false; }
+        *budget -= bytes;
+        true
+    }).count()
+}
+
+fn trim_clip_map_for_model(map: &mut clips::ClipMap) -> bool {
+    let pages: Vec<_> = map.tracks.iter_mut().map(|track| std::mem::take(&mut track.clips)).collect();
+    let mut budget = MAX_MAP_BYTES.saturating_sub(MAP_METADATA_RESERVE + serde_json::to_vec(map).unwrap().len());
+    let mut trimmed = false;
+    for (track, mut page) in map.tracks.iter_mut().zip(pages) {
+        let keep = fitting_prefix(&page, &mut budget);
+        if keep < page.len() {
+            track.next_slot = Some(page[keep].slot);
+            page.truncate(keep);
+            trimmed = true;
+        }
+        track.clips = page;
+    }
+    trimmed
+}
+
+fn trim_chain_map_for_model(map: &mut device_chains::ChainMap) -> bool {
+    let pages: Vec<_> = map.tracks.iter_mut().map(|track| std::mem::take(&mut track.devices)).collect();
+    let mut budget = MAX_MAP_BYTES.saturating_sub(MAP_METADATA_RESERVE + serde_json::to_vec(map).unwrap().len());
+    let mut trimmed = false;
+    for (track, mut page) in map.tracks.iter_mut().zip(pages) {
+        let keep = fitting_prefix(&page, &mut budget);
+        if keep < page.len() {
+            track.next_device_offset = Some(track.device_offset + keep);
+            track.truncated = true;
+            page.truncate(keep);
+            trimmed = true;
+        }
+        track.devices = page;
+    }
+    trimmed
 }
 
 /// Assembles `get_device_chains`'s `missing_reason` from the three things
@@ -800,6 +887,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             }
         }
         "get_clip_notes" => {
+            let Some(note_offset) = offset_arg(args, "note_offset") else { return ToolResult::missing("bad_arguments"); };
             let (Some(track), Some(clip)) = (
                 int_arg(args, "track").filter(|t| (0..=i64::from(i32::MAX)).contains(t)),
                 int_arg(args, "clip").filter(|c| (0..=i64::from(i32::MAX)).contains(c)),
@@ -838,12 +926,27 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
 
             match outcome {
                 Ok(mut notes) => {
+                    if matches!(notes.missing_reason.as_deref(), Some("not_midi_clip" | "empty_slot" | "clip_changed")) {
+                        return ToolResult::missing(notes.missing_reason.as_deref().unwrap());
+                    }
                     let signature = time_signature(&ctx.coalescer);
+                    let source_complete = notes.missing_reason.is_none();
+                    if note_offset > 0 && !source_complete {
+                        return ToolResult::missing(&format!("cannot_continue_partial_note_read: {}", notes.missing_reason.as_deref().unwrap()));
+                    }
+                    let total_read = notes.notes.len();
+                    notes.notes.drain(..note_offset.min(total_read));
+                    let next_note_offset = (source_complete && total_read.saturating_sub(note_offset) > MAX_NOTES_FOR_MODEL)
+                        .then_some(note_offset + MAX_NOTES_FOR_MODEL);
                     let trimmed = trim_notes_for_model(&mut notes.notes);
                     let mut payload = json!({
+                        "note_offset": note_offset,
+                        "next_note_offset": next_note_offset,
                         "notes": notes_payload(&notes.notes, signature, None),
                         "count": notes.notes.len(),
                         "source_length_beats": notes.length_beats,
+                        "source_start_beats": notes.source_start_beats,
+                        "note_range": notes.note_range.as_ref().map(|range| loop_region_payload(range.start_beats, range.end_beats, signature)),
                         "looping": notes.loop_state_known.then_some(notes.loop_region.is_some()),
                         "loop_region": notes.loop_region.map(|region| {
                             loop_region_payload(region.start_beats, region.end_beats, signature)
@@ -865,6 +968,15 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             }
         }
         "get_clips" => {
+            let track = match args.get("track") {
+                None => None,
+                Some(_) => match int_arg(args, "track").filter(|t| (0..i64::from(i32::MAX)).contains(t)) {
+                    Some(t) => Some(t),
+                    None => return ToolResult::missing("bad_arguments"),
+                },
+            };
+            let Some(start_slot) = offset_arg(args, "start_slot") else { return ToolResult::missing("bad_arguments"); };
+            if args.get("start_slot").is_some() && track.is_none() { return ToolResult::missing("bad_arguments"); }
             // Without a count there is nothing to iterate. Querying 0..0
             // would return an empty map, which reads as "the set has no
             // clips" -- an invented answer, not a missing one.
@@ -872,6 +984,8 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 return ToolResult::missing("not_in_mirror");
             };
             let read_tracks = num_tracks.min(MAX_FANOUT_TRACKS);
+            if track.is_some_and(|t| t >= num_tracks) { return ToolResult::missing("track_out_of_range"); }
+            let selected = track.map_or(0..read_tracks, |t| t..t + 1);
             let query = match ctx.query.lock() {
                 Ok(q) => q.clone(),
                 Err(_) => return ToolResult::missing("mirror_unavailable"),
@@ -884,28 +998,58 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // rather than copied: the hazard is identical -- a same-count
             // reorder would leave these track indices naming another
             // track's clips, and the answer would go back looking whole.
-            let before: Vec<Option<serde_json::Value>> = (0..read_tracks)
+            let before: Vec<Option<serde_json::Value>> = selected.clone()
                 .map(|t| track_identity(&ctx.coalescer, t))
                 .collect();
 
-            let map = clips::get_clips(query, read_tracks as i32, clips::QUERY_TIMEOUT).await;
+            let max_pages = if track.is_some() { clips::MAX_PAGES } else { 1 };
+            let mut map = clips::get_clips_range(query, selected.start as i32, (selected.end - selected.start) as i32, start_slot as i32, max_pages, clips::QUERY_TIMEOUT).await;
 
             let after_count = track_count(&ctx.coalescer);
-            let after: Vec<Option<serde_json::Value>> = (0..read_tracks)
+            let after: Vec<Option<serde_json::Value>> = selected.clone()
                 .map(|t| track_identity(&ctx.coalescer, t))
                 .collect();
             if chains_moved(num_tracks, after_count, &before, &after) {
                 return ToolResult::missing("topology_changed");
             }
 
-            let missing_reason =
-                clip_map_reasons(num_tracks, read_tracks, &map.missing, &map.midi_missing);
+            let output_limited = trim_clip_map_for_model(&mut map);
+            let mut missing_reason = clip_map_reasons(
+                if track.is_some() { 1 } else { num_tracks },
+                if track.is_some() { 1 } else { read_tracks }, &map.missing, &map.midi_missing);
+            if output_limited {
+                missing_reason = joined_reason(missing_reason, Some("model_output_limited: continue each track using next_slot".into()));
+            }
+            if map.tracks.iter().any(|t| t.next_slot.is_some()) {
+                missing_reason = joined_reason(missing_reason, Some("session_slots_partial: continue each track from next_slot using track and start_slot".into()));
+            }
             ToolResult::live(
-                json!({ "tracks": map.tracks, "missing": map.missing }),
+                json!({ "tracks": map.tracks, "missing": map.missing, "scope": {"track":track,"start_slot":start_slot} }),
                 missing_reason,
             )
         }
         "get_arrangement" => {
+            let track = match args.get("track") {
+                None => None,
+                Some(_) => match int_arg(args, "track").filter(|t| (0..i64::from(i32::MAX)).contains(t)) {
+                    Some(t) => Some(t),
+                    None => return ToolResult::missing("bad_arguments"),
+                },
+            };
+            let Some(offset) = offset_arg(args, "clip_offset") else {
+                return ToolResult::missing("bad_arguments");
+            };
+            if args.get("clip_offset").is_some() && track.is_none() {
+                return ToolResult::missing("bad_arguments");
+            }
+            let range = match (args.get("start_beats"), args.get("end_beats")) {
+                (None, None) => None,
+                (Some(start), Some(end)) => match (start.as_f64(), end.as_f64()) {
+                    (Some(start), Some(end)) if start.is_finite() && end.is_finite() && start >= 0.0 && end > start => Some((start, end)),
+                    _ => return ToolResult::missing("bad_arguments"),
+                },
+                _ => return ToolResult::missing("bad_arguments"),
+            };
             // Without a count there is nothing to iterate. Querying 0..0
             // would return an empty map, which reads as "the set has no
             // arrangement" -- an invented answer, not a missing one.
@@ -913,6 +1057,10 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 return ToolResult::missing("not_in_mirror");
             };
             let read_tracks = num_tracks.min(MAX_FANOUT_TRACKS);
+            if track.is_some_and(|t| t >= num_tracks) {
+                return ToolResult::missing("track_out_of_range");
+            }
+            let selected = track.map_or(0..read_tracks, |t| t..t + 1);
             let query = match ctx.query.lock() {
                 Ok(q) => q.clone(),
                 Err(_) => return ToolResult::missing("mirror_unavailable"),
@@ -924,16 +1072,16 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // Same bracket as the chain map and the clip map: a same-count
             // reorder would leave these track indices naming another track's
             // timeline, and the answer would go back looking whole.
-            let before: Vec<Option<serde_json::Value>> = (0..read_tracks)
+            let before: Vec<Option<serde_json::Value>> = selected.clone()
                 .map(|t| track_identity(&ctx.coalescer, t))
                 .collect();
 
             let mut map =
-                arrangement::get_arrangement(query, read_tracks as i32, arrangement::QUERY_TIMEOUT)
+                arrangement::get_arrangement_range(query, selected.start as i32..selected.end as i32, offset, arrangement::QUERY_TIMEOUT)
                     .await;
 
             let after_count = track_count(&ctx.coalescer);
-            let after: Vec<Option<serde_json::Value>> = (0..read_tracks)
+            let after: Vec<Option<serde_json::Value>> = selected
                 .map(|t| track_identity(&ctx.coalescer, t))
                 .collect();
             if chains_moved(num_tracks, after_count, &before, &after) {
@@ -947,23 +1095,32 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 .map(|t| t.track)
                 .collect();
             let mut reasons: Vec<String> = arrangement_reasons(
-                num_tracks,
-                read_tracks,
+                if track.is_some() { 1 } else { num_tracks },
+                if track.is_some() { 1 } else { read_tracks },
                 &map.missing,
                 &truncated,
                 &map.changed,
             )
             .into_iter()
             .collect();
+            if let Some((start, end)) = range {
+                for track in &mut map.tracks {
+                    track.clips.retain(|clip| clip.start < end && clip.start + clip.length > start);
+                }
+            }
             if let Some(reason) = trim_arrangement_for_model(&mut map) {
                 reasons.push(reason);
             }
+            let mut payload = arrangement_payload(&map, time_signature(&ctx.coalescer));
+            payload["scope"] = json!({"track":track,"clip_offset":offset,
+                "start_beats":range.map(|r| r.0),"end_beats":range.map(|r| r.1)});
             ToolResult::live(
-                arrangement_payload(&map, time_signature(&ctx.coalescer)),
+                payload,
                 (!reasons.is_empty()).then(|| reasons.join("; ")),
             )
         }
         "get_arrangement_notes" => {
+            let Some(note_offset) = offset_arg(args, "note_offset") else { return ToolResult::missing("bad_arguments"); };
             let (Some(track), Some(index)) = (
                 int_arg(args, "track").filter(|t| (0..=i64::from(i32::MAX)).contains(t)),
                 int_arg(args, "index").filter(|i| (0..=i64::from(i32::MAX)).contains(i)),
@@ -1005,10 +1162,22 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             match outcome {
                 Ok(mut result) => {
                     let signature = time_signature(&ctx.coalescer);
+                    let source_complete = result.notes.missing_reason.is_none();
+                    if note_offset > 0 && !source_complete {
+                        return ToolResult::missing(&format!("cannot_continue_partial_note_read: {}", result.notes.missing_reason.as_deref().unwrap()));
+                    }
+                    let total_read = result.notes.notes.len();
+                    result.notes.notes.drain(..note_offset.min(total_read));
+                    let next_note_offset = (source_complete && total_read.saturating_sub(note_offset) > MAX_NOTES_FOR_MODEL)
+                        .then_some(note_offset + MAX_NOTES_FOR_MODEL);
                     let trimmed = trim_notes_for_model(&mut result.notes.notes);
                     let mut payload = json!({
-                        "notes": notes_payload(&result.notes.notes, signature, Some(result.start)),
+                        "note_offset": note_offset,
+                        "next_note_offset": next_note_offset,
+                        "notes": arrangement_note_payload(&result.notes, signature, result.start, result.length),
                         "count": result.notes.notes.len(),
+                        "source_start_beats": result.notes.source_start_beats,
+                        "note_range": result.notes.note_range.as_ref().map(|range| loop_region_payload(range.start_beats, range.end_beats, signature)),
                         "name": result.name,
                         "start_beats": result.start,
                         "length_beats": result.length,
@@ -1039,6 +1208,15 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             }
         }
         "get_device_chains" => {
+            let track = match args.get("track") {
+                None => None,
+                Some(_) => match int_arg(args, "track").filter(|t| (0..i64::from(i32::MAX)).contains(t)) {
+                    Some(t) => Some(t),
+                    None => return ToolResult::missing("bad_arguments"),
+                },
+            };
+            let Some(device_offset) = offset_arg(args, "device_offset") else { return ToolResult::missing("bad_arguments"); };
+            if args.get("device_offset").is_some() && track.is_none() { return ToolResult::missing("bad_arguments"); }
             // Without a count there is nothing to iterate. Querying 0..0
             // would return an empty map, which reads as "the set has no
             // devices" -- an invented answer, not a missing one.
@@ -1048,6 +1226,8 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // Everything below is sized by `read_tracks`, never by
             // `num_tracks`: see MAX_FANOUT_TRACKS.
             let read_tracks = num_tracks.min(MAX_FANOUT_TRACKS);
+            if track.is_some_and(|t| t >= num_tracks) { return ToolResult::missing("track_out_of_range"); }
+            let selected = track.map_or(0..read_tracks, |t| t..t + 1);
             let query = match ctx.query.lock() {
                 Ok(q) => q.clone(),
                 Err(_) => return ToolResult::missing("mirror_unavailable"),
@@ -1059,23 +1239,18 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // Bracket the whole-set read with every track's mirrored name,
             // not just the count -- see `chains_moved` for why the count
             // alone is not enough.
-            let before: Vec<Option<serde_json::Value>> = (0..read_tracks)
+            let before: Vec<Option<serde_json::Value>> = selected.clone()
                 .map(|t| track_identity(&ctx.coalescer, t))
                 .collect();
 
-            let map = device_chains::get_device_chains(
-                query,
-                // One spawned task per track -- the widest fan-out in this
-                // codebase, and the only one sized by a mirrored value.
-                // Already clamped to MAX_FANOUT_TRACKS, which is what makes
-                // this narrowing safe.
-                read_tracks as i32,
+            let mut map = device_chains::get_device_chains_range(
+                query, selected.start as i32, selected.end as i32, device_offset, 256,
                 device_chains::QUERY_TIMEOUT,
             )
             .await;
 
             let after_count = track_count(&ctx.coalescer);
-            let after: Vec<Option<serde_json::Value>> = (0..read_tracks)
+            let after: Vec<Option<serde_json::Value>> = selected.clone()
                 .map(|t| track_identity(&ctx.coalescer, t))
                 .collect();
             // The counts compared here are the REAL ones, clamped or not: a
@@ -1085,14 +1260,23 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 return ToolResult::missing("topology_changed");
             }
 
-            let missing_reason =
-                chain_map_reasons(num_tracks, read_tracks, &map.missing, &map.flags_missing);
+            let output_limited = trim_chain_map_for_model(&mut map);
+            let mut missing_reason = chain_map_reasons(
+                if track.is_some() { 1 } else { num_tracks },
+                if track.is_some() { 1 } else { read_tracks }, &map.missing, &map.flags_missing);
+            if output_limited {
+                missing_reason = joined_reason(missing_reason, Some("model_output_limited: continue each track using next_device_offset".into()));
+            }
+            if map.tracks.iter().any(|t| t.next_device_offset.is_some()) {
+                missing_reason = joined_reason(missing_reason, Some("device_list_partial: continue each track using next_device_offset".into()));
+            }
             ToolResult::live(
-                json!({ "tracks": map.tracks, "missing": map.missing }),
+                json!({ "tracks": map.tracks, "missing": map.missing, "scope": {"track":track,"device_offset":device_offset} }),
                 missing_reason,
             )
         }
         "get_device_params" => {
+            let Some(offset) = offset_arg(args, "offset") else { return ToolResult::missing("bad_arguments"); };
             let Some((track, path)) = track_and_path(args) else {
                 return ToolResult::missing("bad_arguments");
             };
@@ -1115,6 +1299,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 &query,
                 track as i32,
                 &path,
+                offset,
                 device_params::QUERY_TIMEOUT,
             )
             .await;
@@ -1129,6 +1314,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                         "params": d.params,
                         "total": d.total,
                         "truncated": d.truncated,
+                        "next_offset": d.next_offset,
                     }),
                     d.missing_reason,
                 ),
@@ -1142,6 +1328,8 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             }
         }
         "get_rack_contents" => {
+            let Some(device_offset) = offset_arg(args, "device_offset") else { return ToolResult::missing("bad_arguments"); };
+            let Some(offset) = offset_arg(args, "offset") else { return ToolResult::missing("bad_arguments"); };
             let Some((track, path)) = track_and_path(args) else {
                 return ToolResult::missing("bad_arguments");
             };
@@ -1165,6 +1353,8 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 &query,
                 track as i32,
                 &path,
+                offset,
+                device_offset,
                 rack_contents::QUERY_TIMEOUT,
             )
             .await;
@@ -1245,10 +1435,12 @@ mod tests {
                 let Some(&rosc::OscType::Int(track)) = req.args.first() else {
                     continue;
                 };
-                // Echoing just the track index is a track with no devices.
-                let _ = live
-                    .send_to(app_port, &req.addr, vec![rosc::OscType::Int(track)])
-                    .await;
+                let reply = if req.addr == "/live/mixingpal/get/device_chain" {
+                    vec![rosc::OscType::Int(track), req.args[1].clone(), rosc::OscType::Int(0)]
+                } else {
+                    vec![rosc::OscType::Int(track)]
+                };
+                let _ = live.send_to(app_port, &req.addr, reply).await;
             }
         });
 
@@ -1723,6 +1915,7 @@ mod tests {
                     loop_region: None,
                 }],
                 truncated: false,
+                next_clip_index: None,
                 changed: false,
             }],
             missing: vec![],
@@ -1755,6 +1948,7 @@ mod tests {
                 track: 0,
                 clips,
                 truncated: false,
+                next_clip_index: None,
                 changed: false,
             }],
             missing: vec![],
@@ -1764,6 +1958,63 @@ mod tests {
         assert_eq!(map.tracks[0].clips.len(), MAX_ARRANGEMENT_CLIPS_FOR_MODEL);
         assert!(map.tracks[0].truncated);
         assert!(reason.contains("omitted 2 later placements"));
+    }
+
+    #[tokio::test]
+    async fn arrangement_section_filter_keeps_later_tracks_before_the_output_cap() {
+        let q = arrangement::tests::fake_live(arrangement::tests::FakeLive {
+            timelines: vec![
+                (0..600).map(|i| (String::new(), i as f32 + 128.0, i as f32 + 129.0)).collect(),
+                vec![("ends at break".into(), 32.0, 64.0),
+                     ("crosses break start".into(), 60.0, 68.0),
+                     ("inside break".into(), 80.0, 84.0),
+                     ("starts after break".into(), 128.0, 132.0)],
+            ],
+            ..Default::default()
+        }).await;
+        let ctx = ToolContext {
+            coalescer: Arc::new(Mutex::new(mirror_with_tracks(2))),
+            query: Arc::new(Mutex::new(Some(q))),
+        };
+        let r = execute(&ctx, "get_arrangement", &json!({"start_beats":64,"end_beats":128})).await;
+        assert_eq!(r.missing_reason, None);
+        assert_eq!(r.value["tracks"][0]["clips"], json!([]));
+        let clips = r.value["tracks"][1]["clips"].as_array().unwrap();
+        assert_eq!(clips.len(), 2);
+        assert_eq!(clips[0]["index"], 1);
+        assert_eq!(clips[1]["index"], 2);
+        assert_eq!(r.value["scope"]["start_beats"], 64.0);
+    }
+
+    #[tokio::test]
+    async fn arrangement_offset_recovers_a_track_beyond_the_scan_budget() {
+        let q = arrangement::tests::fake_live(arrangement::tests::FakeLive {
+            timelines: vec![vec![], (0..900).map(|i| (String::new(), i as f32, i as f32 + 1.0)).collect()],
+            silent: vec![0],
+            ..Default::default()
+        }).await;
+        let ctx = ToolContext {
+            coalescer: Arc::new(Mutex::new(mirror_with_tracks(2))),
+            query: Arc::new(Mutex::new(Some(q))),
+        };
+        let r = execute(&ctx, "get_arrangement", &json!({"track":1,"clip_offset":768})).await;
+        assert_eq!(r.missing_reason, None);
+        assert_eq!(r.value["tracks"].as_array().unwrap().len(), 1);
+        assert_eq!(r.value["tracks"][0]["track"], 1);
+        let clips = r.value["tracks"][0]["clips"].as_array().unwrap();
+        assert_eq!(clips.len(), 132);
+        assert_eq!(clips[0]["index"], 768);
+    }
+
+    #[tokio::test]
+    async fn arrangement_refuses_invalid_scope_instead_of_reading_the_whole_set() {
+        let ctx = disconnected_ctx(mirror_with_tracks(2));
+        for args in [json!({"start_beats":64}), json!({"end_beats":128}),
+                     json!({"start_beats":128,"end_beats":64}), json!({"track":-1}),
+                     json!({"clip_offset":1}), json!({"track":0,"clip_offset":-1})] {
+            let r = execute(&ctx, "get_arrangement", &args).await;
+            assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"), "{args}");
+        }
     }
 
     #[test]
@@ -1808,6 +2059,15 @@ mod tests {
         )
         .await;
         assert_eq!(r.missing_reason.as_deref(), Some("not_connected"));
+    }
+
+    #[tokio::test]
+    async fn arrangement_note_output_honors_the_requested_offset() {
+        let ctx = moving_clip_ctx(32.0, 32.0).await;
+        let r = execute(&ctx, "get_arrangement_notes", &json!({"track":0,"index":0,"note_offset":1})).await;
+        assert_eq!(r.value["notes"], json!([]));
+        assert_eq!(r.value["note_offset"], 1);
+        assert!(r.value["next_note_offset"].is_null());
     }
 
     #[tokio::test]
@@ -1887,6 +2147,13 @@ mod tests {
                         req.args[0].clone(),
                         req.args[1].clone(),
                         rosc::OscType::Int(1),
+                        rosc::OscType::String("a".repeat(64)),
+                        rosc::OscType::Float(8.0),
+                        rosc::OscType::Bool(false),
+                        rosc::OscType::Float(0.0),
+                        rosc::OscType::Float(0.0),
+                        rosc::OscType::Float(0.0),
+                        rosc::OscType::Float(8.0),
                     ],
                     "/live/arrangement_clip/get/notes_window" => vec![
                         req.args[0].clone(),
@@ -2135,6 +2402,7 @@ mod tests {
         // this field distinguishes "not a Rack" from "an empty Rack" -- so the
         // key has to be absent, not present-and-empty.
         let unobserved = rack_contents::RackContents {
+            next_offset: None,
             chains: vec![],
             total_chains: None,
             is_rack: None,
@@ -2156,6 +2424,7 @@ mod tests {
         // "this Rack has nothing loaded in it" is a real thing to know about a
         // set, and it is reported with the fields present.
         let empty_rack = rack_contents::RackContents {
+            next_offset: None,
             chains: vec![],
             total_chains: Some(0),
             is_rack: Some(true),
