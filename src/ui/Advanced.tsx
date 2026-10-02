@@ -77,26 +77,6 @@ export function Advanced({
     }
   }
 
-  // Returning null here rendered an empty box with no Cancel button and no
-  // way back to the card. This is the pane that exists for the day the
-  // provider is unreachable, so failing to open is precisely when it must
-  // still offer a way out.
-  if (view === null) {
-    return (
-      <div className="advanced">
-        {updates && <UpdatePanel updates={updates} />}
-        {loadError === null ? (
-          <div className="advanced__note">Reading your settings…</div>
-        ) : (
-          <div className="advanced__error">{`Couldn't read your settings.\n${loadError}`}</div>
-        )}
-        <button className="advanced__button" onClick={onClose}>
-          Close
-        </button>
-      </div>
-    );
-  }
-
   async function save() {
     if (!beginMutation(operations, "settingsSave")) return;
     setSaving(true);
@@ -123,15 +103,17 @@ export function Advanced({
 
   return (
     <div className="advanced">
-      {/* The one way back that is on screen. Escape is the other. */}
       <div className="advanced__titlebar">
         <h2 className="advanced__title">Settings</h2>
-        <button className="advanced__button" onClick={onClose} title="Back to the set (Esc)">
-          Done
-        </button>
       </div>
 
+      <div className="advanced__body" data-tauri-drag-region="false">
       {updates && <UpdatePanel updates={updates} />}
+      {view === null ? (
+        <div className={loadError === null ? "advanced__note" : "advanced__error"} role="status">
+          {loadError === null ? "Reading your settings…" : `Couldn't read your settings.\n${loadError}`}
+        </div>
+      ) : <>
       <AccountPanel account={account} />
 
       <h3 className="advanced__heading">Answers</h3>
@@ -230,7 +212,14 @@ export function Advanced({
         )}
       </div>
 
-      <div className="advanced__note">Mixing Pal v{appVersion}</div>
+      </>}
+      </div>
+      <div className="advanced__footer">
+        <span className="advanced__version">Mixing Pal v{appVersion}</span>
+        <button className="advanced__button" onClick={onClose} title="Back to the set (Esc)">
+          Done
+        </button>
+      </div>
     </div>
   );
 }

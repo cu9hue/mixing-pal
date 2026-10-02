@@ -1,3 +1,4 @@
+import { UpdateNotice } from "./UpdateNotice";
 import { Updates } from "../model/updates";
 import "./Card.css";
 import { SetState } from "../live/model";
@@ -17,6 +18,7 @@ export function Card({
   experience,
   updates,
   onOpenSettings,
+  visible = true,
   state,
   lastSeen,
   connected,
@@ -33,6 +35,7 @@ export function Card({
   experience: ExperienceState;
   updates?: Updates;
   onOpenSettings?: () => void;
+  visible?: boolean;
   state: SetState;
   lastSeen: number | null;
   connected: boolean;
@@ -58,7 +61,8 @@ export function Card({
   return (
     <div className="card" data-tauri-drag-region="deep">
       <Header connected={connected} onCollapse={onCollapse} showConnection={!needsSignIn} />
-      {updates && (updates.view.phase === "available" || updates.view.phase === "ready") && !settingsOpen && <button className="advanced__button" onClick={onOpenSettings}>Update available · Open Settings</button>}
+      {updates && onOpenSettings && <UpdateNotice view={updates.view}
+        visible={visible && !settingsOpen && !needsSignIn} onReview={onOpenSettings} />}
       {/* Settings replaces what is below the header, but hides it rather
           than unmounting it: the conversation and any answer in flight live
           in Conversation's state, the same reason App hides the card. */}

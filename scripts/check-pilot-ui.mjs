@@ -30,6 +30,7 @@ if (location.search.includes('fresh')) localStorage.removeItem('copilot.setupDon
 window.emitFixture=emit; window.saved=[]; window.savedThreads={}; window.requests=[]; window.shared=[];
 window.account={access:'signed_out',capture:false};
 window.experience=location.search.includes('fresh')?null:'finishes_tracks';
+window.update={channel:'stable',phase:new URLSearchParams(location.search).get('update')||'idle',version:new URLSearchParams(location.search).has('update')?'99.0.0':undefined,notes:'A changelog that should not appear.'};
 const active={id:'producer',email:'invited@example.com',access:'active',capture:false,consent_epoch:0,remaining_micro_usd:5000000,period_end:Date.now()+86400000};
 const access=new URLSearchParams(location.search).get('access');
 if(access)window.account={...active,access,capture:true};
@@ -52,6 +53,9 @@ if(cmd==='account_sign_out'){window.account={access:'signed_out',capture:false};
 if(cmd==='connector_status')return {folder:'MixingPal',installed:true};
 if(cmd==='live_is_running')return true;
 if(cmd==='connection_status')return {status:'bound'};
+if(cmd==='check_update')return window.update.phase==='delayed'?new Promise(resolve=>window.finishUpdate=()=>resolve({...window.update,phase:'available'})):{...window.update};
+if(cmd==='download_update')return window.update={...window.update,phase:'ready'};
+if(cmd==='set_update_channel')return window.update={channel:args.channel,phase:'idle'};
 if(cmd==='get_settings')return {base_url:'',model:'',has_key:false};
 if(cmd==='get_experience')return window.experience;
 if(cmd==='set_experience'){window.experience=args.experience;return null;}
@@ -73,6 +77,96 @@ setInterval(()=>{if(!disconnected)emit('live://deltas',snapshot.map(delta=>delta
 await import('/src/main.tsx?proxy-fixture');
 `}));
 try {
+for (const phase of ['available','ready']) {
+await page.goto('http://127.0.0.1:1423?access=active&update='+phase);
+const notice=page.getByRole('dialog',{name:'Mixing Pal update'});
+await notice.waitFor();
+await page.getByLabel('Ask about the set',{exact:true}).waitFor();
+await page.waitForTimeout(150);
+assert.equal(await notice.getByRole('button',{name:'Not now',exact:true}).evaluate(button=>button===document.activeElement),true,'dismissal receives initial focus');
+const popup=await notice.boundingBox();
+const later=await notice.getByRole('button',{name:'Not now',exact:true}).boundingBox();
+assert.ok(later.y+later.height<=popup.y+popup.height,'popup actions must be visible without scrolling');
+await page.screenshot({path:`${artifacts}/update-${phase}.png`});
+assert.equal(await notice.getByText('99.0.0',{exact:false}).count(),1);
+assert.equal(await page.getByText('A changelog that should not appear.').count(),0);
+await notice.getByRole('button',{name:'Not now',exact:true}).click();
+assert.equal(await notice.count(),0);
+const composer=page.getByLabel('Ask about the set',{exact:true});
+await composer.fill('Keep my draft');
+await page.evaluate(()=>window.emitFixture('menu://settings'));
+const done=page.getByRole('button',{name:'Done',exact:true});
+assert.equal(await page.getByText('A changelog that should not appear.').count(),0,'settings omits the changelog');
+await done.waitFor();
+for (const ceiling of [520,360]) {
+await page.evaluate(ceiling=>document.documentElement.style.setProperty('--card-max-height',`${ceiling}px`),ceiling);
+await page.waitForTimeout(100);
+const before=await done.boundingBox();
+assert.ok(before.y>=0&&before.y+before.height<=await page.evaluate(()=>innerHeight),'Done must be visible before scrolling');
+await page.getByRole('button',{name:'Reinstall',exact:true}).scrollIntoViewIfNeeded();
+const after=await done.boundingBox();
+assert.equal(Math.round(after.y),Math.round(before.y),'Done must stay in place while settings scrolls');
+await page.screenshot({path:`${artifacts}/settings-footer-${phase}-${ceiling}.png`});
+}
+await page.evaluate(()=>document.documentElement.style.setProperty('--card-max-height','520px'));
+await page.getByRole('heading',{name:'App updates',exact:true}).scrollIntoViewIfNeeded();
+await page.screenshot({path:`${artifacts}/settings-update-${phase}.png`});
+await done.click();
+assert.equal(await composer.inputValue(),'Keep my draft','settings must preserve the chat draft');
+assert.equal(await notice.count(),0,'dismissed updates must not reappear after settings');
+assert.equal(await page.evaluate(()=>window.requests.some(x=>['download_update','install_update'].includes(x.cmd))),false,'dismissing must not download or restart');
+}
+await page.goto('http://127.0.0.1:1423?access=active&update=available');
+await page.getByRole('dialog').waitFor();
+await page.keyboard.press('Escape');
+await page.getByLabel('Ask about the set',{exact:true}).waitFor();
+assert.equal(await page.getByRole('dialog').count(),0,'Escape closes the update without collapsing the app');
+await page.goto('http://127.0.0.1:1423?access=active&update=available');
+await page.getByRole('button',{name:'Close update notification'}).click();
+assert.equal(await page.getByRole('dialog').count(),0);
+await page.evaluate(()=>window.emitFixture('menu://settings'));
+await page.getByRole('button',{name:'Check for updates',exact:true}).click();
+await page.getByRole('button',{name:'Done',exact:true}).click();
+assert.equal(await page.getByRole('dialog').count(),0,'checking the same version must not undo dismissal');
+await page.evaluate(()=>{window.update={...window.update,version:'99.0.1'};return window.emitFixture('menu://settings');});
+await page.getByRole('button',{name:'Check for updates',exact:true}).click();
+await page.getByText('Mixing Pal 99.0.1',{exact:false}).waitFor();
+await page.getByRole('button',{name:'Done',exact:true}).click();
+await page.getByRole('dialog').waitFor();
+for (let i=0;i<5;i++) {
+await page.keyboard.press('Tab');
+assert.equal(await page.getByRole('dialog').evaluate(dialog=>dialog.contains(document.activeElement)),true,'keyboard focus stays in the popup');
+}
+await page.getByRole('dialog').getByRole('button',{name:'Review update',exact:true}).click();
+await page.getByRole('button',{name:'Download update',exact:true}).click();
+await page.getByRole('button',{name:'Install and restart Mixing Pal',exact:true}).waitFor();
+await page.getByRole('button',{name:'Done',exact:true}).click();
+assert.equal(await page.getByRole('dialog').count(),0,'reviewing acknowledges the notification');
+await page.goto('http://127.0.0.1:1423?access=active&update=delayed');
+const draft=page.getByLabel('Ask about the set',{exact:true});
+await draft.fill('Keep typing after dismissal');
+await page.evaluate(()=>window.finishUpdate());
+await page.getByRole('dialog').waitFor();
+await page.keyboard.press('Shift+Tab');
+assert.equal(await page.getByRole('button',{name:'Review update',exact:true}).evaluate(button=>button===document.activeElement),true);
+await page.keyboard.press('Escape');
+assert.equal(await draft.inputValue(),'Keep typing after dismissal');
+assert.equal(await draft.evaluate(input=>input===document.activeElement),true,'dismissal restores focus to the composer');
+await page.goto('http://127.0.0.1:1423?access=active&update=delayed');
+await page.getByLabel('Ask about the set',{exact:true}).waitFor();
+await page.getByTitle('Collapse',{exact:true}).click();
+await page.evaluate(()=>window.finishUpdate());
+await page.waitForTimeout(100);
+assert.equal(await page.getByRole('dialog').count(),0,'updates must not open over the collapsed pill');
+await page.locator('.pill__body').click();
+await page.getByRole('dialog').getByRole('button',{name:'Not now',exact:true}).click();
+await page.goto('http://127.0.0.1:1423?fresh&update=available');
+await page.locator('.setup').getByLabel('Email',{exact:true}).waitFor();
+assert.equal(await page.getByRole('dialog').count(),0,'updates must not interrupt onboarding');
+const spacing=await page.locator('.setup__bar').evaluate(bar=>({top:bar.firstElementChild.getBoundingClientRect().top,left:bar.firstElementChild.getBoundingClientRect().left,content:document.querySelector('.setup__label').getBoundingClientRect().left}));
+assert.ok(spacing.top>=24,'onboarding progress needs space below the window edge');
+assert.equal(spacing.left,spacing.content,'progress should align with the onboarding content');
+await page.screenshot({path:`${artifacts}/onboarding-spacing.png`});
 await page.goto('http://127.0.0.1:1423?access=active&disconnected');
 await page.getByText('Not connected',{exact:true}).waitFor();
 const disconnectedComposer=page.getByLabel('Ask about the set',{exact:true});
@@ -275,5 +369,5 @@ await page.clock.fastForward(31000);
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_status').length),refreshed,'stop polling once usage settles');
 }
 assert.deepEqual(errors,[]);
-console.log('PASS service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, stale consent response, feedback set switch, delayed feedback persistence, window geometry');
+console.log('PASS update dismissal, keyboard focus, fixed settings footer, onboarding spacing, service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, stale consent response, feedback set switch, delayed feedback persistence, window geometry');
 } catch(e){await page.screenshot({path:`${artifacts}/failure.png`});console.log(errors);throw e;} finally {await browser.close();server.kill();closeSync(log);}

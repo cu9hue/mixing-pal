@@ -151,14 +151,16 @@
 }
 
 /* Settings keeps account content aligned with its section, not nested in a panel. */
-.advanced > .account {
+.advanced__body > .account {
   padding: 0 0 var(--space-5);
   border-bottom: 1px solid var(--border);
   margin-bottom: var(--space-5);
 }
 
-.advanced > .account .account__title {
+.advanced__body > .account .account__title {
   margin-bottom: var(--space-3);
+  font-size: var(--text-md);
+  color: var(--text);
 }
 
 .feedback {
