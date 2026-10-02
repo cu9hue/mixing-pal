@@ -189,12 +189,28 @@ Ordered. Each item says what, why, size, and what it waits on.
    nothing, so a producer who never chose gets the same prompt as before.
    The level changes the words, not the advice. Every level also got
    shorter answers: short sentences, plain words, the move in bold, and
-   about 120 words. The answer text in the card is a size larger, with
-   more space between paragraphs. There is no dyslexia font, because
-   studies don't show one helps. Craft scenario six asks scenario one's
-   question at New to Live. `MIXINGPAL_EVAL_EXPERIENCE` runs the honesty
-   evals at a chosen level. Next: run scenarios one to four and six, and the
-   honesty evals at `new_to_live`.
+   about 120 words. The answer text is set in Atkinson Hyperlegible at
+   17px, with more line and paragraph spacing. A dyslexic producer picked
+   it from four versions of the same answer. The font ships with the app,
+   and the rest of the card keeps the system font. Craft scenario six asks
+   scenario one's question at New to Live. `MIXINGPAL_EVAL_EXPERIENCE` runs
+   the honesty evals at a chosen level. Next: run scenarios one to four and
+   six, and the honesty evals at `new_to_live`.
+
+9. **Read aloud.** A button on each answer reads it out with a macOS
+   voice, through the webview's speech API. For a dyslexic producer,
+   listening beats any font, and producers already work by ear. It reads
+   the answer, not the note block.
+
+10. **Answer summary line.** Each answer opens with a one-line takeaway:
+    the move, or "leave it". A producer who reads only that line still gets
+    the point. This is a prompt change, so it needs a craft property and a
+    run of the craft evals before it ships.
+
+11. **Recap on return.** When she reopens a set after a break, the card
+    opens with a short recap of last time: the goal, what she tried, and
+    what she decided. It is built from the set's saved thread and notes, so
+    it costs no model call. She can dismiss it.
 
 ## When the waitlist says go
 

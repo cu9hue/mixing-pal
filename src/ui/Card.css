@@ -444,17 +444,18 @@
 
 /* The largest and lightest text in the app. Everything the app measured is
    dimmer and smaller than this -- that contrast is how she can tell what
-   was read from what was generated. Size and spacing, not a special font,
-   are what help a dyslexic reader. */
+   was read from what was generated. Generous line and paragraph spacing
+   helps a dyslexic reader find the next line and the next idea. */
 .card__answer {
-  font-size: var(--text-xl);
-  line-height: 1.7;
+  font-family: var(--font-reading);
+  font-size: var(--text-reading);
+  line-height: 1.8;
   letter-spacing: 0.01em;
   color: var(--text);
 }
 
 .card__paragraph {
-  margin: 0 0 var(--space-3-5);
+  margin: 0 0 1.1em;
 }
 
 .card__paragraph:last-child {
@@ -468,7 +469,7 @@
 }
 
 .card__list {
-  margin: var(--space-0-5) 0 var(--space-3-5);
+  margin: var(--space-0-5) 0 1.1em;
   padding-left: var(--space-5);
 }
 
