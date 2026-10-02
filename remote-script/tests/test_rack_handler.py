@@ -63,3 +63,37 @@ class RackHandlerTests(unittest.TestCase):
         rack = N(name="Rack", chains=[], can_have_chains=True, parameters=[])
         self.assertEqual(handler_for(rack)["/live/mixingpal/get/rack/chains"]((0, "0", 0, 32)),
                          (0, "0", 0, 0, 1))
+
+    def test_fingerprint_detects_same_count_chain_and_device_edits(self):
+        chains = [N(name="Chain%d" % i, mute=False, solo=False,
+                    devices=[N(name="Device%d" % j, can_have_chains=False) for j in range(40)])
+                  for i in range(64)]
+        rack = N(name="Rack", chains=chains, can_have_chains=True, parameters=[])
+        callbacks = handler_for(rack)
+        fingerprint = callbacks["/live/mixingpal/get/rack/fingerprint"]
+        before = fingerprint((0, "0"))
+        self.assertEqual(before[:3], (0, "0", 64))
+        self.assertEqual(len(before[3]), 64)
+        self.assertEqual(before, fingerprint((0, "0")))
+        page = callbacks["/live/mixingpal/get/rack/chains_range"]
+        self.assertEqual(page((0, "0", 0, 0, 1))[6], "Chain0")
+        chains[0], chains[32] = chains[32], chains[0]
+        self.assertEqual(page((0, "0", 32, 0, 1))[6], "Chain0")
+        self.assertNotEqual(before, fingerprint((0, "0")))
+        for mutate in [lambda: setattr(chains[0].devices[39], "name", "renamed"),
+                       lambda: setattr(chains[0].devices[39], "can_have_chains", True),
+                       lambda: setattr(chains[0], "mute", True),
+                       lambda: setattr(chains[0], "solo", True),
+                       lambda: setattr(rack, "name", "another rack")]:
+            before = fingerprint((0, "0"))
+            mutate()
+            self.assertNotEqual(before, fingerprint((0, "0")))
+
+    def test_fingerprint_handles_empty_nonrack_and_unreadable_paths(self):
+        rack = N(name="Rack", chains=[], can_have_chains=True, parameters=[])
+        fingerprint = handler_for(rack)["/live/mixingpal/get/rack/fingerprint"]
+        empty = fingerprint((0, "0"))
+        rack.can_have_chains = False
+        self.assertNotEqual(empty, fingerprint((0, "0")))
+        for args in [(0,), (0, "0", 3), (-1, "0"), (0, "99"), (0, "bad")]:
+            self.assertIsNone(fingerprint(args))

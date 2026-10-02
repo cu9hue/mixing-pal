@@ -100,6 +100,7 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // costs two round trips instead of four -- and unlike those two, it
         // resolves a path rather than a top-level index.
         | "/live/mixingpal/get/device/identity"
+        | "/live/mixingpal/get/rack/fingerprint"
         // (track, start, span) out; (track, start, total, *records) back --
         // `arrangement_replies.py`'s own words are "track and start lead
         // because the client's request table keys on the leading arguments

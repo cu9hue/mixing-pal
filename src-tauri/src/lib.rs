@@ -371,6 +371,7 @@ fn handle_inbound(
             | "/live/mixingpal/get/device_chain"
             | "/live/mixingpal/get/device_chain/fingerprint"
             | "/live/mixingpal/get/rack/chains_range"
+            | "/live/mixingpal/get/rack/fingerprint"
             | "/live/mixingpal/get/arrangement/fingerprint"
             | "/live/mixingpal/get/clip/loop_region"
     );
@@ -1625,6 +1626,7 @@ mod tests {
         "/live/mixingpal/get/device_chain",
         "/live/mixingpal/get/device_chain/fingerprint",
         "/live/mixingpal/get/rack/chains_range",
+        "/live/mixingpal/get/rack/fingerprint",
         "/live/mixingpal/get/arrangement/fingerprint",
         "/live/mixingpal/get/clip/loop_region",
     ];

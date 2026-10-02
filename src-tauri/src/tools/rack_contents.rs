@@ -1,6 +1,5 @@
 use crate::osc::query::{LiveQuery, QueryError};
 use crate::tools::device_chains::RACK_SUFFIX;
-use crate::tools::device_params::device_identity;
 use crate::tools::fence::fence;
 use crate::tools::path::DevicePath;
 use rosc::OscType;
@@ -155,6 +154,21 @@ fn decode_window(reply: &[OscType], expect_start: usize) -> Option<(usize, bool,
     Some((total_chains, is_rack, chains))
 }
 
+async fn fingerprint(q: &LiveQuery, track: i32, path: &DevicePath, timeout: Duration) -> Option<(usize, String)> {
+    let wire = path.wire();
+    let reply = q.query(
+        "/live/mixingpal/get/rack/fingerprint",
+        vec![OscType::Int(track), OscType::String(wire.clone())], timeout,
+    ).await.ok()?;
+    let [OscType::Int(actual), OscType::String(actual_path), OscType::Int(total), OscType::String(digest)] = reply.as_slice() else {
+        return None;
+    };
+    if *actual != track || *actual_path != wire || digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((usize::try_from(*total).ok()?, digest.clone()))
+}
+
 /// Lists one rack's chains, paged.
 ///
 /// There is no halve-and-retry here, unlike every other paged read in this
@@ -171,10 +185,7 @@ pub async fn get_rack_contents(
     device_offset: usize,
     timeout: Duration,
 ) -> Result<RackContents, QueryError> {
-    // Same bracket the parameter read uses. No reply is also how "there is
-    // no device at that path" arrives: the Remote Script raises inside Live
-    // and sends nothing, byte-identical to a lost datagram.
-    let Some(before) = device_identity(q, track, path, timeout).await else {
+    let Some(before) = fingerprint(q, track, path, timeout).await else {
         return Err(QueryError::NoReply);
     };
 
@@ -260,13 +271,8 @@ pub async fn get_rack_contents(
         }
     }
 
-    // The listing was read across several seconds while the producer was, by
-    // definition, working in Live. `device_identity` returns the same pair
-    // the parameter read brackets on, and it cannot tell two same-named
-    // devices with the same parameter count apart — recorded in the spec's
-    // Known limits, not papered over here.
-    match device_identity(q, track, path, timeout).await {
-        Some(after) if after == before => {}
+    match fingerprint(q, track, path, timeout).await {
+        Some(after) if after == before && total_chains.is_none_or(|total| total == before.0) => {}
         Some(_) => {
             chains.clear();
             cleared = true;
@@ -279,7 +285,7 @@ pub async fn get_rack_contents(
         None => {
             chains.clear();
             cleared = true;
-            missing_reason = Some("device_identity_unverified".to_string());
+            missing_reason = Some("rack_fingerprint_unverified".to_string());
         }
     }
 
@@ -580,7 +586,8 @@ mod tests {
     /// generous synthetic byte budget stands in for `MAX_REPLY_BYTES`, since
     /// no test here pushes a record large enough to need shrinking).
     struct FakeRack {
-        name: String,
+        changed_content: bool,
+        bad_fingerprint: Option<(usize, bool)>,
         chains: usize,
         devices: usize,
         is_rack: bool,
@@ -591,11 +598,11 @@ mod tests {
         /// Report this many total chains starting with the second window's
         /// reply, modelling a pad deleted mid-page.
         recount_after_first_window: Option<usize>,
-        /// Answer the second and later identity queries with this name,
+        /// Change the fingerprint after the first read,
         /// modelling the device under the path moving mid-read.
-        renamed_after_first_identity: Option<String>,
-        /// Answer the first identity query and then go silent.
-        silent_after_first_identity: bool,
+        renamed_after_first_fingerprint: Option<String>,
+        /// Answer the first fingerprint query and then go silent.
+        silent_after_first_fingerprint: bool,
         /// Go silent on the rack/chains query at this zero-based window
         /// index onward, modelling a reply lost partway through a page.
         silent_from_window: Option<usize>,
@@ -608,15 +615,16 @@ mod tests {
     impl Default for FakeRack {
         fn default() -> Self {
             FakeRack {
-                name: "Drum Rack".into(),
+                changed_content: false,
+                bad_fingerprint: None,
                 chains: 0,
                 devices: 1,
                 is_rack: true,
                 per_window: REQUEST_SPAN,
                 silent_chains: false,
                 recount_after_first_window: None,
-                renamed_after_first_identity: None,
-                silent_after_first_identity: false,
+                renamed_after_first_fingerprint: None,
+                silent_after_first_fingerprint: false,
                 silent_from_window: None,
                 malformed_from_window: None,
             }
@@ -637,8 +645,7 @@ mod tests {
     }
 
     /// The one fake Live stand-in every paging test in this module spawns.
-    /// Answers both `/live/mixingpal/get/device/identity` and
-    /// `/live/mixingpal/get/rack/chains`.
+    /// Answers the rack fingerprint and chain-range endpoints.
     async fn fake_rack(fake: FakeRack) -> (Arc<LiveQuery>, TaskGuard) {
         let live = OscSocket::bind_to(0, 0).await.unwrap();
         let app = Arc::new(OscSocket::bind_to(0, live.local_port()).await.unwrap());
@@ -658,7 +665,7 @@ mod tests {
         });
 
         let reply_handle = tokio::spawn(async move {
-            let mut identity_queries = 0usize;
+            let mut fingerprints = 0usize;
             let mut chain_query_index = 0usize;
             loop {
                 let req = match live.recv().await {
@@ -675,27 +682,14 @@ mod tests {
                     _ => continue,
                 };
                 match req.addr.as_str() {
-                    "/live/mixingpal/get/device/identity" => {
-                        identity_queries += 1;
-                        if fake.silent_after_first_identity && identity_queries > 1 {
-                            continue;
-                        }
-                        let name = match &fake.renamed_after_first_identity {
-                            Some(n) if identity_queries > 1 => n.clone(),
-                            _ => fake.name.clone(),
-                        };
-                        let _ = live
-                            .send_to(
-                                app_port,
-                                "/live/mixingpal/get/device/identity",
-                                vec![
-                                    OscType::Int(track),
-                                    OscType::String(path.clone()),
-                                    OscType::String(name),
-                                    OscType::Int(0),
-                                ],
-                            )
-                            .await;
+                    "/live/mixingpal/get/rack/fingerprint" => {
+                        fingerprints += 1;
+                        if fake.bad_fingerprint == Some((fingerprints, false))
+                            || (fake.silent_after_first_fingerprint && fingerprints > 1) { continue; }
+                        let changed = fingerprints > 1 && (fake.changed_content || fake.renamed_after_first_fingerprint.is_some());
+                        let digest = if fake.bad_fingerprint == Some((fingerprints, true)) { Int(0) }
+                            else { S(if changed { "b" } else { "a" }.repeat(64)) };
+                        let _ = live.send_to(app_port, &req.addr, vec![Int(track), S(path.clone()), Int(fake.chains as i32), digest]).await;
                     }
                     "/live/mixingpal/get/rack/chains_range" => {
                         if fake.silent_chains {
@@ -765,6 +759,36 @@ mod tests {
             Arc::new(LiveQuery::new(app, table)),
             TaskGuard(vec![recv_handle, reply_handle]),
         )
+    }
+
+    #[tokio::test]
+    async fn a_same_count_chain_edit_discards_the_paged_rack() {
+        let (q, _guard) = fake_rack(FakeRack {
+            chains: 64, changed_content: true, ..Default::default()
+        }).await;
+        let out = get_rack_contents(&q, 0, &DevicePath::parse(Some(&serde_json::json!([0]))).unwrap(), 0, 0, FAST).await.unwrap();
+        assert!(out.chains.is_empty());
+        assert_eq!(out.missing_reason.as_deref(), Some("topology_changed"));
+        assert!(out.next_offset.is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_or_malformed_rack_fingerprints_never_accept_pages() {
+        for request in [1, 2] {
+            for malformed in [false, true] {
+                let (q, _guard) = fake_rack(FakeRack {
+                    chains: 64, bad_fingerprint: Some((request, malformed)), ..Default::default()
+                }).await;
+                let result = get_rack_contents(&q, 0, &DevicePath::parse(Some(&serde_json::json!([0]))).unwrap(), 0, 0, FAST).await;
+                if request == 1 { assert!(result.is_err()); }
+                else {
+                    let out = result.unwrap();
+                    assert!(out.chains.is_empty());
+                    assert_eq!(out.missing_reason.as_deref(), Some("rack_fingerprint_unverified"));
+                    assert!(out.next_offset.is_none());
+                }
+            }
+        }
     }
 
     #[tokio::test]
@@ -856,7 +880,7 @@ mod tests {
     async fn a_device_that_moved_under_the_loop_drops_the_read() {
         let (q, _guard) = fake_rack(FakeRack {
             chains: 8,
-            renamed_after_first_identity: Some("Other Rack".into()),
+            renamed_after_first_fingerprint: Some("Other Rack".into()),
             ..Default::default()
         })
         .await;
@@ -872,7 +896,7 @@ mod tests {
         // witnessed, to a producer who knows they touched nothing.
         let (q, _guard) = fake_rack(FakeRack {
             chains: 8,
-            silent_after_first_identity: true,
+            silent_after_first_fingerprint: true,
             ..Default::default()
         })
         .await;
@@ -881,7 +905,7 @@ mod tests {
         assert!(out.chains.is_empty());
         assert_eq!(
             out.missing_reason.as_deref(),
-            Some("device_identity_unverified")
+            Some("rack_fingerprint_unverified")
         );
     }
 

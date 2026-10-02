@@ -207,10 +207,7 @@ async fn timeline_fingerprint(
     q.query(
         "/live/mixingpal/get/arrangement/fingerprint",
         vec![OscType::Int(track)],
-        // Version-6 scripts have the map endpoint but not this coherence
-        // guard. Treat it as an optional short compatibility probe rather
-        // than holding an otherwise useful map for the full query timeout.
-        timeout / 4,
+        timeout,
     )
     .await
     .ok()
@@ -220,19 +217,16 @@ async fn timeline_fingerprint(
 
 /// One track's whole timeline, paged.
 ///
-/// `None` means the track did not answer its FIRST page, which is also how
-/// "there is no track at that index" arrives: the handler returns None and
-/// sends nothing, byte-identical to a lost datagram. A page that fails after
-/// that keeps the clips already collected and marks the track `truncated`:
-/// they are real records Live sent, and filing the whole track under
-/// `missing` would throw away a partial read the model can still use.
+/// `None` means the first page or either fingerprint could not be read.
+/// A later page failure keeps the clips already collected and marks the
+/// track `truncated`, provided both fingerprints verify the timeline.
 async fn read_track_from(q: &LiveQuery, track: i32, offset: usize, timeout: Duration) -> Option<TrackArrangement> {
     let mut clips: Vec<ArrangementClip> = Vec::new();
     let mut windows = 0usize;
     let mut truncated = false;
     let mut changed = false;
     let mut first_total: Option<usize> = None;
-    let before_fingerprint = timeline_fingerprint(q, track, timeout).await;
+    let before_fingerprint = timeline_fingerprint(q, track, timeout).await?;
 
     loop {
         if windows >= MAX_WINDOWS {
@@ -302,22 +296,14 @@ async fn read_track_from(q: &LiveQuery, track: i32, offset: usize, timeout: Dura
         }
     }
 
-    if let Some(before) = before_fingerprint {
-        match timeline_fingerprint(q, track, timeout).await {
-            Some(after) if after != before => {
-                // Do not hand a model a plausible but spliced timeline. A
-                // same-count reorder can make every individual page valid
-                // while pairing one clip's name with another's position.
-                clips.clear();
-                truncated = false;
-                changed = true;
-            }
-            Some(_) => {}
-            // The final probe missing is not evidence of a mutation. The
-            // map pages already carry their ordinary count consistency
-            // check, and a temporary no-reply must not erase good data.
-            None => {}
-        }
+    let after_fingerprint = timeline_fingerprint(q, track, timeout).await?;
+    if after_fingerprint != before_fingerprint {
+        // Do not hand a model a plausible but spliced timeline. A
+        // same-count reorder can make every individual page valid
+        // while pairing one clip's name with another's position.
+        clips.clear();
+        truncated = false;
+        changed = true;
     }
 
     Some(TrackArrangement {
@@ -734,6 +720,10 @@ pub(crate) mod tests {
         /// producer inserting a clip mid-read is what makes the pages
         /// disagree in Live.
         pub(crate) total_after_first: Option<i32>,
+        /// One-based fingerprint request numbers; these cases read one track.
+        pub(crate) missing_fingerprint: Option<usize>,
+        pub(crate) malformed_fingerprint: Option<usize>,
+        pub(crate) reorder_after_first: bool,
     }
 
     pub(crate) async fn fake_live(fake: FakeLive) -> Arc<LiveQuery> {
@@ -762,11 +752,43 @@ pub(crate) mod tests {
             };
             let mut held: Vec<Vec<OscType>> = Vec::new();
             let mut answered = 0usize;
+            let mut fingerprints = 0usize;
             loop {
                 let req = match live.recv().await {
                     Ok(r) => r,
                     Err(_) => continue,
                 };
+                if req.addr == "/live/mixingpal/get/arrangement/fingerprint" {
+                    let Some(OscType::Int(track)) = req.args.first() else {
+                        continue;
+                    };
+                    fingerprints += 1;
+                    if fake.silent.contains(track)
+                        || fake.missing_fingerprint == Some(fingerprints)
+                    {
+                        continue;
+                    }
+                    let total = fake.timelines.get(*track as usize).map_or(0, Vec::len);
+                    let digest = if fake.malformed_fingerprint == Some(fingerprints) {
+                        "invalid".into()
+                    } else if fake.reorder_after_first && answered > 0 {
+                        "b".repeat(64)
+                    } else {
+                        "a".repeat(64)
+                    };
+                    let _ = live
+                        .send_to(
+                            app_port,
+                            &req.addr,
+                            vec![
+                                OscType::Int(*track),
+                                OscType::Int(total as i32),
+                                OscType::String(digest),
+                            ],
+                        )
+                        .await;
+                    continue;
+                }
                 if req.addr != "/live/mixingpal/get/arrangement" {
                     continue;
                 }
@@ -782,7 +804,14 @@ pub(crate) mod tests {
                     continue; // the page that never came back
                 }
                 let empty: Vec<(String, f32, f32)> = Vec::new();
-                let timeline = fake.timelines.get(track as usize).unwrap_or(&empty);
+                let mut timeline = fake
+                    .timelines
+                    .get(track as usize)
+                    .unwrap_or(&empty)
+                    .clone();
+                if fake.reorder_after_first && answered > 1 {
+                    timeline.swap(0, 1);
+                }
                 let total = match fake.total_after_first {
                     Some(t) if answered > 1 => t,
                     _ => timeline.len() as i32,
@@ -1082,6 +1111,83 @@ pub(crate) mod tests {
             map.missing.is_empty(),
             "a changed timeline is not a missing one"
         );
+    }
+
+    #[tokio::test]
+    async fn a_missing_initial_fingerprint_makes_the_track_missing() {
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&[("Beat", 0.0, 8.0)])],
+            missing_fingerprint: Some(1),
+            ..Default::default()
+        })
+        .await;
+        let map = get_arrangement(q, 1, Duration::from_millis(300)).await;
+        assert_eq!(map.missing, vec![0]);
+        assert!(map.tracks.is_empty());
+        assert!(map.changed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_missing_final_fingerprint_rejects_a_same_count_reorder() {
+        // Page one reads A; swapping A and B makes page two read A again.
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&[("A", 0.0, 4.0), ("B", 4.0, 4.0)])],
+            page: 1,
+            reorder_after_first: true,
+            missing_fingerprint: Some(2),
+            ..Default::default()
+        })
+        .await;
+        let map = get_arrangement(q, 1, Duration::from_millis(300)).await;
+        assert_eq!(map.missing, vec![0]);
+        assert!(map.tracks.is_empty());
+        assert!(map.changed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_malformed_initial_fingerprint_makes_the_track_missing() {
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&[("Beat", 0.0, 8.0)])],
+            malformed_fingerprint: Some(1),
+            ..Default::default()
+        })
+        .await;
+        let map = get_arrangement(q, 1, Duration::from_millis(300)).await;
+        assert_eq!(map.missing, vec![0]);
+        assert!(map.tracks.is_empty());
+        assert!(map.changed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_malformed_final_fingerprint_makes_the_track_missing() {
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&[("Beat", 0.0, 8.0)])],
+            malformed_fingerprint: Some(2),
+            ..Default::default()
+        })
+        .await;
+        let map = get_arrangement(q, 1, Duration::from_millis(300)).await;
+        assert_eq!(map.missing, vec![0]);
+        assert!(map.tracks.is_empty());
+        assert!(map.changed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_changed_fingerprint_discards_a_same_count_reorder() {
+        let q = fake_live(FakeLive {
+            timelines: vec![timeline(&[("A", 0.0, 4.0), ("B", 4.0, 4.0)])],
+            page: 1,
+            reorder_after_first: true,
+            ..Default::default()
+        })
+        .await;
+        let map = get_arrangement(q, 1, Duration::from_millis(300)).await;
+        assert_eq!(map.changed, vec![0]);
+        assert!(map.missing.is_empty());
+        assert_eq!(map.tracks.len(), 1);
+        assert!(map.tracks[0].clips.is_empty());
+        assert!(!map.tracks[0].truncated);
+        assert_eq!(map.tracks[0].next_clip_index, None);
     }
 
     #[tokio::test]

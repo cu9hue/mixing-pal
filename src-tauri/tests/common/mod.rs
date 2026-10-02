@@ -581,6 +581,20 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
+                "/live/mixingpal/get/rack/fingerprint" => {
+                    let Some((path, detail)) = device_detail() else { continue; };
+                    let total = detail["chains"].as_array().map_or(0, Vec::len);
+                    let _ = live.send_to(app_port, &req.addr, vec![
+                        OscType::Int(track_index), OscType::String(path),
+                        OscType::Int(total as i32), OscType::String("a".repeat(64)),
+                    ]).await;
+                }
+                "/live/mixingpal/get/arrangement/fingerprint" => {
+                    let total = track["arrangement"].as_array().map_or(0, Vec::len);
+                    let _ = live.send_to(app_port, &req.addr, vec![
+                        OscType::Int(track_index), OscType::Int(total as i32), OscType::String("a".repeat(64)),
+                    ]).await;
+                }
                 "/live/mixingpal/get/device/identity" => {
                     let Some((path, detail)) = device_detail() else {
                         continue;

@@ -1,6 +1,9 @@
+import hashlib
+import json
+
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
-from .rack_paths import NAME_CAP, build_window, chains_of, parse_path, resolve
+from .rack_paths import NAME_CAP, build_window, chain_record, chains_of, parse_path, resolve
 
 
 class RackHandler(AbletonOSCHandler):
@@ -60,6 +63,25 @@ class RackHandler(AbletonOSCHandler):
             return (*header, len(entries),
                     int(bool(getattr(device, "can_have_chains", False))), *flat)
 
+        def rack_fingerprint(params: Tuple[Any]):
+            if len(params) != 2:
+                return None
+            try:
+                device, raw_path = device_for(params)
+                if device is None:
+                    return None
+                entries = chains_of(device)
+                metadata = (str(device.name)[:NAME_CAP], len(device.parameters),
+                            bool(getattr(device, "can_have_chains", False)))
+                digest = hashlib.sha256(json.dumps(metadata, separators=(",", ":")).encode("utf-8"))
+                for entry in entries:
+                    # Cover devices beyond the first output page too.
+                    record = chain_record(entry, max_names=len(entry[0].devices))
+                    digest.update(json.dumps(record, separators=(",", ":")).encode("utf-8"))
+                return (int(params[0]), raw_path, len(entries), digest.hexdigest())
+            except (TypeError, ValueError, OverflowError, IndexError, AttributeError, RuntimeError):
+                return None
+
         def device_identity(params: Tuple[Any]):
             device, raw_path = device_for(params)
             if device is None:
@@ -67,6 +89,8 @@ class RackHandler(AbletonOSCHandler):
             return (int(params[0]), raw_path,
                     str(device.name)[:NAME_CAP], len(device.parameters))
 
+        self.osc_server.add_handler(
+            "/live/mixingpal/get/rack/fingerprint", rack_fingerprint)
         self.osc_server.add_handler(
             "/live/mixingpal/get/rack/chains", rack_chains)
         self.osc_server.add_handler(
