@@ -1110,9 +1110,8 @@ mod tests {
 
     #[test]
     fn the_prompt_says_earlier_answers_are_not_data() {
-        // The app's history keeps her questions and the answers, never the
-        // tool results, so a follow-up that trusts an old answer repeats its
-        // mistakes: "the kit plays alone in bars 9-16" when it was 17-24.
+        // History keeps answers but not tool results, so a follow-up that trusts
+        // an old answer repeats its mistakes: "bars 9-16" when it was 17-24.
         assert!(SYSTEM_PROMPT.contains("Tool results from earlier turns are gone"));
         assert!(SYSTEM_PROMPT.contains("Your earlier answers are not data"));
     }

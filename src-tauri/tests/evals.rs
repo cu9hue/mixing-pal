@@ -251,9 +251,8 @@ async fn an_arrangement_question_reads_the_timeline_before_answering() {
 
 #[tokio::test]
 async fn a_follow_up_reads_the_timeline_again_instead_of_trusting_an_old_answer() {
-    // The app's history keeps answers, not tool results. This one is wrong:
-    // the fixture's «Take 3» on Vox sits at beat 64, bar 17. Repeating bar 9
-    // from the history is the failure under test.
+    // History keeps answers, not tool results. This answer is wrong: «Take 3»
+    // sits at beat 64, bar 17, so repeating bar 9 is the failure under test.
     let msg = |role: &str, text: &str| ChatMessage {
         role: role.into(),
         content: Some(text.into()),
