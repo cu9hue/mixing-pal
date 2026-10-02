@@ -1,6 +1,7 @@
 import { useBusyState, beginMutation } from "../model/updates";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { EXPERIENCES, ExperienceState } from "../model/experience";
 
 /** Every screen after "install" names the connector as Live shows it. */
 export function InstallScreen({
@@ -38,7 +39,7 @@ export function InstallScreen({
 
   return (
     <>
-      <div className="setup__label">Step 2 of 4</div>
+      <div className="setup__label">Step 2 of 5</div>
       <h1 className="setup__title">Mixing Pal needs a small connector inside Live.</h1>
       <p className="setup__body">
         It goes into your Ableton User Library, where Live keeps the things you add
@@ -66,7 +67,7 @@ export function InstallScreen({
 export function OpenLiveScreen() {
   return (
     <>
-      <div className="setup__label">Step 3 of 4</div>
+      <div className="setup__label">Step 3 of 5</div>
       <h1 className="setup__title">Now open Ableton Live.</h1>
       <p className="setup__body">
         Live only looks for connectors when it starts, so if it was already open,
@@ -83,7 +84,7 @@ export function OpenLiveScreen() {
 export function ControlSurfaceScreen({ folder }: { folder: string }) {
   return (
     <>
-      <div className="setup__label">Step 4 of 4</div>
+      <div className="setup__label">Step 4 of 5</div>
       <h1 className="setup__title">Turn it on inside Live.</h1>
       <p className="setup__body">
         Open Live's <b>Settings → Link, Tempo &amp; MIDI</b> (called{" "}
@@ -122,7 +123,7 @@ export function ConnectedScreen({
   const named = trackNames.filter((n) => n.trim() !== "").slice(0, 4);
   return (
     <>
-      <div className="setup__label">Step 4 of 4</div>
+      <div className="setup__label">Step 4 of 5</div>
       <h1 className="setup__title">
         <span className="setup__ok-dot" />
         Connected.
@@ -145,6 +146,31 @@ export function ConnectedScreen({
       <button className="setup__primary" onClick={onContinue}>
         Got it
       </button>
+    </>
+  );
+}
+
+export function ExperienceScreen({ experience }: { experience: ExperienceState }) {
+  return (
+    <>
+      <div className="setup__label">Step 5 of 5</div>
+      <h1 className="setup__title">How do you work in Live?</h1>
+      <p className="setup__body">
+        This sets which words I use. You can change it later in Settings.
+      </p>
+      <div className="setup__choices">
+        {EXPERIENCES.map((option) => (
+          <button
+            key={option.value}
+            className="setup__choice"
+            onClick={() => void experience.choose(option.value)}
+          >
+            <span className="setup__choice-label">{option.label}</span>
+            <span className="setup__choice-hint">{option.hint}</span>
+          </button>
+        ))}
+      </div>
+      {experience.error !== null && <div className="setup__error">{experience.error}</div>}
     </>
   );
 }

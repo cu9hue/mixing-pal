@@ -8,6 +8,7 @@ import wireVersion from "../../shared/wire-version.json";
 import { version as appVersion } from "../../package.json";
 import { AccountState } from "../model/account";
 import { AccountPanel } from "./AccountPanel";
+import { EXPERIENCES, ExperienceState } from "../model/experience";
 
 interface SettingsView {
   base_url: string;
@@ -24,11 +25,14 @@ interface ConnectorView {
 // Public builds keep account access as the only model transport.
 export function Advanced({
   account,
+  experience,
   updates,
   scriptVersion,
   onClose,
 }: {
   account: AccountState;
+  /** App's, so a choice made here also ends the setup step. */
+  experience: ExperienceState;
   updates?: Updates;
   scriptVersion: number | null;
   onClose: () => void;
@@ -129,6 +133,31 @@ export function Advanced({
 
       {updates && <UpdatePanel updates={updates} />}
       <AccountPanel account={account} />
+
+      <h3 className="advanced__heading">Answers</h3>
+      <div className="advanced__choices" role="radiogroup" aria-label="How you work in Live">
+        {EXPERIENCES.map((option) => (
+          <label key={option.value} className="advanced__choice">
+            <input
+              type="radio"
+              name="experience"
+              // Before she chooses, answers use the default level.
+              checked={(experience.experience ?? "finishes_tracks") === option.value}
+              disabled={operations.install}
+              onChange={() => void experience.choose(option.value)}
+            />
+            <span>
+              {option.label}
+              <span className="advanced__choice-hint">{option.hint}</span>
+            </span>
+          </label>
+        ))}
+        {experience.error !== null && (
+          <div className="advanced__error" role="alert">
+            {experience.error}
+          </div>
+        )}
+      </div>
       {account.view?.access === "development" && <>
       <h3 className="advanced__heading">Model settings</h3>
 

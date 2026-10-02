@@ -45,6 +45,16 @@ pub fn settings() -> Settings {
     }
 }
 
+/// The level `ask` runs at: MIXINGPAL_EVAL_EXPERIENCE, named as the app
+/// stores it (e.g. new_to_live), or the app's default when unset.
+pub fn experience() -> Experience {
+    match std::env::var("MIXINGPAL_EVAL_EXPERIENCE") {
+        Ok(name) => serde_json::from_value(json!(name))
+            .unwrap_or_else(|_| panic!("MIXINGPAL_EVAL_EXPERIENCE={name} is not a level")),
+        Err(_) => Experience::default(),
+    }
+}
+
 /// The same bounds the shipped app uses, from the same constants
 /// (`model::MODEL_TIMEOUT`): a provider that accepts the connection and never
 /// answers becomes a failed run, not a hung release gate, and the prose
@@ -790,7 +800,7 @@ impl Turn {
 
 /// `ask_with` at the harness settings and the app's own sampling.
 pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
-    ask_with(&settings(), None, f, context, question).await
+    ask_with(&settings(), experience(), None, f, context, question).await
 }
 
 /// One question through the same loop the app runs: the tools are answered
@@ -802,6 +812,7 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
 /// so the body is the app's body plus at most that one field.
 pub async fn ask_with(
     s: &Settings,
+    experience: Experience,
     temperature: Option<f64>,
     f: Value,
     context: &str,
@@ -826,7 +837,7 @@ pub async fn ask_with(
 
     for _ in 0..MAX_ROUND_TRIPS {
         let started = std::time::Instant::now();
-        let completion = match build_body(s, &messages) {
+        let completion = match build_body(s, experience, &messages) {
             Ok(mut body) => {
                 if let Some(t) = temperature {
                     body["temperature"] = json!(t);

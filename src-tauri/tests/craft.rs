@@ -3,8 +3,9 @@
 //!
 //! Not run by `cargo test`: the target needs `--features evals`. Fixture,
 //! harness, parsing and reporting tests cost nothing and need no credentials.
-//! The six scenario tests ask a real model, then a judge, and cost money.
-//! Run only scenarios 1 to 4 while scenario 5 is parked:
+//! The seven scenario tests ask a real model, then a judge, and cost money.
+//! Run only scenarios 1 to 4 and 6 while scenario 5 is parked (the
+//! `why_does_the_drop_fall_flat` filter also matches scenario 6):
 //!
 //!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
 //!     MIXINGPAL_JUDGE_MODEL=anthropic/claude-sonnet-4.6 \
@@ -141,10 +142,10 @@ async fn the_harness_sends_a_temperature_only_when_asked() {
     };
     let context = common::context("craft-context.txt");
 
-    let turn = common::ask_with(&s, Some(0.0), fixture(), &context, "keep or change?").await;
+    let turn = common::ask_with(&s, Experience::default(), Some(0.0), fixture(), &context, "keep or change?").await;
     assert_eq!(turn.answer, "keep");
     assert_eq!(turn.raw_answer, raw_answer);
-    let turn = common::ask_with(&s, None, fixture(), &context, "keep or change?").await;
+    let turn = common::ask_with(&s, Experience::default(), None, fixture(), &context, "keep or change?").await;
     assert_eq!(turn.answer, "keep");
     assert_eq!(turn.raw_answer, raw_answer);
 
@@ -205,7 +206,7 @@ async fn the_harness_records_tool_arguments_and_results() {
         .with_priority(2)
         .mount(&server).await;
     let s = Settings { base_url: server.uri(), model: "test".into(), api_key: "test".into() };
-    let turn = common::ask_with(&s, None, fixture(), &context_for(None), "read both").await;
+    let turn = common::ask_with(&s, Experience::default(), None, fixture(), &context_for(None), "read both").await;
     assert!(turn.error.is_none(), "{:?}", turn.error);
     assert_eq!(turn.calls.len(), 2);
     let pad = &turn.calls[0];
@@ -300,6 +301,10 @@ const CHORDS_CHANGED: Property = Property {
     key: "chords_changed",
     description: "Its decision on the producer's question is to change the chords: the answer says change, and its one move alters the progression or a chord's quality. Grade the decision the answer states, not an aside or an optional extra.",
 };
+const PLAIN_WORDS: Property = Property {
+    key: "plain_words",
+    description: "Readable by someone new to music production. Uses everyday words and short sentences. Each technical term it needs (for example MIDI, clip, fader, compressor) is explained in a few words the first time it appears. It uses no unexplained abbreviations such as dB, EQ, or BPM. Track, clip, and section names from the set are names, not jargon.",
+};
 const GOAL_TIED: Property = Property {
     key: "goal_tied",
     description: "Says which way the stated GOAL pushed its decision. Do not grade whether what it says about that genre, mood, or reference is true.",
@@ -330,6 +335,7 @@ struct Scenario {
     question: &'static str,
     /// `None` keeps the fixture's goal; `Some` replaces the GOAL line.
     goal: Option<&'static str>,
+    experience: Experience,
     mentor: &'static str,
     must: &'static [Property],
     craft: &'static [Property],
@@ -641,7 +647,7 @@ struct Run {
 async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
     let context = context_for(sc.goal);
     let properties = sc.properties();
-    let turn = common::ask_with(&common::settings(), temperature, fixture(), &context, sc.question).await;
+    let turn = common::ask_with(&common::settings(), sc.experience, temperature, fixture(), &context, sc.question).await;
     // A truncated or empty run is a failed run, not a panic: it fails every
     // property, with the reason recorded, so `tally`'s report shows why. A
     // provider error is an infrastructure fault, recorded in `infra_error`
@@ -894,6 +900,7 @@ async fn passes_majority(sc: &Scenario, extra: impl Fn(&Run) -> bool) {
 const DROP_FALLS_FLAT: Scenario = Scenario {
     question: "why does the drop fall flat?",
     goal: None,
+    experience: Experience::FinishesTracks,
     mentor: "For the stated GOAL, I would make the Drop an arrival. The arrangement shows Pad leaving at beat 64 (bar 17) as Vox arrives; Drums continues and Bass has no placements. Intro and Drop each have two occupied tracks. On contrast at section boundaries, I would try a new part on the empty Bass track. One move: load a bass instrument and draw a four-beat MIDI loop using A and F, the roots in the Pad notes, then repeat it over beats 64–96 (bars 17–24). Keep it out of Intro so its entrance tests that contrast; mute the new clip to undo the trial. Play from beat 60 (bar 16) and listen for whether bar 17 feels like an arrival with the bass enabled. The continuous drum placement is enough on repetition for this trial; leave it alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[SECTION_PURPOSE, NAMED_AXIS, ONE_MOVE, WHY, LISTEN_FOR, LEAVE_IT, SOURCE_NAMED],
@@ -911,6 +918,7 @@ async fn why_does_the_drop_fall_flat() {
 const WHAT_NEXT: Scenario = Scenario {
     question: "what should I do next?",
     goal: None,
+    experience: Experience::FinishesTracks,
     mentor: "For the stated GOAL, I would give the Drop a new part to mark its arrival. The arrangement shows Bass has no placements, Pad leaves at beat 64 (bar 17), Vox enters there, and Drums continues. I rank contrast first: the empty Bass track gives us a place to try an entrance. One move: load a bass instrument and draw a four-beat MIDI loop on A and F, the roots read in the Pad notes; repeat it over beats 64–96 (bars 17–24), keeping it out of Intro. Mute that clip to undo the trial. Play from beat 60 (bar 16) through beat 68 (bar 18) and listen for whether the Drop now lands. The Pad's two-chord repetition and the continuous drum placement are enough for this trial; leave both alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[ONE_MOVE, RANKED, WHY, LISTEN_FOR, LEAVE_IT, SOURCE_NAMED],
@@ -929,6 +937,7 @@ async fn what_should_i_do_next() {
 const PAD_TOO_BUSY: Scenario = Scenario {
     question: "is the pad too busy?",
     goal: None,
+    experience: Experience::FinishesTracks,
     mentor: "For the stated GOAL, I would use the Pad as a repeating harmonic idea. The notes show two triad attacks in a four-beat, one-bar loop: A2/C3/E3 at clip beat 0 and F2/A2/C3 at clip beat 2, each note lasting half a beat. The arrangement repeats it over beats 0–64 (bars 1–16) and 96–128 (bars 25–32); it does not overlap Vox's placements. I find no readable density problem in those two stabs per bar. Whether the sound or release tails feel crowded is yours to hear. Leave the Pad as it is.",
     must: &[READABLE_PROBLEM, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[SOURCE_NAMED],
@@ -970,6 +979,7 @@ fn grounded_and_tied(run: &Run) -> bool {
 const MIX_OKAY: Scenario = Scenario {
     question: "is the mix okay?",
     goal: None,
+    experience: Experience::FinishesTracks,
     mentor: "The device chains show no devices on Pad or Bass, a Drum Rack on Drums, and a Compressor on Vox. The rack read lists Kick, Clap and Hats chains, each with a Simpler. Vox's parameter read gives a threshold of -18 dB, ratio 4:1, attack 10 ms, release 100 ms and output gain +3 dB. Those settings do not tell me the gain reduction or audible balance. Tone, loudness, masking and groove are yours to hear; I cannot judge them. The arrangement shows Bass has no placements, but that does not prove what frequencies the other tracks contain. I find no established mix problem in these reads. Leave the processing alone.",
     must: &[EAR_ONLY_HANDED_OVER, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, CONDITIONAL_MOVE],
     craft: &[SOURCE_NAMED],
@@ -983,6 +993,26 @@ async fn is_the_mix_okay() {
     .await;
 }
 
+// Scenario 6. Scenario 1's question from a producer new to Live. The 180-word
+// limit gives the prompt's 120-word soft cap slack without allowing a lecture.
+const DROP_FOR_A_NEWCOMER: Scenario = Scenario {
+    question: "why does the drop fall flat?",
+    goal: None,
+    experience: Experience::NewToLive,
+    mentor: "For dark garage at 2am, the drop should feel like you have arrived somewhere. Right now, at bar 17 the Pad stops and the Vox starts. The Drums keep going. The Bass track has nothing on it. **Try adding a bass part that starts at the drop.** Put an instrument on the Bass track. Draw a short MIDI clip (a loop of notes Live plays for you) using A and F, the lowest notes of your Pad chords. Let it play from bar 17 to bar 24, and keep it out of the intro. If you don't like it, mute the clip. Play from bar 16 and listen: does bar 17 now feel like an arrival? The drums are fine. Leave them alone.",
+    must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE, PLAIN_WORDS],
+    craft: &[ONE_MOVE, WHY, LISTEN_FOR],
+};
+
+#[tokio::test]
+async fn why_does_the_drop_fall_flat_for_a_newcomer() {
+    passes_majority(&DROP_FOR_A_NEWCOMER, |run| {
+        run.calls.iter().any(|c| c.name == "get_arrangement" && c.missing_reason.is_none())
+            && run.answer.split_whitespace().count() <= 180
+    })
+    .await;
+}
+
 // Scenario 5. Same set, same question, two goals. This is the eval that
 // proves the GOAL line does work: the decision on the question asked, keep
 // the chords or change them, must differ between the goals. Register,
@@ -991,6 +1021,7 @@ async fn is_the_mix_okay() {
 const CHORDS_GARAGE: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: None,
+    experience: Experience::FinishesTracks,
     mentor: "",
     must: &[CHORDS_KEPT, CHORDS_CHANGED, GOAL_TIED],
     craft: &[],
@@ -999,6 +1030,7 @@ const CHORDS_GARAGE: Scenario = Scenario {
 const CHORDS_TECHNO: Scenario = Scenario {
     question: "the pad chords, keep or change?",
     goal: Some("minimal techno, peak time"),
+    experience: Experience::FinishesTracks,
     mentor: "",
     must: &[CHORDS_KEPT, CHORDS_CHANGED, GOAL_TIED],
     craft: &[],

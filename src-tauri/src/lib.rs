@@ -52,7 +52,7 @@ pub mod eval_api {
     pub use crate::osc::query::LiveQuery;
     pub use crate::osc::requests::RequestTable;
     pub use crate::osc::socket::OscSocket;
-    pub use crate::settings::Settings;
+    pub use crate::settings::{Experience, Settings};
     pub use crate::tools::{execute, ToolContext, ToolResult};
 }
 
@@ -66,7 +66,7 @@ use osc::query::LiveQuery;
 use osc::socket::OscSocket;
 use osc::subs::SINGLETON_SUBSCRIPTIONS;
 use rosc::OscType;
-use settings::{Settings, SettingsView, DEFAULT_MODEL};
+use settings::{Experience, Settings, SettingsView, DEFAULT_MODEL};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -595,6 +595,9 @@ async fn execute_tool(
 /// never leaves this struct.
 struct ModelState {
     settings: Mutex<Settings>,
+    /// None until the producer chooses in setup; the prompt treats that as
+    /// the default.
+    experience: Mutex<Option<Experience>>,
     config_dir: PathBuf,
     client: reqwest::Client,
 }
@@ -650,6 +653,25 @@ fn get_settings(state: tauri::State<'_, Arc<ModelState>>) -> SettingsView {
         Ok(s) => SettingsView::from(&*s),
         Err(_) => SettingsView::from(&Settings::default()),
     }
+}
+
+#[tauri::command]
+fn get_experience(state: tauri::State<'_, Arc<ModelState>>) -> Option<Experience> {
+    state.experience.lock().ok().and_then(|e| *e)
+}
+
+#[tauri::command]
+fn set_experience(experience: Experience, state: tauri::State<'_, Arc<ModelState>>) -> Result<(), String> {
+    settings::save_experience(&state.config_dir, experience)
+        .map_err(|e| format!("could not save your choice: {e}"))?;
+    if let Ok(mut stored) = state.experience.lock() {
+        *stored = Some(experience);
+    }
+    Ok(())
+}
+
+fn current_experience(state: &ModelState) -> Experience {
+    state.experience.lock().ok().and_then(|e| *e).unwrap_or_default()
 }
 
 /// Probes before persisting. A model that fails is refused with a message
@@ -727,7 +749,7 @@ async fn model_complete(
     trace_state: tauri::State<'_, Arc<Mutex<Trace>>>,
 ) -> Result<serde_json::Value, proxy::ProxyError> {
     if !cfg!(feature = "direct-provider") {
-        let body = model::build_body(&Settings::default(), &messages)
+        let body = model::build_body(&Settings::default(), current_experience(&state), &messages)
             .map_err(|message| proxy::ProxyError { code: "invalid_request".into(), message })?;
         let required = || proxy::ProxyError { code: "invalid_request".into(), message: "A turn and request identifier are required.".into() };
         let start = Instant::now();
@@ -762,7 +784,7 @@ async fn direct_complete(
         return Err("No model is configured yet. Open Settings and choose a provider, model, and key.".to_string());
     }
 
-    let body = model::build_body(&settings, &messages)?;
+    let body = model::build_body(&settings, current_experience(&state), &messages)?;
     let start = Instant::now();
     let result = model::complete_with_body(&state.client, &settings, body.clone()).await;
     let duration_ms = start.elapsed().as_millis() as u64;
@@ -895,6 +917,8 @@ pub fn run() {
             execute_tool,
             get_settings,
             save_settings,
+            get_experience,
+            set_experience,
             load_thread,
             save_thread,
             model_complete,
@@ -973,6 +997,7 @@ pub fn run() {
             }
             app.manage(Arc::new(ModelState {
                 settings: Mutex::new(settings::load(&config_dir)),
+                experience: Mutex::new(settings::load_experience(&config_dir)),
                 config_dir,
                 // Bounded, so a router that accepts a request and never
                 // answers becomes a provider error instead of a chat pane
@@ -2513,6 +2538,7 @@ mod tests {
     fn model_state(dir: PathBuf, initial: Settings) -> Arc<ModelState> {
         Arc::new(ModelState {
             settings: Mutex::new(initial),
+            experience: Mutex::new(None),
             config_dir: dir,
             client: reqwest::Client::new(),
         })

@@ -7,6 +7,9 @@
 //!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
 //!     cargo test --features evals --test evals -- --test-threads=1
 //!
+//! Add MIXINGPAL_EVAL_EXPERIENCE=new_to_live (or mixes_for_others) to run the
+//! same scenarios with that level's prompt section.
+//!
 //! Assertions are on WHICH TOOLS the model called and in what order, not on
 //! its prose: tool calls are stable across runs and wording is not. The one
 //! exception is the injection scenario, where the forbidden word is the

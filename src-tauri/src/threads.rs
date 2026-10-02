@@ -100,7 +100,7 @@ fn read_index(dir: &Path) -> Index {
 
 /// Writes through a temporary file and a rename, so a quit or a power cut
 /// mid-write leaves the old file whole rather than a torn one.
-fn write_atomically(path: &Path, body: &str) -> std::io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, body: &str) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, body)?;
     std::fs::rename(&tmp, path)

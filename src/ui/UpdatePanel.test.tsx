@@ -12,6 +12,7 @@ import { Advanced } from "./Advanced";
 import { InstallScreen } from "../setup/screens";
 import { AccountPanel } from "./AccountPanel";
 import { AccountState } from "../model/account";
+import { ExperienceState } from "../model/experience";
 import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 beforeEach(() => lockThreadSaves(false));
@@ -55,6 +56,7 @@ const account: AccountState = {
   view: { access: "active", capture: false, email: "test@example.test", remaining_micro_usd: 1 },
   error: null, refresh: async () => {}, change: () => {}, observe: () => () => {},
 };
+const experience: ExperienceState = { experience: "finishes_tracks", error: null, choose: async () => {} };
 const development: AccountState = { ...account, view: { access: "development", capture: false } };
 const deferred = () => { let resolve!: (value?: unknown) => void; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
 it.each(["setup", "reinstall", "settings", "account"] as const)("blocks install while the real %s control awaits its command", async (kind) => {
@@ -71,7 +73,7 @@ it.each(["setup", "reinstall", "settings", "account"] as const)("blocks install 
   render(<BusyContext.Provider value={busy}>
     {kind === "setup" ? <InstallScreen folder="MixingPal" onInstalled={() => {}} />
       : kind === "account" ? <AccountPanel account={account} />
-      : <Advanced account={development} scriptVersion={12} onClose={() => {}} />}
+      : <Advanced account={development} experience={experience} scriptVersion={12} onClose={() => {}} />}
   </BusyContext.Provider>);
   const label = { setup: "Install it", reinstall: "Reinstall", settings: "Save", account: "Sign out" }[kind];
   const button = await screen.findByRole("button", { name: label });
@@ -95,7 +97,7 @@ it.each(["setup", "reinstall", "settings", "account"] as const)("refuses a new %
   render(<BusyContext.Provider value={busy}>
     {kind === "setup" ? <InstallScreen folder="MixingPal" onInstalled={() => {}} />
       : kind === "account" ? <AccountPanel account={account} />
-      : <Advanced account={development} scriptVersion={12} onClose={() => {}} />}
+      : <Advanced account={development} experience={experience} scriptVersion={12} onClose={() => {}} />}
   </BusyContext.Provider>);
   const label = { setup: "Install it", reinstall: "Reinstall", settings: "Save", account: "Sign out" }[kind];
   fireEvent.click(await screen.findByRole("button", { name: label }));

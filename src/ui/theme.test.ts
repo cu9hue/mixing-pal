@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 // @ts-expect-error no @types/node in this project; see vite.config.ts
 import { readFileSync, readdirSync, statSync } from "node:fs";
 // @ts-expect-error no @types/node in this project; see vite.config.ts
-import { join } from "node:path";
+import { join, relative } from "node:path";
 // @ts-expect-error no @types/node in this project; see vite.config.ts
 import { fileURLToPath } from "node:url";
 
@@ -170,5 +170,25 @@ describe("type and spacing tokens", () => {
         expect(literal, `${file}: ${m[0].trim()}`).toBeNull();
       }
     }
+  });
+});
+
+/**
+ * The reading font is for the model's answer, the long text she reads. The
+ * rest of the card stays in the system font. Bundled, so it works offline.
+ */
+describe("the reading font", () => {
+  it("is bundled with the app", () => {
+    const main = readFileSync(join(SRC, "main.tsx"), "utf8");
+    expect(main).toContain('import "@fontsource/atkinson-hyperlegible/400.css";');
+    expect(main).toContain('import "@fontsource/atkinson-hyperlegible/700.css";');
+  });
+
+  it("sets the answer and nothing else", () => {
+    const readers = cssFiles(SRC).filter((f) => !f.endsWith("theme.css"))
+      .flatMap((f) => [...readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "")
+        .matchAll(/([^{}]+)\{[^}]*var\(--font-reading\)/g)]
+        .map((m) => `${relative(SRC, f)}: ${m[1].trim()}`));
+    expect(readers).toEqual(["ui/Card.css: .card__answer"]);
   });
 });
