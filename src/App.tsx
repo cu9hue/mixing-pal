@@ -303,6 +303,7 @@ export default function App() {
           survive a collapse to the pill only if the component does. */}
       <div className={view === "card" ? undefined : "card-slot--hidden"}>
         <Card
+          visible={view === "card"}
           account={account}
           experience={experience}
           updates={updates}

@@ -14,6 +14,11 @@
   overflow: hidden;
 }
 
+/* A modal is outside layout, so it cannot size the native window while the set loads. */
+.card:has(.update-notice[open]) {
+  min-height: var(--card-max-height, 520px);
+}
+
 /* The card stays mounted while she is looking at the pill or at setup, so
    the conversation and its history survive the collapse. display:none also
    keeps it out of the scrollHeight that drives the window height. */
@@ -364,7 +369,8 @@
 }
 
 .card__settings {
-  overflow-y: auto;
+  display: flex;
+  overflow: hidden;
   flex: 1;
   min-height: 0;
 }

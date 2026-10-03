@@ -29,6 +29,7 @@ The existing CSS variables remain the source of truth. This React app does not u
   --surface: #0d070b;
   --surface-raised: #191116;
   --surface-sunken: #080508;
+  --surface-backdrop: rgba(13, 7, 11, 0.7);
   --border: #4e3c47;
   --border-strong: #68505e;
   --text: #eee5ea;
@@ -72,6 +73,10 @@ The existing CSS variables remain the source of truth. This React app does not u
 - Prompt ideas are 44px minimum-height buttons. They fill the composer but never send a request.
 - `:focus-visible` uses the existing 2px accent outline. Buttons retain default, hover, active, disabled, error, and success states where applicable.
 - Motion is limited to 120ms colour transitions and respects existing reduced-motion rules.
+
+- Settings has a fixed title and Done footer around one scrollable body. Its controls use the same neutral outline; download and restart use `--accent`. Update details show the version only.
+- An available update opens a compact dialog on the chat screen. “Not now”, the close button, and Escape dismiss it for that version during the app session. Review opens Settings; downloading and restarting remain separate actions. The dialog never opens over onboarding or the collapsed pill.
+- Onboarding progress sits 32px below the window edge, aligned with the 40px content inset. Content starts 24px below it.
 
 ## Explicit negatives
 

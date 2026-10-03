@@ -27,7 +27,7 @@ it("downloads only on request and requires a separate explicit restart", async (
   function App() { const updates = useUpdates(busy); return <BusyContext.Provider value={busy}><UpdatePanel updates={updates} /></BusyContext.Provider>; }
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Download update" }));
-  expect(await screen.findByText("<b>Release notes</b>")).toBeTruthy();
+  expect(screen.queryByText("<b>Release notes</b>")).toBeNull();
   const install = await screen.findByRole("button", { name: "Install and restart Mixing Pal" });
   expect(commands).toEqual(["check_update", "download_update"]);
   busy.turn = true;
@@ -147,4 +147,19 @@ it("keeps the question flag through the actual delayed model command and rejects
   expect(commands).not.toContain("install_update");
   await installWhenIdle(busy);
   expect(commands).toContain("install_update");
+});
+
+it.each(["loading", "error"] as const)("keeps Done available when settings are %s", async (state) => {
+  vi.mocked(invoke).mockImplementation(async (cmd) => {
+    if (cmd === "get_settings") {
+      if (state === "error") throw new Error("settings unavailable");
+      return new Promise(() => {});
+    }
+    if (cmd === "connector_status") return { folder: "MixingPal", installed: true };
+  });
+  const onClose = vi.fn();
+  render(<Advanced account={account} experience={experience} scriptVersion={13} onClose={onClose} />);
+  await screen.findByText(state === "loading" ? "Reading your settings…" : /settings unavailable/);
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(onClose).toHaveBeenCalledOnce();
 });
