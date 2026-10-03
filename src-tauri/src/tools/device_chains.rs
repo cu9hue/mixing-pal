@@ -10,6 +10,8 @@ const ADDRESS: &str = "/live/mixingpal/get/device_chain";
 const MAX_DEVICES: usize = 256;
 const MAX_PAGES: usize = 32;
 pub(crate) const RACK_SUFFIX: &str = " [rack]";
+/// Values per device record on the wire: name, rack, active, kind, class.
+pub(crate) const DEVICE_FIELDS: usize = 5;
 /// Live's `Device.type` values.
 pub(crate) const INSTRUMENT: i32 = 1;
 pub(crate) const MIDI_EFFECT: i32 = 4;
@@ -18,10 +20,10 @@ pub(crate) const MIDI_EFFECT: i32 = 4;
 pub struct TrackChain {
     pub track: i32,
     pub devices: Vec<String>,
-    /// Each device's `Device.type`, in chain order, for reads that need to
-    /// know what plays before the instrument.
+    /// Each device's `Device.type` and whether it is on, in chain order, for
+    /// reads that need to know what changes the notes before the instrument.
     #[serde(skip)]
-    pub kinds: Vec<i32>,
+    pub kinds: Vec<(i32, bool)>,
     pub device_offset: usize,
     pub total_devices: usize,
     pub next_device_offset: Option<usize>,
@@ -69,11 +71,13 @@ fn as_flag(value: &OscType) -> Option<bool> {
 
 /// One (name, rack, active, kind, class) record, the shape every chain
 /// listing in the connector shares.
-pub(crate) fn decode_device(record: &[OscType]) -> Option<(String, i32)> {
+/// The label, the kind, and whether the device is on.
+pub(crate) fn decode_device(record: &[OscType]) -> Option<(String, i32, bool)> {
     let [OscType::String(name), rack, active, OscType::Int(kind), OscType::String(class)] = record else {
         return None;
     };
-    Some((device_label(name, as_flag(rack)?, as_flag(active)?, *kind, class), *kind))
+    let active = as_flag(active)?;
+    Some((device_label(name, as_flag(rack)?, active, *kind, class), *kind, active))
 }
 
 fn decode_page(
@@ -81,7 +85,7 @@ fn decode_page(
     track: i32,
     offset: usize,
     span: usize,
-) -> Option<(usize, Vec<(String, i32)>)> {
+) -> Option<(usize, Vec<(String, i32, bool)>)> {
     if reply.first()? != &OscType::Int(track) || reply.get(1)? != &OscType::Int(offset as i32) {
         return None;
     }
@@ -90,13 +94,13 @@ fn decode_page(
     };
     let total = usize::try_from(*total).ok()?;
     let fields = reply.get(3..)?;
-    if fields.len() % 5 != 0
-        || fields.len() / 5 > span
-        || fields.len() / 5 > total.saturating_sub(offset)
+    if fields.len() % DEVICE_FIELDS != 0
+        || fields.len() / DEVICE_FIELDS > span
+        || fields.len() / DEVICE_FIELDS > total.saturating_sub(offset)
     {
         return None;
     }
-    let devices = fields.chunks_exact(5).map(decode_device).collect::<Option<Vec<_>>>()?;
+    let devices = fields.chunks_exact(DEVICE_FIELDS).map(decode_device).collect::<Option<Vec<_>>>()?;
     Some((total, devices))
 }
 
@@ -171,7 +175,7 @@ async fn read_track_pages(
     let total_devices = total_devices?;
     let next = offset + devices.len();
     let truncated = next < total_devices;
-    let (devices, kinds) = devices.into_iter().unzip();
+    let (devices, kinds) = devices.into_iter().map(|(label, kind, active)| (label, (kind, active))).unzip();
     Some(TrackChain {
         track,
         devices,
@@ -465,7 +469,7 @@ mod tests {
         ];
         assert_eq!(
             decode_page(&good, 2, 3, 1).unwrap().1,
-            vec![("«Rack ignore » (Audio Effect Rack) [rack]".to_string(), 2)]
+            vec![("«Rack ignore » (Audio Effect Rack) [rack]".to_string(), 2, true)]
         );
         assert!(decode_page(&good, 1, 3, 1).is_none());
         assert!(decode_page(&good, 2, 2, 1).is_none());

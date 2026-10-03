@@ -1,5 +1,5 @@
 use crate::osc::query::LiveQuery;
-use crate::tools::device_chains::decode_device;
+use crate::tools::device_chains::{decode_device, DEVICE_FIELDS};
 use crate::tools::fence::fence;
 use rosc::OscType;
 use serde::Serialize;
@@ -116,12 +116,12 @@ fn decode_channel(index: Option<i32>, fields: &[OscType]) -> Option<ChannelMix> 
         return None;
     };
     let total_devices = usize::try_from(*total).ok()?;
-    if records.len() % 5 != 0 || records.len() / 5 > total_devices {
+    if records.len() % DEVICE_FIELDS != 0 || records.len() / DEVICE_FIELDS > total_devices {
         return None;
     }
     let devices = records
-        .chunks_exact(5)
-        .map(|record| decode_device(record).map(|(label, _)| label))
+        .chunks_exact(DEVICE_FIELDS)
+        .map(|record| decode_device(record).map(|(label, _, _)| label))
         .collect::<Option<Vec<_>>>()?;
     let (volume, volume_automation) = shown(volume, volume_state)?;
     let (pan, pan_automation) = shown(pan, pan_state)?;

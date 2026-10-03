@@ -106,7 +106,7 @@ class SessionHandlerTests(unittest.TestCase):
             self.assertLess(len(builder.build().dgram), 9216)
 
     def test_note_snapshot_detects_same_count_note_and_loop_edits(self):
-        note = SimpleNamespace(pitch=60, start_time=0.0, duration=0.5, velocity=100, mute=False)
+        note = SimpleNamespace(pitch=60, start_time=0.0, duration=0.5, velocity=100, mute=False, probability=1.0)
         clip = SimpleNamespace(is_midi_clip=True, length=4.0, looping=True,
             loop_start=0.0, loop_end=4.0, start_marker=0.0, end_marker=4.0, get_notes_extended=lambda *_: [note])
         self.handler.song.tracks = [SimpleNamespace(clip_slots=[SimpleNamespace(clip=clip)])]
@@ -126,7 +126,8 @@ class SessionHandlerTests(unittest.TestCase):
 
     def test_source_snapshot_includes_notes_at_nonzero_markers(self):
         for looping in (True, False):
-            note = SimpleNamespace(pitch=60, start_time=8.0, duration=0.5, velocity=100, mute=False)
+            note = SimpleNamespace(pitch=60, start_time=8.0, duration=0.5, velocity=100, mute=False,
+                                   probability=1.0)
             clip = SimpleNamespace(is_midi_clip=True, length=4.0, looping=looping,
                 loop_start=8.0, loop_end=12.0, start_marker=8.0, end_marker=12.0,
                 get_notes_extended=lambda pitch, count, start, span: [note] if start <= note.start_time < start + span else [])

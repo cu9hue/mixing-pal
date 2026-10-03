@@ -226,13 +226,12 @@ pub async fn get_clips_range(
     for (offset, handle) in handles.into_iter().enumerate() {
         let track = first_track + offset as i32;
         match handle.await {
-            Ok(((Some(mut entry), failed), midi)) => {
+            // A later page lost still leaves a track that answered: its
+            // next_slot says where the read stopped. `missing` is for silence.
+            Ok(((Some(mut entry), _), midi)) => {
                 entry.midi = midi;
                 if midi.is_none() {
                     midi_missing.push(track);
-                }
-                if failed {
-                    missing.push(track);
                 }
                 tracks.push(entry);
             }
@@ -596,7 +595,8 @@ mod tests {
             })
             .await;
             let map = get_clips(q, 1, Duration::from_millis(100)).await;
-            assert_eq!(map.missing, vec![0]);
+            // It answered, so it is not "no reply"; next_slot names the gap.
+            assert!(map.missing.is_empty());
             assert_eq!(map.tracks[0].clips.len(), 16);
             assert_eq!(map.tracks[0].next_slot, Some(16));
         }

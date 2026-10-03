@@ -953,6 +953,7 @@ pub(crate) mod tests {
                             OscType::Float(0.5),
                             OscType::Float(100.0),
                             OscType::Bool(false),
+                            OscType::Float(1.0),
                         ]);
                         let _ = live.send_to(app_port, &req.addr, reply).await;
                     }
@@ -1341,6 +1342,7 @@ pub(crate) mod tests {
                 duration: 0.5,
                 velocity: 100.0,
                 mute: false,
+                probability: 1.0,
             }]
         );
     }

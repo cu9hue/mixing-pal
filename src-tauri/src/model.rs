@@ -91,8 +91,9 @@ is empty until get_arrangement has said so.
 start_beats + length_beats is the full playback span; a loop_region repeats \
 its source notes through it, so later iterations are not silence. A session \
 clip's source_length_beats is not a timeline span; when looping is true it \
-repeats while launched. A note's start is measured from its clip's start. In \
-edit instructions prefer clip_position or timeline_position, one-based \
+repeats while launched. A note's start is source time inside its clip; for \
+song time use timeline_position. In edit instructions prefer clip_position or \
+timeline_position, one-based \
 bar.beat.sixteenth as Live shows them; a +/- beats remainder is how far the \
 note sits off the sixteenth grid - a nudge, a triplet, or swing. A muted \
 placement or a note with mute true does not sound.

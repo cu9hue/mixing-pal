@@ -451,6 +451,7 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                                     OscType::Float(0.5),
                                     OscType::Float(100.0),
                                     OscType::Bool(false),
+                                    OscType::Float(1.0),
                                 ]);
                             }
                         }
@@ -624,6 +625,7 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                                     OscType::Float(0.5),
                                     OscType::Float(100.0),
                                     OscType::Bool(false),
+                                    OscType::Float(1.0),
                                 ]);
                             }
                         }

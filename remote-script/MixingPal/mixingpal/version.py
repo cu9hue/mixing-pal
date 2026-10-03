@@ -39,9 +39,9 @@ from ..abletonosc.handler import AbletonOSCHandler
 # set is open and nothing per-set can be saved; the banner asks for the
 # reinstall. Version 13 adds paged session and device lists and rack device
 # continuation. Version 14 adds each device's on/off state, kind, and class
-# name to chain listings, the automation state of parameters, and the track,
-# return, and master mixer reads; a stale script answers the old two-field
-# records, which must not be decoded as the new five.
+# name to chain listings, the automation state of parameters, the track,
+# return, and master mixer reads, and each note's probability; a stale script
+# answers the old record shapes, which must not be decoded as the new ones.
 WIRE_VERSION = 14
 
 

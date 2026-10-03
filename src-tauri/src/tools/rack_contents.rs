@@ -1,5 +1,5 @@
 use crate::osc::query::{LiveQuery, QueryError};
-use crate::tools::device_chains::decode_device;
+use crate::tools::device_chains::{decode_device, DEVICE_FIELDS};
 use crate::tools::fence::fence;
 use crate::tools::path::DevicePath;
 use rosc::OscType;
@@ -34,6 +34,9 @@ pub struct RackChain {
     /// number on an Audio Effect Rack chain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<i32>,
+    /// The pad's note as Live labels it (36 is C1), so no octave is guessed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_name: Option<String>,
     /// File name of a sample loaded in this Drum Rack pad when Live exposes
     /// it. A generic `Simpler` device name alone cannot identify a sound.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -123,19 +126,20 @@ fn decode_window(reply: &[OscType], expect_start: usize) -> Option<(usize, bool,
         let total_devices = usize::try_from(int_at(reply, i + 5)?).ok()?;
         let reported = usize::try_from(int_at(reply, i + 6)?).ok()?;
         i += 7;
-        let device_fields = reported.checked_mul(5)?;
+        let device_fields = reported.checked_mul(DEVICE_FIELDS)?;
         if device_fields > reply.len().saturating_sub(i) {
             return None;
         }
         let devices = reply[i..i + device_fields]
-            .chunks_exact(5)
-            .map(|record| decode_device(record).map(|(label, _)| label))
+            .chunks_exact(DEVICE_FIELDS)
+            .map(|record| decode_device(record).map(|(label, _, _)| label))
             .collect::<Option<Vec<_>>>()?;
         i += device_fields;
         chains.push(RackChain {
             index,
             name,
             note: (note >= 0).then_some(note),
+            note_name: (note >= 0).then(|| crate::tools::clip_notes::ableton_note_name(note)),
             sample_name,
             muted,
             soloed,
@@ -366,6 +370,7 @@ mod tests {
         assert_eq!((total, is_rack), (2, true));
         assert_eq!(chains[0].index, 0);
         assert_eq!(chains[0].note, Some(36));
+        assert_eq!(chains[0].note_name.as_deref(), Some("C1"));
         assert_eq!(chains[0].sample_name.as_deref(), Some("«kick.wav»"));
         assert_eq!(chains[0].devices.len(), 2);
         assert_eq!(chains[1].index, 1);
@@ -542,6 +547,7 @@ mod tests {
             index: 0,
             name: "Snare".to_string(),
             note: None,
+            note_name: None,
             sample_name: None,
             muted: false,
             soloed: false,
@@ -560,6 +566,7 @@ mod tests {
             index: 1,
             name: "Kick".to_string(),
             note: Some(36),
+            note_name: Some("C1".to_string()),
             sample_name: Some("«kick.wav»".to_string()),
             muted: true,
             soloed: true,

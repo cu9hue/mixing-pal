@@ -74,6 +74,18 @@ pub struct Note {
     pub duration: f64,
     pub velocity: f64,
     pub mute: bool,
+    /// The share of passes the note plays on, from 0 to 1. Left out at 1.
+    #[serde(skip_serializing_if = "plays_every_time")]
+    pub probability: f64,
+}
+
+/// Values per note on the wire: pitch, start, duration, velocity, mute,
+/// probability. One constant, because the decoder and the window filter walk
+/// the same stream.
+const NOTE_FIELDS: usize = 6;
+
+fn plays_every_time(probability: &f64) -> bool {
+    *probability >= 1.0
 }
 
 /// The three addresses one note read uses.
@@ -209,7 +221,7 @@ fn as_bool(v: &OscType) -> Option<bool> {
 
 /// Ableton labels middle C (MIDI 60) as C3, one octave below the scientific
 /// pitch convention many MIDI libraries use.
-fn ableton_note_name(pitch: i32) -> String {
+pub(crate) fn ableton_note_name(pitch: i32) -> String {
     const PITCH_CLASSES: [&str; 12] = [
         "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
     ];
@@ -238,10 +250,10 @@ pub fn decode_notes(args: &[OscType], expect_window: u32) -> Option<Vec<Note>> {
         _ => return None,
     }
     let body = args.get(3..)?;
-    if body.len() % 5 != 0 {
+    if body.len() % NOTE_FIELDS != 0 {
         return None;
     }
-    body.chunks_exact(5)
+    body.chunks_exact(NOTE_FIELDS)
         .map(|c| {
             let pitch = as_i32(&c[0])?;
             Some(Note {
@@ -251,6 +263,7 @@ pub fn decode_notes(args: &[OscType], expect_window: u32) -> Option<Vec<Note>> {
                 duration: as_f64(&c[2])?,
                 velocity: as_f64(&c[3])?,
                 mute: as_bool(&c[4])?,
+                probability: as_f64(&c[5]).filter(|p| (0.0..=1.0).contains(p))?,
             })
         })
         .collect()
@@ -423,7 +436,7 @@ pub async fn get_notes_at(
                         let window_end = window_start + span as f64;
                         // Compare wire coordinates before decimal formatting; otherwise a
                         // rounded-down boundary note can fall outside its own window.
-                        let mut raw = reply[3..].chunks_exact(5);
+                        let mut raw = reply[3..].chunks_exact(NOTE_FIELDS);
                         decoded.retain(|_| {
                             let start = match &raw.next().unwrap()[1] {
                                 OscType::Float(value) => f64::from(*value),
@@ -609,7 +622,25 @@ mod tests {
             OscType::Float(0.5),
             OscType::Float(100.0),
             OscType::Bool(false),
+            OscType::Float(1.0),
         ]
+    }
+
+    // A note at 30% probability is not "always plays"; anything outside 0..1
+    // is a reply this version does not understand.
+    #[test]
+    fn decode_notes_keeps_probability_and_refuses_one_out_of_range() {
+        let mut args = vec![OscType::Int(0), OscType::Int(0), OscType::Int(0)];
+        let mut note = note_values(60, 0.0);
+        note[5] = OscType::Float(0.3);
+        args.extend(note.clone());
+        let notes = decode_notes(&args, 0).unwrap();
+        assert!((notes[0].probability - 0.3).abs() < 1e-6);
+        assert!(serde_json::to_value(&notes[0]).unwrap().get("probability").is_some());
+        note[5] = OscType::Float(1.5);
+        let mut bad = vec![OscType::Int(0), OscType::Int(0), OscType::Int(0)];
+        bad.extend(note);
+        assert!(decode_notes(&bad, 0).is_none());
     }
 
     #[test]
@@ -649,7 +680,8 @@ mod tests {
                 start: 0.0,
                 duration: 0.5,
                 velocity: 100.0,
-                mute: false
+                mute: false,
+                probability: 1.0,
             }
         );
         assert_eq!(notes[1].pitch, 64);
