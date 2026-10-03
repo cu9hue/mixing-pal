@@ -224,3 +224,28 @@ describe("runTurn", () => {
     expect(typeof toolFailedPayload.queried_at).toBe("number");
   });
 });
+
+it("correlates tool failures and timings with the model request", async () => {
+  const requests: unknown[] = [];
+  const events: { kind: string; data: any }[] = [];
+  let round = 0;
+  const contexts: unknown[] = [];
+  await runTurn({ complete: async (_, request) => {
+    requests.push(request);
+    return round++ === 0 ? { text: "", toolCalls: [call("bad", "get_clips", "{broken"), call("throw", "get_clips", "{}"), call("good", "get_clips", "{}")] } : { text: "done", toolCalls: [] };
+  } }, { run: async (_, __, context) => {
+    contexts.push(context);
+    if (contexts.length === 1) throw new Error("disconnected");
+    return { value: [] };
+  } }, [], undefined, { turnId: "turn-1", record: async (e) => { events.push(e); } });
+  const first = requests[0] as { requestId: string };
+  expect(contexts).toEqual([
+    { turnId: "turn-1", requestId: first.requestId, round: 1, toolCallId: "throw" },
+    { turnId: "turn-1", requestId: first.requestId, round: 1, toolCallId: "good" },
+  ]);
+  const steps = events.filter((e) => e.kind === "tool").map((e) => e.data);
+  expect(steps.map((e) => e.request_id)).toEqual([first.requestId, first.requestId, first.requestId]);
+  expect(steps.every((e) => typeof e.duration_ms === "number" && e.duration_ms >= 0)).toBe(true);
+  expect(steps[0].result.missing_reason).toBe("bad_arguments");
+  expect(steps[1].result.missing_reason).toContain("tool_failed");
+});

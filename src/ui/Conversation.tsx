@@ -341,7 +341,7 @@ export function Conversation({
     const askedUnder = key;
     const turnId = crypto.randomUUID();
     const captureEpoch = account.view?.capture ? account.view.consent_epoch ?? null : null;
-    const begun = begin(threadRef.current, asked, turnId);
+    const begun = begin(threadRef.current, asked, turnId, account.view?.id);
     setThread(begun);
     // Saved now, not only when the answer lands: a quit mid-turn keeps the
     // question, and the restored thread shows it with no answer.
@@ -371,9 +371,9 @@ export function Conversation({
       // had stopped reading. Clearing it here, rather than widening
       // runTurn's callback, keeps agent/loop.ts and its tests untouched.
       const tracked: ToolRunner = {
-        run: async (name, args) => {
+        run: async (name, args, context) => {
           try {
-            return await tauriTools.run(name, args);
+            return await tauriTools.run(name, args, context);
           } finally {
             setProgress(null);
           }

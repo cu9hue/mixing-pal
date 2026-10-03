@@ -27,6 +27,16 @@ const MAX_VALUE_CHARS: usize = 4000;
 /// a glance.
 const PREVIEW_CHARS: usize = 500;
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TraceContext {
+    #[serde(skip)]
+    pub account_id: String,
+    pub turn_id: String,
+    pub request_id: Option<String>,
+    pub round: Option<u64>,
+    pub tool_call_id: Option<String>,
+}
+
 /// One recorded step: either a call to the model or a call to a tool.
 ///
 /// `outcome` (`Model`) is unambiguous about success vs failure by
@@ -36,6 +46,8 @@ const PREVIEW_CHARS: usize = 500;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TraceStep {
     Model {
+        #[serde(flatten)]
+        context: Option<TraceContext>,
         /// Epoch millis, from the same `now_millis` every other timestamp in
         /// this app comes from (`tools::now_millis`) -- not a second clock.
         at: u64,
@@ -44,6 +56,8 @@ pub enum TraceStep {
         duration_ms: u64,
     },
     Tool {
+        #[serde(flatten)]
+        context: Option<TraceContext>,
         at: u64,
         name: String,
         args: serde_json::Value,
@@ -53,6 +67,14 @@ pub enum TraceStep {
 }
 
 impl TraceStep {
+    pub fn with_context(mut self, value: TraceContext) -> Self {
+        match &mut self {
+            Self::Model { context, .. } | Self::Tool { context, .. } => *context = Some(value),
+        }
+        self
+    }
+
+
     /// Builds a `Model` step, truncating and redacting `request` and
     /// `outcome` before they are ever stored.
     ///
@@ -63,6 +85,7 @@ impl TraceStep {
     /// its own query string).
     pub fn model(at: u64, request: serde_json::Value, outcome: serde_json::Value, duration_ms: u64, redact: &str) -> Self {
         TraceStep::Model {
+            context: None,
             at,
             request: prepare_value(&request, redact),
             outcome: prepare_value(&outcome, redact),
@@ -81,6 +104,7 @@ impl TraceStep {
         redact: &str,
     ) -> Self {
         TraceStep::Tool {
+            context: None,
             at,
             name,
             args: prepare_value(&args, redact),
@@ -250,6 +274,18 @@ impl Trace {
         self.steps.iter().cloned().collect()
     }
 
+    pub fn incident_steps(&self, account_id: &str, turn_id: &str) -> Vec<serde_json::Value> {
+        self.steps.iter().filter_map(|step| {
+            let context = match step {
+                TraceStep::Model { context, .. } | TraceStep::Tool { context, .. } => context.as_ref()?,
+            };
+            if context.account_id != account_id || context.turn_id != turn_id { return None; }
+            let mut value = serde_json::to_value(step).ok()?;
+            value.as_object_mut()?.remove("request");
+            Some(value)
+        }).collect()
+    }
+
     pub fn clear(&mut self) {
         self.steps.clear();
     }
@@ -258,6 +294,22 @@ impl Trace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incident_evidence_is_scoped_and_never_includes_model_requests() {
+        let mut trace = Trace::new();
+        for (account, turn, text) in [("alice", "one", "selected"), ("bob", "one", "other-account"), ("alice", "two", "other-turn")] {
+            trace.push(TraceStep::model(1, serde_json::json!({"history": "private history"}), serde_json::json!({"ok": text}), 3, "")
+                .with_context(TraceContext { account_id: account.into(), turn_id: turn.into(), request_id: Some("request".into()), round: Some(1), tool_call_id: None }));
+        }
+        let evidence = trace.incident_steps("alice", "one");
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0]["outcome"]["ok"], "selected");
+        assert_eq!(evidence[0]["request_id"], "request");
+        assert!(evidence[0].get("request").is_none());
+        assert!(evidence[0].get("account_id").is_none());
+        assert!(trace.incident_steps("alice", "missing").is_empty());
+    }
 
     fn small_tool_step(at: u64) -> TraceStep {
         TraceStep::tool(

@@ -18,5 +18,5 @@ export function tauriProvider(onAccount: (view: AccountView) => void, captureEpo
 }
 
 export const tauriTools: ToolRunner = {
-  run: (name, args) => invoke("execute_tool", { name, args }),
+  run: (name, args, context) => invoke("execute_tool", { name, args, context }),
 };

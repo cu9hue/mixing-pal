@@ -262,6 +262,10 @@ impl Proxy {
         self.save_outbox(&outbox)
     }
 
+    pub fn account_id(&self) -> Option<String> {
+        self.session().ok().flatten().map(|s| s.member_id)
+    }
+
     fn required_session(&self) -> Result<Session, ProxyError> {
         self.session()?.ok_or_else(|| ProxyError::new("sign_in_required", "Sign in to Mixing Pal to continue."))
     }
