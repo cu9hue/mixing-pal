@@ -223,7 +223,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_rack_contents",
-                "description": "What is inside one Rack: each chain in order, the devices on it, and for a Drum Rack the MIDI note of its pad plus sample_name when Live exposes a sample file. Rack devices in a chain are marked [rack], just like top-level devices; keep descending those marked devices before claiming which pads a nested kit contains. A generic device name such as Simpler does not identify the sound; use sample_name or the producer's pad name, and do not claim a hat or kick when neither identifies it. Chains that are muted or soloed are marked; nothing is said about the others. Queried from Live at call time and fetched in pages. Use this when get_device_chains marks a device [rack]. An empty page describes only the requested scope; use is_rack and total_chains to distinguish a device that is not a Rack from an empty Rack. A rack with more than 128 chains is truncated and the result says so; a chain lists up to 32 devices beginning at device_offset. When next_device_offset is present, repeat with offset set to that chain index and device_offset set to next_device_offset. The device path index is device_offset plus the position in the returned device list. Chain indices from here go into the path of get_device_params to read a device inside the rack, or back into get_rack_contents for a rack nested inside a chain. Each call returns up to 128 chains starting at offset (default 0). When next_offset is present, call again with that offset; chain indices stay absolute.",
+                "description": "What is inside one Rack: each chain in order, the devices on it, and for a Drum Rack the MIDI note of its pad plus sample_name when Live exposes a sample file. Devices in a chain carry the same labels as in get_device_chains: [rack], [instrument], [midi effect], [off], and Live's own name when renamed. Keep descending those marked devices before claiming which pads a nested kit contains. A generic device name such as Simpler does not identify the sound; use sample_name or the producer's pad name, and do not claim a hat or kick when neither identifies it. Chains that are muted or soloed are marked; nothing is said about the others. Queried from Live at call time and fetched in pages. Use this when get_device_chains marks a device [rack]. An empty page describes only the requested scope; use is_rack and total_chains to distinguish a device that is not a Rack from an empty Rack. A rack with more than 128 chains is truncated and the result says so; a chain lists up to 32 devices beginning at device_offset. When next_device_offset is present, repeat with offset set to that chain index and device_offset set to next_device_offset. The device path index is device_offset plus the position in the returned device list. Chain indices from here go into the path of get_device_params to read a device inside the rack, or back into get_rack_contents for a rack nested inside a chain. Each call returns up to 128 chains starting at offset (default 0). When next_offset is present, call again with that offset; chain indices stay absolute.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -754,6 +754,18 @@ fn fitting_prefix<T: serde::Serialize>(items: &[T], budget: &mut usize) -> usize
     }).count()
 }
 
+/// Keeps the returns, the master, and as many tracks as fit the budget.
+/// Returns the first track left out, which the model then reads alone.
+fn trim_mixer_for_model(map: &mut mixer::MixerMap) -> Option<i32> {
+    let mut tracks = std::mem::take(&mut map.tracks);
+    let mut budget = MAX_MAP_BYTES.saturating_sub(MAP_METADATA_RESERVE + serde_json::to_vec(map).unwrap().len());
+    let keep = fitting_prefix(&tracks, &mut budget);
+    let first_left_out = tracks.get(keep).map(|t| t.track);
+    tracks.truncate(keep);
+    map.tracks = tracks;
+    first_left_out
+}
+
 fn trim_clip_map_for_model(map: &mut clips::ClipMap) -> bool {
     let pages: Vec<_> = map.tracks.iter_mut().map(|track| std::mem::take(&mut track.clips)).collect();
     let mut budget = MAX_MAP_BYTES.saturating_sub(MAP_METADATA_RESERVE + serde_json::to_vec(map).unwrap().len());
@@ -956,14 +968,17 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // span several seconds, and merging two clips' notes into one
             // answer is the failure this catches.
             let before = track_identity(&ctx.coalescer, track);
-            let chain_query = query.clone();
-            let outcome = clip_notes::get_clip_notes(
-                query,
-                track as i32,
-                clip as i32,
-                clip_notes::QUERY_TIMEOUT,
-            )
-            .await;
+            // The chain read sits inside the bracket too, or a moved track
+            // would put its neighbour's MIDI effects under these notes.
+            let (outcome, pre_effects) = tokio::join!(
+                clip_notes::get_clip_notes(
+                    query.clone(),
+                    track as i32,
+                    clip as i32,
+                    clip_notes::QUERY_TIMEOUT,
+                ),
+                midi_effects_before_instrument(query, track as i32),
+            );
             if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
                 return ToolResult::missing("topology_changed");
             }
@@ -1002,7 +1017,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                             json!({ "numerator": numerator, "denominator": denominator });
                         payload["bar_positions_assume_current_signature"] = json!(true);
                     }
-                    add_pre_midi_effects(&mut payload, midi_effects_before_instrument(chain_query, track as i32).await);
+                    add_pre_midi_effects(&mut payload, pre_effects);
                     ToolResult::live(payload, joined_reason(notes.missing_reason, trimmed))
                 }
                 Err(QueryError::NoReply) => ToolResult::missing("no_reply"),
@@ -1202,14 +1217,15 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // are the normal case -- the clip bracket passes and another
             // track's notes come back under this track's name.
             let before = track_identity(&ctx.coalescer, track);
-            let chain_query = query.clone();
-            let outcome = arrangement::get_arrangement_notes(
-                query,
-                track as i32,
-                index as i32,
-                arrangement::QUERY_TIMEOUT,
-            )
-            .await;
+            let (outcome, pre_effects) = tokio::join!(
+                arrangement::get_arrangement_notes(
+                    query.clone(),
+                    track as i32,
+                    index as i32,
+                    arrangement::QUERY_TIMEOUT,
+                ),
+                midi_effects_before_instrument(query, track as i32),
+            );
             if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
                 return ToolResult::missing("topology_changed");
             }
@@ -1243,7 +1259,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                         }),
                     });
                     add_bar_timing(&mut payload, result.start, result.length, signature);
-                    add_pre_midi_effects(&mut payload, midi_effects_before_instrument(chain_query, track as i32).await);
+                    add_pre_midi_effects(&mut payload, pre_effects);
                     ToolResult::live(payload, joined_reason(result.notes.missing_reason, trimmed))
                 }
                 Err(arrangement::ArrangementNotesError::NotMidi) => {
@@ -1364,11 +1380,17 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             if chains_moved(num_tracks, track_count(&ctx.coalescer), &before, &after) {
                 return ToolResult::missing("topology_changed");
             }
-            let reason = mixer::reasons(
+            let mut map = map;
+            let mut reason = mixer::reasons(
                 &map,
                 if track.is_some() { 1 } else { num_tracks },
                 if track.is_some() { 1 } else { read_tracks },
             );
+            if let Some(first) = trim_mixer_for_model(&mut map) {
+                reason = joined_reason(reason, Some(format!(
+                    "model_output_limited: tracks from {first} on are left out; read each with the track argument"
+                )));
+            }
             ToolResult::live(json!(map), reason)
         }
         "get_device_params" => {
@@ -1586,6 +1608,27 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string()
+    }
+
+    #[test]
+    fn a_large_mixer_keeps_returns_and_master_and_names_the_first_track_left_out() {
+        let send = |i: usize| mixer::Send { to: format!("«Return {i} with a long name»"), level: "-12.0 dB".into(), automation: None };
+        let mut map = mixer::MixerMap {
+            tracks: (0..512).map(|t| mixer::TrackMix {
+                track: t, volume: "0.0 dB".into(), volume_automation: None, pan: "C".into(), pan_automation: None,
+                output: "«Main»".into(), group_track: None, sends: (0..12).map(send).collect(),
+            }).collect(),
+            returns: vec![],
+            master: None,
+            missing_tracks: vec![],
+            missing_returns: vec![],
+        };
+        let first = trim_mixer_for_model(&mut map).expect("512 tracks with 12 sends exceed the budget");
+        assert_eq!(first as usize, map.tracks.len());
+        assert!(serde_json::to_vec(&map).unwrap().len() <= MAX_MAP_BYTES);
+        let mut small = mixer::MixerMap { tracks: map.tracks[..2].to_vec(), ..map };
+        assert_eq!(trim_mixer_for_model(&mut small), None);
+        assert_eq!(small.tracks.len(), 2);
     }
 
     // The pilot's «Dorian #4» was a Scale device ahead of the instrument:
@@ -2412,20 +2455,11 @@ mod tests {
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
-        assert_eq!(
-            names,
-            vec![
-                "get_track_detail",
-                "get_clip_notes",
-                "get_clips",
-                "get_arrangement",
-                "get_arrangement_notes",
-                "get_device_chains",
-                "get_mixer",
-                "get_device_params",
-                "get_rack_contents"
-            ]
-        );
+        // The proxy's allow-list is pinned to the same file.
+        let shared: serde_json::Value =
+            serde_json::from_str(include_str!("../../../shared/tool-names.json")).unwrap();
+        let shared: Vec<&str> = shared["tools"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
+        assert_eq!(names, shared);
         // Every entry must be a well-formed OpenAI function tool, or a
         // provider rejects the whole request with a 400 that reads like a
         // model problem.

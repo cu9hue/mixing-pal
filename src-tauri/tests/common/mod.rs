@@ -702,7 +702,7 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                 "/live/mixingpal/get/rack/chains" | "/live/mixingpal/get/rack/chains_range" => {
                     // `(track, path, start, total_chains, can_have_chains, *records)`,
                     // each record `name, note, mute, solo, sample_name,
-                    // total_devices, reported_devices, *(name, is_rack)` --
+                    // total_devices, reported_devices, *(name, is_rack, is_active, kind, class)` --
                     // the shape `rack_contents::decode_window` reads. The
                     // fixture names no samples and nests no racks.
                     let Some((path, detail)) = device_detail() else {
@@ -737,8 +737,12 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                         let reported = devices.len().saturating_sub(device_offset).min(32);
                         reply.push(OscType::Int(reported as i32));
                         for d in devices.iter().skip(device_offset).take(reported) {
-                            reply.push(OscType::String(d.as_str().unwrap().to_string()));
+                            let name = d.as_str().unwrap().to_string();
+                            reply.push(OscType::String(name.clone()));
                             reply.push(OscType::Int(0));
+                            reply.push(OscType::Int(1));
+                            reply.push(OscType::Int(device_kind(&name)));
+                            reply.push(OscType::String(name));
                         }
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
