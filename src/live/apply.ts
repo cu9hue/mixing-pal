@@ -105,15 +105,17 @@ export function setIdentityFrom(
 export const SELECTED_DEVICE_ADDR = "/live/view/get/selected_device";
 export const SELECTED_SLOT_ADDR = "/live/view/get/selected_clip";
 
-function pairFrom(args: unknown[]): [number, number] | null {
+/** The two indices, null when either is -1, undefined for a reply of another shape. */
+function pairFrom(args: unknown[]): [number, number] | null | undefined {
   const [a, b] = args;
-  if (args.length !== 2 || typeof a !== "number" || typeof b !== "number" || a < 0 || b < 0) return null;
-  return [a, b];
+  if (args.length !== 2 || typeof a !== "number" || typeof b !== "number") return undefined;
+  return a < 0 || b < 0 ? null : [a, b];
 }
 
 export function applyDelta(state: SetState, delta: Delta): SetState {
   if (delta.addr === SELECTED_DEVICE_ADDR) {
     const pair = pairFrom(delta.args);
+    if (pair === undefined) return state;
     const selectedDevice = pair && { track: pair[0], device: pair[1] };
     const same = selectedDevice?.track === state.selectedDevice?.track && selectedDevice?.device === state.selectedDevice?.device;
     return same ? state : { ...state, selectedDevice };
@@ -121,6 +123,7 @@ export function applyDelta(state: SetState, delta: Delta): SetState {
 
   if (delta.addr === SELECTED_SLOT_ADDR) {
     const pair = pairFrom(delta.args);
+    if (pair === undefined) return state;
     const selectedSlot = pair && { track: pair[0], scene: pair[1] };
     const same = selectedSlot?.track === state.selectedSlot?.track && selectedSlot?.scene === state.selectedSlot?.scene;
     return same ? state : { ...state, selectedSlot };
