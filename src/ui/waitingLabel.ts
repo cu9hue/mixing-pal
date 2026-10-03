@@ -1,7 +1,7 @@
 /**
  * How long a turn runs before the label admits how long it has been running.
  *
- * Below this the producer gets a plain "Thinking…": a timer on a two-second
+ * Below this the producer gets the verb alone: a timer on a two-second
  * answer makes a fast reply feel measured, and there is nothing to decide
  * yet. Past it she is waiting long enough to wonder whether the app has hung,
  * and the honest answer is a number.
@@ -19,10 +19,8 @@ export interface WaitingState {
 }
 
 /**
- * What the card says between reads, in turn. A reasoning model can think for
- * a minute without a read, and one word for a minute looks like a hang. The
- * verbs are plain and name no act the app could check or a sound it cannot
- * hear, so none of them can be wrong about what the model is doing.
+ * A reasoning model can think for a minute between reads; one word that long looks
+ * like a hang. No verb names an act the app could check or a sound it would hear.
  */
 const VERBS = ["Thinking…", "Checking the details…", "Comparing parts…", "Working it out…", "Putting it together…"];
 
@@ -42,9 +40,6 @@ function reads(n: number): string {
  * and the final stretch while the model writes prose were all silent. This
  * fills those gaps without displacing the tool line, which names her music
  * and is strictly the better thing to show when it applies.
- *
- * The count of reads rides on the tool line from the second read on, and on
- * the thinking line once there has been one.
  */
 export function waitingLabel({ busy, toolProgress, toolsCalled, elapsedMs }: WaitingState): string | null {
   if (!busy) return null;

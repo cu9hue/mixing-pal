@@ -23,8 +23,8 @@ export type CompletionInput = z.infer<typeof completionInput>;
 
 export const POLICY_VERSION = "k26-2026-10-03";
 export const MAX_CONTEXT = 262_144;
-// Reasoning spends from the same cap as the answer; at 4096 a long think
-// left no room for the answer and the producer got a blank card.
+// Reasoning spends from the same cap as the answer. A tighter cap lets a long
+// think use it all, and the producer gets a blank card.
 export const MAX_OUTPUT = 12_000;
 export const MAX_PROMPT_PRICE = 1.0;
 export const MAX_COMPLETION_PRICE = 4.0;
