@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ApiError, MODEL, readJson } from "./env";
 
-const toolNames = z.enum(["get_track_detail", "get_clips", "get_clip_notes", "get_arrangement",
+export const toolNames = z.enum(["get_track_detail", "get_clips", "get_clip_notes", "get_arrangement",
   "get_arrangement_notes", "get_device_chains", "get_mixer", "get_device_params", "get_rack_contents"]);
 export const toolCall = z.object({ id: z.string().min(1).max(200), type: z.literal("function"),
   function: z.object({ name: toolNames, arguments: z.string().max(65_536) }) });

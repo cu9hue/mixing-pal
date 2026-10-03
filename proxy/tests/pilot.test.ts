@@ -5,7 +5,8 @@ import { hash, DAY } from "../src/env";
 import { settle } from "../src/ledger";
 import { redeem } from "../src/account";
 import { maintain } from "../src/maintenance";
-import { RESERVATION } from "../src/policy";
+import { RESERVATION, toolNames } from "../src/policy";
+import sharedTools from "../../shared/tool-names.json";
 import { runTurn } from "../../src/agent/loop";
 
 async function capturedObjects() { return (await env.CAPTURE.list()).objects.filter((object) => !object.key.startsWith("deletions/")); }
@@ -446,16 +447,17 @@ describe("metered requests", () => {
     expect((await env.DB.prepare("SELECT * FROM requests").all()).results[0].usage).not.toContain("secret project");
   });
 
-  test("accepts every tool the app offers", async () => {
+  // shared/tool-names.json is pinned to the app's tool schema by a Rust test.
+  test("allows exactly the tools the app offers", async () => {
+    expect([...toolNames.options].sort()).toEqual([...sharedTools.tools].sort());
     const user = await joined();
     reply();
     const request = question();
-    request.body.tools = ["get_track_detail", "get_clip_notes", "get_clips", "get_arrangement", "get_arrangement_notes",
-      "get_device_chains", "get_mixer", "get_device_params", "get_rack_contents"]
+    request.body.tools = sharedTools.tools
       .map((name) => ({ type: "function", function: { name, description: "Read the set", parameters: { type: "object" } } }));
     const response = await api("/v1/completions", request, user.token);
     expect(response.status, await response.clone().text()).toBe(200);
-    expect(sent[0].tools).toHaveLength(9);
+    expect(sent[0].tools).toHaveLength(sharedTools.tools.length);
   });
 
   test("declines exhausted or revoked accounts before an upstream generation", async () => {
