@@ -30,9 +30,8 @@ function trackLabel(state: SetState, track: number): string {
 }
 
 /**
- * Where she is working, from what the mirror already holds: the loop brace
- * while it is on, and the device and Session slot she has selected. The
- * device is an index, because the mirror holds no device names.
+ * Where she is working, from what the mirror already holds. The device is
+ * an index, because the mirror holds no device names.
  */
 function focusParts(state: SetState): string[] {
   const parts: string[] = [];

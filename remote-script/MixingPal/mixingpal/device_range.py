@@ -10,8 +10,7 @@ def device_record(device):
     """(name, is_rack, is_active, kind, class_name) for one device in a listing.
 
     `kind` is Live's Device.type (1 instrument, 2 audio effect, 4 MIDI effect).
-    The class name survives a rename: a Scale device called "Dorian #4" is
-    still "Scale", and a name alone does not say what a device does.
+    The class name survives a rename: a Scale called "Dorian #4" is still "Scale".
     """
     return (str(device.name)[:NAME_CAP], bool(device.can_have_chains), bool(device.is_active),
             int(device.type), str(device.class_display_name)[:NAME_CAP])

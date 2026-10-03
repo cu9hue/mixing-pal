@@ -28,7 +28,6 @@ pub struct TrackMix {
     pub pan_automation: Option<&'static str>,
     /// Fenced: often another track's name, such as a bus.
     pub output: String,
-    /// The Group track this track sits in.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_track: Option<i32>,
     pub sends: Vec<Send>,
@@ -153,9 +152,8 @@ async fn return_count(q: &LiveQuery, timeout: Duration) -> Option<i32> {
     }
 }
 
-/// Every selected track's mixer, every return, and the master, in one
-/// concurrent fan-out. Returns are read first: a send is named by the return
-/// it feeds.
+/// Every selected track's mixer, every return, and the master. Returns are
+/// read before tracks, because a send is named by the return it feeds.
 pub async fn get_mixer(q: Arc<LiveQuery>, tracks: std::ops::Range<i32>, timeout: Duration) -> MixerMap {
     let num_returns = return_count(&q, timeout).await;
     let return_reads: Vec<_> = (0..num_returns.unwrap_or(0))
