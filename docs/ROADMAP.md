@@ -212,12 +212,25 @@ Ordered. Each item says what, why, size, and what it waits on.
     what she decided. It is built from the set's saved thread and notes, so
     it costs no model call. She can dismiss it.
 
+12. **Kimi K2.6 as the default.** Built 2026-10-03. A pilot trace showed
+    MiniMax M3 claiming reads it never made, misreading a set built from
+    one-shot clips, and offering reads instead of making them. Routed the
+    way the proxy routes, the honesty evals passed 58 of 60 runs for K2.6
+    with low reasoning and 44 of 60 for M3. The proxy now serves K2.6 on six
+    zero-retention int4, fp8 and bf16 hosts with a 12,000-token output cap,
+    because reasoning spends from the same cap as the answer. A typical turn
+    takes about 20 seconds and costs about $0.03 to $0.08, so the $5
+    allowance buys fewer turns. While the model thinks, the card turns
+    through plain verbs. The direct provider path keeps M3, because it
+    cannot set the reasoning effort or the cap. Next: the craft suite on
+    K2.6.
+
 ## When the waitlist says go
 
 All specced or named already. The order is fixed by the gate.
 
 1. **Model access.** Free invited pilot implemented: email-code accounts,
-   single-use invitations, a server-owned MiniMax M3 route, and atomic usage
+   single-use invitations, a server-owned Kimi K2.6 route, and atomic usage
    reservations against a $5 account allowance for 30 days and a $50 pilot
    ceiling. Public builds use the proxy; the direct provider path requires
    an explicit development feature. Quality sharing starts off, retains
