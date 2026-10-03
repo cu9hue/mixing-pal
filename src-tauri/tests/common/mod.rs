@@ -178,6 +178,16 @@ fn arrangement_clip_exists(track: &Value, index: Option<i32>) -> bool {
         .unwrap_or(false)
 }
 
+/// Live's `Device.type` for a fixture device, from its name: the fixtures
+/// name devices by their Live class.
+fn device_kind(name: &str) -> i32 {
+    match name {
+        "Drum Rack" | "Instrument Rack" | "Operator" | "Sampler" | "Simpler" | "Wavetable" => 1,
+        "Scale" | "Chord" | "Arpeggiator" => 4,
+        _ => 2,
+    }
+}
+
 /// A Live that answers from the fixture.
 ///
 /// A device answers `/live/mixingpal/get/device/identity`, the parameter
@@ -235,6 +245,22 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                 Some(OscType::String(s)) => Some(s.clone()),
                 _ => None,
             };
+            // The fixtures have no return tracks; the master holds no devices.
+            match req.addr.as_str() {
+                "/live/return/get/num_returns" => {
+                    let _ = live.send_to(app_port, &req.addr, vec![OscType::Int(0)]).await;
+                    continue;
+                }
+                "/live/mixingpal/get/master_mixer" => {
+                    let reply = vec![
+                        OscType::String("Main".into()), OscType::String("0.0 dB".into()), OscType::Int(0),
+                        OscType::String("C".into()), OscType::Int(0), OscType::Int(0),
+                    ];
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                    continue;
+                }
+                _ => {}
+            }
             let Some(track_index) = int_at(0) else {
                 continue;
             };
@@ -314,9 +340,22 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                     let devices = track["devices"].as_array().unwrap();
                     let mut reply = vec![OscType::Int(track_index), OscType::Int(start as i32), OscType::Int(devices.len() as i32)];
                     for (index, device) in devices.iter().enumerate().skip(start).take(span.min(16)) {
-                        reply.push(OscType::String(device.as_str().unwrap().to_string()));
+                        let name = device.as_str().unwrap().to_string();
+                        reply.push(OscType::String(name.clone()));
                         reply.push(OscType::Bool(track["racks"][index].as_bool().unwrap_or(false)));
+                        reply.push(OscType::Bool(true));
+                        reply.push(OscType::Int(device_kind(&name)));
+                        reply.push(OscType::String(name));
                     }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
+                "/live/mixingpal/get/track_mixer" => {
+                    let volume = track["volumeDb"].as_str().unwrap_or("0.0 dB").to_string();
+                    let reply = vec![
+                        OscType::Int(track_index), OscType::String(volume), OscType::Int(0),
+                        OscType::String("C".into()), OscType::Int(0), OscType::String("Main".into()),
+                        OscType::Int(-1), OscType::Int(0),
+                    ];
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
                 "/live/track/get/devices/name" => {
@@ -626,6 +665,20 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                             ],
                         )
                         .await;
+                }
+                addr @ "/live/device/get/parameters/automation_state_range" => {
+                    let Some((path, detail)) = device_detail() else {
+                        continue;
+                    };
+                    let start = int_at(2).unwrap_or(0).max(0) as usize;
+                    let span = int_at(3).unwrap_or(0).max(0) as usize;
+                    let params = detail["params"].as_array().cloned().unwrap_or_default();
+                    let mut reply = vec![OscType::Int(track_index), OscType::String(path), OscType::Int(start as i32)];
+                    // A fixture parameter's optional third field is its automation state.
+                    for p in params.iter().skip(start).take(span) {
+                        reply.push(OscType::Int(p.get(2).and_then(Value::as_i64).unwrap_or(0) as i32));
+                    }
+                    let _ = live.send_to(app_port, addr, reply).await;
                 }
                 addr @ ("/live/device/get/parameters/name_range"
                 | "/live/device/get/parameters/value_string_range") => {

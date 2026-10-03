@@ -326,7 +326,12 @@ async fn the_oneshot_fixture_reads_as_staggered_entries() {
     assert_eq!(notes.missing_reason, None);
     assert!(notes.value["notes"].as_array().unwrap().iter().all(|n| n["note"] == "D1"), "{}", notes.value);
     let chains = execute(&ctx, "get_device_chains", &json!({})).await;
-    assert_eq!(chains.value["tracks"][6]["devices"], json!(["«Sampler»", "«EQ Eight»"]), "{}", chains.value);
+    assert_eq!(chains.value["tracks"][6]["devices"], json!(["«Sampler» [instrument]", "«EQ Eight»"]), "{}", chains.value);
+    let mixer = execute(&ctx, "get_mixer", &json!({})).await;
+    assert_eq!(mixer.missing_reason, None, "{}", mixer.value);
+    assert_eq!(mixer.value["tracks"].as_array().unwrap().len(), 8);
+    assert_eq!(mixer.value["tracks"][5]["volume"], "-5.0 dB");
+    assert_eq!(mixer.value["master"]["name"], "«Main»");
 }
 
 const HAT_ENTRY: (&str, &str) = ("hat_entry_correct", "The answer says the Closed Hat first plays in bar 3 (3.1.3, or bar 3 beat 1). It gives no other bar as the hat's first entry.");

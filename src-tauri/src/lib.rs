@@ -186,6 +186,12 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/arrangement_clip/get/notes_window",
     "/live/mixingpal/get/cue_points",
     "/live/mixingpal/get/set_identity",
+    // get_device_params' automation flags and get_mixer.
+    "/live/device/get/parameters/automation_state_range",
+    "/live/return/get/num_returns",
+    "/live/mixingpal/get/track_mixer",
+    "/live/mixingpal/get/return_mixer",
+    "/live/mixingpal/get/master_mixer",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,

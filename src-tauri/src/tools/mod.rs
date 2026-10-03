@@ -4,6 +4,7 @@ pub mod clips;
 pub mod device_chains;
 pub mod device_params;
 pub mod fence;
+pub mod mixer;
 pub mod path;
 pub mod rack_contents;
 pub mod track_detail;
@@ -95,7 +96,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_track_detail",
-                "description": "Mixer state for one track: name, fader position, fader in dB, pan, mute, solo. Read from a local mirror that is refreshed about every 2 seconds, so the result carries the age of the data. Does not include devices.",
+                "description": "Mixer state for one track: name, fader position, fader in dB, pan, mute, solo. Read from a local mirror that is refreshed about every 2 seconds, so the result carries the age of the data. Does not include devices. For sends, routing, groups, return tracks, the master, and whether the fader or pan is automated, use get_mixer.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -109,7 +110,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_clip_notes",
-                "description": "MIDI notes in the source note_range of one session-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker, not necessarily zero. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. When the song's current signature is known, use each note's clip_position in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit, computed from the song signature (bar_positions_assume_current_signature). A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. The result also gives source_length_beats and loop_region, with readable start_position/end_position when possible. A note with mute true does not sound and must be excluded from rhythm or harmony claims. source_length_beats is the source clip length, not a finite playback span: when looping is true, its source notes repeat while the clip is launched. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read. Source notes and loop state are checked before and after the read; clip_changed means discard and retry after the clip is stable. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
+                "description": "MIDI notes in the source note_range of one session-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker, not necessarily zero. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. When the song's current signature is known, use each note's clip_position in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit, computed from the song signature (bar_positions_assume_current_signature). A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. The result also gives source_length_beats and loop_region, with readable start_position/end_position when possible. A note with mute true does not sound and must be excluded from rhythm or harmony claims. source_length_beats is the source clip length, not a finite playback span: when looping is true, its source notes repeat while the clip is launched. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. Queried from Live at call time. A dense clip is fetched in pieces; if a piece cannot be read the result says so. Clip slot indices come from get_clips, which also says whether the track is MIDI; an audio clip has no notes to read. Source notes and loop state are checked before and after the read; clip_changed means discard and retry after the clip is stable. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging. pre_midi_effects lists MIDI effects, such as Scale, Chord or Arpeggiator, that sit before the track's instrument: they change the notes before they sound, so these are the notes the clip sends, not what plays. pre_midi_effects_unread means the chain could not be read to check.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -157,7 +158,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "MIDI notes in the source note_range of one arrangement-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. timeline_position is provided only for notes on the first pass within the placement: result.start_beats + note.start - source_start_beats. Notes before the start marker may sound on a later loop; absence of timeline_position does not mean they never play. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes start_position, one-based bar.beat.sixteenth, and length_bars. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
+                "description": "MIDI notes in the source note_range of one arrangement-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. timeline_position is provided only for notes on the first pass within the placement: result.start_beats + note.start - source_start_beats. Notes before the start marker may sound on a later loop; absence of timeline_position does not mean they never play. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes start_position, one-based bar.beat.sixteenth, and length_bars. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging. pre_midi_effects lists MIDI effects, such as Scale, Chord or Arpeggiator, that sit before the track's instrument: they change the notes before they sound, so these are the notes the clip sends, not what plays. pre_midi_effects_unread means the chain could not be read to check.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -173,7 +174,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_device_chains",
-                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master tracks are not covered. A Rack is listed as one device, marked [rack]; call get_rack_contents on it to see what is inside. Whether a device is switched on or bypassed is not reported. Queried from Live at call time in bounded pages. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. An empty list means no devices in the returned scope; check missing and next_device_offset before claiming the whole track is empty. Tracks that did not answer are listed separately under missing. The combined map also has an output byte budget. Device indices equal device_offset plus the position in the returned list. If next_device_offset is present, request that track with device_offset set to it. An empty page describes only the returned scope.",
+                "description": "The device chain on every regular track, in order, named as the producer named them. Return and master chains come from get_mixer. A Rack is listed as one device, marked [rack]; call get_rack_contents on it to see what is inside. When the producer renamed a device, Live's own name for it follows in parentheses: «Dorian #4» (Scale) is a Scale device. [instrument] and [midi effect] mark what a device is; an unmarked device is an audio effect. [off] marks a device switched off right now, which may be automation at the playhead. Queried from Live at call time in bounded pages. Call this first to find out which devices exist and what their indices are, then use get_device_params to read one. An empty list means no devices in the returned scope; check missing and next_device_offset before claiming the whole track is empty. Tracks that did not answer are listed separately under missing. The combined map also has an output byte budget. Device indices equal device_offset plus the position in the returned list. If next_device_offset is present, request that track with device_offset set to it. An empty page describes only the returned scope.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -187,8 +188,22 @@ pub fn tool_schema() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "get_mixer",
+                "description": "The mixer, queried from Live at call time. For each track: volume and pan as Live shows them, its sends named by the return track each one feeds, its output routing, and group_track, the index of the Group it sits in. For each return track and the master: level, pan, and device chain, labelled as get_device_chains labels devices. A volume_automation, pan_automation, or send automation field means that control is automated: the value shown is only its value at the playhead, never the setting; \"overridden\" means the producer moved it off its automation. Routing and levels are settings, not sound: a send level says nothing about how loud the reverb is. Tracks, returns, or the master that did not answer are named in missing_reason. Supply track to read one track; returns and the master are always read.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "track": {"type":"integer","minimum":0,"description":"Optional zero-based track index; omit to read every track."}
+                    },
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "get_device_params",
-                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. The device's on/off switch is itself a parameter, conventionally the first one and named Device On, so a device listed in the chain may be switched off and this is how to find out. On a Rack this returns the Rack's own macros; for the devices inside it use get_rack_contents and then pass a longer path here. A device with more than 256 parameters is truncated and the result says so. Each call returns up to 256 parameters starting at offset (default 0). When next_offset is present, call again with that offset; parameter indices stay absolute.",
+                "description": "Every parameter of one device, as a name and a formatted value such as \"80.0 Hz\" or \"-12.0 dB\". Queried from Live at call time and fetched in pages. Device indices come from get_device_chains. The device's on/off switch is itself a parameter, conventionally the first one and named Device On, so a device listed in the chain may be switched off and this is how to find out. On a Rack this returns the Rack's own macros; for the devices inside it use get_rack_contents and then pass a longer path here. A device with more than 256 parameters is truncated and the result says so. Each call returns up to 256 parameters starting at offset (default 0). When next_offset is present, call again with that offset; parameter indices stay absolute. A parameter with automation \"automated\" is automated: its value is only the value at the playhead, never the setting; \"overridden\" means the producer moved it off its automation.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -525,6 +540,32 @@ fn arrangement_payload(
         }
     }
     payload
+}
+
+/// MIDI effects ahead of the track's first instrument change the notes a clip
+/// sends before they sound. `None` when the chain did not answer.
+async fn midi_effects_before_instrument(query: Arc<LiveQuery>, track: i32) -> Option<Vec<String>> {
+    let map = device_chains::get_device_chains_range(query, track, track + 1, 0, 256, device_chains::QUERY_TIMEOUT).await;
+    let chain = map.tracks.into_iter().next()?;
+    Some(effects_before_instrument(chain.devices, chain.kinds))
+}
+
+fn effects_before_instrument(devices: Vec<String>, kinds: Vec<i32>) -> Vec<String> {
+    devices
+        .into_iter()
+        .zip(kinds)
+        .take_while(|(_, kind)| *kind != device_chains::INSTRUMENT)
+        .filter(|(_, kind)| *kind == device_chains::MIDI_EFFECT)
+        .map(|(label, _)| label)
+        .collect()
+}
+
+fn add_pre_midi_effects(payload: &mut serde_json::Value, effects: Option<Vec<String>>) {
+    match effects {
+        Some(effects) if effects.is_empty() => {}
+        Some(effects) => payload["pre_midi_effects"] = json!(effects),
+        None => payload["pre_midi_effects_unread"] = json!(true),
+    }
 }
 
 fn add_bar_timing(
@@ -915,6 +956,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // span several seconds, and merging two clips' notes into one
             // answer is the failure this catches.
             let before = track_identity(&ctx.coalescer, track);
+            let chain_query = query.clone();
             let outcome = clip_notes::get_clip_notes(
                 query,
                 track as i32,
@@ -960,6 +1002,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                             json!({ "numerator": numerator, "denominator": denominator });
                         payload["bar_positions_assume_current_signature"] = json!(true);
                     }
+                    add_pre_midi_effects(&mut payload, midi_effects_before_instrument(chain_query, track as i32).await);
                     ToolResult::live(payload, joined_reason(notes.missing_reason, trimmed))
                 }
                 Err(QueryError::NoReply) => ToolResult::missing("no_reply"),
@@ -1159,6 +1202,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             // are the normal case -- the clip bracket passes and another
             // track's notes come back under this track's name.
             let before = track_identity(&ctx.coalescer, track);
+            let chain_query = query.clone();
             let outcome = arrangement::get_arrangement_notes(
                 query,
                 track as i32,
@@ -1199,6 +1243,7 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                         }),
                     });
                     add_bar_timing(&mut payload, result.start, result.length, signature);
+                    add_pre_midi_effects(&mut payload, midi_effects_before_instrument(chain_query, track as i32).await);
                     ToolResult::live(payload, joined_reason(result.notes.missing_reason, trimmed))
                 }
                 Err(arrangement::ArrangementNotesError::NotMidi) => {
@@ -1285,6 +1330,46 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 json!({ "tracks": map.tracks, "missing": map.missing, "scope": {"track":track,"device_offset":device_offset} }),
                 missing_reason,
             )
+        }
+        "get_mixer" => {
+            let track = match args.get("track") {
+                None => None,
+                Some(_) => match int_arg(args, "track").filter(|t| (0..i64::from(i32::MAX)).contains(t)) {
+                    Some(t) => Some(t),
+                    None => return ToolResult::missing("bad_arguments"),
+                },
+            };
+            let Some(num_tracks) = track_count(&ctx.coalescer).filter(|n| *n >= 0) else {
+                return ToolResult::missing("not_in_mirror");
+            };
+            let read_tracks = num_tracks.min(MAX_FANOUT_TRACKS);
+            if track.is_some_and(|t| t >= num_tracks) { return ToolResult::missing("track_out_of_range"); }
+            let selected = track.map_or(0..read_tracks, |t| t..t + 1);
+            let query = match ctx.query.lock() {
+                Ok(q) => q.clone(),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            let Some(query) = query else {
+                return ToolResult::missing("not_connected");
+            };
+            // The same bracket as the other whole-set reads: a reorder during
+            // the fan-out would put one track's sends under another's index.
+            let before: Vec<Option<serde_json::Value>> = selected.clone()
+                .map(|t| track_identity(&ctx.coalescer, t))
+                .collect();
+            let map = mixer::get_mixer(query, selected.start as i32..selected.end as i32, mixer::QUERY_TIMEOUT).await;
+            let after: Vec<Option<serde_json::Value>> = selected
+                .map(|t| track_identity(&ctx.coalescer, t))
+                .collect();
+            if chains_moved(num_tracks, track_count(&ctx.coalescer), &before, &after) {
+                return ToolResult::missing("topology_changed");
+            }
+            let reason = mixer::reasons(
+                &map,
+                if track.is_some() { 1 } else { num_tracks },
+                if track.is_some() { 1 } else { read_tracks },
+            );
+            ToolResult::live(json!(map), reason)
         }
         "get_device_params" => {
             let Some(offset) = offset_arg(args, "offset") else { return ToolResult::missing("bad_arguments"); };
@@ -1503,28 +1588,46 @@ mod tests {
             .to_string()
     }
 
+    // The pilot's «Dorian #4» was a Scale device ahead of the instrument:
+    // every note the clip sent was moved before it sounded.
     #[test]
-    fn the_chain_map_does_not_claim_to_cover_returns_or_master() {
-        // It iterates song.tracks; returns and master need
-        // /live/return/get/*, a separate address family. A model told it saw
-        // the whole mix will report no reverb when the reverb is on a
-        // return.
-        let description = description_of("get_device_chains");
-        assert!(description.contains("every regular track"));
-        assert!(description.contains("Return and master tracks are not covered"));
+    fn only_midi_effects_ahead_of_the_instrument_change_what_plays() {
+        let devices = ["«Dorian #4» (Scale) [midi effect]", "«Bass» (Operator) [instrument]", "«Arp» (Arpeggiator) [midi effect]", "«EQ»"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(effects_before_instrument(devices, vec![4, 1, 4, 2]), vec!["«Dorian #4» (Scale) [midi effect]"]);
+        assert!(effects_before_instrument(vec!["«Bass»".into()], vec![1]).is_empty());
+        let mut payload = json!({});
+        add_pre_midi_effects(&mut payload, None);
+        assert_eq!(payload["pre_midi_effects_unread"], true);
+        let mut payload = json!({});
+        add_pre_midi_effects(&mut payload, Some(vec![]));
+        assert_eq!(payload, json!({}));
     }
 
     #[test]
-    fn the_chain_map_does_not_let_the_model_assume_a_listed_device_is_switched_on() {
-        // The chain map carries names and nothing else, so a bypassed EQ is
-        // byte-identical to an active one in it. The description is the only
-        // channel the model reads -- a limit recorded in the spec alone does
-        // not reach it. Without this it describes a bypassed EQ's 80 Hz low
-        // cut as if it were shaping the bass.
-        assert!(
-            description_of("get_device_chains")
-                .contains("Whether a device is switched on or bypassed is not reported")
-        );
+    fn the_chain_map_points_at_the_mixer_for_returns_and_master() {
+        // It iterates song.tracks. A model told it saw the whole mix will
+        // report no reverb when the reverb is on a return.
+        let description = description_of("get_device_chains");
+        assert!(description.contains("every regular track"));
+        assert!(description.contains("Return and master chains come from get_mixer"));
+    }
+
+    #[test]
+    fn the_chain_map_says_what_its_labels_mean() {
+        // [off] is the state at the playhead, which automation can change.
+        let description = description_of("get_device_chains");
+        for label in ["[off]", "[midi effect]", "[instrument]", "(Scale)", "automation at the playhead"] {
+            assert!(description.contains(label), "{label}");
+        }
+    }
+
+    #[test]
+    fn automation_is_never_presented_as_the_setting() {
+        for tool in ["get_device_params", "get_mixer"] {
+            assert!(description_of(tool).contains("only the value at the playhead") || description_of(tool).contains("only its value at the playhead"), "{tool}");
+        }
     }
 
     #[test]
@@ -2301,8 +2404,7 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_lists_exactly_the_eight_tools_the_model_may_call() {
-        // Renamed from seven. get_arrangement_notes is the eighth.
+    fn the_schema_lists_exactly_the_tools_the_model_may_call() {
         let schema = tool_schema();
         let names: Vec<&str> = schema
             .as_array()
@@ -2319,6 +2421,7 @@ mod tests {
                 "get_arrangement",
                 "get_arrangement_notes",
                 "get_device_chains",
+                "get_mixer",
                 "get_device_params",
                 "get_rack_contents"
             ]
