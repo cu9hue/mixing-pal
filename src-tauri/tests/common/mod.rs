@@ -871,6 +871,9 @@ pub struct Turn {
     /// Wall-clock milliseconds from the start of `ask_with` to its return,
     /// tool execution included. `round_trip_ms` is the provider share of it.
     pub turn_ms: u64,
+    /// Provider calls repeated after a transport error. A network fault is
+    /// not the model's answer, so it is retried rather than scored.
+    pub transport_retries: usize,
 }
 
 impl Turn {
@@ -941,18 +944,28 @@ pub async fn ask_after(
     let mut calls: Vec<ToolCallRecord> = Vec::new();
     let mut round_trip_ms: Vec<u64> = Vec::new();
 
+    let mut transport_retries = 0;
     for _ in 0..MAX_ROUND_TRIPS {
-        let started = std::time::Instant::now();
-        let completion = match build_body(s, experience, &messages) {
-            Ok(mut body) => {
-                if let Some(t) = temperature {
-                    body["temperature"] = json!(t);
+        let (completion, elapsed) = loop {
+            let started = std::time::Instant::now();
+            let completion = match build_body(s, experience, &messages) {
+                Ok(mut body) => {
+                    if let Some(t) = temperature {
+                        body["temperature"] = json!(t);
+                    }
+                    route_like_the_proxy(&mut body);
+                    complete_with_body(&http, s, body).await
                 }
-                complete_with_body(&http, s, body).await
+                Err(e) => Err(e),
+            };
+            match completion {
+                Err(e) if is_transport_error(&e) && transport_retries < TRANSPORT_RETRIES => {
+                    transport_retries += 1;
+                }
+                completion => break (completion, started.elapsed()),
             }
-            Err(e) => Err(e),
         };
-        round_trip_ms.push(started.elapsed().as_millis() as u64);
+        round_trip_ms.push(elapsed.as_millis() as u64);
         let completion = match completion {
             Ok(c) => c,
             Err(e) => {
@@ -965,10 +978,20 @@ pub async fn ask_after(
                     error: Some(e),
                     round_trip_ms,
                     turn_ms: turn_started.elapsed().as_millis() as u64,
+                    transport_retries,
                 };
             }
         };
         if completion.tool_calls.is_empty() {
+            // A blank answer, kept for replay against the provider to see why.
+            if let (true, Ok(dir), Ok(body)) = (
+                completion.text.trim().is_empty(),
+                std::env::var("MIXINGPAL_EVAL_DUMP"),
+                build_body(s, experience, &messages),
+            ) {
+                let name = format!("{dir}/blank-{}-{}.json", s.model.replace('/', "_"), crate_now_millis());
+                let _ = std::fs::write(name, body.to_string());
+            }
             return Turn {
                 answer: strip_note_blocks(&completion.text),
                 raw_answer: completion.text,
@@ -978,6 +1001,7 @@ pub async fn ask_after(
                 error: None,
                 round_trip_ms,
                 turn_ms: turn_started.elapsed().as_millis() as u64,
+                transport_retries,
             };
         }
         messages.push(ChatMessage {
@@ -1010,5 +1034,249 @@ pub async fn ask_after(
         error: None,
         round_trip_ms,
         turn_ms: turn_started.elapsed().as_millis() as u64,
+        transport_retries,
+    }
+}
+
+/// The fields `providerBody` in proxy/src/policy.ts adds before a request
+/// reaches the model: reasoning off and only hosts that keep no data. An
+/// eval without them scores a model on hosts and settings no producer gets.
+/// MIXINGPAL_EVAL_PROVIDERS pins hosts (comma-separated, the proxy's `only`)
+/// and MIXINGPAL_EVAL_QUANTIZATIONS limits precision, the way a route list
+/// for a new default would. MIXINGPAL_EVAL_REASONING=low|medium|high scores
+/// a policy that turns reasoning on, and MIXINGPAL_EVAL_MAX_TOKENS the
+/// output cap it needs: reasoning spends from the same cap as the answer.
+pub fn route_like_the_proxy(body: &mut Value) {
+    if let Some(cap) = std::env::var("MIXINGPAL_EVAL_MAX_TOKENS").ok().and_then(|v| v.parse::<u64>().ok()) {
+        body["max_tokens"] = json!(cap);
+    }
+    body["reasoning"] = match std::env::var("MIXINGPAL_EVAL_REASONING") {
+        Ok(effort) if effort != "off" => json!({ "effort": effort }),
+        _ => json!({ "enabled": false }),
+    };
+    body["provider"] = json!({ "require_parameters": true, "data_collection": "deny", "zdr": true });
+    let list = |name: &str| std::env::var(name).ok().map(|v| v.split(',').map(str::trim).map(String::from).collect::<Vec<_>>());
+    if let Some(only) = list("MIXINGPAL_EVAL_PROVIDERS") {
+        body["provider"]["only"] = json!(only);
+    }
+    if let Some(quantizations) = list("MIXINGPAL_EVAL_QUANTIZATIONS") {
+        body["provider"]["quantizations"] = json!(quantizations);
+    }
+}
+
+fn crate_now_millis() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()
+}
+
+/// Repeats of one provider call after a transport error, before the turn
+/// reports it. Two, so a dropped connection costs a retry, not a verdict.
+pub const TRANSPORT_RETRIES: usize = 2;
+
+/// A failure of the network or the provider, not an answer from the model.
+/// The strings are `model.rs`'s transport errors and status reports.
+pub fn is_transport_error(e: &str) -> bool {
+    e.contains("could not reach")
+        || e.contains("could not read the reply")
+        || e.contains("did not answer within")
+        || e.contains(" returned 429")
+        || e.contains(" returned 5")
+}
+
+#[test]
+fn transport_errors_are_told_apart_from_answers() {
+    assert!(is_transport_error("could not reach https://x/chat/completions: error sending request"));
+    assert!(is_transport_error("could not read the reply from https://x: error decoding response body"));
+    assert!(is_transport_error("https://x returned 502 Bad Gateway: upstream"));
+    assert!(is_transport_error("https://x returned 429 Too Many Requests: slow down"));
+    assert!(!is_transport_error("https://x returned 401 Unauthorized: invalid api key"));
+    assert!(!is_transport_error("https://x returned 400 Bad Request: no such model"));
+}
+
+/// Runs per scenario: MIXINGPAL_EVAL_RUNS, default 5. One run cannot tell a
+/// model that passes 70% of the time from one that passes 95%.
+pub fn runs() -> usize {
+    std::env::var("MIXINGPAL_EVAL_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(5)
+}
+
+/// The share of valid runs a scenario must pass to stay green.
+pub const MIN_PASS_RATE: f64 = 0.8;
+
+/// Phrases that offer the producer a read instead of making it.
+const OFFERS: &[&str] = &[
+    "want me to pull", "want me to read", "want me to check", "want me to look",
+    "say the word", "say go", "i can pull", "i can check",
+    "shall i pull", "shall i read", "let me know if you want me to", "if you'd like me to",
+];
+
+/// Why the answer talks tools to the producer, or `None`. Tool names and
+/// offers to read are for the model; a pilot answer did both.
+pub fn tool_talk(answer: &str) -> Option<String> {
+    let a = answer.to_lowercase();
+    if a.contains("get_") {
+        return Some("names a tool".into());
+    }
+    OFFERS.iter().find(|o| a.contains(*o)).map(|o| format!("offers a read: {o:?}"))
+}
+
+#[test]
+fn tool_talk_catches_tool_names_and_offers_only() {
+    assert!(tool_talk("call this with get_rack_contents to see").is_some());
+    assert!(tool_talk("I can pull the exact knobs if you say go.").is_some());
+    assert!(tool_talk("Let me know if you want me to check the rack.").is_some());
+    assert!(tool_talk("The hat comes in at bar 3. **Leave it.**").is_none());
+}
+
+const JUDGE_PROMPT: &str = "You check one answer from a copilot for music producers \
+working in Ableton Live. The copilot read the producer's set with tools; you cannot see \
+the set. The properties are the answer key: every fact a property states about the set is \
+true. Check the answer against them. A fact in the answer that the property does not \
+mention is not an error unless it contradicts the key. Never fail an answer because you \
+cannot see the set. Style, length, and tone do not matter. Reply with one JSON object and nothing \
+else: {\"<property key>\": {\"reason\": \"<one or two sentences checking the answer against the key>\", \
+\"pass\": true or false}}, with every property key. Write the reason first, then the verdict that \
+follows from it.";
+
+/// The judge for properties a phrase list cannot decide. The model is
+/// MIXINGPAL_JUDGE_MODEL, required, so no candidate grades its own answers.
+pub async fn judge(question: &str, answer: &str, properties: &[(&str, &str)]) -> Result<Vec<(String, bool, String)>, String> {
+    let model = std::env::var("MIXINGPAL_JUDGE_MODEL")
+        .expect("MIXINGPAL_JUDGE_MODEL must be set: a model other than the one under test");
+    let s = Settings { model, ..settings() };
+    let list = properties.iter().map(|(k, d)| format!("- {k}: {d}")).collect::<Vec<_>>().join("\n");
+    let body = json!({
+        "model": s.model,
+        "temperature": 0,
+        "max_tokens": 2000,
+        "messages": [
+            { "role": "system", "content": JUDGE_PROMPT },
+            { "role": "user", "content": format!("QUESTION\n{question}\n\nANSWER\n{answer}\n\nPROPERTIES\n{list}") },
+        ],
+    });
+    let raw = post_chat(&judge_client(), &s, body).await.map_err(|e| format!("judge call failed: {e}"))?;
+    let content = raw["choices"][0]["message"]["content"].as_str().unwrap_or("");
+    parse_verdicts(content, properties)
+}
+
+fn parse_verdicts(content: &str, properties: &[(&str, &str)]) -> Result<Vec<(String, bool, String)>, String> {
+    let Some(start) = content.find('{') else {
+        return Err(format!("judge returned no JSON: {content:?}"));
+    };
+    // The first object only: a judge has followed its answer with a second.
+    let parsed: Value = serde_json::Deserializer::from_str(&content[start..])
+        .into_iter::<Value>()
+        .next()
+        .ok_or("judge returned no JSON")?
+        .map_err(|e| format!("invalid judge JSON: {e}"))?;
+    properties
+        .iter()
+        .map(|(key, _)| {
+            let pass = parsed[key]["pass"].as_bool().ok_or(format!("judge left out {key}"))?;
+            Ok((key.to_string(), pass, parsed[key]["reason"].as_str().unwrap_or("").to_string()))
+        })
+        .collect()
+}
+
+#[test]
+fn judge_verdicts_need_every_key() {
+    let props = [("a", "x"), ("b", "y")];
+    let ok = parse_verdicts("```json\n{\"a\":{\"pass\":true,\"reason\":\"r\"},\"b\":{\"pass\":false}}\n```", &props).unwrap();
+    assert_eq!(ok[1], ("b".to_string(), false, String::new()));
+    assert!(parse_verdicts("{\"a\":{\"pass\":true}}", &props).is_err());
+    let twice = "{\"a\":{\"pass\":true},\"b\":{\"pass\":true}}\n{\"a\":{\"pass\":false}}";
+    assert!(parse_verdicts(twice, &props).unwrap().iter().all(|v| v.1));
+    assert!(parse_verdicts("no", &props).is_err());
+}
+
+pub enum Verdict {
+    Pass,
+    Fail(String),
+    /// The network or the judge failed; the run says nothing about the model.
+    Void(String),
+}
+
+/// The checks every scenario shares: the provider answered, the loop ended
+/// in an answer, and the answer talks no tools.
+pub fn base_verdict(turn: &Turn) -> Option<Verdict> {
+    if let Some(e) = &turn.error {
+        return Some(if is_transport_error(e) { Verdict::Void(e.clone()) } else { Verdict::Fail(format!("provider error: {e}")) });
+    }
+    if turn.truncated {
+        return Some(Verdict::Fail(format!("ran out of round trips: {:?}", turn.called)));
+    }
+    if turn.answer.trim().is_empty() {
+        return Some(Verdict::Fail("empty answer".into()));
+    }
+    tool_talk(&turn.answer).map(Verdict::Fail)
+}
+
+/// The judge's verdict on `properties`: a failed property fails the run, a
+/// failed judge call voids it.
+pub async fn judged(question: &str, turn: &Turn, properties: &[(&str, &str)]) -> Verdict {
+    match judge(question, &turn.answer, properties).await {
+        Err(e) => Verdict::Void(e),
+        Ok(verdicts) => match verdicts.iter().find(|(_, pass, _)| !pass) {
+            Some((key, _, reason)) => Verdict::Fail(format!("{key}: {reason}")),
+            None => Verdict::Pass,
+        },
+    }
+}
+
+/// One scenario's runs: a pass rate, not a pass/fail. Each finished
+/// scenario appends a JSON line to MIXINGPAL_EVAL_REPORT when it is set, so
+/// models compare scenario by scenario.
+pub struct Tally {
+    scenario: &'static str,
+    passes: usize,
+    voids: Vec<String>,
+    failures: Vec<(String, String, String, Value)>,
+    turn_ms: Vec<u64>,
+}
+
+impl Tally {
+    pub fn new(scenario: &'static str) -> Self {
+        Tally { scenario, passes: 0, voids: vec![], failures: vec![], turn_ms: vec![] }
+    }
+
+    pub fn add(&mut self, turn: &Turn, verdict: Verdict) {
+        self.turn_ms.push(turn.turn_ms);
+        match verdict {
+            Verdict::Pass => self.passes += 1,
+            Verdict::Void(e) => self.voids.push(e),
+            Verdict::Fail(reason) => {
+                let calls = turn.calls.iter().map(|c| json!([c.name, c.args, c.missing_reason])).collect();
+                self.failures.push((reason, turn.answer.clone(), turn.raw_answer.clone(), calls));
+            }
+        }
+    }
+
+    pub fn finish(mut self) {
+        self.turn_ms.sort_unstable();
+        let median_turn_ms = self.turn_ms.get(self.turn_ms.len() / 2).copied().unwrap_or(0);
+        let valid = self.passes + self.failures.len();
+        let total = valid + self.voids.len();
+        let line = json!({
+            "scenario": self.scenario,
+            "model": std::env::var("MIXINGPAL_EVAL_MODEL").unwrap_or_default(),
+            "experience": format!("{:?}", experience()),
+            "passes": self.passes, "valid": valid, "voids": self.voids.len(),
+            "median_turn_ms": median_turn_ms,
+            "failures": self.failures.iter().map(|(r, a, raw, calls)| json!({"reason": r, "answer": a, "raw_answer": raw, "calls": calls})).collect::<Vec<_>>(),
+            "void_reasons": self.voids,
+        });
+        if let Ok(path) = std::env::var("MIXINGPAL_EVAL_REPORT") {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).unwrap();
+            writeln!(f, "{line}").unwrap();
+        }
+        println!("RATE {} {}/{} passed, {} void", self.scenario, self.passes, valid, self.voids.len());
+        assert!(valid * 2 >= total, "too many void runs to judge {}: {:?}", self.scenario, self.voids);
+        assert!(
+            self.passes as f64 >= MIN_PASS_RATE * valid as f64,
+            "{}: {}/{} passed\n{}",
+            self.scenario,
+            self.passes,
+            valid,
+            self.failures.iter().map(|(r, a, _, _)| format!("--- {r}\n{a}\n")).collect::<String>()
+        );
     }
 }
