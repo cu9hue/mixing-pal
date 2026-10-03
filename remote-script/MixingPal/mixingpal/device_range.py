@@ -3,17 +3,7 @@ import json
 
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
-from .rack_paths import parse_path, resolve, NAME_CAP, MAX_REPLY_BYTES, record_bytes
-
-
-def device_record(device):
-    """(name, is_rack, is_active, kind, class_name) for one device in a listing.
-
-    `kind` is Live's Device.type (1 instrument, 2 audio effect, 4 MIDI effect).
-    The class name survives a rename: a Scale called "Dorian #4" is still "Scale".
-    """
-    return (str(device.name)[:NAME_CAP], bool(device.can_have_chains), bool(device.is_active),
-            int(device.type), str(device.class_display_name)[:NAME_CAP])
+from .rack_paths import parse_path, resolve, NAME_CAP, MAX_REPLY_BYTES, record_bytes, device_record
 
 
 def chain_reply(head, devices):

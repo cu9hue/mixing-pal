@@ -57,12 +57,14 @@ class MixerHandler(AbletonOSCHandler):
                 return None
             try:
                 index = int(params[0])
-                tracks = list(self.song.tracks)
+                tracks = self.song.tracks
                 if index < 0 or index >= len(tracks):
                     return None
                 track = tracks[index]
                 mixer = track.mixer_device
-                group = tracks.index(track.group_track) if track.is_grouped else -1
+                # get_mixer asks for every track in one tick, so only a grouped
+                # track pays for walking the track list.
+                group = list(tracks).index(track.group_track) if track.is_grouped else -1
                 reply = [index, *_shown(mixer.volume), *_shown(mixer.panning),
                          str(track.output_routing_type.display_name)[:NAME_CAP], group, len(mixer.sends)]
                 for send in mixer.sends:

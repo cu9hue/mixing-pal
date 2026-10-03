@@ -52,7 +52,11 @@ class ViewOverrideHandler(AbletonOSCHandler):
             device = track.view.selected_device
             if device is None:
                 return (track_index, -1)
-            device_index = list(track.devices).index(device)
+            try:
+                device_index = list(track.devices).index(device)
+            except ValueError:
+                # A device inside a Rack is selected: it has no top-level index.
+                return (track_index, -1)
             return (track_index, device_index)
 
         def get_selected_clip(params: Optional[Tuple] = ()):
