@@ -225,6 +225,28 @@ Ordered. Each item says what, why, size, and what it waits on.
     cannot set the reasoning effort or the cap. Next: the craft suite on
     K2.6.
 
+13. **What the model can see.** Built 2026-10-03. A pilot answer read an
+    automated Overdrive switch as Off and invented the automation. Parameter
+    reads now mark an automated value as the value at the playhead. Device
+    chains say what each device is, give Live's own name when the producer
+    renamed it, and mark a device that is off. `get_mixer` reads sends,
+    output routing, groups, return tracks and the master. The note tools
+    name any MIDI effect, such as Scale, that changes the notes before the
+    instrument. The context block gains a FOCUS line: the loop brace, the
+    selected device and the selected Session slot. Wire version 14. Next: a
+    Compressor's sidechain source, after a spike on Live 12.
+
+14. **Audio clip settings.** A `get_audio_clip` tool: warp mode, clip gain,
+    transpose, markers, sample rate, and the sample's file name, never its
+    path. Today a vocal is judged from its fader alone. The connector
+    already exposes most of this upstream.
+
+15. **Automation lanes.** A `get_automation` tool that returns breakpoints.
+    Clip envelopes come through Live's API. Arrangement automation probably
+    needs the saved `.als`, which only reflects the last save, so the result
+    must carry the save time and say that unsaved edits are not visible.
+    Spike both on Live 12 first. A dense, drawn lane is capped and summarised.
+
 ## When the waitlist says go
 
 All specced or named already. The order is fixed by the gate.
@@ -311,3 +333,20 @@ is the expensive layer, and the settings-only version ships first. Build it when
 the settings-only advice has a producer using it and the questions she asks are
 the ones only a listener can answer. Until then the app says it cannot hear,
 because it cannot.
+
+On 2026-10-03 the pilot asked for exactly that: a way to check frequencies and
+sample statistics. Two steps, in order:
+
+1. **Source files.** Analyse the audio file behind a clip: loudness, true
+   peak, crest factor, band energies, spectral centroid and onset density,
+   computed in the app from the file Live names. Every result says it
+   describes the raw file, before clip gain, warping, devices and the fader,
+   so it cannot become a claim about the mix. Cache by path, size and save
+   time.
+2. **A bounce she picks.** Loudness and band balance per section, aligned to
+   the locators. It is the only honest route to questions such as "is the low
+   end too thin?".
+
+Both read files only Live names or she chooses, keep everything local, and
+send no analysed audio through the proxy. Live's own meters stay out of what
+the model sees: a coarse meter invites "it is too loud".
