@@ -380,6 +380,11 @@ fn handle_inbound(
             | "/live/mixingpal/get/rack/fingerprint"
             | "/live/mixingpal/get/arrangement/fingerprint"
             | "/live/mixingpal/get/clip/loop_region"
+            | "/live/device/get/parameters/automation_state_range"
+            | "/live/return/get/num_returns"
+            | "/live/mixingpal/get/track_mixer"
+            | "/live/mixingpal/get/return_mixer"
+            | "/live/mixingpal/get/master_mixer"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
@@ -1554,17 +1559,12 @@ mod tests {
         // model them (yet). Each entry needs a reason, not just a listing,
         // per I4 in the 2026-08-16 whole-branch review.
         let allowed_unhandled: &[&str] = &[
-            // Polled every 1s/2s but SetState has no field for either yet.
-            "/live/view/get/selected_clip",
-            "/live/view/get/selected_device",
+            // Polled every 2s but SetState has no field for it yet.
             "/live/master/get/output_meter_level",
             // Subscribed via SINGLETON_SUBSCRIPTIONS but not modelled in
-            // SetState -- five properties, deliberately unmodelled. The two
-            // signature properties left this list when apply.ts started
-            // mapping them, so a dropped mapping fails the build.
-            "/live/song/get/loop",
-            "/live/song/get/loop_start",
-            "/live/song/get/loop_length",
+            // SetState. The signature, loop, and selection properties left
+            // this list when apply.ts started mapping them, so a dropped
+            // mapping fails the build.
             "/live/song/get/beat",
             "/live/view/get/selected_scene",
             // Cached internally for track_chunks' byte-budget math; observed
@@ -1660,6 +1660,11 @@ mod tests {
         "/live/mixingpal/get/rack/fingerprint",
         "/live/mixingpal/get/arrangement/fingerprint",
         "/live/mixingpal/get/clip/loop_region",
+        "/live/device/get/parameters/automation_state_range",
+        "/live/return/get/num_returns",
+        "/live/mixingpal/get/track_mixer",
+        "/live/mixingpal/get/return_mixer",
+        "/live/mixingpal/get/master_mixer",
     ];
 
     #[test]
