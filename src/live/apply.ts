@@ -16,6 +16,11 @@ export function emptySet(): SetState {
     setId: null,
     setName: null,
     setPath: null,
+    loop: null,
+    loopStart: null,
+    loopLength: null,
+    selectedDevice: null,
+    selectedSlot: null,
   };
 }
 
@@ -31,6 +36,9 @@ export const SONG_FIELDS: Record<string, keyof SetState> = {
   "/live/song/get/signature_denominator": "signatureDenominator",
   "/live/view/get/selected_track": "selectedTrack",
   "/live/mixingpal/get/version": "scriptVersion",
+  "/live/song/get/loop": "loop",
+  "/live/song/get/loop_start": "loopStart",
+  "/live/song/get/loop_length": "loopLength",
 };
 
 export const TRACK_FIELDS: Record<string, keyof TrackState> = {
@@ -92,7 +100,32 @@ export function setIdentityFrom(
   };
 }
 
+// Handled directly: two indices that become one field. -1 means Master or a
+// Return is selected, or no device is; either way nothing on a regular track.
+export const SELECTED_DEVICE_ADDR = "/live/view/get/selected_device";
+export const SELECTED_SLOT_ADDR = "/live/view/get/selected_clip";
+
+function pairFrom(args: unknown[]): [number, number] | null {
+  const [a, b] = args;
+  if (args.length !== 2 || typeof a !== "number" || typeof b !== "number" || a < 0 || b < 0) return null;
+  return [a, b];
+}
+
 export function applyDelta(state: SetState, delta: Delta): SetState {
+  if (delta.addr === SELECTED_DEVICE_ADDR) {
+    const pair = pairFrom(delta.args);
+    const selectedDevice = pair && { track: pair[0], device: pair[1] };
+    const same = selectedDevice?.track === state.selectedDevice?.track && selectedDevice?.device === state.selectedDevice?.device;
+    return same ? state : { ...state, selectedDevice };
+  }
+
+  if (delta.addr === SELECTED_SLOT_ADDR) {
+    const pair = pairFrom(delta.args);
+    const selectedSlot = pair && { track: pair[0], scene: pair[1] };
+    const same = selectedSlot?.track === state.selectedSlot?.track && selectedSlot?.scene === state.selectedSlot?.scene;
+    return same ? state : { ...state, selectedSlot };
+  }
+
   if (delta.addr === NUM_TRACKS_ADDR) {
     const n = delta.args[0];
     // A null count means "unknown", not "zero tracks" -- coercing it would

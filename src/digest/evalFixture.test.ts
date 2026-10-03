@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildContext } from "./build";
 import { SetState, TrackState } from "../live/model";
+import { emptySet } from "../live/apply";
 import evalFixture from "../../shared/eval-set.json";
 import evalContext from "../../shared/eval-context.txt?raw";
 import craftFixture from "../../shared/craft-set.json";
@@ -14,7 +15,7 @@ import oneshotContext from "../../shared/oneshot-context.txt?raw";
 // shared/wire-version.json already uses.
 interface EvalFixture {
   goal: string;
-  song: Omit<SetState, "tracks">;
+  song: Partial<Omit<SetState, "tracks">>;
   tracks: Array<{ name: string; mute: boolean; solo: boolean; volumeDb: string }>;
 }
 
@@ -31,7 +32,7 @@ function fixtureState(fixture: EvalFixture): SetState {
       meter: null,
     };
   });
-  return { ...fixture.song, tracks };
+  return { ...emptySet(), ...fixture.song, tracks };
 }
 
 describe.each([

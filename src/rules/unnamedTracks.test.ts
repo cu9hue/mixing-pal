@@ -21,6 +21,11 @@ function setOf(names: Array<string | null>): SetState {
     setId: null,
     setName: null,
     setPath: null,
+    loop: null,
+    loopStart: null,
+    loopLength: null,
+    selectedDevice: null,
+    selectedSlot: null,
     tracks,
   };
 }

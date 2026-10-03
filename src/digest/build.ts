@@ -25,6 +25,39 @@ function currentBeatsPerBar(state: SetState): number | null {
   return Number.isFinite(beats) && beats > 0 ? beats : null;
 }
 
+function trackLabel(state: SetState, track: number): string {
+  return `${fence(state.tracks[track]?.name ?? "")}`;
+}
+
+/**
+ * Where she is working, from what the mirror already holds: the loop brace
+ * while it is on, and the device and Session slot she has selected. The
+ * device is an index, because the mirror holds no device names.
+ */
+function focusParts(state: SetState): string[] {
+  const parts: string[] = [];
+  const { loop, loopStart, loopLength } = state;
+  if (loop && loopStart !== null && loopLength !== null && loopLength > 0) {
+    const beatsPerBar = currentBeatsPerBar(state);
+    const end = loopStart + loopLength;
+    if (beatsPerBar === null) {
+      parts.push(`loop brace beats ${loopStart}–${end}`);
+    } else {
+      const snap = (beat: number) => Math.round(beat * 4) / 4;
+      const first = Math.floor(snap(loopStart) / beatsPerBar) + 1;
+      const last = Math.max(first, Math.ceil(snap(end) / beatsPerBar));
+      parts.push(first === last ? `loop brace bar ${first}` : `loop brace bars ${first}–${last}`);
+    }
+  }
+  if (state.selectedDevice) {
+    parts.push(`selected device ${state.selectedDevice.device} on ${trackLabel(state, state.selectedDevice.track)}`);
+  }
+  if (state.selectedSlot) {
+    parts.push(`selected Session slot ${state.selectedSlot.scene} on ${trackLabel(state, state.selectedSlot.track)}`);
+  }
+  return parts;
+}
+
 /**
  * The context block sent as an ordinary user turn ahead of the producer's
  * question.
@@ -87,6 +120,9 @@ export function buildContext(
     lines.push(`SECTIONS (${unit})  ${sections}${cut}`);
   }
 
+  const focus = focusParts(state);
+  if (focus.length > 0) lines.push(`FOCUS  ${focus.join(" · ")}`);
+
   const trimmedGoal = goal.trim();
   if (trimmedGoal !== "") lines.push(`GOAL  ${trimmedGoal}`);
 
@@ -133,7 +169,8 @@ export function buildContext(
       "get_device_chains; for what is inside a Rack use get_rack_contents; " +
       "for what plays where on the timeline use get_arrangement; " +
       "for the notes in a timeline clip use get_arrangement_notes; " +
-      "for one device's parameter values use get_device_params.",
+      "for one device's parameter values use get_device_params; " +
+      "for sends, routing, returns, the master, and automation use get_mixer.",
   );
   return lines.join("\n");
 }

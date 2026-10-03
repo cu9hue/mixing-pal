@@ -190,3 +190,33 @@ describe("buildContext", () => {
     expect(out).toContain("- [b2] heard  «the sub still masks the kick»  (today, hers)");
   });
 });
+
+// "This part" and "this sound" are where she is looking, and the app mirrors
+// both already; without them the model guesses which section or device.
+describe("the focus line", () => {
+  const focused = {
+    ...setWith({ 2: { name: "Pad" } }),
+    signatureNumerator: 4,
+    signatureDenominator: 4,
+    loop: true,
+    loopStart: 64,
+    loopLength: 32,
+    selectedDevice: { track: 2, device: 1 },
+    selectedSlot: { track: 2, scene: 3 },
+  };
+
+  it("says where she is working: the loop brace, the selected device and slot", () => {
+    expect(buildContext(focused, "")).toContain(
+      "FOCUS  loop brace bars 17–24 · selected device 1 on «Pad» · selected Session slot 3 on «Pad»",
+    );
+  });
+
+  it("gives the loop brace in beats when the signature is unknown", () => {
+    const out = buildContext({ ...focused, signatureNumerator: null, selectedDevice: null, selectedSlot: null }, "");
+    expect(out).toContain("FOCUS  loop brace beats 64–96");
+  });
+
+  it("leaves out a loop brace that is off, and the line when nothing is known", () => {
+    expect(buildContext({ ...focused, selectedDevice: null, selectedSlot: null, loop: false }, "")).not.toContain("FOCUS");
+  });
+});

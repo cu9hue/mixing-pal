@@ -36,6 +36,14 @@ export interface SetState {
   setId: string | null;
   setName: string | null;
   setPath: string | null;
+  /// The arrangement loop brace, in beats: where she is working, when on.
+  loop: boolean | null;
+  loopStart: number | null;
+  loopLength: number | null;
+  /// The selected device by index on its track, and the selected Session
+  /// slot. Null when nothing on a regular track is selected.
+  selectedDevice: { track: number; device: number } | null;
+  selectedSlot: { track: number; scene: number } | null;
 }
 
 export interface Delta {
