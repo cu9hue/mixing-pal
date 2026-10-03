@@ -37,8 +37,12 @@ from ..abletonosc.handler import AbletonOSCHandler
 # 12 adds /live/mixingpal/get/set_identity: the set's stored id, name, and
 # path. A stale script knows no such address, so the app never learns which
 # set is open and nothing per-set can be saved; the banner asks for the
-# reinstall.
-WIRE_VERSION = 13
+# reinstall. Version 13 adds paged session and device lists and rack device
+# continuation. Version 14 adds each device's on/off state, kind, and class
+# name to chain listings, the automation state of parameters, and the track,
+# return, and master mixer reads; a stale script answers the old two-field
+# records, which must not be decoded as the new five.
+WIRE_VERSION = 14
 
 
 class VersionHandler(AbletonOSCHandler):

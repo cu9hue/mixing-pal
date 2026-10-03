@@ -1,5 +1,14 @@
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
+from .device_range import chain_reply
+from .rack_paths import NAME_CAP
+
+_UNREADABLE = (TypeError, ValueError, OverflowError, AttributeError, RuntimeError, IndexError)
+
+
+def _shown(param):
+    """The value as Live shows it, and its automation state (0 none, 1 automated, 2 overridden)."""
+    return (param.str_for_value(param.value), int(param.automation_state))
 
 
 class MixerHandler(AbletonOSCHandler):
@@ -39,6 +48,58 @@ class MixerHandler(AbletonOSCHandler):
                 rv.append(mixer.volume.str_for_value(mixer.volume.value))
             return tuple(rv)
 
+        def track_mixer(params: Tuple[Any]):
+            """(track, volume, state, pan, state, output, group_track, n_sends, *(send, state)).
+
+            group_track is the index of the Group the track sits in, or -1.
+            """
+            if len(params) != 1:
+                return None
+            try:
+                index = int(params[0])
+                tracks = list(self.song.tracks)
+                if index < 0 or index >= len(tracks):
+                    return None
+                track = tracks[index]
+                mixer = track.mixer_device
+                group = tracks.index(track.group_track) if track.is_grouped else -1
+                reply = [index, *_shown(mixer.volume), *_shown(mixer.panning),
+                         str(track.output_routing_type.display_name)[:NAME_CAP], group, len(mixer.sends)]
+                for send in mixer.sends:
+                    reply.extend(_shown(send))
+            except _UNREADABLE:
+                return None
+            return tuple(reply)
+
+        def return_mixer(params: Tuple[Any]):
+            """(index, n_returns, name, volume, state, pan, state, n_devices, *device records)."""
+            if len(params) != 1:
+                return None
+            try:
+                index = int(params[0])
+                returns = self.song.return_tracks
+                if index < 0 or index >= len(returns):
+                    return None
+                track = returns[index]
+                mixer = track.mixer_device
+                return chain_reply((index, len(returns), str(track.name)[:NAME_CAP],
+                                    *_shown(mixer.volume), *_shown(mixer.panning)), track.devices)
+            except _UNREADABLE:
+                return None
+
+        def master_mixer(params: Tuple[Any] = ()):
+            """(name, volume, state, pan, state, n_devices, *device records)."""
+            try:
+                track = self.song.master_track
+                mixer = track.mixer_device
+                return chain_reply((str(track.name)[:NAME_CAP], *_shown(mixer.volume),
+                                    *_shown(mixer.panning)), track.devices)
+            except _UNREADABLE:
+                return None
+
+        self.osc_server.add_handler("/live/mixingpal/get/track_mixer", track_mixer)
+        self.osc_server.add_handler("/live/mixingpal/get/return_mixer", return_mixer)
+        self.osc_server.add_handler("/live/mixingpal/get/master_mixer", master_mixer)
         self.osc_server.add_handler(
             "/live/track/get/volume_db", track_volume_db)
         self.osc_server.add_handler(

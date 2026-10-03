@@ -28,10 +28,15 @@ def handler_for(devices):
     return callbacks
 
 
+def device(name, rack=False, active=True, kind=2, cls="Compressor"):
+    return N(name=name, can_have_chains=rack, is_active=active, type=kind, class_display_name=cls)
+
+
 class DeviceChainHandlerTests(unittest.TestCase):
     def test_long_unicode_chain_pages_fit_udp_and_preserve_indices_and_flags(self):
         address = "/live/mixingpal/get/device_chain"
-        devices = [N(name=str(i) + "😀" * 200, can_have_chains=i % 2 == 0) for i in range(100)]
+        devices = [device(str(i) + "😀" * 200, rack=i % 2 == 0, active=i % 3 != 0, kind=(1, 2, 4)[i % 3],
+                          cls="Class" + "é" * 200) for i in range(100)]
         callbacks = handler_for(devices)
         self.assertIn(address, callbacks)
         callback = callbacks[address]
@@ -43,16 +48,18 @@ class DeviceChainHandlerTests(unittest.TestCase):
             for value in reply:
                 builder.add_arg(value)
             self.assertLessEqual(len(builder.build().dgram), 9216)
-            count = (len(reply) - 3) // 2
+            self.assertEqual((len(reply) - 3) % 5, 0)
+            count = (len(reply) - 3) // 5
             self.assertGreater(count, 0)
             for index in range(count):
-                self.assertEqual(reply[3 + index * 2], devices[offset + index].name[:200])
-                self.assertEqual(reply[4 + index * 2], devices[offset + index].can_have_chains)
+                d = devices[offset + index]
+                self.assertEqual(reply[3 + index * 5:8 + index * 5],
+                                 (d.name[:200], d.can_have_chains, d.is_active, d.type, d.class_display_name[:200]))
             offset += count
         self.assertEqual(callback((0, 100, 256)), (0, 100, 100))
 
     def test_digest_covers_order_names_and_rack_flags_outside_the_page(self):
-        devices = [N(name=str(i), can_have_chains=False) for i in range(5)]
+        devices = [device(str(i)) for i in range(5)]
         callback = handler_for(devices)["/live/mixingpal/get/device_chain/fingerprint"]
         first = callback((0,))
         devices[3], devices[4] = devices[4], devices[3]
@@ -86,3 +93,21 @@ class DeviceChainHandlerTests(unittest.TestCase):
         self.assertEqual(callback((0, 0, 256)), (0, 0, 0))
         for args in [(0, -1, 1), (0, 0, -1), (-1, 0, 1), (1, 0, 1)]:
             self.assertIsNone(callback(args))
+
+
+class ChainRecordTests(unittest.TestCase):
+    def test_a_renamed_device_keeps_its_class_and_reports_its_kind_and_state(self):
+        reply = handler_for([device("Dorian #4", kind=4, active=False, cls="Scale")])[
+            "/live/mixingpal/get/device_chain"]((0, 0, 256))
+        self.assertEqual(reply, (0, 0, 1, "Dorian #4", False, False, 4, "Scale"))
+
+    def test_a_device_missing_the_new_fields_fails_closed(self):
+        reply = handler_for([N(name="old", can_have_chains=False)])[
+            "/live/mixingpal/get/device_chain"]((0, 0, 256))
+        self.assertIsNone(reply)
+
+    def test_parameter_automation_state_is_ranged_like_values(self):
+        params = [N(name="p%d" % i, value=0.0, automation_state=i % 3) for i in range(5)]
+        callbacks = handler_for([N(name="dev", can_have_chains=False, parameters=params)])
+        reply = callbacks["/live/device/get/parameters/automation_state_range"]((0, "0", 1, 3))
+        self.assertEqual(reply, (0, "0", 1, 1, 2, 0))
