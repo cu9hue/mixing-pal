@@ -1038,14 +1038,10 @@ pub async fn ask_after(
     }
 }
 
-/// The fields `providerBody` in proxy/src/policy.ts adds before a request
-/// reaches the model: reasoning off and only hosts that keep no data. An
-/// eval without them scores a model on hosts and settings no producer gets.
-/// MIXINGPAL_EVAL_PROVIDERS pins hosts (comma-separated, the proxy's `only`)
-/// and MIXINGPAL_EVAL_QUANTIZATIONS limits precision, the way a route list
-/// for a new default would. MIXINGPAL_EVAL_REASONING=low|medium|high scores
-/// a policy that turns reasoning on, and MIXINGPAL_EVAL_MAX_TOKENS the
-/// output cap it needs: reasoning spends from the same cap as the answer.
+/// Mirrors `providerBody` in proxy/src/policy.ts (reasoning off, no-data hosts) so evals
+/// score what producers get. A candidate route sets MIXINGPAL_EVAL_PROVIDERS (comma-separated
+/// `only`), MIXINGPAL_EVAL_QUANTIZATIONS, MIXINGPAL_EVAL_REASONING=low|medium|high, and
+/// MIXINGPAL_EVAL_MAX_TOKENS: reasoning spends from the answer's cap.
 pub fn route_like_the_proxy(body: &mut Value) {
     if let Some(cap) = std::env::var("MIXINGPAL_EVAL_MAX_TOKENS").ok().and_then(|v| v.parse::<u64>().ok()) {
         body["max_tokens"] = json!(cap);
@@ -1221,9 +1217,8 @@ pub async fn judged(question: &str, turn: &Turn, properties: &[(&str, &str)]) ->
     }
 }
 
-/// One scenario's runs: a pass rate, not a pass/fail. Each finished
-/// scenario appends a JSON line to MIXINGPAL_EVAL_REPORT when it is set, so
-/// models compare scenario by scenario.
+/// One scenario's runs as a pass rate. `finish` appends a JSON line to
+/// MIXINGPAL_EVAL_REPORT when set, so models compare scenario by scenario.
 pub struct Tally {
     scenario: &'static str,
     passes: usize,

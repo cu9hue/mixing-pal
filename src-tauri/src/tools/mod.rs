@@ -1906,9 +1906,8 @@ mod tests {
 
     #[test]
     fn arrangement_payload_gives_positions_live_shows_and_each_track_its_first_unmuted_start() {
-        // A one-shot set has hundreds of placements. "When does the hat come
-        // in" has to be a lookup, not a scan, and a bar number alone drops
-        // the beat: 9.2.1 is not 9.1.1.
+        // "When does the hat come in" must be a lookup, not a scan of hundreds
+        // of placements, and a bar number alone drops the beat: 9.2.1 is not 9.1.1.
         let clip = |index, start, muted| arrangement::ArrangementClip {
             index,
             name: None,
@@ -1963,9 +1962,8 @@ mod tests {
 
     #[tokio::test]
     async fn arrangement_tracks_carry_their_names() {
-        // The track index alone makes the model join against the context
-        // block's TRACKS list, and a wrong join puts one track's clips under
-        // another's name.
+        // Without a name the model joins the index against the context block's
+        // TRACKS list, and a wrong join files one track's clips under another.
         let q = arrangement::tests::fake_live(arrangement::tests::FakeLive {
             timelines: vec![vec![("".into(), 0.0, 4.0)], vec![]],
             ..Default::default()
