@@ -140,13 +140,13 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement",
-                "description": "Every track's arrangement placements: for each clip, its index, start_beats, length_beats, muted state, MIDI type, and its name when it has one. These are beats, never bar counts. A placement is audible only when muted is false; is_midi false means it is audio and has no MIDI notes. When the current time signature is known, each clip also has one-based bar_start and length_bars; use bar_start when speaking about bars, never start_beats (in 4/4, start_beats 32 is bar 9). A loop_region is present when Live repeats the clip's MIDI: source notes repeat in that region through the clip's length_beats, so an absent note after one loop is not silence. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; placements are read in bounded pages per track. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. An empty list means no placements in the returned scope; check missing, changed, truncated and next_clip_index before claiming the whole timeline is empty. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a MIDI clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated. For a section question, supply start_beats and end_beats to filter overlapping placements before the 512-placement output cap. To recover a truncated track, request its track index with next_clip_index as clip_offset; retain the same range. Group tracks have no direct placements; their child tracks carry them.",
+                "description": "Every track's arrangement placements: for each clip, its index, start_beats, length_beats, muted state, MIDI type, and its name when it has one. These are beats, never bar counts. A placement is audible only when muted is false; is_midi false means it is audio and has no MIDI notes. Each track carries its name when known. When the current time signature is known, each clip also has start_position, one-based bar.beat.sixteenth as Live shows it, and length_bars, and each track has first_unmuted_start, the start_position of its earliest unmuted placement in the returned scope. Use these when speaking about bars, never start_beats (in 4/4, start_beats 32 is 9.1.1). A loop_region is present when Live repeats the clip's MIDI: source notes repeat in that region through the clip's length_beats, so an absent note after one loop is not silence. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; placements are read in bounded pages per track. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. An empty list means no placements in the returned scope; check missing, changed, truncated and next_clip_index before claiming the whole timeline is empty. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a MIDI clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated. For a section question, supply start_beats and end_beats to filter overlapping placements before the 512-placement output cap. To recover a truncated track, request its track index with next_clip_index as clip_offset; retain the same range. Group tracks have no direct placements; their child tracks carry them.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "track": {"type":"integer","minimum":0,"description":"Optional zero-based track index; omit to read all tracks."},
-                        "start_beats": {"type":"number","minimum":0,"description":"Optional inclusive range start in beats; supply with end_beats. In 4/4 bars 17–32 are [64,128)."},
-                        "end_beats": {"type":"number","exclusiveMinimum":0,"description":"Exclusive range end in beats. Keeps placements that overlap the range, including clips starting before it."},
+                        "start_beats": {"type":"number","minimum":0,"description":"Optional inclusive range start in beats; without end_beats the range runs to the end of the timeline. In 4/4 bars 17–32 are [64,128)."},
+                        "end_beats": {"type":"number","exclusiveMinimum":0,"description":"Optional exclusive range end in beats; without start_beats the range starts at beat 0. Keeps placements that overlap the range, including clips starting before it."},
                         "clip_offset": {"type":"integer","minimum":0,"description":"Continue a selected track from next_clip_index. Requires track. Keep the same beat range when continuing."}
                     },
                     "required": []
@@ -157,7 +157,7 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "MIDI notes in the source note_range of one arrangement-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. timeline_position is provided only for notes on the first pass within the placement: result.start_beats + note.start - source_start_beats. Notes before the start marker may sound on a later loop; absence of timeline_position does not mean they never play. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes one-based bar_start and length_bars. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
+                "description": "MIDI notes in the source note_range of one arrangement-view clip. start is absolute source beat time as shown in Live's clip editor; duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. timeline_position is provided only for notes on the first pass within the placement: result.start_beats + note.start - source_start_beats. Notes before the start marker may sound on a later loop; absence of timeline_position does not mean they never play. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with mute true does not sound and must be excluded from rhythm or harmony claims. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes start_position, one-based bar.beat.sixteenth, and length_bars. A loop_region means these source notes repeat through length_beats; never call the portion after one loop silent merely because the notes are listed once. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. An audio clip returns missing_reason not_midi_clip. Output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -342,11 +342,6 @@ fn nearest_sixteenth(beat: f64) -> Option<(i64, f64)> {
     Some((sixteenths, beat - sixteenths as f64 / 4.0))
 }
 
-fn bar_position(beat: f64, grid: &Grid) -> Option<f64> {
-    let (sixteenths, _) = nearest_sixteenth(beat)?;
-    Some((sixteenths.div_euclid(grid.sixteenths_per_bar) + 1) as f64)
-}
-
 /// Formats a beat offset as the bar.beat.sixteenth position producers see in
 /// Live. The raw beat value stays in the payload; a remainder is the note's
 /// distance off the sixteenth grid, shown rather than rounded away.
@@ -510,16 +505,23 @@ fn arrangement_payload(
         let Some(clips) = track["clips"].as_array_mut() else {
             continue;
         };
+        let mut first_audible: Option<f64> = None;
         for clip in clips {
             let (Some(start), Some(length)) =
                 (clip["start_beats"].as_f64(), clip["length_beats"].as_f64())
             else {
                 continue;
             };
-            if let Some(bar) = bar_position(start, &grid) {
-                clip["bar_start"] = json!(bar);
+            if let Some(position) = musical_position(start, &grid) {
+                clip["start_position"] = json!(position);
             }
             clip["length_bars"] = json!(length / beats_per_bar);
+            if clip["muted"] == json!(false) && first_audible.is_none_or(|first| start < first) {
+                first_audible = Some(start);
+            }
+        }
+        if let Some(position) = first_audible.and_then(|start| musical_position(start, &grid)) {
+            track["first_unmuted_start"] = json!(position);
         }
     }
     payload
@@ -541,8 +543,8 @@ fn add_bar_timing(
     };
     payload["time_signature"] = json!({ "numerator": numerator, "denominator": denominator });
     payload["bar_positions_assume_current_signature"] = json!(true);
-    if let Some(bar) = bar_position(start_beats, &grid) {
-        payload["bar_start"] = json!(bar);
+    if let Some(position) = musical_position(start_beats, &grid) {
+        payload["start_position"] = json!(position);
     }
     payload["length_bars"] = json!(length_beats / beats_per_bar);
 }
@@ -1042,13 +1044,14 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             if args.get("clip_offset").is_some() && track.is_none() {
                 return ToolResult::missing("bad_arguments");
             }
+            // A missing bound is the open end of the timeline.
+            let bound = |name: &str, open: f64| args.get(name).map_or(Some(open), |v| v.as_f64().filter(|b| b.is_finite()));
             let range = match (args.get("start_beats"), args.get("end_beats")) {
                 (None, None) => None,
-                (Some(start), Some(end)) => match (start.as_f64(), end.as_f64()) {
-                    (Some(start), Some(end)) if start.is_finite() && end.is_finite() && start >= 0.0 && end > start => Some((start, end)),
+                _ => match (bound("start_beats", 0.0), bound("end_beats", f64::INFINITY)) {
+                    (Some(start), Some(end)) if start >= 0.0 && end > start => Some((start, end)),
                     _ => return ToolResult::missing("bad_arguments"),
                 },
-                _ => return ToolResult::missing("bad_arguments"),
             };
             // Without a count there is nothing to iterate. Querying 0..0
             // would return an empty map, which reads as "the set has no
@@ -1112,6 +1115,14 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 reasons.push(reason);
             }
             let mut payload = arrangement_payload(&map, time_signature(&ctx.coalescer));
+            if let Some(tracks) = payload["tracks"].as_array_mut() {
+                for t in tracks {
+                    let name = t["track"].as_i64().and_then(|i| track_identity(&ctx.coalescer, i));
+                    if let Some(name) = name.as_ref().and_then(|n| n.as_str()) {
+                        t["name"] = json!(fence::fence(name));
+                    }
+                }
+            }
             payload["scope"] = json!({"track":track,"clip_offset":offset,
                 "start_beats":range.map(|r| r.0),"end_beats":range.map(|r| r.1)});
             ToolResult::live(
@@ -1776,9 +1787,9 @@ mod tests {
     #[test]
     fn one_based_bar_positions_do_not_relabel_beats_as_bars() {
         let four_four = grid((4, 4)).unwrap();
-        assert_eq!(bar_position(0.0, &four_four), Some(1.0));
-        assert_eq!(bar_position(28.0, &four_four), Some(8.0));
-        assert_eq!(bar_position(32.0, &four_four), Some(9.0));
+        assert_eq!(musical_position(0.0, &four_four), Some("1.1.1".into()));
+        assert_eq!(musical_position(28.0, &four_four), Some("8.1.1".into()));
+        assert_eq!(musical_position(32.0, &four_four), Some("9.1.1".into()));
     }
 
     #[test]
@@ -1813,15 +1824,6 @@ mod tests {
         let two_two = grid((2, 2)).unwrap();
         assert_eq!(musical_position(2.0, &two_two), Some("1.2.1".into()));
         assert!(grid((4, 3)).is_none());
-    }
-
-    // One payload, one bar convention: the clip's bar_start and its first
-    // note's timeline position are both taken from the nearest sixteenth.
-    #[test]
-    fn bar_start_agrees_with_a_position_just_before_the_bar_line() {
-        let four_four = grid((4, 4)).unwrap();
-        assert_eq!(bar_position(31.9, &four_four), Some(9.0));
-        assert_eq!(musical_position(31.9, &four_four), Some("9.1.1 - 0.1 beats".into()));
     }
 
     #[test]
@@ -1898,26 +1900,40 @@ mod tests {
         assert!(description_of("get_arrangement_notes").contains("result.start_beats + note.start"));
         assert!(description_of("get_clip_notes").contains("clip_position"));
         assert!(description_of("get_arrangement_notes").contains("timeline_position"));
+        assert!(description_of("get_arrangement").contains("first_unmuted_start"));
+        assert!(description_of("get_arrangement").contains("start_position"));
     }
 
     #[test]
-    fn arrangement_payload_exposes_bar_nine_for_beat_thirty_two_in_four_four() {
+    fn arrangement_payload_gives_positions_live_shows_and_each_track_its_first_unmuted_start() {
+        // "When does the hat come in" must be a lookup, not a scan of hundreds
+        // of placements, and a bar number alone drops the beat: 9.2.1 is not 9.1.1.
+        let clip = |index, start, muted| arrangement::ArrangementClip {
+            index,
+            name: None,
+            start,
+            length: 4.0,
+            muted,
+            is_midi: true,
+            loop_region: None,
+        };
         let map = arrangement::ArrangementMap {
-            tracks: vec![arrangement::TrackArrangement {
-                track: 0,
-                clips: vec![arrangement::ArrangementClip {
-                    index: 0,
-                    name: None,
-                    start: 32.0,
-                    length: 4.0,
-                    muted: false,
-                    is_midi: true,
-                    loop_region: None,
-                }],
-                truncated: false,
-                next_clip_index: None,
-                changed: false,
-            }],
+            tracks: vec![
+                arrangement::TrackArrangement {
+                    track: 0,
+                    clips: vec![clip(0, 0.0, true), clip(1, 33.0, false), clip(2, 40.0, false)],
+                    truncated: false,
+                    next_clip_index: None,
+                    changed: false,
+                },
+                arrangement::TrackArrangement {
+                    track: 1,
+                    clips: vec![clip(0, 8.0, true)],
+                    truncated: false,
+                    next_clip_index: None,
+                    changed: false,
+                },
+            ],
             missing: vec![],
             changed: vec![],
         };
@@ -1926,8 +1942,41 @@ mod tests {
             payload["time_signature"],
             json!({ "numerator": 4, "denominator": 4 })
         );
-        assert_eq!(payload["tracks"][0]["clips"][0]["bar_start"], json!(9.0));
-        assert_eq!(payload["tracks"][0]["clips"][0]["length_bars"], json!(1.0));
+        let track = &payload["tracks"][0];
+        assert_eq!(track["clips"][0]["start_position"], json!("1.1.1"));
+        assert_eq!(track["clips"][1]["start_position"], json!("9.2.1"));
+        assert_eq!(track["clips"][1]["length_bars"], json!(1.0));
+        assert!(track["clips"][1].get("bar_start").is_none());
+        assert_eq!(track["first_unmuted_start"], json!("9.2.1"));
+        assert!(payload["tracks"][1].get("first_unmuted_start").is_none());
+    }
+
+    #[test]
+    fn arrangement_notes_timing_gives_the_position_live_shows() {
+        let mut payload = json!({});
+        add_bar_timing(&mut payload, 33.0, 8.0, Some((4, 4)));
+        assert_eq!(payload["start_position"], json!("9.2.1"));
+        assert_eq!(payload["length_bars"], json!(2.0));
+        assert!(payload.get("bar_start").is_none());
+    }
+
+    #[tokio::test]
+    async fn arrangement_tracks_carry_their_names() {
+        // Without a name the model joins the index against the context block's
+        // TRACKS list, and a wrong join files one track's clips under another.
+        let q = arrangement::tests::fake_live(arrangement::tests::FakeLive {
+            timelines: vec![vec![("".into(), 0.0, 4.0)], vec![]],
+            ..Default::default()
+        }).await;
+        let ctx = ToolContext {
+            coalescer: Arc::new(Mutex::new(mirror_with_tracks(2))),
+            query: Arc::new(Mutex::new(Some(q))),
+        };
+        let r = execute(&ctx, "get_arrangement", &json!({})).await;
+        assert_eq!(r.missing_reason, None);
+        assert_eq!(r.value["tracks"][0]["name"], json!("«Bass»"));
+        // The mirror holds no name for track 1, so none is invented.
+        assert!(r.value["tracks"][1].get("name").is_none());
     }
 
     #[test]
@@ -1987,6 +2036,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_one_sided_range_reads_to_the_open_end() {
+        // A pilot model sent start_beats alone, got a bare bad_arguments,
+        // and sent it again until the turn ran out of round trips.
+        let q = arrangement::tests::fake_live(arrangement::tests::FakeLive {
+            timelines: vec![vec![("intro".into(), 0.0, 16.0), ("drop".into(), 64.0, 96.0), ("outro".into(), 128.0, 160.0)]],
+            ..Default::default()
+        }).await;
+        let ctx = ToolContext {
+            coalescer: Arc::new(Mutex::new(mirror_with_tracks(1))),
+            query: Arc::new(Mutex::new(Some(q))),
+        };
+        let indices = |r: &ToolResult| r.value["tracks"][0]["clips"].as_array().unwrap()
+            .iter().map(|c| c["index"].as_i64().unwrap()).collect::<Vec<_>>();
+        let from = execute(&ctx, "get_arrangement", &json!({"start_beats":64})).await;
+        assert_eq!(from.missing_reason, None);
+        assert_eq!(indices(&from), vec![1, 2]);
+        let until = execute(&ctx, "get_arrangement", &json!({"end_beats":64})).await;
+        assert_eq!(until.missing_reason, None);
+        assert_eq!(indices(&until), vec![0]);
+    }
+
+    #[tokio::test]
     async fn arrangement_offset_recovers_a_track_beyond_the_scan_budget() {
         let q = arrangement::tests::fake_live(arrangement::tests::FakeLive {
             timelines: vec![vec![], (0..900).map(|i| (String::new(), i as f32, i as f32 + 1.0)).collect()],
@@ -2009,8 +2080,7 @@ mod tests {
     #[tokio::test]
     async fn arrangement_refuses_invalid_scope_instead_of_reading_the_whole_set() {
         let ctx = disconnected_ctx(mirror_with_tracks(2));
-        for args in [json!({"start_beats":64}), json!({"end_beats":128}),
-                     json!({"start_beats":128,"end_beats":64}), json!({"track":-1}),
+        for args in [json!({"start_beats":128,"end_beats":64}), json!({"start_beats":-1}), json!({"track":-1}),
                      json!({"clip_offset":1}), json!({"track":0,"clip_offset":-1})] {
             let r = execute(&ctx, "get_arrangement", &args).await;
             assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"), "{args}");

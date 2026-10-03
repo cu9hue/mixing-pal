@@ -995,7 +995,9 @@ const HUMAN_REVIEW_PROPERTIES: &[&str] = &[
 fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, String) {
     require_valid_evaluation(sc.question, runs, "");
     let passes = runs.iter().filter(|r| {
-        sc.must.iter().all(|p| r.verdicts.get(p.key).is_some_and(|v| v.0)) && extra(r)
+        sc.must.iter().all(|p| r.verdicts.get(p.key).is_some_and(|v| v.0))
+            && extra(r)
+            && common::tool_talk(&r.answer).is_none()
     }).count();
     let total = runs.len();
     let reads = runs.iter().filter(|r| extra(r)).count();
