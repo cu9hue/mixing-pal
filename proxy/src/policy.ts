@@ -21,15 +21,19 @@ export const completionInput = z.object({
 });
 export type CompletionInput = z.infer<typeof completionInput>;
 
-export const POLICY_VERSION = "m3-2026-09-12";
-export const MAX_CONTEXT = 1_048_576;
-export const MAX_OUTPUT = 4096;
-export const MAX_PROMPT_PRICE = 0.3;
-export const MAX_COMPLETION_PRICE = 1.2;
+export const POLICY_VERSION = "k26-2026-10-03";
+export const MAX_CONTEXT = 262_144;
+// Reasoning spends from the same cap as the answer. A tighter cap lets a long
+// think use it all, and the producer gets a blank card.
+export const MAX_OUTPUT = 12_000;
+export const MAX_PROMPT_PRICE = 1.0;
+export const MAX_COMPLETION_PRICE = 4.0;
 // Reserve the whole context at the admitted route's ceiling. Character-count
 // estimates cannot bound an unknown tokenizer or its message/tool overhead.
 export const RESERVATION = Math.ceil(MAX_CONTEXT * MAX_PROMPT_PRICE + MAX_OUTPUT * MAX_COMPLETION_PRICE);
-const APPROVED_ROUTES = ["deepinfra/fp8", "venice/fp8", "together", "parasail/fp8", "novita/fp8", "minimax/fp8"];
+// Zero-retention hosts at the precisions the model was evaluated on; fp4 and
+// undisclosed quantizations are left out.
+const APPROVED_ROUTES = ["inceptron/int4", "crusoe/bf16", "parasail/int4", "venice/int4", "siliconflow/fp8", "moonshotai/int4"];
 let verified: { until: number; routes: string[] } | undefined;
 
 export async function routes(): Promise<string[]> {
@@ -56,7 +60,7 @@ export async function routes(): Promise<string[]> {
 
 export function providerBody(input: CompletionInput, only: string[]) {
   return { model: MODEL, messages: input.body.messages, tools: input.body.tools,
-    tool_choice: "auto", max_tokens: MAX_OUTPUT, stream: false, reasoning: { enabled: false },
+    tool_choice: "auto", max_tokens: MAX_OUTPUT, stream: false, reasoning: { effort: "low" },
     provider: { only, require_parameters: true, data_collection: "deny", zdr: true,
       max_price: { prompt: MAX_PROMPT_PRICE, completion: MAX_COMPLETION_PRICE, request: 0 } } };
 }

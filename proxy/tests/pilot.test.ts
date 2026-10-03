@@ -68,9 +68,14 @@ beforeEach(async () => {
       if (otp) otpSent = otp[1];
       return Response.json({ id: "email-id" });
     }
-    if (String(url) === `${provider}/api/v1/models/minimax/minimax-m3/endpoints`) {
-      return Response.json({ data: { endpoints: [{ tag: "deepinfra/fp8", status: 0, context_length: 524288,
-        pricing: { prompt: "0.00000028", completion: "0.0000011" } }] } });
+    if (String(url) === `${provider}/api/v1/models/moonshotai/kimi-k2.6/endpoints`) {
+      return Response.json({ data: { endpoints: [
+        { tag: "inceptron/int4", status: 0, context_length: 262144,
+          pricing: { prompt: "0.0000004344", completion: "0.00000245", input_cache_read: "0.00000012", discount: 0 } },
+        // Not on the approved list: an fp4 host is a further quantization than the model was evaluated on.
+        { tag: "deepinfra/fp4", status: 0, context_length: 262144, pricing: { prompt: "0.00000075", completion: "0.0000035" } },
+        { tag: "venice/int4", status: -5, context_length: 256000, pricing: { prompt: "0.00000075", completion: "0.0000035" } },
+      ] } });
     }
     if (String(url) === `${provider}/api/v1/chat/completions`) {
       sent.push(JSON.parse(String(options?.body)));
@@ -433,7 +438,8 @@ describe("metered requests", () => {
     const response = await api("/v1/completions", question(), user.token);
     expect(response.status, await response.clone().text()).toBe(200);
     expect((await response.json()).text).toContain("```note");
-    expect(sent[0]).toMatchObject({ model: "minimax/minimax-m3", max_tokens: 4096, provider: { only: ["deepinfra/fp8"], zdr: true } });
+    expect(sent[0]).toMatchObject({ model: "moonshotai/kimi-k2.6", max_tokens: 12000, reasoning: { effort: "low" },
+      provider: { only: ["inceptron/int4"], zdr: true } });
     const row = await env.DB.prepare("SELECT spent, reserved FROM members WHERE id = ?").bind(user.id).first();
     expect(row).toEqual({ spent: 1000, reserved: 0 });
     expect(await capturedObjects()).toHaveLength(0);

@@ -17,7 +17,7 @@ export const CAPTURE_VERSION = "quality-2026-09-17";
 export const MAX_BODY = 1_048_576;
 // A 4,000-character report can need six bytes per character when JSON-escaped.
 export const MAX_FEEDBACK_BODY = 32 * 1024;
-export const MODEL = "minimax/minimax-m3";
+export const MODEL = "moonshotai/kimi-k2.6";
 export const MODEL_TIMEOUT = 165_000;
 
 export class ApiError extends Error {

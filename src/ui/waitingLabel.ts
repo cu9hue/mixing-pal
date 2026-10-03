@@ -1,7 +1,7 @@
 /**
  * How long a turn runs before the label admits how long it has been running.
  *
- * Below this the producer gets a plain "Thinking…": a timer on a two-second
+ * Below this the producer gets the verb alone: a timer on a two-second
  * answer makes a fast reply feel measured, and there is nothing to decide
  * yet. Past it she is waiting long enough to wonder whether the app has hung,
  * and the honest answer is a number.
@@ -18,6 +18,15 @@ export interface WaitingState {
   elapsedMs: number;
 }
 
+/**
+ * A reasoning model can think for a minute between reads; one word that long looks
+ * like a hang. No verb names an act the app could check or a sound it would hear.
+ */
+const VERBS = ["Thinking…", "Checking the details…", "Comparing parts…", "Working it out…", "Putting it together…"];
+
+/** How long each verb holds: slow enough to read at a glance. */
+export const VERB_MS = 4_000;
+
 function reads(n: number): string {
   return n === 1 ? "1 read" : `${n} reads`;
 }
@@ -31,20 +40,15 @@ function reads(n: number): string {
  * and the final stretch while the model writes prose were all silent. This
  * fills those gaps without displacing the tool line, which names her music
  * and is strictly the better thing to show when it applies.
- *
- * A turn is mostly reading, not thinking, and the line says how much: the
- * count of reads rides on the tool line from the second read on, and on the
- * thinking line once there has been one. The verb stays "Thinking" between
- * reads because the app cannot tell whether the model is writing or about
- * to read again, and a verb that guesses would be wrong half the time.
  */
 export function waitingLabel({ busy, toolProgress, toolsCalled, elapsedMs }: WaitingState): string | null {
   if (!busy) return null;
   if (toolProgress !== null) {
     return toolsCalled > 1 ? `${toolProgress} · ${reads(toolsCalled)}` : toolProgress;
   }
-  const parts = ["Thinking…"];
-  if (toolsCalled > 0) parts.push(`${reads(toolsCalled)} so far`);
-  if (elapsedMs >= SLOW_AFTER_MS) parts.push(`${Math.floor(elapsedMs / 1000)}s`);
-  return parts.join(" · ").replace("Thinking… · ", "Thinking… ");
+  const verb = VERBS[Math.floor(elapsedMs / VERB_MS) % VERBS.length];
+  const rest = [];
+  if (toolsCalled > 0) rest.push(`${reads(toolsCalled)} so far`);
+  if (elapsedMs >= SLOW_AFTER_MS) rest.push(`${Math.floor(elapsedMs / 1000)}s`);
+  return rest.length > 0 ? `${verb} ${rest.join(" · ")}` : verb;
 }
