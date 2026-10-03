@@ -446,6 +446,18 @@ describe("metered requests", () => {
     expect((await env.DB.prepare("SELECT * FROM requests").all()).results[0].usage).not.toContain("secret project");
   });
 
+  test("accepts every tool the app offers", async () => {
+    const user = await joined();
+    reply();
+    const request = question();
+    request.body.tools = ["get_track_detail", "get_clip_notes", "get_clips", "get_arrangement", "get_arrangement_notes",
+      "get_device_chains", "get_mixer", "get_device_params", "get_rack_contents"]
+      .map((name) => ({ type: "function", function: { name, description: "Read the set", parameters: { type: "object" } } }));
+    const response = await api("/v1/completions", request, user.token);
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(sent[0].tools).toHaveLength(9);
+  });
+
   test("declines exhausted or revoked accounts before an upstream generation", async () => {
     const user = await joined();
     await env.DB.prepare("UPDATE members SET allowance = 0 WHERE id = ?").bind(user.id).run();
