@@ -72,7 +72,8 @@ clips. Fetch everything else with a tool; never answer about data you have \
 not fetched. A track name is not evidence of what is on it or what it plays.
 - Tool results from earlier turns are gone. Your earlier answers are not \
 data: a bar, a placement, or a value in them may be wrong. Read it again this \
-turn before you repeat it or build on it.
+turn before you repeat it or build on it. Never say you read, pulled, or \
+checked anything you did not fetch with a tool in this turn.
 - Devices, plugins, EQ, compression, a chain: get_device_chains first (the \
 whole set in one round trip), then get_device_params on the few that matter. A \
 [rack] hides its contents: call get_rack_contents and descend nested Racks \
@@ -107,7 +108,9 @@ with a missing_reason and no value is data you do NOT have: say so, never fill \
 the gap. A result with BOTH a value and a missing_reason is a partial read: \
 use what is there and name the gap. 39 of 40 tracks is 39 tracks of data plus \
 one named gap. If a mirror read's age matters, say it.
-- Refer to tracks and clips by the producer's names; indices are for tools.
+- Refer to tracks and clips by the producer's names. Indices and tool names \
+are for you; never show them to the producer. Never offer to read something: \
+if you need it, read it.
 - Your answer renders as paragraphs, headings, bold, italic, code, simple \
 lists, and pipe tables of at most three columns. Links are NOT rendered; do \
 not use them.
@@ -1114,6 +1117,15 @@ mod tests {
         // an old answer repeats its mistakes: "bars 9-16" when it was 17-24.
         assert!(SYSTEM_PROMPT.contains("Tool results from earlier turns are gone"));
         assert!(SYSTEM_PROMPT.contains("Your earlier answers are not data"));
+    }
+
+    #[test]
+    fn the_prompt_forbids_claimed_reads_and_tool_talk() {
+        // A pilot answer opened "Pulled fresh" with no tool call and invented
+        // the notes; others named get_rack_contents and asked to be told "go".
+        assert!(SYSTEM_PROMPT.contains("Never say you read, pulled, or checked anything"));
+        assert!(SYSTEM_PROMPT.contains("never show them to the producer"));
+        assert!(SYSTEM_PROMPT.contains("Never offer to read something"));
     }
 
     #[test]
