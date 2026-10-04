@@ -606,9 +606,9 @@ async fn execute_tool(
     };
     let result_json = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
     if context.is_none() {
-    if let Ok(mut t) = trace_state.lock() {
-        t.push(TraceStep::tool(tools::now_millis(), name, args, result_json, duration_ms, &redact_value));
-    }
+        if let Ok(mut t) = trace_state.lock() {
+            t.push(TraceStep::tool(tools::now_millis(), name, args, result_json, duration_ms, &redact_value));
+        }
     }
 
     Ok(result)

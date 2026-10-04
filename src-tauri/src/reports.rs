@@ -125,10 +125,10 @@ impl ReportStore {
     pub fn prune(&mut self, now: u64) -> Result<(), ProxyError> {
         if self.unreadable { return Err(storage_error()); }
         let mut entries = self.entries.clone();
-        entries.retain(|e| now.saturating_sub(e.receipt.created_at) < 30 * DAY);
+        entries.retain(|e| e.receipt.status == ReportStatus::Deleting || now.saturating_sub(e.receipt.created_at) < 30 * DAY);
         for e in &mut entries {
             if now.saturating_sub(e.receipt.created_at) >= 7 * DAY && e.receipt.status != ReportStatus::Received
-                && e.receipt.status != ReportStatus::Deleted {
+                && e.receipt.status != ReportStatus::Deleted && e.receipt.status != ReportStatus::Deleting {
                 e.payload = None;
                 e.receipt.status = ReportStatus::Expired;
             }
@@ -140,7 +140,11 @@ impl ReportStore {
         self.prune(now)?;
         let id: Uuid = serde_json::from_value(payload["id"].clone()).map_err(|_| ProxyError::new("invalid_report", "The report reference is invalid."))?;
         if let Some(existing) = self.entries.iter().find(|e| e.receipt.id == id) {
-            if existing.owner != owner || existing.payload.as_ref().is_some_and(|p| p != &payload) {
+            if existing.owner != owner || existing.payload.as_ref().is_some_and(|p| {
+                // A retried form can observe newer diagnostics. Keep its first snapshot.
+                ["origin", "description", "turn_id", "diagnostics_consent"].iter().any(|key| p[*key] != payload[*key])
+                    || p["diagnostics"]["exchange"] != payload["diagnostics"]["exchange"]
+            }) {
                 return Err(ProxyError::new("report_conflict", "This report reference has different content."));
             }
             return Ok(existing.receipt.clone());

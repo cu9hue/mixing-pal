@@ -568,6 +568,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn report_deletion_retries_after_submission_and_receipt_expiry() {
+        let f = Fixture::new().await; let proxy = f.proxy(); let id = Uuid::new_v4();
+        proxy.queue_report("producer", report_payload(id)).await.unwrap();
+        {
+            let mut store = proxy.reports.lock().await;
+            store.entries[0].receipt.created_at -= 8 * 86_400_000;
+            store.update("producer", id, crate::reports::ReportStatus::Received).unwrap();
+        }
+        proxy.delete_report(id).await.unwrap();
+        f.route("DELETE", &format!("/v1/reports/{id}"), 503, json!({"error": {"code": "service_unavailable"}})).await;
+        proxy.flush_reports().await.unwrap();
+        assert_eq!(f.server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(proxy.list_reports().await.unwrap()[0].status, crate::reports::ReportStatus::Deleting);
+        {
+            let mut store = proxy.reports.lock().await;
+            store.entries[0].receipt.created_at -= 24 * 86_400_000;
+            store.update("producer", id, crate::reports::ReportStatus::Deleting).unwrap();
+        }
+        let restarted = f.proxy();
+        f.server.reset().await;
+        f.route("DELETE", &format!("/v1/reports/{id}"), 202, json!({"deletion": "pending"})).await;
+        restarted.flush_reports().await.unwrap();
+        assert_eq!(f.server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(restarted.reports.lock().await.entries[0].receipt.status, crate::reports::ReportStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn report_form_retry_preserves_the_first_native_snapshot() {
+        let f = Fixture::new().await; let proxy = f.proxy(); let id = Uuid::new_v4();
+        let mut input = crate::reports::ReportInput { id, account_id: "producer".into(), origin: "settings".into(),
+            description: "it broke".into(), include_diagnostics: true, exchange: None };
+        let first = crate::reports::build_payload(&input, "producer", &crate::trace::Trace::new(), Some(13), true).unwrap();
+        proxy.queue_report("producer", first.clone()).await.unwrap();
+        let retry = crate::reports::build_payload(&input, "producer", &crate::trace::Trace::new(), None, false).unwrap();
+        proxy.queue_report("producer", retry).await.unwrap();
+        input.description = "changed".into();
+        assert!(proxy.queue_report("producer", crate::reports::build_payload(&input, "producer", &crate::trace::Trace::new(), None, false).unwrap()).await.is_err());
+        f.route("POST", "/v1/reports", 201, json!({"id": id, "status": "received"})).await;
+        proxy.flush_reports().await.unwrap();
+        assert_eq!(f.server.received_requests().await.unwrap()[0].body_json::<Value>().unwrap(), first);
+    }
+
+    #[tokio::test]
     async fn reports_do_not_follow_an_account_or_environment_change() {
         let f = Fixture::new().await;
         let proxy = f.proxy();
