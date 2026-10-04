@@ -11,8 +11,13 @@ pub fn incident_snapshot(trace: &Trace, account: &str, exchange: Option<&Exchang
             limitations.push("This conversation's account could not be verified. No conversation data attached.");
         } else {
             let mut text = |s: &str| {
-                if s.chars().count() > 16000 { limitations.push("Long exchange text was shortened."); }
-                s.chars().take(16000).collect::<String>()
+                let mut units = 0;
+                let end = s.char_indices().find_map(|(index, ch)| {
+                    units += ch.len_utf16();
+                    (units > 16000).then_some(index)
+                }).unwrap_or(s.len());
+                if end < s.len() { limitations.push("Long exchange text was shortened."); }
+                s[..end].to_owned()
             };
             result["exchange"] = json!({"question": text(&entry.question),
                 "answer": entry.answer.as_deref().map(&mut text), "error": entry.error.as_deref().map(&mut text)});
@@ -264,9 +269,10 @@ mod tests {
     #[test]
     fn snapshot_marks_missing_trace_and_bounds_large_unicode_exchange() {
         let mut entry = exchange(Some("producer"));
-        entry.answer = Some("音".repeat(300_000));
+        entry.answer = Some("🎵".repeat(300_000));
         let result = incident_snapshot(&crate::trace::Trace::new(), "producer", Some(&entry), None);
         assert_eq!(result["exchange"]["question"], "private question");
+        assert!(result["exchange"]["answer"].as_str().unwrap().encode_utf16().count() <= 16000);
         assert!(serde_json::to_vec(&result).unwrap().len() <= 262144);
         assert!(result["limitations"].as_array().unwrap().len() >= 2);
     }
