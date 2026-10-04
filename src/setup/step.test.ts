@@ -8,6 +8,7 @@ const DONE: SetupFacts = {
   deltasArriving: true,
   connectedAcknowledged: true,
   hasAccount: true,
+  sharingChosen: true,
   experienceChosen: true,
 };
 
@@ -33,9 +34,20 @@ describe("currentStep", () => {
         deltasArriving: false,
         connectedAcknowledged: false,
         hasAccount: false,
+        sharingChosen: false,
         experienceChosen: false,
       }),
     ).toBe("account");
+  });
+
+  // Right after sign-in, before Live, so the question is never skipped by a
+  // connector that is already installed.
+  it("asks about sharing once signed in and before setting up Live", () => {
+    expect(currentStep({ ...DONE, sharingChosen: false })).toBe("sharing");
+    expect(
+      currentStep({ ...DONE, sharingChosen: false, connectorInstalled: false, deltasArriving: false }),
+    ).toBe("sharing");
+    expect(currentStep({ ...DONE, sharingChosen: false, hasAccount: false })).toBe("account");
   });
 
   // The app updated and the part inside Live did not. Reinstalling is the

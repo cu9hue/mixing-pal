@@ -150,6 +150,16 @@ export async function deleteAccount(env: Env, memberId: string, journal = true):
   ]);
 }
 
+export async function deleteShared(env: Env, memberId: string, journal = true): Promise<void> {
+  const now = Date.now();
+  if (journal) await recordRestriction(env, { member_id: memberId, shared: true });
+  await env.DB.batch([
+    env.DB.prepare("UPDATE turns SET deleted_at = COALESCE(deleted_at, ?), capture = 0 WHERE member_id = ?").bind(now, memberId),
+    env.DB.prepare("UPDATE captures SET state = 'deleting', updated_at = ? WHERE turn_id IN (SELECT id FROM turns WHERE member_id = ?) AND state != 'deleted'")
+      .bind(now, memberId),
+  ]);
+}
+
 export async function revokeAccess(env: Env, memberId: string, journal = true): Promise<void> {
   if (journal) await recordRestriction(env, { member_id: memberId, revoked: true });
   await env.DB.batch([
@@ -158,7 +168,7 @@ export async function revokeAccess(env: Env, memberId: string, journal = true): 
   ]);
 }
 
-async function recordRestriction(env: Env, target: { member_id: string; turn_id?: string; revoked?: true }): Promise<void> {
+async function recordRestriction(env: Env, target: { member_id: string; turn_id?: string; revoked?: true; shared?: true }): Promise<void> {
   // This journal must survive restoring D1 to an earlier point in time.
   await env.CAPTURE.put(`deletions/${Date.now()}-${crypto.randomUUID()}.json`,
     JSON.stringify({ ...target, requested_at: Date.now() }), { httpMetadata: { contentType: "application/json" } });
@@ -175,12 +185,13 @@ export async function replayDeletions(env: Env, cursor?: string): Promise<string
   for (const object of page.objects) {
     const saved = await env.CAPTURE.get(object.key);
     if (!saved) continue;
-    const entry = z.object({ member_id: z.string(), turn_id: z.uuid().optional(), revoked: z.literal(true).optional(), requested_at: z.number() }).parse(await saved.json());
+    const entry = z.object({ member_id: z.string(), turn_id: z.uuid().optional(), revoked: z.literal(true).optional(), shared: z.literal(true).optional(), requested_at: z.number() }).parse(await saved.json());
     if (entry.revoked) await revokeAccess(env, entry.member_id, false);
     else if (entry.turn_id) {
       const exists = await env.DB.prepare("SELECT id FROM turns WHERE id = ? AND member_id = ?").bind(entry.turn_id, entry.member_id).first();
       if (exists) await deleteTurn(env, entry.member_id, entry.turn_id, false);
-    } else await deleteAccount(env, entry.member_id, false);
+    } else if (entry.shared) await deleteShared(env, entry.member_id, false);
+    else await deleteAccount(env, entry.member_id, false);
   }
   return page.truncated ? page.cursor : null;
 }

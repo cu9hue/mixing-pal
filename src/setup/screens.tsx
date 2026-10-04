@@ -2,6 +2,7 @@ import { useBusyState, beginMutation } from "../model/updates";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { EXPERIENCES, ExperienceState } from "../model/experience";
+import { AccountState, AccountView, errorMessage } from "../model/account";
 
 /** Every screen after "install" names the connector as Live shows it. */
 export function InstallScreen({
@@ -39,7 +40,7 @@ export function InstallScreen({
 
   return (
     <>
-      <div className="setup__label">Step 2 of 5</div>
+      <div className="setup__label">Step 3 of 6</div>
       <h1 className="setup__title">Mixing Pal needs a small connector inside Live.</h1>
       <p className="setup__body">
         It goes into your Ableton User Library, where Live keeps the things you add
@@ -67,7 +68,7 @@ export function InstallScreen({
 export function OpenLiveScreen() {
   return (
     <>
-      <div className="setup__label">Step 3 of 5</div>
+      <div className="setup__label">Step 4 of 6</div>
       <h1 className="setup__title">Now open Ableton Live.</h1>
       <p className="setup__body">
         Live only looks for connectors when it starts, so if it was already open,
@@ -84,7 +85,7 @@ export function OpenLiveScreen() {
 export function ControlSurfaceScreen({ folder }: { folder: string }) {
   return (
     <>
-      <div className="setup__label">Step 4 of 5</div>
+      <div className="setup__label">Step 5 of 6</div>
       <h1 className="setup__title">Turn it on inside Live.</h1>
       <p className="setup__body">
         Open Live's <b>Settings → Link, Tempo &amp; MIDI</b> (called{" "}
@@ -123,7 +124,7 @@ export function ConnectedScreen({
   const named = trackNames.filter((n) => n.trim() !== "").slice(0, 4);
   return (
     <>
-      <div className="setup__label">Step 4 of 5</div>
+      <div className="setup__label">Step 5 of 6</div>
       <h1 className="setup__title">
         <span className="setup__ok-dot" />
         Connected.
@@ -153,7 +154,7 @@ export function ConnectedScreen({
 export function ExperienceScreen({ experience }: { experience: ExperienceState }) {
   return (
     <>
-      <div className="setup__label">Step 5 of 5</div>
+      <div className="setup__label">Step 6 of 6</div>
       <h1 className="setup__title">How do you work in Live?</h1>
       <p className="setup__body">
         This sets which words I use. You can change it later in Settings.
@@ -171,6 +172,50 @@ export function ExperienceScreen({ experience }: { experience: ExperienceState }
         ))}
       </div>
       {experience.error !== null && <div className="setup__error">{experience.error}</div>}
+    </>
+  );
+}
+
+export function SharingScreen({ account }: { account: AccountState }) {
+  const operations = useBusyState();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function choose(enabled: boolean) {
+    if (!beginMutation(operations, "accountMutation")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      account.change(await invoke<AccountView>("account_consent", { enabled }));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+      operations.accountMutation = false;
+    }
+  }
+
+  return (
+    <>
+      <div className="setup__label">Step 2 of 6</div>
+      <h1 className="setup__title">Help improve Mixing Pal?</h1>
+      <p className="setup__body">
+        If you share, we keep your questions, what I read in your set, my answers, and what
+        you tell me about them. A person reads them to make my advice better. We delete them
+        after 30 days and never use them to train AI.
+      </p>
+      <p className="setup__body">You can change this, or delete what you shared, in Settings.</p>
+      <div className="setup__choices">
+        <button className="setup__choice" disabled={busy} onClick={() => void choose(true)}>
+          <span className="setup__choice-label">Share</span>
+          <span className="setup__choice-hint">Kept for 30 days, then deleted.</span>
+        </button>
+        <button className="setup__choice" disabled={busy} onClick={() => void choose(false)}>
+          <span className="setup__choice-label">Don't share</span>
+          <span className="setup__choice-hint">Nothing is kept for review.</span>
+        </button>
+      </div>
+      {error !== null && <div className="setup__error">{error}</div>}
     </>
   );
 }

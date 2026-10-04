@@ -4,7 +4,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { errorMessage } from "../model/account";
 import { Feedback } from "./thread";
 
-export function FeedbackPanel({ turnId, answered, saved, sharingEnabled, sentCount, onSave }: { turnId: string; answered: boolean; saved?: Feedback; sharingEnabled: boolean; sentCount: number; onSave: (value: Feedback) => void }) {
+const OUTCOMES: Record<Feedback["outcome"], string> = {
+  not_tried: "Haven't tried it",
+  tried: "Tried it, still deciding",
+  kept: "Tried it and kept it",
+  undone: "Tried it and undid it",
+};
+
+export function FeedbackPanel({ turnId, saved, sharingEnabled, sentCount, onSave }: { turnId: string; saved?: Feedback; sharingEnabled: boolean; sentCount: number; onSave: (value: Feedback) => void }) {
   const operations = useBusyState();
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -12,15 +19,16 @@ export function FeedbackPanel({ turnId, answered, saved, sharingEnabled, sentCou
   const [heard, setHeard] = useState(saved?.heard ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => { setOpen(false); setDeleting(false); }, [sentCount]);
+  useEffect(() => { setOpen(false); }, [sentCount]);
 
   return <div className="feedback" data-tauri-drag-region="false">
-    <button aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>{answered ? saved ? "Your outcome" : "Tried this advice?" : "Shared turn"}</button>
+    <button type="button" className="feedback__link" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
+      {saved ? OUTCOMES[saved.outcome] : "Tried it?"}
+    </button>
     {open && <form id={id} onSubmit={async (e) => {
       e.preventDefault();
-      if (!answered || !beginMutation(operations, "accountMutation")) return;
+      if (!beginMutation(operations, "accountMutation")) return;
       setBusy(true); setMessage("");
       const value = { outcome, heard, shared: false };
       onSave(value);
@@ -34,30 +42,18 @@ export function FeedbackPanel({ turnId, answered, saved, sharingEnabled, sentCou
         } else {
           setMessage("Saved on this laptop.");
         }
+        setOpen(false);
       } catch (error) { setMessage(`Saved on this laptop. Could not share: ${errorMessage(error)}`); }
       finally { setBusy(false); operations.accountMutation = false; }
     }}>
-      {answered && <><label htmlFor={`${id}-outcome`}>What did you do?</label>{" "}
+      <label htmlFor={`${id}-outcome`}>What did you do?</label>{" "}
       <select id={`${id}-outcome`} value={outcome} disabled={busy || operations.install} onChange={(e) => setOutcome(e.target.value as Feedback["outcome"])}>
-        <option value="not_tried">Haven't tried it</option><option value="tried">Tried it, still deciding</option>
-        <option value="kept">Tried it and kept it</option><option value="undone">Tried it and undid it</option>
+        {Object.entries(OUTCOMES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
       <label htmlFor={`${id}-heard`}>What did you hear?</label>
       <textarea id={`${id}-heard`} value={heard} maxLength={4000} rows={2} disabled={busy || operations.install} onChange={(e) => setHeard(e.target.value)} />
-      </>}
-      <div className="account__actions">{answered && <button type="submit" disabled={busy || operations.install}>Save outcome</button>}
-        <button type="button" disabled={busy || operations.install} onClick={() => setDeleting(true)}>Delete shared turn…</button></div>
-      {deleting && <div><p>Delete this turn's shared questions, answers, tool reads and feedback?</p>
-        <button type="button" disabled={busy || operations.install} onClick={async () => {
-          if (!beginMutation(operations, "accountMutation")) return;
-          setBusy(true);
-          try { await invoke("turn_delete_capture", { turnId }); setMessage("Deletion requested. Your local conversation stays here."); setDeleting(false); }
-          catch (error) { setMessage(errorMessage(error)); }
-          finally { setBusy(false); operations.accountMutation = false; }
-        }}>Delete shared turn</button>{" "}
-        <button type="button" disabled={busy || operations.install} onClick={() => setDeleting(false)}>Cancel</button>
-      </div>}
-      {message && <p role="status">{message}</p>}
+      <div className="account__actions"><button type="submit" disabled={busy || operations.install}>Save outcome</button></div>
     </form>}
+    {message && <p className="feedback__status" role="status">{message}</p>}
   </div>;
 }

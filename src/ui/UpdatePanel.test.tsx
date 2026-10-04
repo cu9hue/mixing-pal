@@ -104,14 +104,16 @@ it.each(["setup", "reinstall", "settings", "account"] as const)("refuses a new %
   expect(commands).not.toContain(kind === "settings" ? "save_settings" : kind === "account" ? "account_sign_out" : "install_connector");
 });
 
-it.each(["feedback", "delete"] as const)("refuses restart while a shared-turn %s mutation is pending", async (kind) => {
+it.each(["feedback", "delete"] as const)("refuses restart while a shared-advice %s mutation is pending", async (kind) => {
   const pending = deferred();
   vi.mocked(invoke).mockImplementation(async (cmd) => cmd === "install_update" ? undefined : pending.promise);
   const busy = createBusyState();
-  render(<BusyContext.Provider value={busy}><FeedbackPanel turnId="turn" answered sharingEnabled sentCount={1} onSave={() => {}} /></BusyContext.Provider>);
-  fireEvent.click(screen.getByRole("button", { name: "Tried this advice?" }));
-  if (kind === "delete") fireEvent.click(screen.getByRole("button", { name: "Delete shared turn…" }));
-  fireEvent.click(screen.getByRole("button", { name: kind === "feedback" ? "Save outcome" : "Delete shared turn" }));
+  render(<BusyContext.Provider value={busy}>{kind === "feedback"
+    ? <FeedbackPanel turnId="turn" sharingEnabled sentCount={1} onSave={() => {}} />
+    : <AccountPanel account={account} />}</BusyContext.Provider>);
+  if (kind === "feedback") fireEvent.click(screen.getByRole("button", { name: "Tried it?" }));
+  else fireEvent.click(screen.getByRole("button", { name: "Delete shared advice…" }));
+  fireEvent.click(screen.getByRole("button", { name: kind === "feedback" ? "Save outcome" : "Delete shared advice" }));
   await expect(installWhenIdle(busy)).rejects.toThrow("Finish");
   expect(invoke).not.toHaveBeenCalledWith("install_update");
   pending.resolve({ saved: true });

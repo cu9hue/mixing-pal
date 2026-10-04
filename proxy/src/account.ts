@@ -35,6 +35,7 @@ export async function account(env: Env, id: string): Promise<Response> {
     service_paused: servicePaused,
     reserved_micro_usd: m?.reserved ?? 0, period_end: m?.period_end ?? null,
     capture: m?.capture === 1 && latestConsent?.version === CAPTURE_VERSION && latestConsent.enabled === 1,
+    sharing_chosen: latestConsent?.version === CAPTURE_VERSION,
     consent_epoch: m?.consent_epoch ?? 0,
     consent_version: CAPTURE_VERSION, training: false });
 }

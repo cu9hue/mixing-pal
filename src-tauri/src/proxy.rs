@@ -376,17 +376,17 @@ impl Proxy {
         Ok(self.request(Method::POST, &format!("/v1/turns/{turn_id}/feedback"), Some(payload), Some(&session)).await?.0)
     }
 
-    pub async fn delete_turn(&self, turn_id: Uuid) -> Result<(), ProxyError> {
+    pub async fn delete_shared(&self) -> Result<(), ProxyError> {
         let _change = self.account_change.lock().await;
         let session = self.required_session()?;
         {
             let mut outbox = self.outbox.lock().await;
-            if let Some(t) = self.turns.lock().unwrap().get_mut(&turn_id) { t.capture = false; t.blocked = true; }
-            outbox.events.retain(|e| e.turn_id != turn_id);
-            outbox.gaps.retain(|e| e.turn_id != turn_id);
+            for turn in self.turns.lock().unwrap().values_mut() { turn.capture = false; turn.blocked = true; }
+            outbox.events.clear();
+            outbox.gaps.clear();
             self.save_outbox(&outbox)?;
         }
-        self.request(Method::DELETE, &format!("/v1/turns/{turn_id}/capture"), None, Some(&session)).await?;
+        self.request(Method::DELETE, "/v1/captures", None, Some(&session)).await?;
         Ok(())
     }
 
@@ -648,9 +648,9 @@ mod tests {
         let fixture = Fixture::new().await;
         let proxy = Arc::new(fixture.proxy());
         let turn = fixture.turn(&proxy, true).await;
-        fixture.route("DELETE", &format!("/v1/turns/{turn}/capture"), 202, json!({ "deletion": "pending" })).await;
+        fixture.route("DELETE", "/v1/captures", 202, json!({ "deletion": "pending" })).await;
         let held = proxy.outbox.lock().await;
-        let deleting = { let proxy = proxy.clone(); tokio::spawn(async move { proxy.delete_turn(turn).await }) };
+        let deleting = { let proxy = proxy.clone(); tokio::spawn(async move { proxy.delete_shared().await }) };
         tokio::task::yield_now().await;
         let upload = { let proxy = proxy.clone(); tokio::spawn(async move { proxy.event(turn, event("tool", json!({ "private": "notes" }))).await }) };
         tokio::task::yield_now().await;

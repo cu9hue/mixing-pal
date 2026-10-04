@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import "./SharingConsent.css";
 
 const DETAIL =
-  "Optional. Save your questions, relevant set context, tool reads, raw answers and outcomes for human review for 30 days. Outcomes from advice given before you enabled sharing stay on this laptop. You can stop future sharing or delete a shared turn. This does not permit model training.";
+  "Optional. Save your questions, relevant set context, tool reads, raw answers and outcomes for human review for 30 days. Outcomes from advice given before you enabled sharing stay on this laptop. You can stop future sharing or delete everything you shared. This does not permit model training.";
 
 export function SharingConsent({
   checked,
