@@ -211,6 +211,9 @@ Ordered. Each item says what, why, size, and what it waits on.
     opens with a short recap of last time: the goal, what she tried, and
     what she decided. It is built from the set's saved thread and notes, so
     it costs no model call. She can dismiss it.
+    High priority for retention, next after item 18. Today the card shows
+    only a count line ("Earlier on this set · 3 exchanges · last 2 days
+    ago"), which says nothing about what she did.
 
 12. **Kimi K2.6 as the default.** Built 2026-10-03. A pilot trace showed
     MiniMax M3 claiming reads it never made, misreading a set built from
@@ -264,6 +267,19 @@ Ordered. Each item says what, why, size, and what it waits on.
     host stops sending, never while a long reply is still arriving.
     Streaming does not shorten a turn: the time goes to K2.6's reasoning
     tokens and the host's speed.
+
+18. **First questions that reach the aha.** High priority, small: next
+    after item 17. The empty card offers three fixed questions
+    (`src/ui/examples.ts`). Two of them, "What is masking the kick?" and
+    "Is the low end too busy?", ask for a sound judgement, the answer type
+    the craft evals score lowest, because the model cannot hear. A new
+    producer's first answer should show the product at its best: an answer
+    about her own set that she can check by ear. Build the questions from
+    the open set (its track names and its arrangement), lean on what the
+    reads answer well (structure, what comes in when, what is on a chain),
+    and include the core promise: how this loop could become a track. Give
+    them a design pass too; they read as an afterthought today. Measure the
+    first click and the first kept move once usage events exist.
 
 ## When the waitlist says go
 
