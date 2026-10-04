@@ -75,3 +75,19 @@ it("says so when a share fails, and keeps the local rating", async () => {
   await screen.findByText("Couldn't share this outcome.");
   expect(last[last.length - 1]?.outcome).toBe("kept");
 });
+
+it("shares the heard text even when it is saved before the first share returns", async () => {
+  let release: (value: unknown) => void = () => {};
+  vi.mocked(invoke).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
+    .mockResolvedValue({ saved: true });
+  render(<Harness sharing />);
+  fireEvent.click(undid());
+  const field = screen.getByLabelText("What did you hear?");
+  fireEvent.change(field, { target: { value: "sounded thin" } });
+  fireEvent.keyDown(field, { key: "Enter" });
+  release({ saved: true });
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("turn_feedback", expect.objectContaining({
+    feedback: expect.objectContaining({ outcome: "undone", heard: "sounded thin" }),
+  })));
+  expect(screen.queryByText("Couldn't share this outcome.")).toBeNull();
+});

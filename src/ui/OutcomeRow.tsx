@@ -19,11 +19,21 @@ export function OutcomeRow({ exchange, outcomes, sharingEnabled, sentCount, onCh
   const [draft, setDraft] = useState("");
   const [shareFailed, setShareFailed] = useState(false);
   const field = useRef<HTMLInputElement>(null);
+  // Shares go out in order: a heard text saved while the rating's share is
+  // still in flight would otherwise find the mutation slot taken.
+  const sharing = useRef<Promise<void> | null>(null);
 
   useEffect(() => { setHearing(false); }, [sentCount]);
 
-  async function share(outcome: Rating, heard: string) {
+  function share(outcome: Rating, heard: string) {
     if (!sharingEnabled) return;
+    // The first share claims the slot now, so a restart cannot slip in first.
+    const next = sharing.current ? sharing.current.then(() => send(outcome, heard)) : send(outcome, heard);
+    sharing.current = next;
+    void next.finally(() => { if (sharing.current === next) sharing.current = null; });
+  }
+
+  async function send(outcome: Rating, heard: string) {
     if (!beginMutation(operations, "accountMutation")) { setShareFailed(true); return; }
     try {
       await invoke("turn_feedback", { turnId: exchange.turnId, feedback: { id: crypto.randomUUID(), outcome, heard } });
@@ -45,14 +55,14 @@ export function OutcomeRow({ exchange, outcomes, sharingEnabled, sentCount, onCh
     setHearing(true);
     // After an undo the reason is what makes the record useful.
     if (outcome === "undone") requestAnimationFrame(() => field.current?.focus());
-    void share(outcome, "");
+    share(outcome, "");
   }
 
   function saveHeard() {
     setHearing(false);
     const text = draft.trim();
     if (latest === null || text === latest.heard) return;
-    if (onChange(setHeard(outcomes, exchange.turnId, text))) void share(latest.outcome, text);
+    if (onChange(setHeard(outcomes, exchange.turnId, text))) share(latest.outcome, text);
   }
 
   return <div className="outcome" data-tauri-drag-region="false">
