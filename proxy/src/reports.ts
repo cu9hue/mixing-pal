@@ -141,3 +141,19 @@ export async function maintainReports(env: Env): Promise<void> {
   await env.DB.prepare("DELETE FROM support_reports WHERE state = 'deleted' AND created_at <= ? AND updated_at >= ?")
     .bind(now - 90 * DAY, now - DAY).run();
 }
+
+export async function inspectReport(env: Env, id: string) {
+  const row = await env.DB.prepare("SELECT * FROM support_reports WHERE id = ?").bind(id).first<SupportReport>();
+  if (!row) throw new ApiError(404, "report_not_found", "This report was not found.");
+  available(row);
+  if (row.state !== "ready") throw new ApiError(409, "report_pending", "This report is still being saved.");
+  const object = await env.CAPTURE.get(row.object_key);
+  if (!object) throw new ApiError(410, "report_deleted", "The report content is unavailable.");
+  const stored = await object.json<{ report: z.infer<typeof reportSchema>; mail_from: string; reply_to: string; staging: boolean }>();
+  const current = await ownedReport(env, row.user_id, id);
+  available(current);
+  if (await env.DB.prepare("SELECT 1 FROM deletion_jobs WHERE member_id = ?").bind(row.user_id).first()) {
+    throw new ApiError(410, "report_deleted", "This account was deleted.");
+  }
+  return { ...stored, expires_at: (row.accepted_at ?? row.created_at) + 30 * DAY, training_allowed: false };
+}

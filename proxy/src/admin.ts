@@ -1,3 +1,4 @@
+import { inspectReport } from "./reports";
 import { z } from "zod";
 import { deleteAccount, deleteTurn, replayDeletions, revokeAccess } from "./capture";
 import { ApiError, DAY, Env, hash, json, privateHash } from "./env";
@@ -18,6 +19,8 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
   const data = z.discriminatedUnion("action", [
     z.object({ action: z.literal("invite"), email: z.email().transform((s) => s.toLowerCase()) }),
     z.object({ action: z.literal("usage") }),
+    z.object({ action: z.literal("report"), report_id: z.uuid() }),
+    z.object({ action: z.literal("report_notifications") }),
     z.object({ action: z.literal("revoke"), member_id: z.string().max(100) }),
     z.object({ action: z.literal("delete_account"), member_id: z.string().max(100) }),
     z.object({ action: z.literal("delete_turn"), member_id: z.string().max(100), turn_id: z.uuid() }),
@@ -50,6 +53,9 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     ]);
     return json({ budget, members: members.results, pending: pending.results });
   }
+  if (data.action === "report") return json(await inspectReport(env, data.report_id));
+  if (data.action === "report_notifications") return json((await env.DB.prepare(`SELECT id, created_at, mail_state, mail_error
+    FROM support_reports WHERE state = 'ready' AND mail_state IN ('pending', 'sending', 'attention') ORDER BY created_at LIMIT 100`).all()).results);
   if (data.action === "export") return exportTurn(env, data.member_id, data.turn_id);
   if (data.action === "replay_deletions") return json({ cursor: await replayDeletions(env, data.cursor) });
   if (data.action === "recover") {

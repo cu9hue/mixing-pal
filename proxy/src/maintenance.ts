@@ -1,3 +1,4 @@
+import { retryReportMail } from "./report-email";
 import { maintainReports } from "./reports";
 import { deleteTurn } from "./capture";
 import { DAY, Env, readJson } from "./env";
@@ -9,6 +10,7 @@ const CAPTURE_DELETE_BATCHES = 3;
 export async function maintain(env: Env): Promise<void> {
   const now = Date.now();
   await maintainReports(env);
+  await retryReportMail(env);
   await env.DB.batch([
     env.DB.prepare("UPDATE requests SET status = 'unknown', error_code = 'worker_interrupted', updated_at = ? WHERE status IN ('reserved', 'dispatched') AND updated_at < ?")
       .bind(now, now - 5 * 60_000),

@@ -133,3 +133,15 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test("report inspection sends only an ID and does not save a transcript", async () => {
+  const seen = [];
+  const connection = { origin: "https://api.mixingpal.com", token: "test-operator", fetch: async (_, options) => {
+    seen.push(JSON.parse(options.body)); return Response.json({ report: { description: "failed" } });
+  } };
+  const output = [];
+  await run(["report", "00000000-0000-4000-8000-000000000001"], connection, s => output.push(s));
+  await run(["report-notifications"], connection, s => output.push(s));
+  assert.deepEqual(seen, [{ action: "report", report_id: "00000000-0000-4000-8000-000000000001" }, { action: "report_notifications" }]);
+  assert.match(output[0], /failed/);
+});

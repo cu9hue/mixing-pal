@@ -6,6 +6,7 @@ import { deleteAccount, deleteShared, deleteTurn, event, feedback } from "./capt
 import { complete } from "./completion";
 import { ApiError, Env, MAX_FEEDBACK_BODY, json, privateHash, readJson } from "./env";
 import { maintain } from "./maintenance";
+import { notifyReport } from "./report-email";
 import { submitReport, reportReceipt, deleteReport, MAX_REPORT_BODY } from "./reports";
 import { releaseRequest } from "./releases";
 
@@ -62,6 +63,7 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   const route = `${request.method} ${url.pathname}`;
   if (route === "POST /v1/reports") {
     const saved = await submitReport(env, memberId, await readJson(request, MAX_REPORT_BODY));
+    ctx.waitUntil(notifyReport(env, saved.id).catch(() => console.error(JSON.stringify({ event: "report_notification_failed", report_id: saved.id }))));
     return json({ id: saved.id, status: saved.status }, saved.created ? 201 : 200);
   }
   const report = /^\/v1\/reports\/([a-f0-9-]{36})$/.exec(url.pathname);

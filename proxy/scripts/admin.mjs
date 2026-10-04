@@ -9,6 +9,8 @@ Set MIXINGPAL_API_ORIGIN and MIXINGPAL_ADMIN_TOKEN in your shell's secret store.
 The token is never an argument. Only localhost may use HTTP.
 
   npm run admin -- invite email                 Email a seven-day invitation and download link
+  npm run admin -- report report-id            Inspect a private report (no local cache)
+  npm run admin -- report-notifications         List pending/failed support emails
   npm run admin -- usage                        Balances and held requests
   npm run admin -- revoke member-id              End access and revoke sessions
   npm run admin -- delete-account member-id      Delete identity and shared content
@@ -24,6 +26,10 @@ The token is never an argument. Only localhost may use HTTP.
                                                 Restore verified total service spending
   npm run admin -- export member-id turn-id file Save a review reference (no transcript)
   npm run admin -- review file                  Fetch the current export for review
+
+Reports expire after 30 days. Do not save their contents to retained files.
+App deletion does not recall emails already sent to the support mailbox.
+Monitor report_notification_attention and report_notification_failed logs.
 
 Review references expire with the turn. review checks deletion on each read;
 it never caches project content locally. Do not redirect its output to a
@@ -104,10 +110,11 @@ export async function run(args, connection, print = console.log) {
     catch (error) { if (error.status === 404 || error.status === 410) await rm(file); throw error; }
     return;
   }
-  const arity = { invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3,
+  const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3,
     "recover-member": 3, "recover-budget": 2, pause: 0, resume: 0, sweep: 0, export: 3 };
   if (!(command in arity) || values.length !== arity[command]) throw new Error("Unknown command or arguments. Run npm run admin -- help.");
-  const payload = command === "invite" ? { action: "invite", email: values[0] }
+  const payload = command === "report" ? { action: "report", report_id: values[0] }
+    : command === "invite" ? { action: "invite", email: values[0] }
     : command === "pause" || command === "resume" ? { action: "pause", paused: command === "pause" }
     : command === "resolve" ? { action: "resolve", request_id: values[0], cost_micro_usd: Number(values[1]), reason: values[2] }
     : command === "recover-member" ? { action: "recover", member_id: values[0], spent_micro_usd: Number(values[1]), reason: values[2] }

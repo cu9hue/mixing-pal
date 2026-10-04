@@ -2,6 +2,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import worker from "../src/index";
 import { DAY, hash } from "../src/env";
+import { notifyReport } from "../src/report-email";
 import { maintain } from "../src/maintenance";
 
 let otp = "";
@@ -200,4 +201,99 @@ test("a storage retry starts retention when the report is accepted", async () =>
   expect((await api("/v1/reports", r, u.token)).status).toBe(200);
   const row = await env.DB.prepare("SELECT * FROM support_reports WHERE id = ?").bind(r.id).first();
   expect(row!.accepted_at).toBeGreaterThan(Date.now() - 10000);
+});
+
+test("emails the report description to support with the verified producer as reply-to", async () => {
+  const u = await user(); const r = report();
+  expect((await api("/v1/reports", r, u.token)).status).toBe(201);
+  expect(emails).toHaveLength(1);
+  expect(emails[0].body).toMatchObject({ from: env.MAIL_FROM, to: ["hello@mixingpal.com"], reply_to: "producer@example.com" });
+  expect(emails[0].body.text).toContain("The answer disappeared.");
+  expect(emails[0].body.subject).toBe(`[STAGING] [Mixing Pal report] ${r.id}`);
+  expect(emails[0].key).toBe(`support-report/${r.id}`);
+  expect(emails[0].body.attachments).toBeUndefined();
+  expect((await api("/v1/reports", r, u.token)).status).toBe(200);
+  expect(emails).toHaveLength(1);
+});
+
+test("stores reports despite email outage and retries the identical notification", async () => {
+  const u = await user(); const r = report(); emailStatus = 503;
+  expect((await api("/v1/reports", r, u.token)).status).toBe(201);
+  expect((await env.DB.prepare("SELECT mail_state FROM support_reports WHERE id = ?").bind(r.id).first())!.mail_state).toBe("pending");
+  emailStatus = 200;
+  await env.DB.prepare("UPDATE support_reports SET next_attempt_at = 0 WHERE id = ?").bind(r.id).run();
+  await maintain(env);
+  expect(emails).toHaveLength(2);
+  expect(emails[1]).toEqual(emails[0]);
+  expect((await env.DB.prepare("SELECT mail_state FROM support_reports WHERE id = ?").bind(r.id).first())!.mail_state).toBe("accepted");
+});
+
+test("stops mail retries before Resend's deduplication window expires", async () => {
+  const u = await user(); const r = report(); emailStatus = 503;
+  await api("/v1/reports", r, u.token);
+  await env.DB.prepare("UPDATE support_reports SET first_attempt_at = ?, next_attempt_at = 0 WHERE id = ?")
+    .bind(Date.now() - 23 * 60 * 60 * 1000, r.id).run();
+  const before = emails.length;
+  await maintain(env);
+  expect(emails).toHaveLength(before);
+  expect((await env.DB.prepare("SELECT mail_state FROM support_reports WHERE id = ?").bind(r.id).first())!.mail_state).toBe("attention");
+  const response = await api("/operator", { action: "report_notifications" }, env.ADMIN_TOKEN);
+  expect(response.status).toBe(200);
+  expect(JSON.stringify(await response.json())).toContain(r.id);
+});
+
+test("private operator inspection expires and deletion cancels pending mail", async () => {
+  const u = await user(); const r = report(); emailStatus = 503;
+  await api("/v1/reports", r, u.token);
+  const action = { action: "report", report_id: r.id };
+  expect((await api("/operator", action, u.token)).status).toBe(401);
+  const response = await api("/operator", action, env.ADMIN_TOKEN);
+  expect(response.status).toBe(200);
+  expect((await response.json()).report.description).toBe(r.description);
+  await api(`/v1/reports/${r.id}`, undefined, u.token, "DELETE");
+  await maintain(env);
+  expect(emails).toHaveLength(1);
+  expect((await api("/operator", action, env.ADMIN_TOKEN)).status).toBe(410);
+});
+
+
+test("lost mail replies and expired leases retry once with the same key", async () => {
+  const u = await user(); const r = report();
+  const send = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (url, options) => {
+    await send(url, options);
+    throw new Error("reply lost");
+  });
+  expect((await api("/v1/reports", r, u.token)).status).toBe(201);
+  expect(emails).toHaveLength(1);
+  vi.mocked(fetch).mockImplementation(send);
+  await env.DB.prepare("UPDATE support_reports SET mail_state = 'sending', lease_until = 0, next_attempt_at = 0 WHERE id = ?").bind(r.id).run();
+  await Promise.all([notifyReport(env, r.id), notifyReport(env, r.id)]);
+  expect(emails).toHaveLength(2);
+  expect(emails[1]).toEqual(emails[0]);
+});
+
+test.each([[401, undefined, "attention"], [409, "invalid_idempotent_request", "attention"],
+  [409, "concurrent_idempotent_requests", "pending"], [429, undefined, "pending"]])(
+  "classifies mail rejection %s %s without exposing provider text", async (status, name, expected) => {
+    const u = await user(); const r = report();
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ name, message: "secret-provider-detail" }, { status: Number(status) }));
+    await api("/v1/reports", r, u.token);
+    const row = await env.DB.prepare("SELECT mail_state, mail_error FROM support_reports WHERE id = ?").bind(r.id).first();
+    expect(row!.mail_state).toBe(expected);
+    expect(JSON.stringify(row)).not.toContain("secret-provider-detail");
+  });
+
+test("deletion during private object inspection blocks export and notification", async () => {
+  const u = await user(); const r = report(); emailStatus = 503;
+  await api("/v1/reports", r, u.token);
+  const get = env.CAPTURE.get.bind(env.CAPTURE);
+  vi.spyOn(env.CAPTURE, "get").mockImplementation(async (key, options) => {
+    const value = await get(key, options);
+    if (key.startsWith("reports/")) await api(`/v1/reports/${r.id}`, undefined, u.token, "DELETE");
+    return value;
+  });
+  expect((await api("/operator", { action: "report", report_id: r.id }, env.ADMIN_TOKEN)).status).toBe(410);
+  await maintain(env);
+  expect(emails).toHaveLength(1);
 });
