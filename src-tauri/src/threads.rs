@@ -46,7 +46,7 @@ pub struct Bullet {
 }
 
 /// One rating of an answer's move; the same shape as the frontend's
-/// `Outcome` in `src/notes/outcomes.ts`. Rust stores it and never reads it.
+/// `Outcome` in `src/notes/outcomes.ts`. Rust stores it; the prune only checks whether any exist.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Outcome {
     #[serde(rename = "turnId")]

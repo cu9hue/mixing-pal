@@ -1,9 +1,8 @@
 import type { SetState } from "../live/model";
 
 /**
- * A set's outcome log: every rating of an answer's move, append-only, kept
- * for the life of the set. The context block shows a view rebuilt from it
- * each turn; the log itself is never summarised or rewritten.
+ * A set's outcome log: every rating of an answer's move, kept for the life of
+ * the set. The context block shows a view rebuilt from it, never the log.
  */
 export type Rating = "kept" | "undone";
 

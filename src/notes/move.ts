@@ -1,9 +1,8 @@
 import { BULLET_MAX_CHARS } from "./note";
 
 /**
- * The move an answer gives, named by the model so a rating can say what was
- * kept or undone. Same rules as `noteDelta`: never throws, an unclosed block
- * is text, every block is stripped, and only the last one counts.
+ * The move an answer gives, so a rating can say what was kept or undone.
+ * Same rules as `noteDelta`: an unclosed block is text, the last block counts.
  */
 const BLOCK = /```move[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?[ \t]*```/g;
 
