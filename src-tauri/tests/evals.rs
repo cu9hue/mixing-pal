@@ -17,7 +17,7 @@
 //!
 //! Tool calls are checked directly: they are stable across runs and wording
 //! is not. The judge checks claims, except where one word or number decides.
-//! Every answer fails if it names a tool or offers the producer a read.
+//! Every answer fails if it names a tool.
 
 mod common;
 use common::{Tally, Turn, Verdict};
