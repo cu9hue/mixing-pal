@@ -17,6 +17,11 @@ const STATE: SetState = {
   setId: null,
   setName: null,
   setPath: null,
+  loop: null,
+  loopStart: null,
+  loopLength: null,
+  selectedDevice: null,
+  selectedSlot: null,
   tracks: {
     0: { ...emptyTrack(), name: "Kick" },
     1: { ...emptyTrack(), name: "Pad Wide" },
@@ -53,6 +58,8 @@ describe("progressLabel", () => {
       "opening the rack on Kick…",
     );
     expect(progressLabel("get_clips", {}, STATE)).toBe("listing the clips…");
+    expect(progressLabel("get_mixer", {}, STATE)).toBe("reading the mixer…");
+    expect(progressLabel("get_mixer", { track: 1 }, STATE)).toBe("reading the mixer for Pad Wide…");
     expect(progressLabel("get_arrangement", {}, STATE)).toBe("mapping the arrangement…");
     expect(progressLabel("get_device_chains", {}, STATE)).toBe("listing the devices…");
   });

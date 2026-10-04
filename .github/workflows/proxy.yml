@@ -1,7 +1,7 @@
 name: Pilot proxy
 on:
   pull_request:
-    paths: ['proxy/**', '.github/workflows/proxy.yml']
+    paths: ['proxy/**', '.github/workflows/proxy.yml', 'shared/tool-names.json']
   workflow_dispatch:
     inputs:
       stage:

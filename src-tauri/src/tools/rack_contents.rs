@@ -1,5 +1,5 @@
 use crate::osc::query::{LiveQuery, QueryError};
-use crate::tools::device_chains::RACK_SUFFIX;
+use crate::tools::device_chains::{decode_device, DEVICE_FIELDS};
 use crate::tools::fence::fence;
 use crate::tools::path::DevicePath;
 use rosc::OscType;
@@ -34,6 +34,9 @@ pub struct RackChain {
     /// number on an Audio Effect Rack chain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<i32>,
+    /// The pad's note as Live labels it (36 is C1), so no octave is guessed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_name: Option<String>,
     /// File name of a sample loaded in this Drum Rack pad when Live exposes
     /// it. A generic `Simpler` device name alone cannot identify a sound.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -123,23 +126,20 @@ fn decode_window(reply: &[OscType], expect_start: usize) -> Option<(usize, bool,
         let total_devices = usize::try_from(int_at(reply, i + 5)?).ok()?;
         let reported = usize::try_from(int_at(reply, i + 6)?).ok()?;
         i += 7;
-        let device_fields = reported.checked_mul(2)?;
+        let device_fields = reported.checked_mul(DEVICE_FIELDS)?;
         if device_fields > reply.len().saturating_sub(i) {
             return None;
         }
-        let mut devices = Vec::with_capacity(reported);
-        for k in 0..reported {
-            let mut name = str_at(reply, i + k * 2)?;
-            if int_at(reply, i + k * 2 + 1)? != 0 {
-                name.push_str(RACK_SUFFIX);
-            }
-            devices.push(name);
-        }
+        let devices = reply[i..i + device_fields]
+            .chunks_exact(DEVICE_FIELDS)
+            .map(|record| decode_device(record).map(|(label, _, _)| label))
+            .collect::<Option<Vec<_>>>()?;
         i += device_fields;
         chains.push(RackChain {
             index,
             name,
             note: (note >= 0).then_some(note),
+            note_name: (note >= 0).then(|| crate::tools::clip_notes::ableton_note_name(note)),
             sample_name,
             muted,
             soloed,
@@ -309,6 +309,7 @@ pub async fn get_rack_contents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::device_chains::RACK_SUFFIX;
     use rosc::OscType::{Int, String as S};
 
     fn reply(start: i32, total: i32, is_rack: bool, records: Vec<Vec<OscType>>) -> Vec<OscType> {
@@ -327,7 +328,7 @@ mod tests {
     }
 
     /// `name, note, mute, solo, sample_name, total_devices, reported_devices,
-    /// *(name, is_rack)`.
+    /// *(name, is_rack, is_active, kind, class)`.
     fn record(
         name: &str,
         note: i32,
@@ -347,8 +348,7 @@ mod tests {
             Int(names.len() as i32),
         ];
         for name in names {
-            r.push(S((*name).into()));
-            r.push(Int(0));
+            r.extend([S((*name).into()), Int(0), Int(1), Int(2), S((*name).into())]);
         }
         r
     }
@@ -370,6 +370,7 @@ mod tests {
         assert_eq!((total, is_rack), (2, true));
         assert_eq!(chains[0].index, 0);
         assert_eq!(chains[0].note, Some(36));
+        assert_eq!(chains[0].note_name.as_deref(), Some("C1"));
         assert_eq!(chains[0].sample_name.as_deref(), Some("«kick.wav»"));
         assert_eq!(chains[0].devices.len(), 2);
         assert_eq!(chains[1].index, 1);
@@ -393,10 +394,16 @@ mod tests {
                 Int(1),
                 S("Combine Kit".into()),
                 Int(1),
+                Int(1),
+                Int(1),
+                S("Instrument Rack".into()),
             ]],
         );
         let (_, _, chains) = decode_window(&r, 0).unwrap();
-        assert_eq!(chains[0].devices, vec![format!("{}{}", fence("Combine Kit"), RACK_SUFFIX)]);
+        assert_eq!(
+            chains[0].devices,
+            vec![format!("{} (Instrument Rack){} [instrument]", fence("Combine Kit"), RACK_SUFFIX)]
+        );
     }
 
     #[test]
@@ -451,7 +458,7 @@ mod tests {
 
     #[test]
     fn a_wrongly_typed_field_anywhere_refuses_the_whole_window() {
-        for corrupt in [6usize, 7, 8, 9, 11, 12, 13, 14] {
+        for corrupt in [6usize, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17] {
             let mut r = reply(
                 0,
                 1,
@@ -540,6 +547,7 @@ mod tests {
             index: 0,
             name: "Snare".to_string(),
             note: None,
+            note_name: None,
             sample_name: None,
             muted: false,
             soloed: false,
@@ -558,6 +566,7 @@ mod tests {
             index: 1,
             name: "Kick".to_string(),
             note: Some(36),
+            note_name: Some("C1".to_string()),
             sample_name: Some("«kick.wav»".to_string()),
             muted: true,
             soloed: true,
@@ -742,8 +751,8 @@ mod tests {
                             reply.push(OscType::Int(fake.devices as i32));
                             reply.push(OscType::Int(device_end.saturating_sub(device_offset) as i32));
                             for n in device_offset..device_end {
-                                reply.push(OscType::String(if fake.devices == 1 { "Simpler".into() } else { format!("Device {n}") }));
-                                reply.push(OscType::Int(0));
+                                let name = if fake.devices == 1 { "Simpler".to_string() } else { format!("Device {n}") };
+                                reply.extend([OscType::String(name.clone()), OscType::Int(0), OscType::Int(1), OscType::Int(2), OscType::String(name)]);
                             }
                         }
                         let _ = live

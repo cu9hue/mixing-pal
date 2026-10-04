@@ -5,6 +5,8 @@ import {
   NUM_TRACKS_ADDR,
   CUE_POINTS_ADDR,
   SET_IDENTITY_ADDR,
+  SELECTED_DEVICE_ADDR,
+  SELECTED_SLOT_ADDR,
 } from "./apply";
 import manifest from "../../shared/handled-addresses.json";
 
@@ -15,7 +17,7 @@ import manifest from "../../shared/handled-addresses.json";
 // NUM_TRACKS_ADDR, CUE_POINTS_ADDR, and SET_IDENTITY_ADDR. Listed here,
 // separately from SONG_FIELDS, so the equality check below still holds for
 // every field that IS a plain SONG_FIELDS copy.
-const handledOutsideFieldMaps = [NUM_TRACKS_ADDR, CUE_POINTS_ADDR, SET_IDENTITY_ADDR];
+const handledOutsideFieldMaps = [NUM_TRACKS_ADDR, CUE_POINTS_ADDR, SET_IDENTITY_ADDR, SELECTED_DEVICE_ADDR, SELECTED_SLOT_ADDR];
 
 // This file is one half of the address-consistency tripwire from I4 in the
 // 2026-08-16 whole-branch review: shared/handled-addresses.json is the

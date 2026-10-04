@@ -54,7 +54,8 @@ def session_fingerprint_reply(track_index, slots):
 
 
 def _note_attributes(note):
-    return (note.pitch, note.start_time, note.duration, note.velocity, note.mute)
+    return (note.pitch, note.start_time, note.duration, note.velocity, note.mute,
+            float(note.probability))
 
 
 def source_note_range(clip):

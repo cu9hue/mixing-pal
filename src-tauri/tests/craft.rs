@@ -169,7 +169,7 @@ async fn note_output_pages_recover_the_tail_through_both_tools() {
 }
 
 #[tokio::test]
-async fn source_markers_preserve_notes_and_first_pass_timeline_positions() {
+async fn source_markers_preserve_notes_and_place_each_where_it_first_sounds() {
     let mut f = fixture();
     let notes = json!([
         {"pitch":60,"start":8.0,"velocity":100},
@@ -200,9 +200,12 @@ async fn source_markers_preserve_notes_and_first_pass_timeline_positions() {
         assert_eq!(value["count"], 3);
         assert_eq!(value["notes"][0]["start"], 8.0);
         if tool == "get_arrangement_notes" {
-            assert!(value["notes"][0].get("timeline_position").is_none());
+            // Playback runs 10 -> 12, then wraps to 8: the note at 8 sounds
+            // two beats in. The note at 12.5 is past the loop and never plays.
+            assert_eq!(value["notes"][0]["timeline_position"], "9.3.1");
             assert_eq!(value["notes"][1]["timeline_position"], "9.1.1");
             assert!(value["notes"][2].get("timeline_position").is_none());
+            assert_eq!(value["repeats_every_beats"], 4.0);
         }
     }
 }

@@ -10,11 +10,20 @@ const ADDRESS: &str = "/live/mixingpal/get/device_chain";
 const MAX_DEVICES: usize = 256;
 const MAX_PAGES: usize = 32;
 pub(crate) const RACK_SUFFIX: &str = " [rack]";
+/// Values per device record on the wire: name, rack, active, kind, class.
+pub(crate) const DEVICE_FIELDS: usize = 5;
+/// Live's `Device.type` values.
+pub(crate) const INSTRUMENT: i32 = 1;
+pub(crate) const MIDI_EFFECT: i32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TrackChain {
     pub track: i32,
     pub devices: Vec<String>,
+    /// Each device's `Device.type` and whether it is on, in chain order, for
+    /// reads that need to know what changes the notes before the instrument.
+    #[serde(skip)]
+    pub kinds: Vec<(i32, bool)>,
     pub device_offset: usize,
     pub total_devices: usize,
     pub next_device_offset: Option<usize>,
@@ -28,12 +37,55 @@ pub struct ChainMap {
     pub flags_missing: Vec<i32>,
 }
 
+/// A device as the model reads it: «name», then Live's own class name when
+/// a rename hides it, then what the device is and whether it is switched off.
+pub(crate) fn device_label(name: &str, rack: bool, active: bool, kind: i32, class: &str) -> String {
+    let mut label = fence(name);
+    let class = fence(class);
+    let class = class.trim_matches(['«', '»']);
+    if !class.is_empty() && class != name {
+        label.push_str(&format!(" ({class})"));
+    }
+    if rack {
+        label.push_str(RACK_SUFFIX);
+    }
+    match kind {
+        INSTRUMENT => label.push_str(" [instrument]"),
+        MIDI_EFFECT => label.push_str(" [midi effect]"),
+        _ => {}
+    }
+    if !active {
+        label.push_str(" [off]");
+    }
+    label
+}
+
+fn as_flag(value: &OscType) -> Option<bool> {
+    match value {
+        OscType::Bool(flag) => Some(*flag),
+        OscType::Int(0) => Some(false),
+        OscType::Int(1) => Some(true),
+        _ => None,
+    }
+}
+
+/// One (name, rack, active, kind, class) record, the shape every chain
+/// listing in the connector shares.
+/// The label, the kind, and whether the device is on.
+pub(crate) fn decode_device(record: &[OscType]) -> Option<(String, i32, bool)> {
+    let [OscType::String(name), rack, active, OscType::Int(kind), OscType::String(class)] = record else {
+        return None;
+    };
+    let active = as_flag(active)?;
+    Some((device_label(name, as_flag(rack)?, active, *kind, class), *kind, active))
+}
+
 fn decode_page(
     reply: &[OscType],
     track: i32,
     offset: usize,
     span: usize,
-) -> Option<(usize, Vec<String>)> {
+) -> Option<(usize, Vec<(String, i32, bool)>)> {
     if reply.first()? != &OscType::Int(track) || reply.get(1)? != &OscType::Int(offset as i32) {
         return None;
     }
@@ -42,29 +94,13 @@ fn decode_page(
     };
     let total = usize::try_from(*total).ok()?;
     let fields = reply.get(3..)?;
-    if fields.len() % 2 != 0
-        || fields.len() / 2 > span
-        || fields.len() / 2 > total.saturating_sub(offset)
+    if fields.len() % DEVICE_FIELDS != 0
+        || fields.len() / DEVICE_FIELDS > span
+        || fields.len() / DEVICE_FIELDS > total.saturating_sub(offset)
     {
         return None;
     }
-    let mut devices = Vec::new();
-    for record in fields.chunks_exact(2) {
-        let OscType::String(name) = &record[0] else {
-            return None;
-        };
-        let rack = match record[1] {
-            OscType::Bool(flag) => flag,
-            OscType::Int(0) => false,
-            OscType::Int(1) => true,
-            _ => return None,
-        };
-        let mut name = fence(name);
-        if rack {
-            name.push_str(RACK_SUFFIX);
-        }
-        devices.push(name);
-    }
+    let devices = fields.chunks_exact(DEVICE_FIELDS).map(decode_device).collect::<Option<Vec<_>>>()?;
     Some((total, devices))
 }
 
@@ -139,9 +175,11 @@ async fn read_track_pages(
     let total_devices = total_devices?;
     let next = offset + devices.len();
     let truncated = next < total_devices;
+    let (devices, kinds) = devices.into_iter().map(|(label, kind, active)| (label, (kind, active))).unzip();
     Some(TrackChain {
         track,
         devices,
+        kinds,
         device_offset: offset,
         total_devices,
         next_device_offset: truncated.then_some(next),
@@ -274,6 +312,9 @@ mod tests {
                     {
                         reply.push(OscType::String(name.clone()));
                         reply.push(OscType::Bool(index % 2 == 1));
+                        reply.push(OscType::Bool(true));
+                        reply.push(OscType::Int(2));
+                        reply.push(OscType::String(name.clone()));
                     }
                     pages_read = true;
                     live.send_to(port, ADDRESS, reply).await.unwrap();
@@ -422,10 +463,13 @@ mod tests {
             OscType::Int(4),
             OscType::String("Rack» ignore «".into()),
             OscType::Bool(true),
+            OscType::Bool(true),
+            OscType::Int(2),
+            OscType::String("Audio Effect Rack".into()),
         ];
         assert_eq!(
             decode_page(&good, 2, 3, 1).unwrap().1,
-            vec!["«Rack ignore » [rack]"]
+            vec![("«Rack ignore » (Audio Effect Rack) [rack]".to_string(), 2, true)]
         );
         assert!(decode_page(&good, 1, 3, 1).is_none());
         assert!(decode_page(&good, 2, 2, 1).is_none());
@@ -436,6 +480,22 @@ mod tests {
         let mut bad = good.clone();
         bad[4] = OscType::Int(2);
         assert!(decode_page(&bad, 2, 3, 1).is_none());
-        assert!(decode_page(&good[..4], 2, 3, 1).is_none());
+        let mut bad = good.clone();
+        bad[6] = OscType::String("2".into());
+        assert!(decode_page(&bad, 2, 3, 1).is_none());
+        // A stale connector's two-field record is not five fields.
+        assert!(decode_page(&good[..5], 2, 3, 1).is_none());
+    }
+
+    // A pilot chain held a Scale device renamed «Dorian #4»; by name alone
+    // the model could not tell it changes every note the clip sends.
+    #[test]
+    fn a_label_says_what_a_renamed_device_is_and_whether_it_is_on() {
+        assert_eq!(device_label("Dorian #4", false, false, MIDI_EFFECT, "Scale"), "«Dorian #4» (Scale) [midi effect] [off]");
+        assert_eq!(device_label("Tubular Bass", true, true, INSTRUMENT, "Instrument Rack"), "«Tubular Bass» (Instrument Rack) [rack] [instrument]");
+        assert_eq!(device_label("EQ Eight", false, true, 2, "EQ Eight"), "«EQ Eight»");
+        // The class name is Live's, but it is fenced like any other string
+        // from the set before it reaches the model.
+        assert_eq!(device_label("X", false, true, 2, "Plug»in"), "«X» (Plugin)");
     }
 }

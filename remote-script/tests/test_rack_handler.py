@@ -31,20 +31,20 @@ def handler_for(rack):
 class RackHandlerTests(unittest.TestCase):
     def test_both_offsets_are_echoed_and_device_names_continue_at_the_requested_index(self):
         chain = N(name="Chain", mute=False, solo=False,
-                  devices=[N(name="Device%d" % i) for i in range(40)])
+                  devices=[N(name="Device%d" % i, can_have_chains=False, is_active=True, type=2, class_display_name="X") for i in range(40)])
         rack = N(name="Rack", chains=[chain], can_have_chains=True, parameters=[])
         callback = handler_for(rack)["/live/mixingpal/get/rack/chains_range"]
         reply = callback((0, "0", 0, 32, 1))
         self.assertEqual(reply[:6], (0, "0", 0, 32, 1, 1))
         self.assertEqual(reply[11:13], (40, 8))
-        self.assertEqual(reply[13::2], tuple("Device%d" % i for i in range(32, 40)))
+        self.assertEqual(reply[13::5], tuple("Device%d" % i for i in range(32, 40)))
         self.assertEqual(callback((0, "0", 1, 32, 1)), (0, "0", 1, 32, 1, 1))
         beyond = callback((0, "0", 0, 99, 1))
         self.assertEqual(beyond[11:13], (40, 0))
 
     def test_long_names_fit_the_actual_osc_datagram_on_every_device_page(self):
         chain = N(name="😀" * 200, mute=False, solo=False,
-                  devices=[N(name=str(i) + "😀" * 200) for i in range(40)])
+                  devices=[N(name=str(i) + "😀" * 200, can_have_chains=False, is_active=True, type=2, class_display_name="X") for i in range(40)])
         rack = N(name="Rack", chains=[chain], can_have_chains=True, parameters=[])
         address = "/live/mixingpal/get/rack/chains_range"
         callback = handler_for(rack)[address]
@@ -66,7 +66,8 @@ class RackHandlerTests(unittest.TestCase):
 
     def test_fingerprint_detects_same_count_chain_and_device_edits(self):
         chains = [N(name="Chain%d" % i, mute=False, solo=False,
-                    devices=[N(name="Device%d" % j, can_have_chains=False) for j in range(40)])
+                    devices=[N(name="Device%d" % j, can_have_chains=False, is_active=True, type=2,
+                               class_display_name="X") for j in range(40)])
                   for i in range(64)]
         rack = N(name="Rack", chains=chains, can_have_chains=True, parameters=[])
         callbacks = handler_for(rack)

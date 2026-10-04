@@ -3,7 +3,21 @@ import json
 
 from typing import Tuple, Any
 from ..abletonosc.handler import AbletonOSCHandler
-from .rack_paths import parse_path, resolve, NAME_CAP, MAX_REPLY_BYTES, osc_string_bytes
+from .rack_paths import parse_path, resolve, NAME_CAP, MAX_REPLY_BYTES, record_bytes, device_record
+
+
+def chain_reply(head, devices):
+    """`head`, the device count, then as many device records as fit a datagram."""
+    reply = list(head) + [len(devices)]
+    used = record_bytes(reply)
+    for device in devices:
+        record = device_record(device)
+        size = record_bytes(record)
+        if used + size > MAX_REPLY_BYTES:
+            break
+        reply.extend(record)
+        used += size
+    return tuple(reply)
 
 
 class DeviceRangeHandler(AbletonOSCHandler):
@@ -51,14 +65,17 @@ class DeviceRangeHandler(AbletonOSCHandler):
                 return None
             devices = self.song.tracks[track].devices
             reply = [track, start, len(devices)]
-            used = 0
-            for device in devices[start:start + min(span, 256)]:
-                name = str(device.name)[:NAME_CAP]
-                size = osc_string_bytes(name) + 6
-                if used + size > MAX_REPLY_BYTES:
-                    break
-                reply.extend((name, bool(device.can_have_chains)))
-                used += size
+            used = record_bytes(reply)
+            try:
+                for device in devices[start:start + min(span, 256)]:
+                    record = device_record(device)
+                    size = record_bytes(record)
+                    if used + size > MAX_REPLY_BYTES:
+                        break
+                    reply.extend(record)
+                    used += size
+            except (TypeError, ValueError, OverflowError, AttributeError, RuntimeError):
+                return None
             return tuple(reply)
 
         self.osc_server.add_handler("/live/mixingpal/get/device_chain", device_chain)
@@ -113,3 +130,8 @@ class DeviceRangeHandler(AbletonOSCHandler):
         self.osc_server.add_handler(
             "/live/device/get/parameters/value_string_range",
             ranged(lambda p: p.str_for_value(p.value)))
+        # 0 none, 1 automated, 2 overridden: an automated value is only the
+        # value at the playhead, never "the setting".
+        self.osc_server.add_handler(
+            "/live/device/get/parameters/automation_state_range",
+            ranged(lambda p: int(p.automation_state)))

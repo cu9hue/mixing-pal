@@ -54,7 +54,9 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/mixingpal/get/cue_points"
         // The set's stored id, name, and path -- three strings, no key.
         // See mixingpal/set_identity.py and the 2026-09-07 spec.
-        | "/live/mixingpal/get/set_identity" => KeyArity::None,
+        | "/live/mixingpal/get/set_identity"
+        // The master track's level, pan, and chain -- one reply, no index.
+        | "/live/mixingpal/get/master_mixer" => KeyArity::None,
 
         "/live/track/get/name"
         | "/live/track/get/mute"
@@ -84,7 +86,10 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/mixingpal/get/device_chain/fingerprint"
         | "/live/return/get/volume"
         | "/live/return/get/panning"
-        | "/live/return/get/name" => KeyArity::Args(1),
+        | "/live/return/get/name"
+        // (track) or (return) in, echoed first with the mixer state after.
+        | "/live/mixingpal/get/track_mixer"
+        | "/live/mixingpal/get/return_mixer" => KeyArity::Args(1),
 
         "/live/track/get/send"
         | "/live/clip/get/notes"
@@ -134,6 +139,7 @@ pub fn key_arity(addr: &str) -> KeyArity {
         | "/live/device/get/parameter/value_string"
         | "/live/device/get/parameters/name_range"
         | "/live/device/get/parameters/value_string_range"
+        | "/live/device/get/parameters/automation_state_range"
         // (track, path, start) echoed back, exactly like the ranged
         // parameter addresses. `span` is deliberately NOT in the key; see
         // the spec's Devices section on why that is safe here and what
@@ -240,6 +246,10 @@ mod tests {
             // the spec's Devices section on why that is safe here and what
             // closes it.
             ("/live/mixingpal/get/rack/chains", KeyArity::Args(3)),
+            ("/live/device/get/parameters/automation_state_range", KeyArity::Args(3)),
+            ("/live/mixingpal/get/track_mixer", KeyArity::Args(1)),
+            ("/live/mixingpal/get/return_mixer", KeyArity::Args(1)),
+            ("/live/mixingpal/get/master_mixer", KeyArity::None),
             // Keyless: args vary between requests but the reply echoes nothing.
             ("/live/song/get/track_data", KeyArity::Unkeyed),
             ("/live/song/get/track_names", KeyArity::Unkeyed),

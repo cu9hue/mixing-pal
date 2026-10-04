@@ -4,6 +4,8 @@ import {
   applyDelta,
   CUE_POINTS_ADDR,
   SET_IDENTITY_ADDR,
+  SELECTED_DEVICE_ADDR,
+  SELECTED_SLOT_ADDR,
   setIdentityFrom,
 } from "./apply";
 
@@ -225,5 +227,31 @@ describe("set identity", () => {
     });
     const after = applyDelta(before, { addr: SET_IDENTITY_ADDR, args: [id] });
     expect(after).toBe(before);
+  });
+});
+
+// The FOCUS line names what these hold, so a stale one names the wrong device.
+describe("selection", () => {
+  const selected = applyDelta(emptySet(), { addr: SELECTED_DEVICE_ADDR, args: [2, 1] });
+
+  it("stores the selected device and Session slot", () => {
+    expect(selected.selectedDevice).toEqual({ track: 2, device: 1 });
+    const slot = applyDelta(emptySet(), { addr: SELECTED_SLOT_ADDR, args: [3, 0] });
+    expect(slot.selectedSlot).toEqual({ track: 3, scene: 0 });
+  });
+
+  it("clears when Master, a Return, or no device is selected", () => {
+    expect(applyDelta(selected, { addr: SELECTED_DEVICE_ADDR, args: [-1, 0] }).selectedDevice).toBeNull();
+    expect(applyDelta(selected, { addr: SELECTED_DEVICE_ADDR, args: [2, -1] }).selectedDevice).toBeNull();
+  });
+
+  it("keeps what it had on a reply it cannot read", () => {
+    for (const args of [[2], ["2", 1], [2, 1, 0], []]) {
+      expect(applyDelta(selected, { addr: SELECTED_DEVICE_ADDR, args })).toBe(selected);
+    }
+  });
+
+  it("returns the same state for the same selection", () => {
+    expect(applyDelta(selected, { addr: SELECTED_DEVICE_ADDR, args: [2, 1] })).toBe(selected);
   });
 });

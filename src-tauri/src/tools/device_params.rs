@@ -30,6 +30,29 @@ pub struct Param {
     /// Fenced too. `str_for_value` is the plugin's own formatting, and a
     /// plugin arrives inside a downloaded preset or template pack.
     pub value: String,
+    /// "automated" or "overridden" when the parameter has automation: the
+    /// value is then only the value at the playhead, not the setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automation: Option<&'static str>,
+}
+
+/// A ranged reply of `automation_state` ints: 0 none, 1 automated, 2 overridden.
+fn decode_states(reply: &[OscType], expect_start: usize, span: usize) -> Option<Vec<Option<&'static str>>> {
+    match reply.get(2)? {
+        OscType::Int(i) if *i as usize == expect_start => {}
+        _ => return None,
+    }
+    let states = reply
+        .get(3..)?
+        .iter()
+        .map(|arg| match arg {
+            OscType::Int(0) => Some(None),
+            OscType::Int(1) => Some(Some("automated")),
+            OscType::Int(2) => Some(Some("overridden")),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (states.len() <= span).then_some(states)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -102,37 +125,45 @@ async fn fetch_window(
     // in flight at once, and `osc_server.process()` drains the whole socket
     // per tick, so the pair costs one tick rather than two. On the failure
     // path their timeouts overlap in one window instead of stacking.
-    let (names, values) = tokio::join!(
+    let (names, values, states) = tokio::join!(
         q.query("/live/device/get/parameters/name_range", args(), timeout),
         q.query(
             "/live/device/get/parameters/value_string_range",
             args(),
             timeout
         ),
+        q.query(
+            "/live/device/get/parameters/automation_state_range",
+            args(),
+            timeout
+        ),
     );
-    let (names, values) = (names?, values?);
+    let (names, values, states) = (names?, values?, states?);
 
-    let (Some(names), Some(values)) = (
+    let (Some(names), Some(values), Some(states)) = (
         decode_strings(&names, start, span),
         decode_strings(&values, start, span),
+        decode_states(&states, start, span),
     ) else {
         return Ok(None);
     };
     // Zipping a shorter list against a longer one would pair every name
     // past the gap with the wrong value -- plausible, wrong, and impossible
     // for the model to detect.
-    if names.len() != values.len() {
+    if names.len() != values.len() || names.len() != states.len() {
         return Ok(None);
     }
     Ok(Some(
         names
             .into_iter()
             .zip(values)
+            .zip(states)
             .enumerate()
-            .map(|(n, (name, value))| Param {
+            .map(|(n, ((name, value), automation))| Param {
                 index: start + n,
                 name,
                 value,
+                automation,
             })
             .collect(),
     ))
@@ -351,6 +382,8 @@ mod tests {
         silent_after_first_identity_query: bool,
         /// Append this many strings past the end of every requested window.
         extra_strings: usize,
+        /// Parameter indices whose automation_state is 1 (automated).
+        automated: Vec<usize>,
     }
 
     impl Default for FakeDevice {
@@ -367,6 +400,7 @@ mod tests {
                 recount_after_first_identity_query: None,
                 silent_after_first_identity_query: false,
                 extra_strings: 0,
+                automated: vec![],
             }
         }
     }
@@ -506,6 +540,22 @@ mod tests {
                         }
                         let _ = live.send_to(app_port, addr, reply).await;
                     }
+                    addr @ "/live/device/get/parameters/automation_state_range" => {
+                        let (start, span) = (i(2), i(3));
+                        if fake.silent_spans_above.is_some_and(|cap| span as usize > cap) {
+                            continue;
+                        }
+                        let end = (start as usize + span as usize).min(fake.total);
+                        let mut reply = vec![
+                            OscType::Int(track),
+                            OscType::String(path.clone()),
+                            OscType::Int(fake.wrong_start.unwrap_or(start)),
+                        ];
+                        for idx in start as usize..end + fake.extra_strings {
+                            reply.push(OscType::Int(i32::from(fake.automated.contains(&idx))));
+                        }
+                        let _ = live.send_to(app_port, addr, reply).await;
+                    }
                     _ => {}
                 }
             }
@@ -576,17 +626,20 @@ mod tests {
                 Param {
                     index: 0,
                     name: "«Param 0»".into(),
-                    value: "«0.0 Hz»".into()
+                    value: "«0.0 Hz»".into(),
+                    automation: None,
                 },
                 Param {
                     index: 1,
                     name: "«Param 1»".into(),
-                    value: "«1.0 Hz»".into()
+                    value: "«1.0 Hz»".into(),
+                    automation: None,
                 },
                 Param {
                     index: 2,
                     name: "«Param 2»".into(),
-                    value: "«2.0 Hz»".into()
+                    value: "«2.0 Hz»".into(),
+                    automation: None,
                 },
             ]
         );
@@ -594,6 +647,20 @@ mod tests {
         let c = counts.lock().unwrap();
         assert_eq!(c["/live/device/get/parameters/name_range"], 1);
         assert_eq!(c["/live/device/get/parameters/value_string_range"], 1);
+    }
+
+    #[tokio::test]
+    async fn an_automated_parameter_says_its_value_is_only_the_playhead_value() {
+        // A pilot answer read Overdrive's Device On as Off and called it a
+        // values problem; the switch was automated.
+        let (q, counts, _guard) = fake_live(FakeDevice { automated: vec![1], ..fake(3) }).await;
+        let d = get_device_params(&q, 1, &path0(), 0, FAST).await.unwrap();
+        let flags: Vec<_> = d.params.iter().map(|p| p.automation).collect();
+        assert_eq!(flags, vec![None, Some("automated"), None]);
+        assert_eq!(counts.lock().unwrap()["/live/device/get/parameters/automation_state_range"], 1);
+        let json = serde_json::to_value(&d.params).unwrap();
+        assert!(json[0].get("automation").is_none());
+        assert_eq!(json[1]["automation"], "automated");
     }
 
     #[tokio::test]

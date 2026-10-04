@@ -1,0 +1,14 @@
+{
+  "_comment": "The tools the app offers the model, in tool_schema() order. Pinned by src-tauri's tool schema test and by the proxy's allow-list test, so the two cannot drift apart unnoticed.",
+  "tools": [
+    "get_track_detail",
+    "get_clip_notes",
+    "get_clips",
+    "get_arrangement",
+    "get_arrangement_notes",
+    "get_device_chains",
+    "get_mixer",
+    "get_device_params",
+    "get_rack_contents"
+  ]
+}

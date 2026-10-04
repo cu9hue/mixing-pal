@@ -28,6 +28,11 @@ const EMPTY: SetState = {
   setId: null,
   setName: null,
   setPath: null,
+  loop: null,
+  loopStart: null,
+  loopLength: null,
+  selectedDevice: null,
+  selectedSlot: null,
 };
 
 describe("the digest's tool pointer", () => {

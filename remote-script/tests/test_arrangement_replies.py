@@ -271,6 +271,7 @@ class FakeNote:
         self.duration = 0.5
         self.velocity = 100
         self.mute = False
+        self.probability = 1.0
 
 
 class ArrangementNotesShareTheSessionShape(unittest.TestCase):
@@ -281,7 +282,7 @@ class ArrangementNotesShareTheSessionShape(unittest.TestCase):
         notes = [FakeNote(60, 0.0), FakeNote(64, 1.0)]
         self.assertEqual(
             notes_window_reply(2, 7, 3, notes),
-            (2, 7, 3, 60, 0.0, 0.5, 100, False, 64, 1.0, 0.5, 100, False),
+            (2, 7, 3, 60, 0.0, 0.5, 100, False, 1.0, 64, 1.0, 0.5, 100, False, 1.0),
         )
 
     def test_the_count_reply_is_byte_identical_to_the_session_one(self):

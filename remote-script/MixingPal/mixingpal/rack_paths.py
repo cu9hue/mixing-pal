@@ -152,11 +152,21 @@ def record_bytes(record):
     return sum(osc_string_bytes(f) if isinstance(f, str) else 5 for f in record)
 
 
+def device_record(device):
+    """(name, is_rack, is_active, kind, class_name) for one device in a listing.
+
+    `kind` is Live's Device.type (1 instrument, 2 audio effect, 4 MIDI effect).
+    The class name survives a rename: a Scale called "Dorian #4" is still "Scale".
+    """
+    return (str(device.name)[:NAME_CAP], bool(device.can_have_chains), bool(device.is_active),
+            int(device.type), str(device.class_display_name)[:NAME_CAP])
+
+
 def chain_record(entry, max_names=MAX_DEVICES_PER_CHAIN, device_offset=0):
     """(name, note, mute, solo, sample_name, total_devices, reported_devices,
-    *(device_name, is_rack)).
+    *device_record).
 
-    Six fixed fields, then exactly `reported_devices` names. The record
+    Seven fixed fields, then exactly `reported_devices` device records. The record
     announces how many names it actually carries -- not how many the chain
     has -- so the decoder can walk a stream of variable-length records with no
     separator, and so a record cut back to fit a datagram stays readable.
@@ -166,8 +176,7 @@ def chain_record(entry, max_names=MAX_DEVICES_PER_CHAIN, device_offset=0):
     devices = list(chain.devices)
     offset = max(0, device_offset)
     reported = devices[offset:offset + max(0, max_names)]
-    names = [field for d in reported for field in (
-        str(d.name)[:NAME_CAP], int(bool(getattr(d, "can_have_chains", False))))]
+    names = [field for d in reported for field in device_record(d)]
     return (str(name)[:NAME_CAP], int(note), int(bool(mute)), int(bool(solo)),
             None if sample_name is None else str(sample_name)[:NAME_CAP],
             len(devices), len(reported)) + tuple(names)

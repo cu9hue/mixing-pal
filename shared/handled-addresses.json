@@ -11,7 +11,12 @@
     "/live/song/get/num_tracks",
     "/live/mixingpal/get/version",
     "/live/mixingpal/get/cue_points",
-    "/live/mixingpal/get/set_identity"
+    "/live/mixingpal/get/set_identity",
+    "/live/song/get/loop",
+    "/live/song/get/loop_start",
+    "/live/song/get/loop_length",
+    "/live/view/get/selected_device",
+    "/live/view/get/selected_clip"
   ],
   "trackFields": [
     "/live/track/get/name",

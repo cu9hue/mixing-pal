@@ -8,8 +8,8 @@ const HEADER_SLACK: usize = 256;
 /// Every OSC int/float is 4 bytes of payload plus 1 byte of type tag.
 const BYTES_PER_VALUE: usize = 5;
 
-/// /live/clip/get/notes returns pitch, start_time, duration, velocity, mute.
-const VALUES_PER_NOTE: usize = 5;
+/// A note window returns pitch, start_time, duration, velocity, mute, probability.
+const VALUES_PER_NOTE: usize = 6;
 
 fn budget_values() -> usize {
     (MAX_DATAGRAM - HEADER_SLACK) / BYTES_PER_VALUE

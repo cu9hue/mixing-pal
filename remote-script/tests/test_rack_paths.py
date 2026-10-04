@@ -46,6 +46,10 @@ class FakeDevice(object):
     def __init__(self, name, chains=None, drum_pads=None, parameters=()):
         self.name = name
         self.parameters = list(parameters)
+        self.can_have_chains = False
+        self.is_active = True
+        self.type = 2
+        self.class_display_name = name
         if chains is not None:
             self.chains = chains
             self.can_have_chains = True
@@ -195,16 +199,26 @@ class WindowTests(unittest.TestCase):
         entries = self.entries(1, devices_each=40)
         (record,) = rack_paths.build_window(entries, 0, 1)
         # name, note, mute, solo, sample, total_devices, reported_devices,
-        # then (name, is_rack) pairs.
+        # then (name, is_rack, is_active, kind, class) records.
         self.assertEqual(record[5], 40)
         self.assertEqual(record[6], rack_paths.MAX_DEVICES_PER_CHAIN)
-        self.assertEqual(len(record), 7 + 2 * rack_paths.MAX_DEVICES_PER_CHAIN)
+        self.assertEqual(len(record), 7 + 5 * rack_paths.MAX_DEVICES_PER_CHAIN)
+
+    # A bypassed EQ inside a Rack read as active is the pilot's Overdrive
+    # mistake one level down.
+    def test_a_device_inside_a_chain_carries_its_state_kind_and_class(self):
+        eq = FakeDevice("Bass Cut")
+        eq.is_active = False
+        eq.class_display_name = "EQ Eight"
+        entries = [(FakeChain("Chain", [eq]), -1, "Chain", False, False, None)]
+        (record,) = rack_paths.build_window(entries, 0, 1)
+        self.assertEqual(record[7:], ("Bass Cut", False, False, 2, "EQ Eight"))
 
     def test_a_nested_rack_is_marked_in_its_parent_chain_record(self):
         nested = FakeDevice("Combine Kit", chains=[FakeChain("Pads")])
         entry = (FakeChain("Parent", [nested]), -1, "Parent", False, False, None)
         record = rack_paths.chain_record(entry)
-        self.assertEqual(record[7:], ("Combine Kit", 1))
+        self.assertEqual(record[7:], ("Combine Kit", True, True, 2, "Combine Kit"))
 
     def test_the_estimate_covers_a_multi_byte_chain_record(self):
         # pythonosc encodes a string with `val.encode('utf-8')`, so a chain
@@ -282,7 +296,7 @@ class WindowTests(unittest.TestCase):
             self.assertGreater(record[6], 0)
             self.assertEqual(record[5], 40)
             self.assertLessEqual(rack_paths.record_bytes(record), rack_paths.MAX_REPLY_BYTES)
-            seen.extend(record[7::2])
+            seen.extend(record[7::5])
             offset += record[6]
         self.assertEqual(seen, [name[:rack_paths.NAME_CAP] for name in names])
 

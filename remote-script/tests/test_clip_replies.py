@@ -24,12 +24,13 @@ _SPEC.loader.exec_module(clip_replies)
 
 
 class FakeNote(object):
-    def __init__(self, pitch, start_time, duration, velocity, mute):
+    def __init__(self, pitch, start_time, duration, velocity, mute, probability=1.0):
         self.pitch = pitch
         self.start_time = start_time
         self.duration = duration
         self.velocity = velocity
         self.mute = mute
+        self.probability = probability
 
 
 class NumNotesReplyTests(unittest.TestCase):
@@ -50,27 +51,27 @@ class NotesWindowReplyTests(unittest.TestCase):
         reply = clip_replies.notes_window_reply(2, 1, 7, [])
         self.assertEqual(reply, (2, 1, 7))
 
-    def test_each_note_flattens_to_five_attributes_in_the_order_rust_reads(self):
+    def test_each_note_flattens_to_six_attributes_in_the_order_rust_reads(self):
         # decode_notes in src-tauri/src/tools/clip_notes.rs reads
-        # pitch, start, duration, velocity, mute -- positionally. A swap here
-        # produces notes that are plausible and wrong.
+        # pitch, start, duration, velocity, mute, probability -- positionally.
+        # A swap here produces notes that are plausible and wrong.
         notes = [FakeNote(60, 0.0, 0.5, 100, False),
-                 FakeNote(64, 1.0, 0.25, 80, True)]
+                 FakeNote(64, 1.0, 0.25, 80, True, 0.3)]
         self.assertEqual(
             clip_replies.notes_window_reply(2, 1, 0, notes),
             (2, 1, 0,
-             60, 0.0, 0.5, 100, False,
-             64, 1.0, 0.25, 80, True),
+             60, 0.0, 0.5, 100, False, 1.0,
+             64, 1.0, 0.25, 80, True, 0.3),
         )
 
-    def test_the_body_is_always_a_multiple_of_five(self):
+    def test_the_body_is_always_a_multiple_of_six(self):
         # The client refuses a body that is not, so an off-by-one here would
         # make the whole window decode as malformed rather than as wrong data.
         for count in range(0, 4):
             notes = [FakeNote(60, 0.0, 0.5, 100, False) for _ in range(count)]
             body = clip_replies.notes_window_reply(0, 0, 0, notes)[3:]
-            self.assertEqual(len(body) % 5, 0)
-            self.assertEqual(len(body), count * 5)
+            self.assertEqual(len(body) % 6, 0)
+            self.assertEqual(len(body), count * 6)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ const PHRASE: Record<string, (trackName: string) => string> = {
   get_arrangement_notes: (t) => `reading the arrangement notes in ${t}…`,
   get_device_params: (t) => `looking at a device on ${t}…`,
   get_rack_contents: (t) => `opening the rack on ${t}…`,
+  get_mixer: (t) => `reading the mixer for ${t}…`,
 };
 
 const FALLBACK: Record<string, string> = {
@@ -32,6 +33,7 @@ const FALLBACK: Record<string, string> = {
   get_clips: "listing the clips…",
   get_arrangement: "mapping the arrangement…",
   get_device_chains: "listing the devices…",
+  get_mixer: "reading the mixer…",
 };
 
 function trackName(args: unknown, state: SetState): string | null {
