@@ -283,6 +283,17 @@ All specced or named already. The order is fixed by the gate.
    post-training. Subscriptions follow measured pilot usage and use the same
    account access checks; price and paid allowances remain undecided.
 
+   In-app problem reports go to hello@mixingpal.com, with the verified account
+   email as Reply-To. Answers, failed questions and Settings each offer a report
+   form; diagnostics require a separate, unchecked consent for that incident
+   and never permit training or enable ongoing sharing. The app keeps up to
+   20 pending reports for seven days and shows delivery receipts in Settings.
+   The proxy admits five new reports per account per day, stores content
+   privately for 30 days after acceptance, and supports account, turn and
+   report deletion. Support emails already sent cannot be recalled. Rollout
+   requires the additive reports migration and R2 lifecycle rule, then proxy
+   deployment before desktop, with an authorized staging mail/deletion check.
+
 2. **Signing.** Apple enrollment, Developer ID signing, notarization, stapling.
    Distribution stage 2. Size M, mostly waiting on Apple.
 3. **Updates.** Tagged release CI, hosted artifacts, and automatic update
