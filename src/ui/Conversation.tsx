@@ -476,8 +476,8 @@ export function Conversation({
             ref={i === thread.length - 1 ? newest : undefined}
           >
             <ExchangeView x={x} />
-            {x.turnId && (!busy || i !== thread.length - 1) && account.view?.access !== "development" && (
-              <FeedbackPanel turnId={x.turnId} answered={x.answer !== null} saved={x.feedback}
+            {x.turnId && x.answer !== null && (!busy || i !== thread.length - 1) && account.view?.access !== "development" && (
+              <FeedbackPanel turnId={x.turnId} saved={x.feedback}
                 sharingEnabled={account.view?.capture === true} sentCount={thread.length} onSave={(feedback) => {
                 if (operations.install) return;
                 if (keyRef.current?.id !== key?.id || keyRef.current?.path !== key?.path) return;

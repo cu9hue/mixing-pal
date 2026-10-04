@@ -870,8 +870,8 @@ async fn turn_feedback(turn_id: uuid::Uuid, feedback: serde_json::Value, state: 
 }
 
 #[tauri::command]
-async fn turn_delete_capture(turn_id: uuid::Uuid, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
-    state.delete_turn(turn_id).await
+async fn account_delete_shared(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
+    state.delete_shared().await
 }
 
 /// Every recorded step, oldest first -- see `trace.rs`'s module doc for why
@@ -950,7 +950,7 @@ pub fn run() {
             account_delete,
             turn_event,
             turn_feedback,
-            turn_delete_capture,
+            account_delete_shared,
             trace,
             clear_trace,
             window::set_window_mode,

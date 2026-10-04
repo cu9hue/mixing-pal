@@ -5,6 +5,7 @@ export type SetupStep =
   | "connected"
   | "experience"
   | "account"
+  | "sharing"
   | "done";
 
 /** Connection acknowledgement is transient; setupDone keeps returning users in the card. */
@@ -16,6 +17,8 @@ export interface SetupFacts {
   deltasArriving: boolean;
   connectedAcknowledged: boolean;
   hasAccount: boolean;
+  /** Whether she answered the current sharing question, either way. */
+  sharingChosen: boolean;
   /** False while Rust has not answered, so the question shows rather than
       setup finishing early. */
   experienceChosen: boolean;
@@ -36,6 +39,7 @@ export interface SetupFacts {
 export function currentStep(facts: SetupFacts): SetupStep {
   // Sign-in comes first because it does not depend on Live.
   if (!facts.hasAccount) return "account";
+  if (!facts.sharingChosen) return "sharing";
 
   if (facts.connectorCopied && (!facts.connectorCurrent || !facts.deltasArriving)) return "open_live";
   if (!facts.connectorInstalled || !facts.connectorCurrent) return "install";

@@ -6,6 +6,7 @@ import {
   ExperienceScreen,
   InstallScreen,
   OpenLiveScreen,
+  SharingScreen,
 } from "./screens";
 import { AccountState } from "../model/account";
 import { ExperienceState } from "../model/experience";
@@ -13,12 +14,13 @@ import { AccountPanel } from "../ui/AccountPanel";
 
 const TICK: Record<SetupStep, number> = {
   account: 0,
-  install: 1,
-  open_live: 2,
-  control_surface: 3,
-  connected: 3,
-  experience: 4,
-  done: 4,
+  sharing: 1,
+  install: 2,
+  open_live: 3,
+  control_surface: 4,
+  connected: 4,
+  experience: 5,
+  done: 5,
 };
 
 export function Setup({
@@ -49,7 +51,7 @@ export function Setup({
   return (
     <div className="setup" data-tauri-drag-region>
       <div className="setup__bar">
-        {[0, 1, 2, 3, 4].map((i) => (
+        {[0, 1, 2, 3, 4, 5].map((i) => (
           <span
             key={i}
             className={`setup__tick ${
@@ -71,10 +73,11 @@ export function Setup({
             onContinue={onAcknowledgeConnected}
           />
         )}
+        {step === "sharing" && <SharingScreen account={account} />}
         {step === "experience" && <ExperienceScreen experience={experience} />}
         {step === "account" && (
           <>
-            <div className="setup__label">Step 1 of 5</div>
+            <div className="setup__label">Step 1 of 6</div>
             <AccountPanel account={account} />
           </>
         )}

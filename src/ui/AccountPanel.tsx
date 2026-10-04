@@ -15,6 +15,8 @@ export function AccountPanel({ account }: { account: AccountState }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deletingShared, setDeletingShared] = useState(false);
+  const [sharedDeleted, setSharedDeleted] = useState(false);
   const view = account.view;
   const problem = error ?? account.error;
   const signingIn = view === null || view.access === "signed_out" || view.access === "invitation_required";
@@ -99,6 +101,18 @@ export function AccountPanel({ account }: { account: AccountState }) {
             });
           }}
         />
+        {deletingShared ? <div>
+          <p>Delete everything you shared? Your account, your sharing choice, and your conversations on this laptop stay.</p>
+          <div className="account__actions">
+            <button disabled={busy || operations.install} onClick={() => void act(async () => {
+              await invoke("account_delete_shared"); setDeletingShared(false); setSharedDeleted(true);
+            })}>Delete shared advice</button>
+            <button disabled={busy || operations.install} onClick={() => setDeletingShared(false)}>Cancel</button>
+          </div>
+        </div> : <div>
+          <button className="account__link" disabled={busy || operations.install} onClick={() => { setSharedDeleted(false); setDeletingShared(true); }}>Delete shared advice…</button>
+        </div>}
+        {sharedDeleted && <p role="status">Deletion requested.</p>}
       </>}
       {(view?.access === "expired" || view?.access === "revoked") && <p>Your pilot access has ended. Contact Mixing Pal to continue.</p>}
       {view && view.access !== "signed_out" && <div className="account__actions">

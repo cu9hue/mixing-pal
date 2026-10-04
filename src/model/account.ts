@@ -12,6 +12,7 @@ export interface AccountView {
   period_end?: number;
   capture: boolean;
   consent_epoch?: number;
+  sharing_chosen?: boolean;
   consent_version?: string;
 }
 

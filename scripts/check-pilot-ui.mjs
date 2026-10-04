@@ -48,7 +48,7 @@ if(cmd==='account_status')return {...window.account};
 if(cmd==='account_send_code')return null;
 if(cmd==='account_sign_in')return window.account={...active,access:'invitation_required'};
 if(cmd==='account_redeem')return window.account={...active};
-if(cmd==='account_consent')return window.account={...window.account,capture:args.enabled,consent_epoch:window.account.consent_epoch+1};
+if(cmd==='account_consent')return window.account={...window.account,capture:args.enabled,consent_epoch:window.account.consent_epoch+1,sharing_chosen:true};
 if(cmd==='account_sign_out'){window.account={access:'signed_out',capture:false};return;}
 if(cmd==='connector_status')return {folder:'MixingPal',installed:true};
 if(cmd==='live_is_running')return true;
@@ -69,7 +69,7 @@ if(cmd==='load_thread'){
 if(cmd==='save_thread'){window.saved.push(args);window.savedThreads[args.setId]={saved_at:Math.floor(Date.now()/1000),goal:args.goal,note:args.note,next_bullet:args.nextBullet,exchanges:args.exchanges};return;}
 if(cmd==='turn_event')return;
 if(cmd==='model_complete'){const account={...window.account};return new Promise((resolve,reject)=>{window.failModel=()=>reject({code:'completion_unknown',message:'The reply was interrupted.'});window.finishModel=(text='A complete answer.')=>resolve({text,tool_calls:[],account});});}
-if(cmd==='turn_delete_capture')return;
+if(cmd==='account_delete_shared')return;
 if(cmd==='turn_feedback'){window.shared.push(args);return new Promise(resolve=>window.finishFeedback=()=>resolve({saved:true}));}
 throw new Error('Unexpected native call: '+cmd);
 },{shouldMockEvents:true});
@@ -274,8 +274,11 @@ await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='model_complete')[1].args.captureEpoch),1);
 await page.evaluate(()=>window.finishModel());
 await page.getByText('A new turn after opting in',{exact:true}).waitFor();
-const priorOutcome=page.getByRole('button',{name:'Tried this advice?',exact:true}).first();
+await page.screenshot({path:`${artifacts}/answer-closed.png`});
+const priorOutcome=page.getByRole('button',{name:'Tried it?',exact:true}).first();
+assert.equal(await priorOutcome.evaluate(link=>getComputedStyle(link).borderStyle),'none','the outcome action reads as text, not a button');
 await priorOutcome.click();
+await page.screenshot({path:`${artifacts}/answer-open.png`});
 assert.equal(await priorOutcome.getAttribute('aria-expanded'),'true');
 await page.getByLabel('Ask about the set',{exact:true}).fill('A failed shared turn');
 await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
@@ -284,22 +287,24 @@ await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete
 await page.evaluate(()=>window.failModel());
 const failed=page.locator('.card__exchange').filter({hasText:'A failed shared turn'});
 await failed.getByText('The reply was interrupted.',{exact:true}).waitFor();
-await failed.getByRole('button',{name:'Shared turn',exact:true}).click();
-assert.equal(await failed.getByRole('button',{name:'Save outcome',exact:true}).count(),0);
-await failed.getByRole('button',{name:'Delete shared turn…',exact:true}).click();
-await failed.getByRole('button',{name:'Delete shared turn',exact:true}).click();
-await failed.getByText('Deletion requested. Your local conversation stays here.').waitFor();
-assert.equal(await page.evaluate(()=>window.requests.find(x=>x.cmd==='turn_delete_capture').args.turnId===window.requests.filter(x=>x.cmd==='model_complete')[2].args.turnId),true);
+assert.equal(await failed.locator('.feedback').count(),0,'a turn with no answer has no outcome to report');
+await page.evaluate(()=>window.emitFixture('menu://settings'));
+await page.getByRole('button',{name:'Delete shared advice…',exact:true}).click();
+await page.getByRole('button',{name:'Delete shared advice',exact:true}).click();
+await page.getByText('Deletion requested.',{exact:true}).waitFor();
+assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_delete_shared').length),1);
+assert.equal(await page.getByLabel('Share advice and outcomes to help improve Mixing Pal').isChecked(),true,'deleting shared advice keeps the sharing choice');
+await page.getByRole('button',{name:'Done',exact:true}).click();
 async function set(id){await page.evaluate(id=>window.switchSet(id),id); await page.getByText('Question for '+id,{exact:true}).waitFor();}
 await set('A');
-await page.getByRole('button',{name:'Tried this advice?',exact:true}).first().click();
+await page.getByRole('button',{name:'Tried it?',exact:true}).first().click();
 await page.getByLabel('What did you hear?',{exact:true}).fill('A private report');
 assert.equal(await page.getByLabel('Share this report with Mixing Pal for review').count(),0);
 await page.getByRole('button',{name:'Save outcome',exact:true}).click();
 await page.waitForFunction(()=>!!window.finishFeedback);
 assert.equal(await page.evaluate(()=>window.shared.length),1,'account sharing sends the outcome without another checkbox');
 await set('B');
-await page.getByRole('button',{name:'Tried this advice?',exact:true}).click();
+await page.getByRole('button',{name:'Tried it?',exact:true}).click();
 assert.equal(await page.getByLabel('What did you hear?',{exact:true}).inputValue(),'');
 await page.evaluate(()=>window.finishFeedback());
 await page.waitForTimeout(100);
@@ -324,6 +329,10 @@ await setup.getByLabel('Six-digit sign-in code').fill('123456');
 await setup.getByRole('button',{name:'Sign in',exact:true}).click();
 await setup.getByLabel('Invitation code').fill('example-invite-code');
 await setup.getByRole('button',{name:'Join the free pilot'}).click();
+await setup.getByText('Step 2 of 6',{exact:true}).waitFor();
+await page.screenshot({path:`${artifacts}/fresh-sharing.png`});
+await setup.getByRole('button',{name:/^Don't share/}).click();
+assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_consent').at(-1).args.enabled),false);
 await setup.getByRole('button',{name:'Got it',exact:true}).click();
 await setup.getByText('How do you work in Live?',{exact:true}).waitFor();
 await page.screenshot({path:`${artifacts}/fresh-experience.png`});
@@ -369,5 +378,5 @@ await page.clock.fastForward(31000);
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_status').length),refreshed,'stop polling once usage settles');
 }
 assert.deepEqual(errors,[]);
-console.log('PASS update dismissal, keyboard focus, fixed settings footer, onboarding spacing, service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, stale consent response, feedback set switch, delayed feedback persistence, window geometry');
+console.log('PASS update dismissal, keyboard focus, fixed settings footer, onboarding spacing, service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, setup sharing choice, shared-advice deletion, stale consent response, feedback set switch, delayed feedback persistence, window geometry');
 } catch(e){await page.screenshot({path:`${artifacts}/failure.png`});console.log(errors);throw e;} finally {await browser.close();server.kill();closeSync(log);}

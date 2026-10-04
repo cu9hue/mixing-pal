@@ -840,4 +840,56 @@ describe("capture and deletion", () => {
     const late = await api(`/v1/turns/${request.turn_id}/events`, { id: crypto.randomUUID(), kind: "tool", at: Date.now(), data: "late" }, user.token);
     expect((await late.json()).saved).toBe(false);
   });
+
+  test("deleting shared advice removes every shared turn but keeps the account and its sharing choice", async () => {
+    const user = await joined();
+    const other = await joined("other@example.com");
+    for (const member of [user, other]) {
+      await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, member.token, "PUT");
+    }
+    const first = question();
+    for (const [member, request] of [[user, first], [user, question()], [other, question()]] as const) {
+      reply();
+      await api("/v1/completions", request, member.token);
+    }
+    expect(await capturedObjects()).toHaveLength(3);
+    expect((await api("/v1/captures", undefined, user.token, "DELETE")).status).toBe(202);
+    await maintain(env);
+    const left = await capturedObjects();
+    expect(left).toHaveLength(1);
+    expect(left[0].key).toContain(other.id);
+    const late = await api(`/v1/turns/${first.turn_id}/events`, { id: crypto.randomUUID(), kind: "tool", at: Date.now(), data: "late" }, user.token);
+    expect((await late.json()).saved).toBe(false);
+    const view = await (await api("/v1/account", undefined, user.token)).json();
+    expect(view).toMatchObject({ access: "active", capture: true });
+    reply();
+    await api("/v1/completions", question(), user.token);
+    expect(await capturedObjects()).toHaveLength(2);
+  });
+
+  test("a restored database replays a shared-advice deletion", async () => {
+    const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
+    const request = question();
+    reply();
+    await api("/v1/completions", request, user.token);
+    await api("/v1/captures", undefined, user.token, "DELETE");
+    expect((await env.CAPTURE.list({ prefix: "deletions/" })).objects).toHaveLength(1);
+    await env.DB.prepare("UPDATE turns SET deleted_at = NULL, capture = 1 WHERE id = ?").bind(request.turn_id).run();
+    expect((await api("/operator", { action: "replay_deletions" }, env.ADMIN_TOKEN)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT capture, deleted_at IS NOT NULL AS deleted FROM turns WHERE id = ?").bind(request.turn_id).first())
+      .toEqual({ capture: 0, deleted: 1 });
+    expect(await env.DB.prepare("SELECT deleted_at FROM members WHERE id = ?").bind(user.id).first()).toEqual({ deleted_at: null });
+  });
+
+  test("the account says whether the producer has answered the current sharing question", async () => {
+    const user = await joined();
+    const chosen = async () => (await (await api("/v1/account", undefined, user.token)).json()).sharing_chosen;
+    expect(await chosen()).toBe(false);
+    await env.DB.prepare("INSERT INTO consents(member_id, version, enabled, created_at) VALUES (?, ?, 1, ?)")
+      .bind(user.id, "quality-2026-09-12", Date.now()).run();
+    expect(await chosen()).toBe(false);
+    await api("/v1/consent", { enabled: false, version: "quality-2026-09-17" }, user.token, "PUT");
+    expect(await chosen()).toBe(true);
+  });
 });

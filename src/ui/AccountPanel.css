@@ -169,6 +169,30 @@
   color: var(--text-muted);
 }
 
+/* A minor action reads as text, not as a control competing with the content above it. */
+.feedback .feedback__link,
+.account .account__link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.feedback .feedback__link:hover,
+.account .account__link:hover {
+  color: var(--text-secondary);
+}
+
+.account .account__link {
+  margin-top: var(--space-2);
+}
+
+.feedback__status {
+  margin: var(--space-1) 0 0;
+}
+
 .feedback label {
   display: block;
   margin-top: var(--space-2);

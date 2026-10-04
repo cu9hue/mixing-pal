@@ -114,6 +114,7 @@ export default function App() {
     deltasArriving: wireReady(connected, state.scriptVersion, wireVersion.version),
     connectedAcknowledged,
     hasAccount: account.view?.access === "active" || account.view?.access === "development",
+    sharingChosen: account.view?.access === "development" || account.view?.sharing_chosen === true,
     experienceChosen: experience.experience != null,
   };
 

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { account, consent, rateLimit, redeem } from "./account";
 import { admin } from "./admin";
 import { auth, authenticate } from "./auth";
-import { deleteAccount, deleteTurn, event, feedback } from "./capture";
+import { deleteAccount, deleteShared, deleteTurn, event, feedback } from "./capture";
 import { complete } from "./completion";
 import { ApiError, Env, MAX_FEEDBACK_BODY, json, privateHash, readJson } from "./env";
 import { maintain } from "./maintenance";
@@ -65,6 +65,10 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx);
   if (route === "DELETE /v1/account") {
     await deleteAccount(env, memberId);
+    return json({ deletion: "pending" }, 202);
+  }
+  if (route === "DELETE /v1/captures") {
+    await deleteShared(env, memberId);
     return json({ deletion: "pending" }, 202);
   }
   const turn = /^\/v1\/turns\/([a-f0-9-]{36})\/(events|feedback|capture)$/.exec(url.pathname);
