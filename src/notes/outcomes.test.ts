@@ -45,14 +45,21 @@ describe("the outcome log", () => {
 });
 
 describe("the recent view", () => {
-  it("shows one line per answer, newest first, with the first rating when it flipped", () => {
+  it("shows one line per answer, newest first, with the rating before the latest when it flipped", () => {
     let log: Outcome[] = rate([], ex("a"), "kept", 1);
     log = rate(log, ex("b"), "undone", 2);
     log = rate(log, ex("a"), "undone", 3);
-    expect(recentOutcomes(log, 6).map(({ record, first }) => [record.turnId, record.outcome, first])).toEqual([
+    expect(recentOutcomes(log, 6).map(({ record, before }) => [record.turnId, record.outcome, before])).toEqual([
       ["a", "undone", "kept"],
       ["b", "undone", null],
     ]);
+  });
+
+  it("names an undo between two keeps", () => {
+    let log: Outcome[] = rate([], ex("a"), "kept", 1);
+    log = rate(log, ex("a"), "undone", 2);
+    log = rate(log, ex("a"), "kept", 3);
+    expect(recentOutcomes(log, 6).map(({ record, before }) => [record.outcome, before])).toEqual([["kept", "undone"]]);
   });
 
   it("caps the number of answers", () => {

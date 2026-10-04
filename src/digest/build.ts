@@ -146,9 +146,9 @@ export function buildContext(
   const recent = recentOutcomes(outcomes, OUTCOMES_IN_VIEW);
   if (recent.length > 0) {
     lines.push("OUTCOMES  (newest first)");
-    for (const { record, first } of recent) {
+    for (const { record, before } of recent) {
       const heard = record.heard === "" ? "" : `  heard ${fence(record.heard)}`;
-      const flip = first === null ? "" : `, ${first} first`;
+      const flip = before === null ? "" : `, ${before} before`;
       lines.push(`- ${record.outcome}  ${fence(record.move)}${heard}  (${ageWords(record.at, now)}${flip})`);
     }
   }

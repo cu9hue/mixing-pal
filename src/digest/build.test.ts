@@ -205,7 +205,7 @@ describe("buildContext", () => {
       { ...base, turnId: "t1", move: "«Pad», mud: cut 2 dB at 300 Hz", outcome: "undone", heard: "sounded thin", at: now },
     ], now);
     expect(out.indexOf("OUTCOMES  (newest first)")).toBeGreaterThan(out.indexOf("NOTES"));
-    expect(out).toContain("- undone  «Pad, mud: cut 2 dB at 300 Hz»  heard «sounded thin»  (today, kept first)\n- kept  «Bass, masking: sidechain 3 dB»  (yesterday)");
+    expect(out).toContain("- undone  «Pad, mud: cut 2 dB at 300 Hz»  heard «sounded thin»  (today, kept before)\n- kept  «Bass, masking: sidechain 3 dB»  (yesterday)");
   });
 
   it("fences heard text with guillemets and line breaks", () => {

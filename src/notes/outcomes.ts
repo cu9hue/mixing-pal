@@ -62,17 +62,18 @@ export function latestFor(log: Outcome[], turnId: string): Outcome | null {
   return i < 0 ? null : log[i];
 }
 
-/** One line per answer: its latest record, and its first rating when that differs. */
-export function recentOutcomes(log: Outcome[], max: number): { record: Outcome; first: Rating | null }[] {
-  const byTurn = new Map<string, { record: Outcome; index: number; first: Rating }>();
+/** One line per answer: its latest record, and the latest earlier rating that differs from it. */
+export function recentOutcomes(log: Outcome[], max: number): { record: Outcome; before: Rating | null }[] {
+  const byTurn = new Map<string, { record: Outcome; index: number; before: Rating | null }>();
   log.forEach((record, index) => {
     const seen = byTurn.get(record.turnId);
-    byTurn.set(record.turnId, { record, index, first: seen?.first ?? record.outcome });
+    const before = seen === undefined ? null : seen.record.outcome !== record.outcome ? seen.record.outcome : seen.before;
+    byTurn.set(record.turnId, { record, index, before });
   });
   return [...byTurn.values()]
     .sort((a, b) => b.record.at - a.record.at || b.index - a.index)
     .slice(0, max)
-    .map(({ record, first }) => ({ record, first: first === record.outcome ? null : first }));
+    .map(({ record, before }) => ({ record, before }));
 }
 
 export function withTrackRead(tracks: string[], args: unknown, state: SetState): string[] {
