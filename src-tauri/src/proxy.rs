@@ -16,6 +16,8 @@ const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 const MAX_EVENT: usize = 1024 * 1024;
 const MAX_OUTBOX: usize = 20 * MAX_EVENT;
 const OUTBOX_AGE: u64 = 24 * 60 * 60 * 1000;
+/// Longer than the proxy's `MODEL_TIMEOUT`, so its own error arrives first.
+const COMPLETION_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxyError {
@@ -139,7 +141,7 @@ impl Proxy {
             });
         Self {
             client: Client::builder().connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(180)).redirect(reqwest::redirect::Policy::none()).build()
+                .timeout(COMPLETION_TIMEOUT).redirect(reqwest::redirect::Policy::none()).build()
                 .expect("the proxy HTTP configuration is valid"),
             origin, credentials, credential_name,
             session: Mutex::new(None), turns: Mutex::new(HashMap::new()),
@@ -442,6 +444,15 @@ mod tests {
     use std::sync::Arc;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // The proxy's own timeout error, not a dropped connection, must reach her.
+    #[test]
+    fn the_app_waits_longer_than_the_proxy_waits_for_the_model() {
+        let env = include_str!("../../proxy/src/env.ts");
+        let line = env.lines().find(|l| l.starts_with("export const MODEL_TIMEOUT")).unwrap();
+        let millis: u64 = line.split('=').nth(1).unwrap().trim().trim_end_matches(';').replace('_', "").parse().unwrap();
+        assert!(COMPLETION_TIMEOUT >= Duration::from_millis(millis) + Duration::from_secs(20));
+    }
 
     #[derive(Clone, Default)]
     struct Memory(Arc<Mutex<HashMap<String, String>>>);

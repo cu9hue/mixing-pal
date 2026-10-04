@@ -18,7 +18,8 @@ export const MAX_BODY = 1_048_576;
 // A 4,000-character report can need six bytes per character when JSON-escaped.
 export const MAX_FEEDBACK_BODY = 32 * 1024;
 export const MODEL = "moonshotai/kimi-k2.6";
-export const MODEL_TIMEOUT = 165_000;
+// A reply at the output cap must finish: 12,000 tokens at 50 a second is 240 s.
+export const MODEL_TIMEOUT = 270_000;
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
