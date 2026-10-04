@@ -70,6 +70,7 @@ if(cmd==='load_thread'){
 if(cmd==='save_thread'){window.saved.push(args);window.savedThreads[args.setId]={saved_at:Math.floor(Date.now()/1000),goal:args.goal,note:args.note,next_bullet:args.nextBullet,exchanges:args.exchanges,outcomes:args.outcomes};return;}
 if(cmd==='incident_snapshot')return {limitations:['Trace unavailable after restart.']};
 if(cmd==='report_submit'){
+ if(window.reportSubmitFails)throw {message:'Could not save the report on this laptop.'};
  const receipt={id:args.input.id,origin:args.input.origin,turn_id:args.input.exchange?.turnId??null,created_at:Date.now(),status:location.search.includes('queued')?'queued':'received'};
  window.reports.push(receipt);sessionStorage.setItem('reports',JSON.stringify(window.reports));return receipt;
 }
@@ -396,7 +397,40 @@ assert.equal(refreshed,1);
 await page.clock.fastForward(31000);
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_status').length),refreshed,'stop polling once usage settles');
 }
-// Reporting uses the real card, native IPC adapter and WebKit dialog behavior.
+for (const ceiling of [520,360]) {
+await page.goto('http://127.0.0.1:1423?access=active');
+await page.getByLabel('Ask about the set',{exact:true}).waitFor();
+await page.evaluate(ceiling=>document.documentElement.style.setProperty('--card-max-height',`${ceiling}px`),ceiling);
+await page.evaluate(()=>window.emitFixture('menu://settings'));
+await page.getByRole('button',{name:'Report a problem',exact:true}).click();
+const report=page.locator('dialog.report');
+await page.waitForFunction(ceiling=>innerHeight===ceiling,ceiling);
+assert.equal(await report.getByLabel('Include diagnostics for this report').evaluate(e=>{
+ const r=e.getBoundingClientRect(),body=e.closest('.report__body').getBoundingClientRect();
+ return r.top>=body.top && r.bottom<=body.bottom;
+}),true,'diagnostic choice starts in view');
+await report.getByLabel('What went wrong?',{exact:true}).press('Tab');
+await page.keyboard.press('Tab');
+assert.equal(await report.locator('summary').evaluate(e=>e===document.activeElement),true,'optional details are keyboard reachable');
+await page.keyboard.press('Enter');
+assert.equal(await report.locator('details').getAttribute('open'),'');
+await report.getByLabel('What went wrong?',{exact:true}).fill('Could not ask another question.');
+await page.evaluate(()=>window.reportSubmitFails=true);
+await report.getByRole('button',{name:'Send report',exact:true}).click();
+const alert=report.getByRole('alert');await alert.waitFor();
+assert.equal(await alert.evaluate(e=>{
+ const r=e.getBoundingClientRect();
+ const body=e.closest('.report__body');
+ const clip=body?body.getBoundingClientRect():{top:0,bottom:innerHeight};
+ return r.top>=clip.top && r.bottom<=clip.bottom;
+}),true,'send failure must be visible without scrolling');
+await page.screenshot({path:`${artifacts}/report-error-${ceiling}.png`});
+await page.evaluate(()=>window.reportSubmitFails=false);
+await report.getByRole('button',{name:'Retry',exact:true}).click();
+await report.getByRole('heading',{name:'Report sent',exact:true}).waitFor();
+assert.deepEqual(await page.evaluate(()=>window.requests.filter(r=>r.cmd==='report_submit').map(r=>r.args.input)),
+ await page.evaluate(()=>{const input=window.requests.find(r=>r.cmd==='report_submit').args.input;return [input,input];}),'retry preserves the original report');
+}
 for (const ceiling of [520,360]) {
 await page.goto('http://127.0.0.1:1423?access=active&update=delayed&queued');
 const composer=page.getByLabel('Ask about the set',{exact:true});
@@ -414,7 +448,7 @@ await description.press('Enter');
 assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.cmd==='report_submit').length),0,'textarea Enter does not submit');
 assert.equal(await dialog.getByLabel('Include diagnostics for this report').isChecked(),false);
 await dialog.getByLabel('Include diagnostics for this report').check();
-await dialog.getByText('Trace unavailable after restart.').waitFor();
+await dialog.getByText(/Some technical details are unavailable/).waitFor();
 await page.evaluate(()=>window.finishUpdate());
 assert.equal(await page.locator('dialog[open]').count(),1,'update cannot cover report');
 const cancel=dialog.getByRole('button',{name:'Cancel',exact:true});
@@ -425,8 +459,8 @@ await page.screenshot({path:`${artifacts}/report-${ceiling}.png`});
 await cancel.focus();await page.keyboard.press('Tab');
 assert.equal(await description.evaluate(e=>e===document.activeElement),true,'Tab stays inside report');
 await dialog.getByRole('button',{name:'Send report',exact:true}).click();
-await dialog.getByText(/Waiting to send/).waitFor();
-await dialog.getByRole('button',{name:'Done',exact:true}).click();
+await page.locator('dialog.report').getByText(/Waiting to send/).waitFor();
+await page.locator('dialog.report').getByRole('button',{name:'Done',exact:true}).click();
 await page.getByRole('dialog',{name:'Mixing Pal update'}).waitFor();
 await page.getByRole('button',{name:'Not now',exact:true}).click();
 await composer.fill('Keep this draft');
@@ -448,10 +482,10 @@ const settingsReport=page.getByRole('dialog',{name:'Report a problem',exact:true
 await settingsReport.getByText(/No conversation is included/).waitFor();
 await settingsReport.getByLabel('What went wrong?',{exact:true}).fill('Live is disconnected');
 await settingsReport.getByRole('button',{name:'Send report',exact:true}).click();
-await settingsReport.getByText('Report sent.',{exact:true}).waitFor();
+await page.locator('dialog.report').getByRole('heading',{name:'Report sent',exact:true}).waitFor();
 const submitted=await page.evaluate(()=>window.requests.find(r=>r.cmd==='report_submit').args.input);
 assert.equal(submitted.includeDiagnostics,false);assert.equal(submitted.exchange,undefined);
-await settingsReport.getByRole('button',{name:'Done',exact:true}).click();
+await page.locator('dialog.report').getByRole('button',{name:'Done',exact:true}).click();
 await page.goto('http://127.0.0.1:1423?access=active');
 const answerComposer=page.getByLabel('Ask about the set',{exact:true});
 await answerComposer.fill('Answer to report');await answerComposer.press('Enter');

@@ -113,10 +113,6 @@ export function Advanced({
 
       <div className="advanced__body" data-tauri-drag-region="false">
       {updates && <UpdatePanel updates={updates} />}
-      {onReport && <>
-        <button className="advanced__button" disabled={operations.install} onClick={(event) => { event.currentTarget.focus(); onReport({ origin: "settings" }); }}>Report a problem</button>
-        <ReportHistory key={account.view?.id} />
-      </>}
       {view === null ? (
         <div className={loadError === null ? "advanced__note" : "advanced__error"} role="status">
           {loadError === null ? "Reading your settings…" : `Couldn't read your settings.\n${loadError}`}
@@ -221,6 +217,11 @@ export function Advanced({
       </div>
 
       </>}
+      {onReport && <section className="report-support" aria-label="Support">
+        <h3 className="advanced__heading">Support</h3>
+        <button className="report-link" disabled={operations.install} onClick={(event) => { event.currentTarget.focus(); onReport({ origin: "settings" }); }}>Report a problem</button>
+        <ReportHistory key={account.view?.id} />
+      </section>}
       </div>
       <div className="advanced__footer">
         <span className="advanced__version">Mixing Pal v{appVersion}</span>

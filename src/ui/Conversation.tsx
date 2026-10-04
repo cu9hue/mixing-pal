@@ -503,14 +503,14 @@ export function Conversation({
             ref={i === thread.length - 1 ? newest : undefined}
           >
             <ExchangeView x={x} />
-            {onReport && (x.answer !== null || x.error !== null) && <button className="advanced__button report-trigger"
-              data-tauri-drag-region="false" disabled={operations.install}
-              onClick={(event) => { event.currentTarget.focus(); onReport({ origin: x.error ? "error" : "answer", exchange: x }); }}>Report a problem</button>}
             {x.turnId && x.move && x.answer !== null && (!busy || i !== thread.length - 1) && (
               <OutcomeRow exchange={{ turnId: x.turnId, move: x.move, answer: x.answer, tracksRead: x.tracksRead }}
                 outcomes={outcomes} sharingEnabled={account.view?.capture === true} sentCount={thread.length}
                 onChange={(next) => changeOutcomes(next, key)} />
             )}
+            {onReport && (x.answer !== null || x.error !== null) && <button className="report-link report-trigger"
+              data-tauri-drag-region="false" disabled={operations.install}
+              onClick={(event) => { event.currentTarget.focus(); onReport({ origin: x.error ? "error" : "answer", exchange: x }); }}>Report a problem</button>}
           </div>
         ))}
         {waiting !== null && (
