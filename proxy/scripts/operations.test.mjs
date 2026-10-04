@@ -123,6 +123,8 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
       assert.deepEqual(JSON.parse(await readFile(lifecycle, "utf8")), { rules: [
         { id: "expire-captures", enabled: true, conditions: { prefix: "captures/" },
           deleteObjectsTransition: { condition: { type: "Age", maxAge: 2592000 } } },
+        { id: "expire-support-reports", enabled: true, conditions: { prefix: "reports/" },
+          deleteObjectsTransition: { condition: { type: "Age", maxAge: 2592000 } } },
         { id: "expire-deletion-journal", enabled: true, conditions: { prefix: "deletions/" },
           deleteObjectsTransition: { condition: { type: "Age", maxAge: 7776000 } } },
         { id: "abort-incomplete-multipart-uploads", enabled: true, conditions: { prefix: "" },

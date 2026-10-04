@@ -1,3 +1,4 @@
+import { deleteReport, deleteReportsFor } from "./reports";
 import { z } from "zod";
 import { ApiError, CAPTURE_VERSION, DAY, Env, MAX_BODY, privateHash } from "./env";
 
@@ -125,14 +126,17 @@ export async function feedback(env: Env, memberId: string, turnId: string, input
   return saveCapture(env, turn, data.id, { kind: "feedback", source: "producer", outcome: data.outcome, heard: data.heard }, "feedback");
 }
 
-export async function deleteTurn(env: Env, memberId: string, turnId: string, journal = true): Promise<void> {
+export async function deleteTurn(env: Env, memberId: string, turnId: string, journal = true, expire = false): Promise<void> {
   const turn = await ownedTurn(env, turnId, memberId);
-  if (journal && turn.deleted_at === null) await recordRestriction(env, { member_id: memberId, turn_id: turnId });
+  const hasReports = !expire && await env.DB.prepare("SELECT 1 FROM support_reports WHERE user_id = ? AND turn_id = ? AND state IN ('ready', 'writing') LIMIT 1")
+    .bind(memberId, turnId).first();
+  if (journal && !expire && (turn.deleted_at === null || hasReports)) await recordRestriction(env, { member_id: memberId, turn_id: turnId });
   await env.DB.batch([
     env.DB.prepare("UPDATE turns SET deleted_at = COALESCE(deleted_at, ?), capture = 0 WHERE id = ?").bind(Date.now(), turnId),
     env.DB.prepare("UPDATE captures SET state = 'deleting', updated_at = ? WHERE turn_id = ? AND state != 'deleted'")
       .bind(Date.now(), turnId),
   ]);
+  if (!expire) await deleteReportsFor(env, memberId, turnId);
 }
 
 export async function deleteAccount(env: Env, memberId: string, journal = true): Promise<void> {
@@ -148,6 +152,7 @@ export async function deleteAccount(env: Env, memberId: string, journal = true):
     env.DB.prepare('DELETE FROM "session" WHERE userId = ?').bind(memberId),
     env.DB.prepare("INSERT INTO deletion_jobs(member_id, requested_at) VALUES (?, ?) ON CONFLICT DO NOTHING").bind(memberId, now),
   ]);
+  await deleteReportsFor(env, memberId);
 }
 
 export async function deleteShared(env: Env, memberId: string, journal = true): Promise<void> {
@@ -185,8 +190,9 @@ export async function replayDeletions(env: Env, cursor?: string): Promise<string
   for (const object of page.objects) {
     const saved = await env.CAPTURE.get(object.key);
     if (!saved) continue;
-    const entry = z.object({ member_id: z.string(), turn_id: z.uuid().optional(), revoked: z.literal(true).optional(), shared: z.literal(true).optional(), requested_at: z.number() }).parse(await saved.json());
-    if (entry.revoked) await revokeAccess(env, entry.member_id, false);
+    const entry = z.object({ member_id: z.string(), turn_id: z.uuid().optional(), report_id: z.uuid().optional(), revoked: z.literal(true).optional(), shared: z.literal(true).optional(), requested_at: z.number() }).parse(await saved.json());
+    if (entry.report_id) await deleteReport(env, entry.member_id, entry.report_id, false);
+    else if (entry.revoked) await revokeAccess(env, entry.member_id, false);
     else if (entry.turn_id) {
       const exists = await env.DB.prepare("SELECT id FROM turns WHERE id = ? AND member_id = ?").bind(entry.turn_id, entry.member_id).first();
       if (exists) await deleteTurn(env, entry.member_id, entry.turn_id, false);

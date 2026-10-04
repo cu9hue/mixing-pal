@@ -6,6 +6,7 @@ import { deleteAccount, deleteShared, deleteTurn, event, feedback } from "./capt
 import { complete } from "./completion";
 import { ApiError, Env, MAX_FEEDBACK_BODY, json, privateHash, readJson } from "./env";
 import { maintain } from "./maintenance";
+import { submitReport, reportReceipt, deleteReport, MAX_REPORT_BODY } from "./reports";
 import { releaseRequest } from "./releases";
 
 async function authRequest(request: Request, env: Env, path: string): Promise<Response> {
@@ -59,6 +60,16 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   const memberId = await authenticate(request, env);
   await rateLimit(env, `member:${memberId}`, 120, 60_000);
   const route = `${request.method} ${url.pathname}`;
+  if (route === "POST /v1/reports") {
+    const saved = await submitReport(env, memberId, await readJson(request, MAX_REPORT_BODY));
+    return json({ id: saved.id, status: saved.status }, saved.created ? 201 : 200);
+  }
+  const report = /^\/v1\/reports\/([a-f0-9-]{36})$/.exec(url.pathname);
+  if (report) {
+    const id = z.uuid().parse(report[1]);
+    if (request.method === "GET") return json(await reportReceipt(env, memberId, id));
+    if (request.method === "DELETE") { await deleteReport(env, memberId, id); return json({ deletion: "pending" }, 202); }
+  }
   if (route === "GET /v1/account") return account(env, memberId);
   if (route === "POST /v1/invites/redeem") return redeem(env, memberId, await readJson(request, 4096));
   if (route === "PUT /v1/consent") return consent(env, memberId, await readJson(request, 4096));
