@@ -48,9 +48,15 @@ operational records at 90 days. D1 Time Travel backups can retain earlier data
 for 7 days on Workers Free or 30 days on Paid. This service requires Paid.
 Each stage rejects new capture objects at 4 GB. R2 lifecycle rules independently
 expire capture objects after 30 days and deletion journals after 90 days.
-Before a restore, deploy with inference disabled and preserve available ledger
-records. After restoring D1, apply current migrations, run replay-deletions,
-then sweep. Replay blocks ordinary resume until spending is recovered too.
+Before a restore, run npm run deploy -- recovery staging|production. This
+sets REPORT_RECOVERY=true outside D1 and disables inference. Wait at least one
+minute for requests from the previous deployment to finish; preserve available
+ledger records. Report submission, private reads and notification sends stay
+paused even if restoring D1 revives pending mail. After restoring, apply current
+migrations with Wrangler using .deploy-STAGE.json; keep REPORT_RECOVERY=true.
+Run every replay-deletions page, then sweep. Do not run deploy or enable until
+all deletion pages and spending recovery are complete. Replay blocks ordinary
+resume until spending is recovered too.
 Deletion and revocation metadata is journaled separately in private R2 for 90 days.
 Replay turns sharing off for every restored account and invalidates its old
 consent version. Producers must opt in again. Recorded revocations also remove
@@ -66,7 +72,9 @@ including spending by accounts absent from the snapshot. Amounts cannot go
 down, and the service total must cover all recorded account spending. Keep the
 service paused if lost charges cannot be attributed reliably. Recovery records
 each amount and reason atomically; it never grants allowance or renews access.
-Only after recovery, check access and costs, resume and enable inference.
+Only after recovery, check access and costs, resume and run
+npm run deploy -- enable <stage>. This clears REPORT_RECOVERY and re-enables
+inference.
 Never restore deleted content from an operator's local copy.
 `;
 

@@ -290,8 +290,10 @@ All specced or named already. The order is fixed by the gate.
    20 pending reports for seven days and shows delivery receipts in Settings.
    The proxy admits five new reports per account per day, stores content
    privately for 30 days after acceptance, and supports account, turn and
-   report deletion. Support emails already sent cannot be recalled. Rollout
-   requires the additive reports migration and R2 lifecycle rule, then proxy
+   report deletion. Deletion requests keep retrying without retaining report
+   content. A separate Worker recovery setting pauses report mail and private reads across database
+   restoration and deletion replay. Support emails already sent cannot be
+   recalled. Rollout requires the additive reports migration and R2 lifecycle rule, then proxy
    deployment before desktop, with an authorized staging mail/deletion check.
 
 2. **Signing.** Apple enrollment, Developer ID signing, notarization, stapling.

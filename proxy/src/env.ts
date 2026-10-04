@@ -10,6 +10,7 @@ export interface Env {
   OPENROUTER_KEY: string;
   ADMIN_TOKEN: string;
   INFERENCE_ENABLED: string;
+  REPORT_RECOVERY?: string;
 }
 
 export const DAY = 86_400_000;

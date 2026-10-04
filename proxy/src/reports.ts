@@ -2,6 +2,9 @@ import { z } from "zod";
 import { ApiError, DAY, Env, privateHash } from "./env";
 
 export const MAX_REPORT_BODY = 320 * 1024;
+export function requireReportAccess(env: Env) {
+  if (env.REPORT_RECOVERY === "true") throw new ApiError(503, "report_recovery", "Reporting is temporarily unavailable during maintenance. We will retry later.");
+}
 const boundedText = z.string().max(16000);
 const step = z.object({
   kind: z.enum(["model", "tool"]), at: z.number().nonnegative(), duration_ms: z.number().nonnegative(),
@@ -45,6 +48,7 @@ export async function reportReceipt(env: Env, userId: string, id: string) {
 }
 
 export async function submitReport(env: Env, userId: string, input: unknown) {
+  requireReportAccess(env);
   const data = reportSchema.parse(input);
   if (data.diagnostics && new TextEncoder().encode(JSON.stringify(data.diagnostics)).length > 256 * 1024) {
     throw new ApiError(413, "report_too_large", "The diagnostics are too large.");
@@ -143,6 +147,7 @@ export async function maintainReports(env: Env): Promise<void> {
 }
 
 export async function inspectReport(env: Env, id: string) {
+  requireReportAccess(env);
   const row = await env.DB.prepare("SELECT * FROM support_reports WHERE id = ?").bind(id).first<SupportReport>();
   if (!row) throw new ApiError(404, "report_not_found", "This report was not found.");
   available(row);

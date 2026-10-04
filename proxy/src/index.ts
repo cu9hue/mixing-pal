@@ -7,7 +7,7 @@ import { complete } from "./completion";
 import { ApiError, Env, MAX_FEEDBACK_BODY, json, privateHash, readJson } from "./env";
 import { maintain } from "./maintenance";
 import { notifyReport } from "./report-email";
-import { submitReport, reportReceipt, deleteReport, MAX_REPORT_BODY } from "./reports";
+import { submitReport, reportReceipt, deleteReport, requireReportAccess, MAX_REPORT_BODY } from "./reports";
 import { releaseRequest } from "./releases";
 
 async function authRequest(request: Request, env: Env, path: string): Promise<Response> {
@@ -68,6 +68,7 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   }
   const report = /^\/v1\/reports\/([a-f0-9-]{36})$/.exec(url.pathname);
   if (report) {
+    requireReportAccess(env);
     const id = z.uuid().parse(report[1]);
     if (request.method === "GET") return json(await reportReceipt(env, memberId, id));
     if (request.method === "DELETE") { await deleteReport(env, memberId, id); return json({ deletion: "pending" }, 202); }

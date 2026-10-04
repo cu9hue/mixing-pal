@@ -34,6 +34,7 @@ function report() {
 async function objects() { return (await env.CAPTURE.list({ prefix: "reports/" })).objects; }
 
 beforeEach(async () => {
+  Reflect.deleteProperty(env, "REPORT_RECOVERY");
   emails = []; emailStatus = 200;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
     if (String(url) !== "https://api.resend.com/emails") throw new Error("Unexpected external request");
@@ -296,4 +297,33 @@ test("deletion during private object inspection blocks export and notification",
   expect((await api("/operator", { action: "report", report_id: r.id }, env.ADMIN_TOKEN)).status).toBe(410);
   await maintain(env);
   expect(emails).toHaveLength(1);
+});
+
+
+test("recovery blocks restored notifications and private reads until journal replay finishes", async () => {
+  const u = await user(); const r = report(); emailStatus = 503;
+  await api("/v1/reports", r, u.token);
+  await api(`/v1/reports/${r.id}`, undefined, u.token, "DELETE");
+  Object.assign(env, { REPORT_RECOVERY: "true" });
+  await env.DB.prepare("UPDATE support_reports SET state = 'ready', mail_state = 'pending', next_attempt_at = 0 WHERE id = ?").bind(r.id).run();
+  emails = []; emailStatus = 200;
+  await maintain(env);
+  expect(emails).toHaveLength(0);
+  expect((await api("/operator", { action: "report", report_id: r.id }, env.ADMIN_TOKEN)).status).toBe(503);
+  expect((await api("/v1/reports", r, u.token)).status).toBe(503);
+  expect((await api("/operator", { action: "replay_deletions" }, env.ADMIN_TOKEN)).status).toBe(200);
+  Object.assign(env, { REPORT_RECOVERY: "false" });
+  await maintain(env);
+  expect(emails).toHaveLength(0);
+  expect((await api(`/v1/reports/${r.id}`, undefined, u.token)).status).toBe(410);
+});
+
+test("an ordinary inference pause still delivers support reports", async () => {
+  const previous = env.INFERENCE_ENABLED;
+  env.INFERENCE_ENABLED = "false";
+  try {
+    const u = await user(); const r = report();
+    expect((await api("/v1/reports", r, u.token)).status).toBe(201);
+    expect(emails).toHaveLength(1);
+  } finally { env.INFERENCE_ENABLED = previous; }
 });

@@ -2,6 +2,7 @@ import { DAY, Env, readJson } from "./env";
 import { inspectReport, SupportReport } from "./reports";
 
 export async function notifyReport(env: Env, id: string): Promise<void> {
+  if (env.REPORT_RECOVERY === "true") return;
   const now = Date.now();
   const deadline = now - 23 * 60 * 60 * 1000;
   const expired = await env.DB.prepare(`UPDATE support_reports SET mail_state = 'attention', mail_error = 'retry_deadline'
