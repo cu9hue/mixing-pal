@@ -4,12 +4,14 @@ import { settle, UsageRequest } from "./ledger";
 
 const CAPTURE_DELETE_BATCH = 100;
 const CAPTURE_DELETE_BATCHES = 3;
+/** A request still in flight after this is lost; it must outlast `MODEL_TIMEOUT`. */
+export const LOST_REQUEST_AFTER = 5 * 60_000;
 
 export async function maintain(env: Env): Promise<void> {
   const now = Date.now();
   await env.DB.batch([
     env.DB.prepare("UPDATE requests SET status = 'unknown', error_code = 'worker_interrupted', updated_at = ? WHERE status IN ('reserved', 'dispatched') AND updated_at < ?")
-      .bind(now, now - 5 * 60_000),
+      .bind(now, now - LOST_REQUEST_AFTER),
     env.DB.prepare("UPDATE turns SET status = 'interrupted', incomplete = 1 WHERE status = 'running' AND updated_at < ?").bind(now - 20 * 60_000),
     env.DB.prepare('DELETE FROM verification WHERE expiresAt < ?').bind(new Date(now).toISOString()),
     env.DB.prepare('DELETE FROM "session" WHERE expiresAt < ?').bind(new Date(now).toISOString()),

@@ -1,11 +1,11 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
-import { hash, DAY } from "../src/env";
+import { hash, DAY, MODEL_TIMEOUT } from "../src/env";
 import { settle } from "../src/ledger";
 import { redeem } from "../src/account";
-import { maintain } from "../src/maintenance";
-import { RESERVATION, toolNames } from "../src/policy";
+import { LOST_REQUEST_AFTER, maintain } from "../src/maintenance";
+import { MAX_OUTPUT, RESERVATION, toolNames } from "../src/policy";
 import sharedTools from "../../shared/tool-names.json";
 import { runTurn } from "../../src/agent/loop";
 
@@ -234,6 +234,13 @@ describe("invited accounts", () => {
     expect((await api("/auth/sign-out", {}, user.token)).status).toBe(200);
     expect((await api("/v1/account", undefined, user.token)).status).toBe(401);
   });
+});
+
+// A call cut off by the timeout leaves no generation id, so its cost can only be resolved by hand.
+test("a reply at the output cap fits the model timeout, which ends before the sweep calls a request lost", () => {
+  // K2.6 wrote 55 to 85 tokens a second on Inceptron on 2026-10-04.
+  expect(MODEL_TIMEOUT).toBeGreaterThanOrEqual((MAX_OUTPUT / 50) * 1000);
+  expect(MODEL_TIMEOUT).toBeLessThan(LOST_REQUEST_AFTER);
 });
 
 describe("metered requests", () => {
