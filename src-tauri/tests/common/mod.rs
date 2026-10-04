@@ -1156,28 +1156,17 @@ pub fn runs() -> usize {
 /// The share of valid runs a scenario must pass to stay green.
 pub const MIN_PASS_RATE: f64 = 0.8;
 
-/// Phrases that offer the producer a read instead of making it.
-const OFFERS: &[&str] = &[
-    "want me to pull", "want me to read", "want me to check", "want me to look",
-    "say the word", "say go", "i can pull", "i can check",
-    "shall i pull", "shall i read", "let me know if you want me to", "if you'd like me to",
-];
-
-/// Why the answer talks tools to the producer, or `None`. Tool names and
-/// offers to read are for the model; a pilot answer did both.
+/// Why the answer talks tools to the producer, or `None`. Offers to read
+/// more pass, since each scenario checks its own needed reads.
 pub fn tool_talk(answer: &str) -> Option<String> {
-    let a = answer.to_lowercase();
-    if a.contains("get_") {
-        return Some("names a tool".into());
-    }
-    OFFERS.iter().find(|o| a.contains(*o)).map(|o| format!("offers a read: {o:?}"))
+    answer.to_lowercase().contains("get_").then(|| "names a tool".into())
 }
 
 #[test]
-fn tool_talk_catches_tool_names_and_offers_only() {
+fn tool_talk_catches_tool_names_but_allows_offers_to_read() {
     assert!(tool_talk("call this with get_rack_contents to see").is_some());
-    assert!(tool_talk("I can pull the exact knobs if you say go.").is_some());
-    assert!(tool_talk("Let me know if you want me to check the rack.").is_some());
+    assert!(tool_talk("I can pull the exact knobs if you say go.").is_none());
+    assert!(tool_talk("Let me know if you want me to check the rack.").is_none());
     assert!(tool_talk("The hat comes in at bar 3. **Leave it.**").is_none());
 }
 
