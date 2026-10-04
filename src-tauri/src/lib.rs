@@ -854,8 +854,10 @@ async fn account_redeem(code: String, state: tauri::State<'_, Arc<proxy::Proxy>>
 }
 
 #[tauri::command]
-async fn account_sign_out(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
-    state.sign_out().await
+async fn account_sign_out(state: tauri::State<'_, Arc<proxy::Proxy>>, trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<(), proxy::ProxyError> {
+    state.sign_out().await?;
+    if let Ok(mut trace) = trace_state.lock() { trace.clear(); }
+    Ok(())
 }
 
 #[tauri::command]
@@ -864,8 +866,10 @@ async fn account_consent(enabled: bool, state: tauri::State<'_, Arc<proxy::Proxy
 }
 
 #[tauri::command]
-async fn account_delete(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
-    state.delete_account().await
+async fn account_delete(state: tauri::State<'_, Arc<proxy::Proxy>>, trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<(), proxy::ProxyError> {
+    state.delete_account().await?;
+    if let Ok(mut trace) = trace_state.lock() { trace.clear(); }
+    Ok(())
 }
 
 #[tauri::command]
@@ -895,13 +899,47 @@ async fn account_delete_shared(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Re
     state.delete_shared().await
 }
 
+fn report_connection(ctx: &ToolContext) -> (Option<u64>, bool) {
+    let retained = ctx.coalescer.lock().ok().and_then(|c| c.lookup("/live/mixingpal/get/version", &[]));
+    let version = retained.as_ref().and_then(|r| r.args.first()).and_then(|v| v.as_u64());
+    let connected = retained.is_some_and(|r| r.observed_at.elapsed() < Duration::from_secs(15));
+    (version, connected)
+}
+
 #[tauri::command]
-fn incident_snapshot(exchange: Option<threads::Exchange>, connected: bool, wire_version: Option<u64>,
+fn incident_snapshot(exchange: Option<threads::Exchange>, ctx: tauri::State<'_, ToolContext>,
     state: tauri::State<'_, Arc<proxy::Proxy>>, trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<serde_json::Value, String> {
     let account = state.account_id().ok_or("Sign in to report a problem.")?;
+    let (version, connected) = report_connection(&ctx);
     let trace = trace_state.lock().map_err(|_| "The local trace is unavailable.")?;
     Ok(reports::incident_snapshot(&trace, &account, exchange.as_ref(),
-        Some(serde_json::json!({"connected": connected, "wire_version": wire_version}))))
+        Some(serde_json::json!({"connected": connected, "wire_version": version}))))
+}
+
+#[tauri::command]
+async fn report_submit(input: reports::ReportInput, ctx: tauri::State<'_, ToolContext>, state: tauri::State<'_, Arc<proxy::Proxy>>,
+    trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<reports::ReportReceipt, proxy::ProxyError> {
+    let owner = state.account_id().ok_or_else(|| proxy::ProxyError::new("sign_in_required", "Sign in to report a problem."))?;
+    let (version, connected) = report_connection(&ctx);
+    let payload = {
+        let trace = trace_state.lock().map_err(|_| proxy::ProxyError::new("trace_unavailable", "The local trace is unavailable."))?;
+        reports::build_payload(&input, &owner, &trace, version, connected)?
+    };
+    let receipt = state.queue_report(&owner, payload).await?;
+    state.flush_reports().await?;
+    state.list_reports().await?.into_iter().find(|r| r.id == receipt.id)
+        .ok_or_else(|| proxy::ProxyError::new("account_changed", "Your account changed while sending the report."))
+}
+
+#[tauri::command]
+async fn report_list(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<Vec<reports::ReportReceipt>, proxy::ProxyError> {
+    state.list_reports().await
+}
+
+#[tauri::command]
+async fn report_delete(id: uuid::Uuid, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
+    state.delete_report(id).await?;
+    state.flush_reports().await
 }
 
 /// Every recorded step, oldest first -- see `trace.rs`'s module doc for why
@@ -984,6 +1022,9 @@ pub fn run() {
             trace,
             clear_trace,
             incident_snapshot,
+            report_submit,
+            report_list,
+            report_delete,
             window::set_window_mode,
             install::connector_status,
             install::install_connector,
@@ -1034,6 +1075,9 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_secs(30)).await;
+                    if let Err(e) = proxy.flush_reports().await {
+                        eprintln!("pilot: pending reports were not sent ({})", e.code);
+                    }
                     if let Err(e) = proxy.flush().await {
                         eprintln!("pilot: pending events were not sent ({})", e.code);
                     }
