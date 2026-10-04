@@ -49,3 +49,10 @@ describe("the thread", () => {
     expect(complete(thread, "Leave it.")[0]).toBe(EARLIER);
   });
 });
+
+it("keeps the asking account on settled exchanges without assigning legacy ownership", () => {
+  const begun = begin([EARLIER], "why?", "turn", "producer");
+  expect(complete(begun, "answer")[1].accountId).toBe("producer");
+  expect(fail(begun, "offline")[1].accountId).toBe("producer");
+  expect(begun[0].accountId).toBeUndefined();
+});

@@ -10,6 +10,7 @@ mod settings;
 mod threads;
 mod tools;
 mod trace;
+mod reports;
 mod window;
 
 /// The crate's private internals, re-exported for `benches/hot_paths.rs`.
@@ -582,6 +583,7 @@ fn connection_status(state: tauri::State<Arc<Mutex<ConnectionStatus>>>) -> Conne
 async fn execute_tool(
     name: String,
     args: serde_json::Value,
+    context: Option<serde_json::Value>,
     ctx: tauri::State<'_, ToolContext>,
     model_state: tauri::State<'_, Arc<ModelState>>,
     trace_state: tauri::State<'_, Arc<Mutex<Trace>>>,
@@ -603,8 +605,10 @@ async fn execute_tool(
         Err(_) => String::new(),
     };
     let result_json = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
-    if let Ok(mut t) = trace_state.lock() {
-        t.push(TraceStep::tool(tools::now_millis(), name, args, result_json, duration_ms, &redact_value));
+    if context.is_none() {
+        if let Ok(mut t) = trace_state.lock() {
+            t.push(TraceStep::tool(tools::now_millis(), name, args, result_json, duration_ms, &redact_value));
+        }
     }
 
     Ok(result)
@@ -772,6 +776,7 @@ async fn model_complete(
         let body = model::build_body(&Settings::default(), current_experience(&state), &messages)
             .map_err(|message| proxy::ProxyError { code: "invalid_request".into(), message })?;
         let required = || proxy::ProxyError { code: "invalid_request".into(), message: "A turn and request identifier are required.".into() };
+        let owner = proxy_state.account_id().unwrap_or_default();
         let start = Instant::now();
         let result = proxy_state.complete(body.clone(), turn_id.ok_or_else(required)?, request_id.ok_or_else(required)?, round.ok_or_else(required)?, capture_epoch).await;
         let outcome = match &result {
@@ -779,7 +784,10 @@ async fn model_complete(
             Err(error) => serde_json::json!({ "error": error.message }),
         };
         if let Ok(mut trace) = trace_state.lock() {
-            trace.push(TraceStep::model(tools::now_millis(), body, outcome, start.elapsed().as_millis() as u64, ""));
+            trace.push(TraceStep::model(tools::now_millis(), body, outcome, start.elapsed().as_millis() as u64, "").with_context(trace::TraceContext {
+                account_id: owner, turn_id: turn_id.unwrap().to_string(), request_id: request_id.map(|id| id.to_string()),
+                round: round.map(u64::from), tool_call_id: None,
+            }));
         }
         return result;
     }
@@ -846,8 +854,10 @@ async fn account_redeem(code: String, state: tauri::State<'_, Arc<proxy::Proxy>>
 }
 
 #[tauri::command]
-async fn account_sign_out(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
-    state.sign_out().await
+async fn account_sign_out(state: tauri::State<'_, Arc<proxy::Proxy>>, trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<(), proxy::ProxyError> {
+    state.sign_out().await?;
+    if let Ok(mut trace) = trace_state.lock() { trace.clear(); }
+    Ok(())
 }
 
 #[tauri::command]
@@ -856,12 +866,26 @@ async fn account_consent(enabled: bool, state: tauri::State<'_, Arc<proxy::Proxy
 }
 
 #[tauri::command]
-async fn account_delete(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
-    state.delete_account().await
+async fn account_delete(state: tauri::State<'_, Arc<proxy::Proxy>>, trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<(), proxy::ProxyError> {
+    state.delete_account().await?;
+    if let Ok(mut trace) = trace_state.lock() { trace.clear(); }
+    Ok(())
 }
 
 #[tauri::command]
-async fn turn_event(turn_id: uuid::Uuid, event: serde_json::Value, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
+async fn turn_event(turn_id: uuid::Uuid, event: serde_json::Value, state: tauri::State<'_, Arc<proxy::Proxy>>,
+    trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<(), proxy::ProxyError> {
+    if event["kind"] == "tool" {
+        let data = &event["data"];
+        let step = TraceStep::tool(event["at"].as_u64().unwrap_or_else(tools::now_millis),
+            data["name"].as_str().unwrap_or("unknown").into(),
+            serde_json::from_str(data["arguments"].as_str().unwrap_or("")).unwrap_or(data["arguments"].clone()),
+            data["result"].clone(), data["duration_ms"].as_u64().unwrap_or(0), "")
+            .with_context(trace::TraceContext { account_id: state.account_id().unwrap_or_default(),
+                turn_id: turn_id.to_string(), request_id: data["request_id"].as_str().map(str::to_owned),
+                round: data["round"].as_u64(), tool_call_id: data["tool_call_id"].as_str().map(str::to_owned) });
+        if let Ok(mut trace) = trace_state.lock() { trace.push(step); }
+    }
     state.event(turn_id, event).await
 }
 
@@ -873,6 +897,49 @@ async fn turn_feedback(turn_id: uuid::Uuid, feedback: serde_json::Value, state: 
 #[tauri::command]
 async fn account_delete_shared(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
     state.delete_shared().await
+}
+
+fn report_connection(ctx: &ToolContext) -> (Option<u64>, bool) {
+    let retained = ctx.coalescer.lock().ok().and_then(|c| c.lookup("/live/mixingpal/get/version", &[]));
+    let version = retained.as_ref().and_then(|r| r.args.first()).and_then(|v| v.as_u64());
+    let connected = retained.is_some_and(|r| r.observed_at.elapsed() < Duration::from_secs(15));
+    (version, connected)
+}
+
+#[tauri::command]
+fn incident_snapshot(exchange: Option<threads::Exchange>, ctx: tauri::State<'_, ToolContext>,
+    state: tauri::State<'_, Arc<proxy::Proxy>>, trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<serde_json::Value, String> {
+    let account = state.account_id().ok_or("Sign in to report a problem.")?;
+    let (version, connected) = report_connection(&ctx);
+    let trace = trace_state.lock().map_err(|_| "The local trace is unavailable.")?;
+    Ok(reports::incident_snapshot(&trace, &account, exchange.as_ref(),
+        Some(serde_json::json!({"connected": connected, "wire_version": version}))))
+}
+
+#[tauri::command]
+async fn report_submit(input: reports::ReportInput, ctx: tauri::State<'_, ToolContext>, state: tauri::State<'_, Arc<proxy::Proxy>>,
+    trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<reports::ReportReceipt, proxy::ProxyError> {
+    let owner = state.account_id().ok_or_else(|| proxy::ProxyError::new("sign_in_required", "Sign in to report a problem."))?;
+    let (version, connected) = report_connection(&ctx);
+    let payload = {
+        let trace = trace_state.lock().map_err(|_| proxy::ProxyError::new("trace_unavailable", "The local trace is unavailable."))?;
+        reports::build_payload(&input, &owner, &trace, version, connected)?
+    };
+    let receipt = state.queue_report(&owner, payload).await?;
+    state.flush_reports().await?;
+    state.list_reports().await?.into_iter().find(|r| r.id == receipt.id)
+        .ok_or_else(|| proxy::ProxyError::new("account_changed", "Your account changed while sending the report."))
+}
+
+#[tauri::command]
+async fn report_list(state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<Vec<reports::ReportReceipt>, proxy::ProxyError> {
+    state.list_reports().await
+}
+
+#[tauri::command]
+async fn report_delete(id: uuid::Uuid, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<(), proxy::ProxyError> {
+    state.delete_report(id).await?;
+    state.flush_reports().await
 }
 
 /// Every recorded step, oldest first -- see `trace.rs`'s module doc for why
@@ -954,6 +1021,10 @@ pub fn run() {
             account_delete_shared,
             trace,
             clear_trace,
+            incident_snapshot,
+            report_submit,
+            report_list,
+            report_delete,
             window::set_window_mode,
             install::connector_status,
             install::install_connector,
@@ -1004,6 +1075,9 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_secs(30)).await;
+                    if let Err(e) = proxy.flush_reports().await {
+                        eprintln!("pilot: pending reports were not sent ({})", e.code);
+                    }
                     if let Err(e) = proxy.flush().await {
                         eprintln!("pilot: pending events were not sent ({})", e.code);
                     }

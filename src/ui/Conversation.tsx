@@ -1,3 +1,4 @@
+import { ReportTarget } from "../model/reports";
 import { useBusyState, beginMutation } from "../model/updates";
 import { wireReady } from "../setup/step";
 import wireVersion from "../../shared/wire-version.json";
@@ -149,6 +150,7 @@ export function Conversation({
   state,
   onTurnRunningChange,
   onAnswer,
+  onReport,
   account,
   connected,
 }: {
@@ -156,6 +158,7 @@ export function Conversation({
   state: SetState;
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
+  onReport?: (target: ReportTarget) => void;
   account: AccountState;
 }) {
   const operations = useBusyState();
@@ -341,7 +344,7 @@ export function Conversation({
     const askedUnder = key;
     const turnId = crypto.randomUUID();
     const captureEpoch = account.view?.capture ? account.view.consent_epoch ?? null : null;
-    const begun = begin(threadRef.current, asked, turnId);
+    const begun = begin(threadRef.current, asked, turnId, account.view?.id);
     setThread(begun);
     // Saved now, not only when the answer lands: a quit mid-turn keeps the
     // question, and the restored thread shows it with no answer.
@@ -371,9 +374,9 @@ export function Conversation({
       // had stopped reading. Clearing it here, rather than widening
       // runTurn's callback, keeps agent/loop.ts and its tests untouched.
       const tracked: ToolRunner = {
-        run: async (name, args) => {
+        run: async (name, args, context) => {
           try {
-            return await tauriTools.run(name, args);
+            return await tauriTools.run(name, args, context);
           } finally {
             setProgress(null);
           }
@@ -505,6 +508,9 @@ export function Conversation({
                 outcomes={outcomes} sharingEnabled={account.view?.capture === true} sentCount={thread.length}
                 onChange={(next) => changeOutcomes(next, key)} />
             )}
+            {onReport && (x.answer !== null || x.error !== null) && <button className="report-link report-trigger"
+              data-tauri-drag-region="false" disabled={operations.install}
+              onClick={(event) => { event.currentTarget.focus(); onReport({ origin: x.error ? "error" : "answer", exchange: x }); }}>Report a problem</button>}
           </div>
         ))}
         {waiting !== null && (

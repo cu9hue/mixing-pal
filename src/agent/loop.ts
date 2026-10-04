@@ -41,8 +41,15 @@ export interface TurnObserver {
   record(event: { id: string; kind: "tool" | "terminal"; at: number; data: unknown }): Promise<void>;
 }
 
+export interface ToolContext {
+  turnId: string;
+  requestId: string;
+  round: number;
+  toolCallId: string;
+}
+
 export interface ToolRunner {
-  run(name: string, args: unknown): Promise<unknown>;
+  run(name: string, args: unknown, context?: ToolContext): Promise<unknown>;
 }
 
 /**
@@ -73,9 +80,10 @@ export async function runTurn(
 
   try {
     for (let round = 0; round < MAX_ROUND_TRIPS; round++) {
-      const completion = await provider.complete(history, observer ? {
+      const request = observer ? {
         turnId: observer.turnId, requestId: crypto.randomUUID(), round: round + 1,
-      } : undefined);
+      } : undefined;
+      const completion = await provider.complete(history, request);
       if (completion.toolCalls.length === 0) {
         history.push({ role: "assistant", content: completion.text });
         await record("terminal", { status: "complete", incomplete: captureFailed });
@@ -90,7 +98,10 @@ export async function runTurn(
 
       // Calls from one completion cannot depend on each other's unread results.
       // Parallel execution avoids serial Live queries while preserving reply order.
-      const toolMessages = await Promise.all(completion.toolCalls.map(async (c) => {
+      const durations: number[] = [];
+      const toolMessages = await Promise.all(completion.toolCalls.map(async (c, index) => {
+        const started = Date.now();
+        durations[index] = 0;
         let args: unknown;
         try {
           args = JSON.parse(c.function.arguments || "{}");
@@ -111,7 +122,7 @@ export async function runTurn(
         onProgress?.(c.function.name, args);
         let result: unknown;
         try {
-          result = await tools.run(c.function.name, args);
+          result = await tools.run(c.function.name, args, request ? { ...request, toolCallId: c.id } : undefined);
         } catch (err) {
           result = {
             value: null,
@@ -121,6 +132,7 @@ export async function runTurn(
             missing_reason: `tool_failed: ${String(err)}`,
           };
         }
+        durations[index] = Date.now() - started;
         return {
           role: "tool",
           tool_call_id: c.id,
@@ -130,6 +142,7 @@ export async function runTurn(
       for (let i = 0; i < toolMessages.length; i++) {
         const call = completion.toolCalls[i];
         await record("tool", { round: round + 1, tool_call_id: call.id, name: call.function.name,
+          request_id: request?.requestId, duration_ms: durations[i],
           arguments: call.function.arguments, result: JSON.parse(toolMessages[i].content) });
       }
       history.push(...toolMessages);

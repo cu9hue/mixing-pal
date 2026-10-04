@@ -25,6 +25,7 @@ come from Wrangler login or CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN.
   node scripts/deploy.mjs deploy staging|production      Apply additive migrations, deploy paused
   node scripts/deploy.mjs secrets staging|production     Read secrets from environment, not argv
   node scripts/deploy.mjs enable staging|production      Deploy with inference enabled
+  node scripts/deploy.mjs recovery staging|production    Pause inference and reporting before D1 restore
   node scripts/deploy.mjs rollback staging|production version-id
 
 secrets reads AUTH_SECRET (at least 32 random characters), RESEND_KEY,
@@ -46,6 +47,10 @@ Before enabling production: complete those staging checks and verify production
 email, provider policy and its $50 API key cap with no replenishment.
 Pass MIXINGPAL_RELEASE_VERIFIED=yes to acknowledge these release checks.
 
+The recovery command sets REPORT_RECOVERY=true in Worker configuration, outside
+D1. Keep it enabled through every deletion replay page and spending recovery.
+See npm run admin -- help for the restore sequence.
+
 Rollback changes only the Worker version; never reverse ledger migrations.
 Keep schema changes additive and compatible with the previous version. First
 pause admissions using the operator CLI, deploy the previous known-good
@@ -56,7 +61,7 @@ with a debug desktop build. Public release builds always use api.mixingpal.com.
 Internal developer transport: npm run tauri -- dev --features direct-provider.
 `;
 
-export function configuration(base, stage, databaseId, enabled = false) {
+export function configuration(base, stage, databaseId, enabled = false, reportRecovery = false) {
   if (!["staging", "production"].includes(stage)) throw new Error("Choose staging or production.");
   if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(databaseId ?? "")) throw new Error("Set MIXINGPAL_D1_ID to this stage's D1 UUID.");
   const host = stage === "production" ? "api.mixingpal.com" : "api-staging.mixingpal.com";
@@ -64,7 +69,7 @@ export function configuration(base, stage, databaseId, enabled = false) {
   const releaseBucket = `mixing-pal-${stage}-releases`;
   if (captureBucket === releaseBucket) throw new Error("Release and capture buckets must be distinct.");
   return { ...base, name: `mixing-pal-${stage}`, routes: [{ pattern: host, custom_domain: true }],
-    vars: { ...base.vars, API_ORIGIN: `https://${host}`, INFERENCE_ENABLED: String(enabled),
+    vars: { ...base.vars, API_ORIGIN: `https://${host}`, INFERENCE_ENABLED: String(enabled), REPORT_RECOVERY: String(reportRecovery),
       DOWNLOADS_ORIGIN: stage === "production" ? "https://downloads.mixingpal.com" : "https://downloads-staging.mixingpal.com" },
     d1_databases: [{ binding: "DB", database_name: `mixing-pal-${stage}`, database_id: databaseId, migrations_dir: "migrations" }],
     r2_buckets: [{ binding: "CAPTURE", bucket_name: captureBucket }, { binding: "RELEASES", bucket_name: releaseBucket }] };
@@ -80,17 +85,18 @@ function wrangler(args, input) {
 export async function run(args) {
   const [command, stage, version] = args;
   if (!command || command === "help" || command === "--help") { console.log(help); return; }
-  if (!["configure", "check", "deploy", "secrets", "enable", "rollback"].includes(command)) throw new Error("Unknown deployment command.");
+  if (!["configure", "check", "deploy", "secrets", "enable", "recovery", "rollback"].includes(command)) throw new Error("Unknown deployment command.");
   if (command === "enable") {
     const check = stage === "staging" ? "MIXINGPAL_STAGING_PREFLIGHT_VERIFIED" : "MIXINGPAL_RELEASE_VERIFIED";
     if (process.env[check] !== "yes") throw new Error(`Complete the ${stage} checks shown by help and set ${check}=yes before enable.`);
   }
   const base = JSON.parse(await readFile("wrangler.jsonc", "utf8"));
-  const config = configuration(base, stage, process.env.MIXINGPAL_D1_ID, command === "enable");
+  const config = configuration(base, stage, process.env.MIXINGPAL_D1_ID, command === "enable", command === "recovery");
   const file = `.deploy-${stage}.json`;
   await writeFile(file, JSON.stringify(config, null, 2), { mode: 0o600 });
   if (command === "configure") { console.log(file); return; }
   if (command === "check") { wrangler(["deploy", "--config", file, "--dry-run"]); return; }
+  if (command === "recovery") { wrangler(["deploy", "--config", file]); return; }
   if (command === "secrets") {
     const names = ["AUTH_SECRET", "RESEND_KEY", "OPENROUTER_KEY", "ADMIN_TOKEN"];
     if (names.some((name) => !process.env[name]) || process.env.AUTH_SECRET.length < 32) throw new Error("Set all four service secrets; AUTH_SECRET needs at least 32 characters.");

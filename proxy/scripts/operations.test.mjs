@@ -123,11 +123,44 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
       assert.deepEqual(JSON.parse(await readFile(lifecycle, "utf8")), { rules: [
         { id: "expire-captures", enabled: true, conditions: { prefix: "captures/" },
           deleteObjectsTransition: { condition: { type: "Age", maxAge: 2592000 } } },
+        { id: "expire-support-reports", enabled: true, conditions: { prefix: "reports/" },
+          deleteObjectsTransition: { condition: { type: "Age", maxAge: 2592000 } } },
         { id: "expire-deletion-journal", enabled: true, conditions: { prefix: "deletions/" },
           deleteObjectsTransition: { condition: { type: "Age", maxAge: 7776000 } } },
         { id: "abort-incomplete-multipart-uploads", enabled: true, conditions: { prefix: "" },
           abortMultipartUploadsTransition: { condition: { type: "Age", maxAge: 604800 } } },
       ] });
     }
+    await rm(join(dir, "calls.jsonl"), { force: true });
+    const recovery = spawnSync(process.execPath, [script, "recovery", "staging"], { cwd: dir, encoding: "utf8", env: {
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+    } });
+    assert.equal(recovery.status, 0, recovery.stderr);
+    assert.deepEqual((await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse),
+      [["deploy", "--config", ".deploy-staging.json"]]);
+    const recovering = JSON.parse(await readFile(join(dir, ".deploy-staging.json"), "utf8"));
+    assert.equal(recovering.vars.REPORT_RECOVERY, "true");
+    assert.equal(recovering.vars.INFERENCE_ENABLED, "false");
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("report inspection sends only an ID and does not save a transcript", async () => {
+  const seen = [];
+  const connection = { origin: "https://api.mixingpal.com", token: "test-operator", fetch: async (_, options) => {
+    seen.push(JSON.parse(options.body)); return Response.json({ report: { description: "failed" } });
+  } };
+  const output = [];
+  await run(["report", "00000000-0000-4000-8000-000000000001"], connection, s => output.push(s));
+  await run(["report-notifications"], connection, s => output.push(s));
+  assert.deepEqual(seen, [{ action: "report", report_id: "00000000-0000-4000-8000-000000000001" }, { action: "report_notifications" }]);
+  assert.match(output[0], /failed/);
+});
+
+
+test("report recovery is a deployment setting outside the restored database", () => {
+  const id = "00000000-0000-4000-8000-000000000000";
+  const recovery = configuration({ vars: {} }, "staging", id, false, true);
+  assert.equal(recovery.vars.REPORT_RECOVERY, "true");
+  assert.equal(recovery.vars.INFERENCE_ENABLED, "false");
+  assert.equal(configuration({ vars: {} }, "staging", id).vars.REPORT_RECOVERY, "false");
 });

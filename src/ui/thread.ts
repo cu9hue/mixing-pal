@@ -9,6 +9,7 @@ export interface Exchange {
   /** What went wrong, shown where the answer would have been. */
   error: string | null;
   turnId?: string;
+  accountId?: string;
   feedback?: Feedback;
   /** The model's name for the move this answer gives; see src/notes/move.ts. */
   move?: string;
@@ -22,8 +23,8 @@ export interface Feedback {
   shared: boolean;
 }
 
-export function begin(thread: Exchange[], question: string, turnId?: string): Exchange[] {
-  return [...thread, { question, answer: null, error: null, ...(turnId ? { turnId } : {}) }];
+export function begin(thread: Exchange[], question: string, turnId?: string, accountId?: string): Exchange[] {
+  return [...thread, { question, answer: null, error: null, ...(turnId ? { turnId } : {}), ...(accountId ? { accountId } : {}) }];
 }
 
 export function complete(thread: Exchange[], answer: string, details: Pick<Exchange, "move" | "tracksRead"> = {}): Exchange[] {

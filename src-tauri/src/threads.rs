@@ -25,6 +25,8 @@ pub struct Exchange {
     pub move_label: Option<String>,
     #[serde(default, rename = "tracksRead", skip_serializing_if = "Option::is_none")]
     pub tracks_read: Option<Vec<String>>,
+    #[serde(default, rename = "accountId", skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -289,6 +291,7 @@ mod tests {
                 feedback: None,
                 move_label: None,
                 tracks_read: None,
+                account_id: None,
             }],
             saved_at,
             goal: None,

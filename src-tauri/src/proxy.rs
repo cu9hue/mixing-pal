@@ -26,7 +26,7 @@ pub struct ProxyError {
 }
 
 impl ProxyError {
-    fn new(code: &str, message: &str) -> Self {
+    pub(crate) fn new(code: &str, message: &str) -> Self {
         Self { code: code.into(), message: message.into() }
     }
 }
@@ -112,6 +112,8 @@ pub struct Proxy {
     outbox_path: PathBuf,
     account_change: tokio::sync::Mutex<()>,
     uploading: tokio::sync::Mutex<()>,
+    reports: tokio::sync::Mutex<crate::reports::ReportStore>,
+    report_uploading: tokio::sync::Mutex<()>,
 }
 
 impl Proxy {
@@ -139,6 +141,7 @@ impl Proxy {
             .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| Outbox {
                 pending_withdrawal: outbox_path.exists(), ..Outbox::default()
             });
+        let reports = crate::reports::ReportStore::load(outbox_path.with_file_name("support-reports.json"));
         Self {
             client: Client::builder().connect_timeout(Duration::from_secs(10))
                 .timeout(COMPLETION_TIMEOUT).redirect(reqwest::redirect::Policy::none()).build()
@@ -148,6 +151,8 @@ impl Proxy {
             outbox: tokio::sync::Mutex::new(outbox), outbox_path,
             account_change: tokio::sync::Mutex::new(()),
             uploading: tokio::sync::Mutex::new(()),
+            reports: tokio::sync::Mutex::new(reports),
+            report_uploading: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -226,6 +231,9 @@ impl Proxy {
             return Err(ProxyError::new("consent_pending", "Sign back into your previous account to finish turning off sharing."));
         }
         self.credentials.write(&self.credential_name, &serde_json::to_string(&session).unwrap()).map_err(|e| ProxyError::new("keychain_error", &e))?;
+        if let Err(e) = self.reports.lock().await.signed_in(&session.member_id) {
+            eprintln!("pilot: report queue could not resume ({})", e.code);
+        }
         *self.session.lock().unwrap() = Some(session.clone());
         self.turns.lock().unwrap().clear();
         let mut outbox = self.outbox.lock().await;
@@ -256,12 +264,17 @@ impl Proxy {
     }
 
     async fn clear_local(&self) -> Result<(), ProxyError> {
+        self.reports.lock().await.clear()?;
         self.credentials.clear(&self.credential_name).map_err(|e| ProxyError::new("keychain_error", &e))?;
         *self.session.lock().unwrap() = None;
         self.turns.lock().unwrap().clear();
         let mut outbox = self.outbox.lock().await;
         *outbox = Outbox::default();
         self.save_outbox(&outbox)
+    }
+
+    pub fn account_id(&self) -> Option<String> {
+        self.session().ok().flatten().map(|s| s.member_id)
     }
 
     fn required_session(&self) -> Result<Session, ProxyError> {
@@ -399,6 +412,64 @@ impl Proxy {
         self.clear_local().await
     }
 
+    pub async fn queue_report(&self, owner: &str, payload: Value) -> Result<crate::reports::ReportReceipt, ProxyError> {
+        let _change = self.account_change.lock().await;
+        if self.required_session()?.member_id != owner { return Err(ProxyError::new("account_changed", "Your account changed. Open the report again.")); }
+        self.reports.lock().await.enqueue(owner, payload, crate::tools::now_millis())
+    }
+
+    pub async fn list_reports(&self) -> Result<Vec<crate::reports::ReportReceipt>, ProxyError> {
+        let Some(session) = self.session()? else { return Ok(Vec::new()); };
+        let mut reports = self.reports.lock().await;
+        reports.prune(crate::tools::now_millis())?;
+        Ok(reports.entries.iter().filter(|e| e.owner == session.member_id).map(|e| e.receipt.clone()).collect())
+    }
+
+    pub async fn delete_report(&self, id: Uuid) -> Result<(), ProxyError> {
+        let _change = self.account_change.lock().await;
+        let session = self.required_session()?;
+        let mut reports = self.reports.lock().await;
+        if !reports.entries.iter().any(|e| e.owner == session.member_id && e.receipt.id == id) {
+            return Err(ProxyError::new("report_not_found", "This report was not found."));
+        }
+        reports.update(&session.member_id, id, crate::reports::ReportStatus::Deleting)
+    }
+
+    pub async fn flush_reports(&self) -> Result<(), ProxyError> {
+        use crate::reports::ReportStatus;
+        let _upload = self.report_uploading.lock().await;
+        let session;
+        let entry;
+        {
+            let _change = self.account_change.lock().await;
+            let Some(current) = self.session()? else { return Ok(()); };
+            session = current;
+            let mut reports = self.reports.lock().await;
+            reports.prune(crate::tools::now_millis())?;
+            entry = reports.entries.iter().find(|e| e.owner == session.member_id
+                && matches!(e.receipt.status, ReportStatus::Queued | ReportStatus::Deleting)).cloned();
+        }
+        let Some(entry) = entry else { return Ok(()); };
+        let deleting = entry.receipt.status == ReportStatus::Deleting;
+        let result = if deleting {
+            self.request(Method::DELETE, &format!("/v1/reports/{}", entry.receipt.id), None, Some(&session)).await
+        } else {
+            self.request(Method::POST, "/v1/reports", entry.payload, Some(&session)).await
+        };
+        let _change = self.account_change.lock().await;
+        if self.account_id().as_deref() != Some(&session.member_id) { return Ok(()); }
+        let status = match result {
+            Ok((value, _)) if deleting && value["deletion"] == "pending" => ReportStatus::Deleted,
+            Ok((value, _)) if !deleting && value["status"] == "received" && value["id"] == entry.receipt.id.to_string() => ReportStatus::Received,
+            Ok(_) => return Ok(()),
+            Err(error) if error.code == "report_deleted" => ReportStatus::Deleted,
+            Err(error) if error.code == "sign_in_required" && !deleting => ReportStatus::NeedsSignIn,
+            Err(error) if ["invalid_request", "report_conflict", "report_too_large"].contains(&error.code.as_str()) && !deleting => ReportStatus::Failed,
+            Err(_) => return Ok(()),
+        };
+        self.reports.lock().await.update(&session.member_id, entry.receipt.id, status)
+    }
+
     fn save_outbox(&self, outbox: &Outbox) -> Result<(), ProxyError> {
         write_private(&self.outbox_path, &serde_json::to_vec(outbox).unwrap())
             .map_err(|_| ProxyError::new("capture_storage_failed", "Could not save pending sharing events on this laptop."))
@@ -420,7 +491,7 @@ fn trim_outbox(outbox: &mut Outbox, now: u64) {
     }
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let parent = path.parent().unwrap();
     std::fs::create_dir_all(parent)?;
@@ -482,6 +553,145 @@ mod tests {
         }
     }
     impl Drop for Fixture { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.dir); } }
+
+    fn report_payload(id: Uuid) -> Value {
+        json!({"id": id, "origin": "settings", "description": "it broke", "app_version": "0.2.7",
+            "wire_version": 13, "diagnostics_consent": null})
+    }
+
+    #[tokio::test]
+    async fn reports_retry_the_frozen_payload_after_restart_and_erase_it_after_acceptance() {
+        let f = Fixture::new().await;
+        let id = Uuid::new_v4();
+        f.route("POST", "/v1/reports", 503, json!({"error": {"code": "service_unavailable"}})).await;
+        let first = f.proxy();
+        first.queue_report("producer", report_payload(id)).await.unwrap();
+        first.flush_reports().await.unwrap();
+        assert_eq!(first.list_reports().await.unwrap()[0].status, crate::reports::ReportStatus::Queued);
+        let restarted = f.proxy();
+        f.server.reset().await;
+        f.route("POST", "/v1/reports", 201, json!({"id": id, "status": "received"})).await;
+        restarted.flush_reports().await.unwrap();
+        let requests = f.server.received_requests().await.unwrap();
+        assert_eq!(requests[0].body_json::<Value>().unwrap(), report_payload(id));
+        assert_eq!(restarted.list_reports().await.unwrap()[0].status, crate::reports::ReportStatus::Received);
+        assert!(!std::fs::read_to_string(&restarted.reports.lock().await.path).unwrap().contains("it broke"));
+    }
+
+    #[tokio::test]
+    async fn report_deletion_retries_after_submission_and_receipt_expiry() {
+        let f = Fixture::new().await; let proxy = f.proxy(); let id = Uuid::new_v4();
+        proxy.queue_report("producer", report_payload(id)).await.unwrap();
+        {
+            let mut store = proxy.reports.lock().await;
+            store.entries[0].receipt.created_at -= 8 * 86_400_000;
+            store.update("producer", id, crate::reports::ReportStatus::Received).unwrap();
+        }
+        proxy.delete_report(id).await.unwrap();
+        f.route("DELETE", &format!("/v1/reports/{id}"), 503, json!({"error": {"code": "service_unavailable"}})).await;
+        proxy.flush_reports().await.unwrap();
+        assert_eq!(f.server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(proxy.list_reports().await.unwrap()[0].status, crate::reports::ReportStatus::Deleting);
+        {
+            let mut store = proxy.reports.lock().await;
+            store.entries[0].receipt.created_at -= 24 * 86_400_000;
+            store.update("producer", id, crate::reports::ReportStatus::Deleting).unwrap();
+        }
+        let restarted = f.proxy();
+        f.server.reset().await;
+        f.route("DELETE", &format!("/v1/reports/{id}"), 202, json!({"deletion": "pending"})).await;
+        restarted.flush_reports().await.unwrap();
+        assert_eq!(f.server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(restarted.reports.lock().await.entries[0].receipt.status, crate::reports::ReportStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn report_form_retry_preserves_the_first_native_snapshot() {
+        let f = Fixture::new().await; let proxy = f.proxy(); let id = Uuid::new_v4();
+        let mut input = crate::reports::ReportInput { id, account_id: "producer".into(), origin: "settings".into(),
+            description: "it broke".into(), include_diagnostics: true, exchange: None };
+        let first = crate::reports::build_payload(&input, "producer", &crate::trace::Trace::new(), Some(13), true).unwrap();
+        proxy.queue_report("producer", first.clone()).await.unwrap();
+        let retry = crate::reports::build_payload(&input, "producer", &crate::trace::Trace::new(), None, false).unwrap();
+        proxy.queue_report("producer", retry).await.unwrap();
+        input.description = "changed".into();
+        assert!(proxy.queue_report("producer", crate::reports::build_payload(&input, "producer", &crate::trace::Trace::new(), None, false).unwrap()).await.is_err());
+        f.route("POST", "/v1/reports", 201, json!({"id": id, "status": "received"})).await;
+        proxy.flush_reports().await.unwrap();
+        assert_eq!(f.server.received_requests().await.unwrap()[0].body_json::<Value>().unwrap(), first);
+    }
+
+    #[tokio::test]
+    async fn reports_do_not_follow_an_account_or_environment_change() {
+        let f = Fixture::new().await;
+        let proxy = f.proxy();
+        proxy.queue_report("producer", report_payload(Uuid::new_v4())).await.unwrap();
+        *proxy.session.lock().unwrap() = Some(Session { member_id: "other".into(), token: "other-token".into() });
+        assert!(proxy.list_reports().await.unwrap().is_empty());
+        proxy.flush_reports().await.unwrap();
+        assert!(f.server.received_requests().await.unwrap().is_empty());
+        assert!(proxy.queue_report("producer", report_payload(Uuid::new_v4())).await.is_err());
+        let other = Proxy::with_store(&f.dir, ORIGIN.into(), Box::new(f.store.clone()));
+        assert!(other.list_reports().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reports_pause_on_auth_failure_and_can_cancel_uncertain_delivery() {
+        let f = Fixture::new().await; let proxy = f.proxy(); let id = Uuid::new_v4();
+        proxy.queue_report("producer", report_payload(id)).await.unwrap();
+        f.route("POST", "/v1/reports", 401, json!({"error": {"code": "sign_in_required"}})).await;
+        proxy.flush_reports().await.unwrap();
+        assert_eq!(proxy.list_reports().await.unwrap()[0].status, crate::reports::ReportStatus::NeedsSignIn);
+        proxy.flush_reports().await.unwrap();
+        assert_eq!(f.server.received_requests().await.unwrap().len(), 1);
+        proxy.delete_report(id).await.unwrap();
+        f.route("DELETE", &format!("/v1/reports/{id}"), 202, json!({"deletion": "pending"})).await;
+        proxy.flush_reports().await.unwrap();
+        assert_eq!(proxy.list_reports().await.unwrap()[0].status, crate::reports::ReportStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn reports_keep_cancellation_when_a_late_upload_succeeds() {
+        let f = Fixture::new().await; let proxy = Arc::new(f.proxy()); let id = Uuid::new_v4();
+        proxy.queue_report("producer", report_payload(id)).await.unwrap();
+        Mock::given(method("POST")).and(path("/v1/reports")).respond_with(ResponseTemplate::new(201)
+            .set_delay(Duration::from_millis(150)).set_body_json(json!({"id": id, "status": "received"}))).mount(&f.server).await;
+        let sending = { let proxy = proxy.clone(); tokio::spawn(async move { proxy.flush_reports().await }) };
+        while f.server.received_requests().await.unwrap().is_empty() { tokio::task::yield_now().await; }
+        proxy.delete_report(id).await.unwrap();
+        sending.await.unwrap().unwrap();
+        assert_eq!(proxy.list_reports().await.unwrap()[0].status, crate::reports::ReportStatus::Deleting);
+        assert!(!std::fs::read_to_string(&proxy.reports.lock().await.path).unwrap().contains("it broke"));
+        f.route("DELETE", &format!("/v1/reports/{id}"), 202, json!({"deletion": "pending"})).await;
+        proxy.flush_reports().await.unwrap();
+        assert_eq!(proxy.list_reports().await.unwrap()[0].status, crate::reports::ReportStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn reports_do_not_reappear_after_signout_during_upload() {
+        let f = Fixture::new().await; let proxy = Arc::new(f.proxy()); let id = Uuid::new_v4();
+        proxy.queue_report("producer", report_payload(id)).await.unwrap();
+        Mock::given(method("POST")).and(path("/v1/reports")).respond_with(ResponseTemplate::new(201)
+            .set_delay(Duration::from_millis(150)).set_body_json(json!({"id": id, "status": "received"}))).mount(&f.server).await;
+        f.route("POST", "/auth/sign-out", 200, json!({"success": true})).await;
+        let sending = { let proxy = proxy.clone(); tokio::spawn(async move { proxy.flush_reports().await }) };
+        while f.server.received_requests().await.unwrap().is_empty() { tokio::task::yield_now().await; }
+        proxy.sign_out().await.unwrap();
+        sending.await.unwrap().unwrap();
+        assert!(proxy.list_reports().await.unwrap().is_empty());
+        assert!(proxy.reports.lock().await.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reports_show_permanent_failure_but_retry_rate_limits() {
+        for (code, expected) in [("invalid_request", crate::reports::ReportStatus::Failed), ("report_rate_limit", crate::reports::ReportStatus::Queued)] {
+            let f = Fixture::new().await; let proxy = f.proxy();
+            proxy.queue_report("producer", report_payload(Uuid::new_v4())).await.unwrap();
+            f.route("POST", "/v1/reports", 400, json!({"error": {"code": code}})).await;
+            proxy.flush_reports().await.unwrap();
+            assert_eq!(proxy.list_reports().await.unwrap()[0].status, expected);
+        }
+    }
 
     fn event(kind: &str, data: Value) -> Value {
         json!({ "id": Uuid::new_v4(), "kind": kind, "at": crate::tools::now_millis(), "data": data })

@@ -1,3 +1,6 @@
+import { useEffect, useState } from "react";
+import { ReportProblem } from "./ReportProblem";
+import { ReportTarget } from "../model/reports";
 import { UpdateNotice } from "./UpdateNotice";
 import { Updates } from "../model/updates";
 import "./Card.css";
@@ -48,6 +51,11 @@ export function Card({
   settingsOpen: boolean;
   onCloseSettings: () => void;
 }) {
+  const [report, setReport] = useState<(ReportTarget & { accountId: string; email: string }) | null>(null);
+  const openReport = account.view?.id && account.view.email ? (target: ReportTarget) =>
+    setReport({ ...target, accountId: account.view!.id!, email: account.view!.email! }) : undefined;
+  useEffect(() => { setReport(null); }, [account.view?.id]);
+  const activeReport = report?.accountId === account.view?.id ? report : null;
   const needsSignIn =
     account.view === null ||
     account.view.access === "signed_out" ||
@@ -62,13 +70,15 @@ export function Card({
     <div className="card" data-tauri-drag-region="deep">
       <Header connected={connected} onCollapse={onCollapse} showConnection={!needsSignIn} />
       {updates && onOpenSettings && <UpdateNotice view={updates.view}
-        visible={visible && !settingsOpen && !needsSignIn} onReview={onOpenSettings} />}
+        visible={visible && !settingsOpen && !needsSignIn && !activeReport} onReview={onOpenSettings} />}
+      {activeReport && <ReportProblem key={activeReport.accountId} target={activeReport} accountId={activeReport.accountId}
+        email={activeReport.email} onClose={() => setReport(null)} />}
       {/* Settings replaces what is below the header, but hides it rather
           than unmounting it: the conversation and any answer in flight live
           in Conversation's state, the same reason App hides the card. */}
       {settingsOpen && (
         <div className="card__settings">
-          <Advanced updates={updates} account={account} experience={experience} scriptVersion={state.scriptVersion} onClose={onCloseSettings} />
+          <Advanced onReport={openReport} updates={updates} account={account} experience={experience} scriptVersion={state.scriptVersion} onClose={onCloseSettings} />
         </div>
       )}
       <div className={`card__main${settingsOpen ? " card__main--hidden" : ""}`}>
@@ -82,6 +92,7 @@ export function Card({
       <div className={`card__conversation${connected ? "" : " card__conversation--hidden"}`}>
         <Conversation
           account={account}
+          onReport={openReport}
           connected={connected}
           state={state}
           onTurnRunningChange={onTurnRunningChange}

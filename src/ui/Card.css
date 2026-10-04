@@ -15,7 +15,8 @@
 }
 
 /* A modal is outside layout, so it cannot size the native window while the set loads. */
-.card:has(.update-notice[open]) {
+.card:has(.update-notice[open]),
+.card:has(.report[open]) {
   min-height: var(--card-max-height, 520px);
 }
 

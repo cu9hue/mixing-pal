@@ -1,3 +1,5 @@
+import { ReportHistory } from "./ReportProblem";
+import { ReportTarget } from "../model/reports";
 import { UpdatePanel } from "./UpdatePanel";
 import { Updates } from "../model/updates";
 import { useBusyState, beginMutation } from "../model/updates";
@@ -29,6 +31,7 @@ export function Advanced({
   updates,
   scriptVersion,
   onClose,
+  onReport,
 }: {
   account: AccountState;
   /** App's, so a choice made here also ends the setup step. */
@@ -36,6 +39,7 @@ export function Advanced({
   updates?: Updates;
   scriptVersion: number | null;
   onClose: () => void;
+  onReport?: (target: ReportTarget) => void;
 }) {
   const operations = useBusyState();
   const [view, setView] = useState<SettingsView | null>(null);
@@ -213,6 +217,11 @@ export function Advanced({
       </div>
 
       </>}
+      {onReport && <section className="report-support" aria-label="Support">
+        <h3 className="advanced__heading">Support</h3>
+        <button className="report-link" disabled={operations.install} onClick={(event) => { event.currentTarget.focus(); onReport({ origin: "settings" }); }}>Report a problem</button>
+        <ReportHistory key={account.view?.id} />
+      </section>}
       </div>
       <div className="advanced__footer">
         <span className="advanced__version">Mixing Pal v{appVersion}</span>

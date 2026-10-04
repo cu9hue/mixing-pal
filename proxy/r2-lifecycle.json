@@ -7,6 +7,12 @@
       "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 2592000 } }
     },
     {
+      "id": "expire-support-reports",
+      "enabled": true,
+      "conditions": { "prefix": "reports/" },
+      "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 2592000 } }
+    },
+    {
       "id": "expire-deletion-journal",
       "enabled": true,
       "conditions": { "prefix": "deletions/" },

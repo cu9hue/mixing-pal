@@ -1,3 +1,5 @@
+import { retryReportMail } from "./report-email";
+import { maintainReports } from "./reports";
 import { deleteTurn } from "./capture";
 import { DAY, Env, readJson } from "./env";
 import { settle, UsageRequest } from "./ledger";
@@ -9,6 +11,8 @@ export const LOST_REQUEST_AFTER = 5 * 60_000;
 
 export async function maintain(env: Env): Promise<void> {
   const now = Date.now();
+  await maintainReports(env);
+  await retryReportMail(env);
   await env.DB.batch([
     env.DB.prepare("UPDATE requests SET status = 'unknown', error_code = 'worker_interrupted', updated_at = ? WHERE status IN ('reserved', 'dispatched') AND updated_at < ?")
       .bind(now, now - LOST_REQUEST_AFTER),
@@ -42,7 +46,7 @@ export async function maintain(env: Env): Promise<void> {
   }
   const expired = await env.DB.prepare("SELECT id, member_id FROM turns WHERE created_at <= ? AND deleted_at IS NULL LIMIT 100")
     .bind(now - 30 * DAY).all<{ id: string; member_id: string }>();
-  for (const row of expired.results) await deleteTurn(env, row.member_id, row.id);
+  for (const row of expired.results) await deleteTurn(env, row.member_id, row.id, true, true);
   // Keep tombstones and re-delete their object keys. A Worker canceled during
   // an R2 write can finish that write after the first deletion pass.
   const backlog = await env.DB.prepare(`SELECT COUNT(*) AS count, MIN(c.updated_at) AS oldest_updated_at
@@ -77,7 +81,7 @@ export async function maintain(env: Env): Promise<void> {
   for (const { member_id: id } of deletions.results) {
     const unfinished = await env.DB.prepare(`SELECT id FROM captures WHERE turn_id IN (SELECT id FROM turns WHERE member_id = ?)
       AND state != 'deleted' LIMIT 1`).bind(id).first();
-    if (unfinished) continue;
+    if (unfinished || await env.DB.prepare("SELECT 1 FROM support_reports WHERE user_id = ? AND state != 'deleted' LIMIT 1").bind(id).first()) continue;
     await env.DB.batch([
       env.DB.prepare(`DELETE FROM verification WHERE identifier IN (
         SELECT 'sign-in-otp-' || lower(email) FROM "user" WHERE id = ?

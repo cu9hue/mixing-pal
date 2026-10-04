@@ -9,6 +9,8 @@ Set MIXINGPAL_API_ORIGIN and MIXINGPAL_ADMIN_TOKEN in your shell's secret store.
 The token is never an argument. Only localhost may use HTTP.
 
   npm run admin -- invite email                 Email a seven-day invitation and download link
+  npm run admin -- report report-id            Inspect a private report (no local cache)
+  npm run admin -- report-notifications         List pending/failed support emails
   npm run admin -- usage                        Balances and held requests
   npm run admin -- revoke member-id              End access and revoke sessions
   npm run admin -- delete-account member-id      Delete identity and shared content
@@ -24,6 +26,10 @@ The token is never an argument. Only localhost may use HTTP.
                                                 Restore verified total service spending
   npm run admin -- export member-id turn-id file Save a review reference (no transcript)
   npm run admin -- review file                  Fetch the current export for review
+
+Reports expire after 30 days. Do not save their contents to retained files.
+App deletion does not recall emails already sent to the support mailbox.
+Monitor report_notification_attention and report_notification_failed logs.
 
 Review references expire with the turn. review checks deletion on each read;
 it never caches project content locally. Do not redirect its output to a
@@ -42,9 +48,15 @@ operational records at 90 days. D1 Time Travel backups can retain earlier data
 for 7 days on Workers Free or 30 days on Paid. This service requires Paid.
 Each stage rejects new capture objects at 4 GB. R2 lifecycle rules independently
 expire capture objects after 30 days and deletion journals after 90 days.
-Before a restore, deploy with inference disabled and preserve available ledger
-records. After restoring D1, apply current migrations, run replay-deletions,
-then sweep. Replay blocks ordinary resume until spending is recovered too.
+Before a restore, run npm run deploy -- recovery staging|production. This
+sets REPORT_RECOVERY=true outside D1 and disables inference. Wait at least one
+minute for requests from the previous deployment to finish; preserve available
+ledger records. Report submission, private reads and notification sends stay
+paused even if restoring D1 revives pending mail. After restoring, apply current
+migrations with Wrangler using .deploy-STAGE.json; keep REPORT_RECOVERY=true.
+Run every replay-deletions page, then sweep. Do not run deploy or enable until
+all deletion pages and spending recovery are complete. Replay blocks ordinary
+resume until spending is recovered too.
 Deletion and revocation metadata is journaled separately in private R2 for 90 days.
 Replay turns sharing off for every restored account and invalidates its old
 consent version. Producers must opt in again. Recorded revocations also remove
@@ -60,7 +72,9 @@ including spending by accounts absent from the snapshot. Amounts cannot go
 down, and the service total must cover all recorded account spending. Keep the
 service paused if lost charges cannot be attributed reliably. Recovery records
 each amount and reason atomically; it never grants allowance or renews access.
-Only after recovery, check access and costs, resume and enable inference.
+Only after recovery, check access and costs, resume and run
+npm run deploy -- enable <stage>. This clears REPORT_RECOVERY and re-enables
+inference.
 Never restore deleted content from an operator's local copy.
 `;
 
@@ -104,10 +118,11 @@ export async function run(args, connection, print = console.log) {
     catch (error) { if (error.status === 404 || error.status === 410) await rm(file); throw error; }
     return;
   }
-  const arity = { invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3,
+  const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3,
     "recover-member": 3, "recover-budget": 2, pause: 0, resume: 0, sweep: 0, export: 3 };
   if (!(command in arity) || values.length !== arity[command]) throw new Error("Unknown command or arguments. Run npm run admin -- help.");
-  const payload = command === "invite" ? { action: "invite", email: values[0] }
+  const payload = command === "report" ? { action: "report", report_id: values[0] }
+    : command === "invite" ? { action: "invite", email: values[0] }
     : command === "pause" || command === "resume" ? { action: "pause", paused: command === "pause" }
     : command === "resolve" ? { action: "resolve", request_id: values[0], cost_micro_usd: Number(values[1]), reason: values[2] }
     : command === "recover-member" ? { action: "recover", member_id: values[0], spent_micro_usd: Number(values[1]), reason: values[2] }
