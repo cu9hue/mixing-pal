@@ -252,7 +252,7 @@ export function Conversation({
 
   function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note, withGoal = goalRef.current, rekeyFrom: ThreadKey | null = null) {
     if (under === null) return;
-    saveThread(under, exchanges, withNote, withGoal, rekeyFrom).then(
+    saveThread(under, exchanges, withNote, [], withGoal, rekeyFrom).then(
       () => setSaveError(null),
       (e) => {
         console.error("failed to save the thread", e);

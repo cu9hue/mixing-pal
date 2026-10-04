@@ -10,6 +10,10 @@ export interface Exchange {
   error: string | null;
   turnId?: string;
   feedback?: Feedback;
+  /** The model's name for the move this answer gives; see src/notes/move.ts. */
+  move?: string;
+  /** Tracks the model read for this answer, by name at the time. */
+  tracksRead?: string[];
 }
 
 export interface Feedback {
@@ -22,15 +26,15 @@ export function begin(thread: Exchange[], question: string, turnId?: string): Ex
   return [...thread, { question, answer: null, error: null, ...(turnId ? { turnId } : {}) }];
 }
 
-export function complete(thread: Exchange[], answer: string): Exchange[] {
-  return settle(thread, { answer, error: null });
+export function complete(thread: Exchange[], answer: string, details: Pick<Exchange, "move" | "tracksRead"> = {}): Exchange[] {
+  return settle(thread, { answer, error: null, ...details });
 }
 
 export function fail(thread: Exchange[], error: string): Exchange[] {
   return settle(thread, { answer: null, error });
 }
 
-function settle(thread: Exchange[], outcome: Pick<Exchange, "answer" | "error">): Exchange[] {
+function settle(thread: Exchange[], outcome: Pick<Exchange, "answer" | "error" | "move" | "tracksRead">): Exchange[] {
   const last = thread[thread.length - 1];
   return [...thread.slice(0, -1), { ...last, ...outcome }];
 }

@@ -19,6 +19,13 @@ describe("the thread", () => {
     ]);
   });
 
+  it("keeps the move label and the tracks read with the answer", () => {
+    const thread = begin([], "why is the pad muddy?", "t1");
+    expect(complete(thread, "Cut it.", { move: "«Pad», mud: cut", tracksRead: ["Pad"] })[0]).toEqual({
+      question: "why is the pad muddy?", answer: "Cut it.", error: null, turnId: "t1", move: "«Pad», mud: cut", tracksRead: ["Pad"],
+    });
+  });
+
   it("completes the newest exchange with the answer", () => {
     const thread = begin([EARLIER], "and the bass?");
     expect(complete(thread, "Leave it.")).toEqual([
