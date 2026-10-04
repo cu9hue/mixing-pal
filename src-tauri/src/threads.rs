@@ -1,5 +1,5 @@
 //! Path fallback keeps an unsaved set's thread when Live mints a new id.
-//! Retention removes old transcripts while preserving set notes and goals.
+//! Retention removes old transcripts while preserving set notes, goals, and outcomes.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -21,6 +21,10 @@ pub struct Exchange {
     pub turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<Feedback>,
+    #[serde(default, rename = "move", skip_serializing_if = "Option::is_none")]
+    pub move_label: Option<String>,
+    #[serde(default, rename = "tracksRead", skip_serializing_if = "Option::is_none")]
+    pub tracks_read: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,6 +45,21 @@ pub struct Bullet {
     pub hers: bool,
 }
 
+/// One rating of an answer's move; the same shape as the frontend's
+/// `Outcome` in `src/notes/outcomes.ts`. Rust stores it; the prune only checks whether any exist.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Outcome {
+    #[serde(rename = "turnId")]
+    pub turn_id: String,
+    #[serde(rename = "move")]
+    pub move_label: String,
+    pub outcome: String,
+    pub heard: String,
+    pub tracks: Vec<String>,
+    pub answer: String,
+    pub at: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Thread {
     pub exchanges: Vec<Exchange>,
@@ -56,6 +75,9 @@ pub struct Thread {
     pub note: Vec<Bullet>,
     #[serde(default)]
     pub next_bullet: u64,
+    /// Files from before outcomes existed read as an empty log.
+    #[serde(default)]
+    pub outcomes: Vec<Outcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -194,7 +216,7 @@ fn read_thread(file: &Path) -> Option<Thread> {
     serde_json::from_str(&raw).ok()
 }
 
-/// Drops aged transcripts while retaining each set's note and goal.
+/// Drops aged transcripts while retaining each set's note, goal, and outcomes.
 /// Failed rewrites keep their index entry so the next startup can retry.
 pub fn prune(dir: &Path, now: u64) -> std::io::Result<usize> {
     let mut index = read_index(dir);
@@ -209,7 +231,7 @@ pub fn prune(dir: &Path, now: u64) -> std::io::Result<usize> {
             continue;
         }
         let file = dir.join(&e.file);
-        if let Some(thread) = read_thread(&file).filter(|t| !t.note.is_empty() || t.goal.is_some()) {
+        if let Some(thread) = read_thread(&file).filter(|t| !t.note.is_empty() || t.goal.is_some() || !t.outcomes.is_empty()) {
             if thread.exchanges.is_empty() {
                 // Already pruned to its note on an earlier startup.
                 kept.push(e);
@@ -265,11 +287,14 @@ mod tests {
                 error: None,
                 turn_id: None,
                 feedback: None,
+                move_label: None,
+                tracks_read: None,
             }],
             saved_at,
             goal: None,
             note: vec![],
             next_bullet: 0,
+            outcomes: vec![],
         }
     }
 
@@ -469,6 +494,51 @@ mod tests {
         assert_eq!(t.goal, None);
         assert_eq!(t.note, vec![]);
         assert_eq!(t.next_bullet, 0);
+        assert_eq!(t.outcomes, vec![]);
+        assert_eq!(t.exchanges[0].move_label, None);
+    }
+
+    fn outcome(turn: &str) -> Outcome {
+        Outcome {
+            turn_id: turn.into(),
+            move_label: "«Pad», mud: cut 300 Hz".into(),
+            outcome: "undone".into(),
+            heard: "thin".into(),
+            tracks: vec!["Pad".into()],
+            answer: "Cut 2 dB at 300 Hz.".into(),
+            at: 5,
+        }
+    }
+
+    // Outcomes are the set's memory of what she kept and undid; the
+    // transcript goes on the prune's schedule, they do not.
+    #[test]
+    fn prune_keeps_outcomes_without_a_note_or_goal() {
+        let dir = scratch();
+        let day = 24 * 60 * 60;
+        let rated = Thread { outcomes: vec![outcome("t1")], ..thread("q", 0) };
+        save(&dir, ID, Some(PATH), &rated).unwrap();
+        assert_eq!(prune(&dir, 31 * day).unwrap(), 1);
+        let after = load(&dir, ID, Some(PATH), 31 * day).unwrap().unwrap();
+        assert_eq!(after.exchanges, vec![]);
+        assert_eq!(after.outcomes, rated.outcomes);
+    }
+
+    #[test]
+    fn outcomes_and_exchange_labels_round_trip_under_their_wire_names() {
+        let dir = scratch();
+        let mut t = thread("q", 0);
+        t.exchanges[0].move_label = Some("«Pad», mud: cut".into());
+        t.exchanges[0].tracks_read = Some(vec!["Pad".into()]);
+        t.outcomes = vec![outcome("t1")];
+        save(&dir, ID, Some(PATH), &t).unwrap();
+        let raw = std::fs::read_to_string(dir.join(&read_index(&dir).entries[0].file)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(json["exchanges"][0]["move"], "«Pad», mud: cut");
+        assert_eq!(json["exchanges"][0]["tracksRead"][0], "Pad");
+        assert_eq!(json["outcomes"][0]["turnId"], "t1");
+        assert_eq!(json["outcomes"][0]["move"], "«Pad», mud: cut 300 Hz");
+        assert_eq!(load(&dir, ID, Some(PATH), 0).unwrap().unwrap(), t);
     }
 
     #[test]

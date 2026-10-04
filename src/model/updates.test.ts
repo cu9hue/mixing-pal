@@ -16,20 +16,20 @@ it.each(["turn", "wireInstall", "settingsSave", "accountMutation"] as const)("re
 });
 it("flushes a delayed real thread save before installing and closes mutation admission synchronously", async () => {
   const pending = deferred(); vi.mocked(invoke).mockImplementation((name) => name === "save_thread" ? pending.promise : Promise.resolve());
-  const saving = saveThread({ id: "set", path: "/set" }, [], { bullets: [], next: 0 }, "");
+  const saving = saveThread({ id: "set", path: "/set" }, [], { bullets: [], next: 0 }, [], "");
   const busy = createBusyState(); const installing = installWhenIdle(busy);
   expect(busy.install).toBe(true);
   expect(beginMutation(busy, "wireInstall")).toBe(false);
   expect(beginMutation(busy, "settingsSave")).toBe(false);
   expect(beginMutation(busy, "accountMutation")).toBe(false);
   expect(invoke).not.toHaveBeenCalledWith("install_update");
-  await expect(saveThread({ id: "late", path: null }, [], { bullets: [], next: 0 }, "")).rejects.toThrow("preparing to restart");
+  await expect(saveThread({ id: "late", path: null }, [], { bullets: [], next: 0 }, [], "")).rejects.toThrow("preparing to restart");
   pending.resolve(); await saving; await installing;
   expect(invoke).toHaveBeenCalledWith("install_update");
 });
 it("retains failed thread saves and retries them before restarting", async () => {
   vi.mocked(invoke).mockRejectedValueOnce(new Error("disk full"));
-  await expect(saveThread({ id: "failed", path: "" }, [], { bullets: [], next: 0 }, "")).rejects.toThrow("disk full");
+  await expect(saveThread({ id: "failed", path: "" }, [], { bullets: [], next: 0 }, [], "")).rejects.toThrow("disk full");
   vi.mocked(invoke).mockRejectedValueOnce(new Error("disk full"));
   const busy = createBusyState();
   await expect(installWhenIdle(busy)).rejects.toThrow("disk full");

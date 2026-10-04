@@ -64,13 +64,13 @@ if(cmd==='load_thread'){
   if(window.savedThreads[args.setId])return window.savedThreads[args.setId];
   if(['C','D','fresh-set'].includes(args.setId))return null;
   return {saved_at:Math.floor(Date.now()/1000),goal:args.setId==='default'?'Finish this arrangement':'Goal for '+args.setId,note:[],next_bullet:0,
-    exchanges:args.setId==='default'?[]:[{turnId:args.setId==='B'?'22222222-2222-4222-8222-222222222222':'11111111-1111-4111-8111-111111111111',question:'Question for '+args.setId,answer:'Answer for '+args.setId,error:null}]};
+    exchanges:args.setId==='default'?[]:[{turnId:args.setId==='B'?'22222222-2222-4222-8222-222222222222':'11111111-1111-4111-8111-111111111111',question:'Question for '+args.setId,answer:'Answer for '+args.setId,error:null,move:'«Drums», test move '+args.setId}],outcomes:[]};
 }
-if(cmd==='save_thread'){window.saved.push(args);window.savedThreads[args.setId]={saved_at:Math.floor(Date.now()/1000),goal:args.goal,note:args.note,next_bullet:args.nextBullet,exchanges:args.exchanges};return;}
+if(cmd==='save_thread'){window.saved.push(args);window.savedThreads[args.setId]={saved_at:Math.floor(Date.now()/1000),goal:args.goal,note:args.note,next_bullet:args.nextBullet,exchanges:args.exchanges,outcomes:args.outcomes};return;}
 if(cmd==='turn_event')return;
 if(cmd==='model_complete'){const account={...window.account};return new Promise((resolve,reject)=>{window.failModel=()=>reject({code:'completion_unknown',message:'The reply was interrupted.'});window.finishModel=(text='A complete answer.')=>resolve({text,tool_calls:[],account});});}
 if(cmd==='account_delete_shared')return;
-if(cmd==='turn_feedback'){window.shared.push(args);return new Promise(resolve=>window.finishFeedback=()=>resolve({saved:true}));}
+if(cmd==='turn_feedback'){window.shared.push(args);return {saved:true};}
 throw new Error('Unexpected native call: '+cmd);
 },{shouldMockEvents:true});
 setInterval(()=>{if(!disconnected)emit('live://deltas',snapshot.map(delta=>delta.addr==='/live/mixingpal/get/set_identity'?{...delta,args:[window.currentSet,'Set '+window.currentSet,'/fixture/'+window.currentSet+'.als']}:delta))},1000);
@@ -259,7 +259,8 @@ assert.equal(await page.getByLabel('I finish tracks').isChecked(),true,'settings
 await page.getByRole('radiogroup',{name:'How you work in Live'}).scrollIntoViewIfNeeded();
 await page.screenshot({path:`${artifacts}/settings-answers.png`});
 await page.getByLabel('Share advice and outcomes to help improve Mixing Pal').check();
-await page.evaluate(()=>window.finishModel());
+const MOVE='A complete answer.\n```move\n«Drums», muddy kick: cut 2 dB at 300 Hz\n```';
+await page.evaluate(text=>window.finishModel(text),MOVE);
 await page.waitForTimeout(100);
 assert.equal(await page.getByLabel('Share advice and outcomes to help improve Mixing Pal').isChecked(),true);
 await page.screenshot({path:`${artifacts}/settings.png`});
@@ -272,22 +273,38 @@ await page.getByLabel('Ask about the set',{exact:true}).fill('A new turn after o
 await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
 await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete').length===2);
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='model_complete')[1].args.captureEpoch),1);
-await page.evaluate(()=>window.finishModel());
+await page.evaluate(text=>window.finishModel(text),MOVE);
 await page.getByText('A new turn after opting in',{exact:true}).waitFor();
+const row=page.locator('.card__exchange').filter({hasText:'A new turn after opting in'}).locator('.outcome');
+await row.waitFor();
 await page.screenshot({path:`${artifacts}/answer-closed.png`});
-const priorOutcome=page.getByRole('button',{name:'Tried it?',exact:true}).first();
-assert.equal(await priorOutcome.evaluate(link=>getComputedStyle(link).borderStyle),'none','the outcome action reads as text, not a button');
-await priorOutcome.click();
+assert.equal(await page.getByText('```move').count(),0,'the move block is not shown');
+const kept=row.getByRole('button',{name:'Kept it',exact:true});
+assert.equal(await kept.evaluate(link=>getComputedStyle(link).borderStyle),'none','the rating reads as text, not a button');
+await kept.click();
+assert.equal(await kept.getAttribute('aria-pressed'),'true');
+await page.waitForFunction(()=>window.shared.length===1);
+await kept.click();
+assert.equal(await kept.getAttribute('aria-pressed'),'false','a second tap on the highlighted choice clears it');
+assert.equal(await page.evaluate(()=>window.shared.length),1,'clearing a rating shares nothing');
+await row.getByRole('button',{name:'Undid it',exact:true}).click();
+await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='What did you hear?');
 await page.screenshot({path:`${artifacts}/answer-open.png`});
-assert.equal(await priorOutcome.getAttribute('aria-expanded'),'true');
+const heard=row.getByLabel('What did you hear?');
+await heard.fill('The kick lost its punch');
+await heard.press('Enter');
+await row.getByRole('button',{name:'“The kick lost its punch”',exact:true}).waitFor();
+const rated=await page.evaluate(()=>window.saved.filter(s=>s.setId==='default').at(-1).outcomes.at(-1));
+assert.equal(rated.outcome,'undone');
+assert.equal(rated.heard,'The kick lost its punch');
+assert.equal(rated.move,'«Drums», muddy kick: cut 2 dB at 300 Hz');
 await page.getByLabel('Ask about the set',{exact:true}).fill('A failed shared turn');
 await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
-assert.equal(await priorOutcome.getAttribute('aria-expanded'),'false','a new question closes the prior outcome');
 await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete').length===3);
 await page.evaluate(()=>window.failModel());
 const failed=page.locator('.card__exchange').filter({hasText:'A failed shared turn'});
 await failed.getByText('The reply was interrupted.',{exact:true}).waitFor();
-assert.equal(await failed.locator('.feedback').count(),0,'a turn with no answer has no outcome to report');
+assert.equal(await failed.locator('.outcome').count(),0,'a turn with no answer has nothing to rate');
 await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.getByRole('button',{name:'Delete shared advice…',exact:true}).click();
 await page.getByRole('button',{name:'Delete shared advice',exact:true}).click();
@@ -297,25 +314,19 @@ assert.equal(await page.getByLabel('Share advice and outcomes to help improve Mi
 await page.getByRole('button',{name:'Done',exact:true}).click();
 async function set(id){await page.evaluate(id=>window.switchSet(id),id); await page.getByText('Question for '+id,{exact:true}).waitFor();}
 await set('A');
-await page.getByRole('button',{name:'Tried it?',exact:true}).first().click();
-await page.getByLabel('What did you hear?',{exact:true}).fill('A private report');
-assert.equal(await page.getByLabel('Share this report with Mixing Pal for review').count(),0);
-await page.getByRole('button',{name:'Save outcome',exact:true}).click();
-await page.waitForFunction(()=>!!window.finishFeedback);
-assert.equal(await page.evaluate(()=>window.shared.length),1,'account sharing sends the outcome without another checkbox');
+const sharedBefore=await page.evaluate(()=>window.shared.length);
+await page.getByRole('button',{name:'Kept it',exact:true}).click();
+await page.waitForFunction(n=>window.shared.length===n+1,sharedBefore);
 await set('B');
-await page.getByRole('button',{name:'Tried it?',exact:true}).click();
-assert.equal(await page.getByLabel('What did you hear?',{exact:true}).inputValue(),'');
-await page.evaluate(()=>window.finishFeedback());
-await page.waitForTimeout(100);
-const saves=await page.evaluate(()=>window.saved);
-assert.equal(saves.some(s=>s.setId==='A' && s.exchanges.some(x=>x.question==='Question for B')),false,'feedback response overwrote another set');
+assert.equal(await page.evaluate(()=>window.savedThreads.A.outcomes.length),1,'the rating saved under set A');
+assert.equal(await page.evaluate(()=>window.saved.some(s=>s.setId==='B'&&s.outcomes.length>0)),false,'a rating in A never lands in B');
 await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.getByLabel('Share advice and outcomes to help improve Mixing Pal').uncheck();
 await page.getByRole('button',{name:'Done',exact:true}).click();
-await page.getByRole('button',{name:'Save outcome',exact:true}).click();
-await page.getByText('Saved on this laptop.',{exact:true}).waitFor();
-assert.equal(await page.evaluate(()=>window.shared.length),1,'sharing off keeps the next outcome local');
+await page.getByRole('button',{name:'Kept it',exact:true}).click();
+await page.waitForTimeout(100);
+assert.equal(await page.evaluate(()=>window.shared.length),sharedBefore+1,'sharing off keeps the rating local');
+assert.equal(await page.evaluate(()=>window.savedThreads.B.outcomes.length),1,'a local rating is still saved');
 await page.screenshot({path:`${artifacts}/feedback.png`});
 const geometry=await page.evaluate(()=>({height:innerHeight,scroll:document.documentElement.scrollHeight,width:innerWidth,scrollWidth:document.documentElement.scrollWidth}));
 assert.equal(geometry.height,geometry.scroll);assert.equal(geometry.width,geometry.scrollWidth);
@@ -378,5 +389,5 @@ await page.clock.fastForward(31000);
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_status').length),refreshed,'stop polling once usage settles');
 }
 assert.deepEqual(errors,[]);
-console.log('PASS update dismissal, keyboard focus, fixed settings footer, onboarding spacing, service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, setup sharing choice, shared-advice deletion, stale consent response, feedback set switch, delayed feedback persistence, window geometry');
+console.log('PASS update dismissal, keyboard focus, fixed settings footer, onboarding spacing, service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, setup sharing choice, shared-advice deletion, stale consent response, outcome rating, heard field, rating set switch, window geometry');
 } catch(e){await page.screenshot({path:`${artifacts}/failure.png`});console.log(errors);throw e;} finally {await browser.close();server.kill();closeSync(log);}

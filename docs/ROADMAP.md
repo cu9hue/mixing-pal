@@ -247,6 +247,13 @@ Ordered. Each item says what, why, size, and what it waits on.
     must carry the save time and say that unsaved edits are not visible.
     Spike both on Live 12 first. A dense, drawn lane is capped and summarised.
 
+16. **Outcome history.** Ratings under answers write a per-set outcome log
+    that outlives the 30-day transcript prune, and the context block shows
+    the newest six. Next: a `get_history` tool that searches the log and the
+    transcripts younger than 30 days by keyword (track names, frequencies),
+    automatic injection of past outcomes for the track in focus, and a list
+    of outcomes in the Notes panel where she can remove one.
+
 ## When the waitlist says go
 
 All specced or named already. The order is fixed by the gate.

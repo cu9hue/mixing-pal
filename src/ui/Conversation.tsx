@@ -4,7 +4,7 @@ import wireVersion from "../../shared/wire-version.json";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AccountState, canAsk, errorMessage } from "../model/account";
-import { FeedbackPanel } from "./FeedbackPanel";
+import { OutcomeRow } from "./OutcomeRow";
 import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
@@ -16,6 +16,8 @@ import { Exchange, begin, complete, fail } from "./thread";
 import { loadThread, saveThread } from "../model/threads";
 import { SWITCH_HOLD_MS, ThreadKey, carryNote, classify, historyFrom, keyFor, recapLine } from "./threadStore";
 import { Note, emptyNote, mergeNote, noteDelta } from "../notes/note";
+import { moveLabel } from "../notes/move";
+import { Outcome, withTrackRead } from "../notes/outcomes";
 import { SetRow } from "./SetRow";
 import { EXAMPLE_QUESTIONS } from "./examples";
 import { GOAL_MAX_LENGTH } from "./goal";
@@ -187,6 +189,11 @@ export function Conversation({
   const [note, setNote] = useState<Note>(emptyNote());
   const noteRef = useRef<Note>(emptyNote());
   noteRef.current = note;
+  // The set's outcome log rides beside the note: same key, same file. The
+  // ref lets a load assign it before the save that follows in the same tick.
+  const [outcomes, setOutcomes] = useState<Outcome[]>([]);
+  const outcomesRef = useRef<Outcome[]>([]);
+  outcomesRef.current = outcomes;
   // A save that failed, shown above the thread until one succeeds. The
   // note is hers by hand; a write that silently failed would lose it with
   // the row still showing it applied.
@@ -228,6 +235,10 @@ export function Conversation({
       const carried = key === null ? threadRef.current : [];
       const merged = [...restored, ...carried];
       const { note: restoredNote, carried: noteCarried } = carryNote(saved, noteRef.current, key === null);
+      const carriedOutcomes = key === null ? outcomesRef.current : [];
+      const restoredOutcomes = [...(saved?.outcomes ?? []), ...carriedOutcomes];
+      setOutcomes(restoredOutcomes);
+      outcomesRef.current = restoredOutcomes;
       setNote(restoredNote);
       const restoredGoal = saved?.goal ?? null;
       setGoal(restoredGoal);
@@ -242,7 +253,7 @@ export function Conversation({
           ? recapLine(restored.length, saved.saved_at, Math.floor(Date.now() / 1000))
           : null,
       );
-      if (carried.length > 0 || noteCarried) persist(target, merged, restoredNote, restoredGoal);
+      if (carried.length > 0 || noteCarried || carriedOutcomes.length > 0) persist(target, merged, restoredNote, restoredGoal);
     }, SWITCH_HOLD_MS);
     return () => {
       cancelled = true;
@@ -252,7 +263,7 @@ export function Conversation({
 
   function persist(under: ThreadKey | null, exchanges: Exchange[], withNote: Note, withGoal = goalRef.current, rekeyFrom: ThreadKey | null = null) {
     if (under === null) return;
-    saveThread(under, exchanges, withNote, withGoal, rekeyFrom).then(
+    saveThread(under, exchanges, withNote, outcomesRef.current, withGoal, rekeyFrom).then(
       () => setSaveError(null),
       (e) => {
         console.error("failed to save the thread", e);
@@ -268,6 +279,16 @@ export function Conversation({
     }
     setNote(next);
     persist(key, threadRef.current, next);
+    return true;
+  }
+
+  function changeOutcomes(next: Outcome[], under: ThreadKey | null): boolean {
+    if (operations.install) return false;
+    // A rating made on one set must not land in the set switched to since.
+    if (keyRef.current?.id !== under?.id || keyRef.current?.path !== under?.path) return false;
+    setOutcomes(next);
+    outcomesRef.current = next;
+    persist(under, threadRef.current, noteRef.current);
     return true;
   }
 
@@ -320,7 +341,7 @@ export function Conversation({
     const askedUnder = key;
     const turnId = crypto.randomUUID();
     const captureEpoch = account.view?.capture ? account.view.consent_epoch ?? null : null;
-    const begun = begin(threadRef.current, asked, account.view?.access === "development" ? undefined : turnId);
+    const begun = begin(threadRef.current, asked, turnId);
     setThread(begun);
     // Saved now, not only when the answer lands: a quit mid-turn keeps the
     // question, and the restored thread shows it with no answer.
@@ -336,7 +357,7 @@ export function Conversation({
     // it was when the conversation started.
     const turn: ChatMessage[] = [
       ...history.slice(-MAX_HISTORY_MESSAGES),
-      { role: "user", content: `${buildContext(state, goal, note.bullets)}\n\n---\n\n${asked}` },
+      { role: "user", content: `${buildContext(state, goal, note.bullets, outcomes)}\n\n---\n\n${asked}` },
     ];
     setHistory((h) => [
       ...h,
@@ -359,20 +380,23 @@ export function Conversation({
         },
       };
 
+      let tracksRead: string[] = [];
       const out = await runTurn(tauriProvider(account.observe(), captureEpoch), tracked, turn, (name, args) => {
+        tracksRead = withTrackRead(tracksRead, args, state);
         setToolsCalled((n) => n + 1);
         setProgress(progressLabel(name, args, state));
       }, { turnId, record: (event) => invoke("turn_event", { turnId, event }) });
-      // The model's note changes ride at the end of its answer and are not
-      // part of what she reads or what the history keeps.
+      // The model's note changes and move label ride at the end of its answer
+      // and are not part of what she reads or what the history keeps.
       const { answer, delta } = noteDelta(out.text);
+      const { answer: shown, move } = moveLabel(answer);
       const mergedNote = mergeNote(noteRef.current, delta, Math.floor(Date.now() / 1000));
       setNote(mergedNote);
       setHistory((h) => [
         ...h,
-        { role: "assistant" as const, content: answer },
+        { role: "assistant" as const, content: shown },
       ].slice(-MAX_HISTORY_MESSAGES));
-      const settled = complete(threadRef.current, answer);
+      const settled = complete(threadRef.current, shown, move === null ? { tracksRead } : { move, tracksRead });
       setThread(settled);
       persist(askedUnder, settled, mergedNote);
       onAnswer();
@@ -476,15 +500,10 @@ export function Conversation({
             ref={i === thread.length - 1 ? newest : undefined}
           >
             <ExchangeView x={x} />
-            {x.turnId && x.answer !== null && (!busy || i !== thread.length - 1) && account.view?.access !== "development" && (
-              <FeedbackPanel turnId={x.turnId} saved={x.feedback}
-                sharingEnabled={account.view?.capture === true} sentCount={thread.length} onSave={(feedback) => {
-                if (operations.install) return;
-                if (keyRef.current?.id !== key?.id || keyRef.current?.path !== key?.path) return;
-                const updated = threadRef.current.map((entry) => entry.turnId === x.turnId ? { ...entry, feedback } : entry);
-                setThread(updated);
-                persist(key, updated, noteRef.current);
-              }} />
+            {x.turnId && x.move && x.answer !== null && (!busy || i !== thread.length - 1) && (
+              <OutcomeRow exchange={{ turnId: x.turnId, move: x.move, answer: x.answer, tracksRead: x.tracksRead }}
+                outcomes={outcomes} sharingEnabled={account.view?.capture === true} sentCount={thread.length}
+                onChange={(next) => changeOutcomes(next, key)} />
             )}
           </div>
         ))}

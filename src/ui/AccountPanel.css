@@ -56,8 +56,7 @@
   color: var(--text);
 }
 
-.account input:not([type="checkbox"]),
-.feedback textarea {
+.account input:not([type="checkbox"]) {
   display: block;
   box-sizing: border-box;
   width: 100%;
@@ -70,9 +69,7 @@
   font: inherit;
 }
 
-.account button,
-.feedback button,
-.feedback select {
+.account button {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--surface-raised);
@@ -125,14 +122,12 @@
   overflow-wrap: anywhere;
 }
 
-.account :is(input, button):focus-visible,
-.feedback :is(textarea, button, select, input):focus-visible {
+.account :is(input, button):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-.account button:disabled,
-.feedback button:disabled {
+.account button:disabled {
   opacity: 0.55;
   cursor: default;
 }
@@ -163,14 +158,7 @@
   color: var(--text);
 }
 
-.feedback {
-  margin-top: var(--space-2);
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
 /* A minor action reads as text, not as a control competing with the content above it. */
-.feedback .feedback__link,
 .account .account__link {
   border: none;
   background: none;
@@ -180,7 +168,6 @@
   text-underline-offset: 2px;
 }
 
-.feedback .feedback__link:hover,
 .account .account__link:hover {
   color: var(--text-secondary);
 }
@@ -189,11 +176,3 @@
   margin-top: var(--space-2);
 }
 
-.feedback__status {
-  margin: var(--space-1) 0 0;
-}
-
-.feedback label {
-  display: block;
-  margin-top: var(--space-2);
-}

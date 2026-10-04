@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const note = { bullets: [], next: 0 };
-const save = (key: ThreadKey, goal: string, rekeyFrom: ThreadKey | null = null) => saveThread(key, [], note, goal, rekeyFrom);
+const save = (key: ThreadKey, goal: string, rekeyFrom: ThreadKey | null = null) => saveThread(key, [], note, [], goal, rekeyFrom);
 const original = { id: "set", path: "/old.als" };
 const rekeys = [
   { id: "set", path: "/new.als" },
@@ -91,7 +91,7 @@ it.each(["saved", "loaded", "unseen"])("preserves another ID's retry at the same
   vi.mocked(invoke).mockResolvedValue(undefined);
   if (known === "saved") await save(original, "already saved");
   if (known === "loaded") {
-    vi.mocked(invoke).mockResolvedValueOnce({ exchanges: [], goal: "loaded", saved_at: 0, note: [], next_bullet: 0 });
+    vi.mocked(invoke).mockResolvedValueOnce({ exchanges: [], goal: "loaded", saved_at: 0, note: [], next_bullet: 0, outcomes: [] });
     await loadThread(original);
   }
   vi.mocked(invoke).mockRejectedValueOnce(new Error("disk full"));

@@ -1,5 +1,6 @@
 import { SetState } from "../live/model";
 import { Bullet, ageWords } from "../notes/note";
+import { OUTCOMES_IN_VIEW, Outcome, recentOutcomes } from "../notes/outcomes";
 import { fence } from "./fence";
 
 const PITCH_CLASSES = [
@@ -72,6 +73,7 @@ export function buildContext(
   state: SetState,
   goal: string,
   note: Bullet[] = [],
+  outcomes: Outcome[] = [],
   now: number = Math.floor(Date.now() / 1000),
 ): string {
   const lines: string[] = [];
@@ -136,6 +138,18 @@ export function buildContext(
     for (const b of note) {
       const hers = b.hers ? ", hers" : "";
       lines.push(`- [${b.id}] ${b.kind}  ${fence(b.text)}  (${ageWords(b.at, now)}${hers})`);
+    }
+  }
+
+  // What she kept and undid, rebuilt each turn from the log. Fenced: the
+  // label is the model's from an earlier turn and the heard text is hers.
+  const recent = recentOutcomes(outcomes, OUTCOMES_IN_VIEW);
+  if (recent.length > 0) {
+    lines.push("OUTCOMES  (newest first)");
+    for (const { record, before } of recent) {
+      const heard = record.heard === "" ? "" : `  heard ${fence(record.heard)}`;
+      const flip = before === null ? "" : `, ${before} before`;
+      lines.push(`- ${record.outcome}  ${fence(record.move)}${heard}  (${ageWords(record.at, now)}${flip})`);
     }
   }
 

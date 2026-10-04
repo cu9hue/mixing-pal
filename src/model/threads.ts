@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Bullet, Note } from "../notes/note";
+import { Outcome } from "../notes/outcomes";
 import { Exchange } from "../ui/thread";
 import { ThreadKey } from "../ui/threadStore";
 
@@ -12,6 +13,7 @@ export interface SavedThread {
   saved_at: number;
   note: Bullet[];
   next_bullet: number;
+  outcomes: Outcome[];
 }
 
 export function loadThread(key: ThreadKey): Promise<SavedThread | null> {
@@ -27,7 +29,7 @@ export async function flushThreadSaves(): Promise<void> {
   for (const write of [...retry.values()]) await write();
 }
 
-export function saveThread(key: ThreadKey, exchanges: Exchange[], note: Note, goal: string | null, rekeyFrom: ThreadKey | null = null): Promise<void> {
+export function saveThread(key: ThreadKey, exchanges: Exchange[], note: Note, outcomes: Outcome[], goal: string | null, rekeyFrom: ThreadKey | null = null): Promise<void> {
   if (writesLocked) return Promise.reject(new Error("Mixing Pal is preparing to restart."));
   // Only the caller knows when the displayed thread adopts a new ID.
   // A shared path alone cannot distinguish it from another indexed thread.
@@ -41,6 +43,7 @@ export function saveThread(key: ThreadKey, exchanges: Exchange[], note: Note, go
       goal,
       note: note.bullets,
       nextBullet: note.next,
+      outcomes,
     });
     pending.add(request);
     retry.set(id, write);
