@@ -29,6 +29,7 @@ localStorage.setItem('copilot.setupDone','1');
 if (location.search.includes('fresh')) localStorage.removeItem('copilot.setupDone');
 window.emitFixture=emit; window.saved=[]; window.savedThreads={}; window.requests=[]; window.shared=[];
 window.account={access:'signed_out',capture:false};
+window.reports=JSON.parse(sessionStorage.getItem('reports')||'[]');
 window.experience=location.search.includes('fresh')?null:'finishes_tracks';
 window.update={channel:'stable',phase:new URLSearchParams(location.search).get('update')||'idle',version:new URLSearchParams(location.search).has('update')?'99.0.0':undefined,notes:'A changelog that should not appear.'};
 const active={id:'producer',email:'invited@example.com',access:'active',capture:false,consent_epoch:0,remaining_micro_usd:5000000,period_end:Date.now()+86400000};
@@ -67,6 +68,13 @@ if(cmd==='load_thread'){
     exchanges:args.setId==='default'?[]:[{turnId:args.setId==='B'?'22222222-2222-4222-8222-222222222222':'11111111-1111-4111-8111-111111111111',question:'Question for '+args.setId,answer:'Answer for '+args.setId,error:null,move:'«Drums», test move '+args.setId}],outcomes:[]};
 }
 if(cmd==='save_thread'){window.saved.push(args);window.savedThreads[args.setId]={saved_at:Math.floor(Date.now()/1000),goal:args.goal,note:args.note,next_bullet:args.nextBullet,exchanges:args.exchanges,outcomes:args.outcomes};return;}
+if(cmd==='incident_snapshot')return {limitations:['Trace unavailable after restart.']};
+if(cmd==='report_submit'){
+ const receipt={id:args.input.id,origin:args.input.origin,turn_id:args.input.exchange?.turnId??null,created_at:Date.now(),status:location.search.includes('queued')?'queued':'received'};
+ window.reports.push(receipt);sessionStorage.setItem('reports',JSON.stringify(window.reports));return receipt;
+}
+if(cmd==='report_list')return window.reports;
+if(cmd==='report_delete'){window.reports=window.reports.map(r=>r.id===args.id?{...r,status:'deleted'}:r);sessionStorage.setItem('reports',JSON.stringify(window.reports));return;}
 if(cmd==='turn_event')return;
 if(cmd==='model_complete'){const account={...window.account};return new Promise((resolve,reject)=>{window.failModel=()=>reject({code:'completion_unknown',message:'The reply was interrupted.'});window.finishModel=(text='A complete answer.')=>resolve({text,tool_calls:[],account});});}
 if(cmd==='account_delete_shared')return;
@@ -388,6 +396,68 @@ assert.equal(refreshed,1);
 await page.clock.fastForward(31000);
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_status').length),refreshed,'stop polling once usage settles');
 }
+// Reporting uses the real card, native IPC adapter and WebKit dialog behavior.
+for (const ceiling of [520,360]) {
+await page.goto('http://127.0.0.1:1423?access=active&update=delayed&queued');
+const composer=page.getByLabel('Ask about the set',{exact:true});
+await composer.waitFor();
+await page.evaluate(ceiling=>document.documentElement.style.setProperty('--card-max-height',`${ceiling}px`),ceiling);
+await composer.fill('First question fails');await composer.press('Enter');
+await page.waitForFunction(()=>!!window.failModel);await page.evaluate(()=>window.failModel());
+const reportButton=page.getByRole('button',{name:'Report a problem',exact:true});
+await reportButton.click();
+const dialog=page.getByRole('dialog',{name:'Report a problem',exact:true});
+const description=dialog.getByLabel('What went wrong?',{exact:true});
+assert.equal(await description.evaluate(e=>e===document.activeElement),true);
+await description.fill('The question failed.\n'.repeat(120));
+await description.press('Enter');
+assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.cmd==='report_submit').length),0,'textarea Enter does not submit');
+assert.equal(await dialog.getByLabel('Include diagnostics for this report').isChecked(),false);
+await dialog.getByLabel('Include diagnostics for this report').check();
+await dialog.getByText('Trace unavailable after restart.').waitFor();
+await page.evaluate(()=>window.finishUpdate());
+assert.equal(await page.locator('dialog[open]').count(),1,'update cannot cover report');
+const cancel=dialog.getByRole('button',{name:'Cancel',exact:true});
+await page.waitForFunction(ceiling=>innerHeight===ceiling,ceiling);
+const bounds=await cancel.boundingBox();
+assert.ok(bounds.y>=0 && bounds.y+bounds.height<=await page.evaluate(()=>innerHeight),'report actions stay visible');
+await page.screenshot({path:`${artifacts}/report-${ceiling}.png`});
+await cancel.focus();await page.keyboard.press('Tab');
+assert.equal(await description.evaluate(e=>e===document.activeElement),true,'Tab stays inside report');
+await dialog.getByRole('button',{name:'Send report',exact:true}).click();
+await dialog.getByText(/Waiting to send/).waitFor();
+await dialog.getByRole('button',{name:'Done',exact:true}).click();
+await page.getByRole('dialog',{name:'Mixing Pal update'}).waitFor();
+await page.getByRole('button',{name:'Not now',exact:true}).click();
+await composer.fill('Keep this draft');
+await reportButton.click();await description.press('Escape');
+assert.equal(await dialog.count(),0);
+assert.equal(await reportButton.evaluate(e=>e===document.activeElement),true,'Escape restores report trigger');
+assert.equal(await composer.inputValue(),'Keep this draft');
+await page.reload();
+await page.getByLabel('Ask about the set',{exact:true}).waitFor();
+await page.evaluate(()=>window.emitFixture('menu://settings'));
+await page.getByRole('button',{name:'Recent reports',exact:true}).click();
+await page.getByText(/Waiting to send/).first().waitFor();
+}
+await page.goto('http://127.0.0.1:1423?paused&disconnected');
+await page.getByText('Not connected',{exact:false}).first().waitFor();
+await page.evaluate(()=>window.emitFixture('menu://settings'));
+await page.getByRole('button',{name:'Report a problem',exact:true}).click();
+const settingsReport=page.getByRole('dialog',{name:'Report a problem',exact:true});
+await settingsReport.getByText(/No conversation is included/).waitFor();
+await settingsReport.getByLabel('What went wrong?',{exact:true}).fill('Live is disconnected');
+await settingsReport.getByRole('button',{name:'Send report',exact:true}).click();
+await settingsReport.getByText('Report sent.',{exact:true}).waitFor();
+const submitted=await page.evaluate(()=>window.requests.find(r=>r.cmd==='report_submit').args.input);
+assert.equal(submitted.includeDiagnostics,false);assert.equal(submitted.exchange,undefined);
+await settingsReport.getByRole('button',{name:'Done',exact:true}).click();
+await page.goto('http://127.0.0.1:1423?access=active');
+const answerComposer=page.getByLabel('Ask about the set',{exact:true});
+await answerComposer.fill('Answer to report');await answerComposer.press('Enter');
+await page.waitForFunction(()=>!!window.finishModel);await page.evaluate(()=>window.finishModel());
+await page.getByRole('button',{name:'Report a problem',exact:true}).click();
+await page.getByRole('dialog',{name:'Report a problem',exact:true}).getByRole('button',{name:'Cancel',exact:true}).click();
 assert.deepEqual(errors,[]);
-console.log('PASS update dismissal, keyboard focus, fixed settings footer, onboarding spacing, service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, setup sharing choice, shared-advice deletion, stale consent response, outcome rating, heard field, rating set switch, window geometry');
+console.log('PASS report consent, offline receipts/restart, failure/answer/settings entry points, report focus and update coordination, update dismissal, keyboard focus, fixed settings footer, onboarding spacing, service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, setup sharing choice, shared-advice deletion, stale consent response, outcome rating, heard field, rating set switch, window geometry');
 } catch(e){await page.screenshot({path:`${artifacts}/failure.png`});console.log(errors);throw e;} finally {await browser.close();server.kill();closeSync(log);}

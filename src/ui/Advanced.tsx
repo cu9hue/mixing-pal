@@ -1,3 +1,5 @@
+import { ReportHistory } from "./ReportProblem";
+import { ReportTarget } from "../model/reports";
 import { UpdatePanel } from "./UpdatePanel";
 import { Updates } from "../model/updates";
 import { useBusyState, beginMutation } from "../model/updates";
@@ -29,6 +31,7 @@ export function Advanced({
   updates,
   scriptVersion,
   onClose,
+  onReport,
 }: {
   account: AccountState;
   /** App's, so a choice made here also ends the setup step. */
@@ -36,6 +39,7 @@ export function Advanced({
   updates?: Updates;
   scriptVersion: number | null;
   onClose: () => void;
+  onReport?: (target: ReportTarget) => void;
 }) {
   const operations = useBusyState();
   const [view, setView] = useState<SettingsView | null>(null);
@@ -109,6 +113,10 @@ export function Advanced({
 
       <div className="advanced__body" data-tauri-drag-region="false">
       {updates && <UpdatePanel updates={updates} />}
+      {onReport && <>
+        <button className="advanced__button" disabled={operations.install} onClick={(event) => { event.currentTarget.focus(); onReport({ origin: "settings" }); }}>Report a problem</button>
+        <ReportHistory key={account.view?.id} />
+      </>}
       {view === null ? (
         <div className={loadError === null ? "advanced__note" : "advanced__error"} role="status">
           {loadError === null ? "Reading your settings…" : `Couldn't read your settings.\n${loadError}`}

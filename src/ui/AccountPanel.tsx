@@ -1,3 +1,4 @@
+import { SupportContact } from "./ReportProblem";
 import { useBusyState, beginMutation } from "../model/updates";
 import { useId, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -130,6 +131,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
           <button disabled={busy || operations.install} onClick={() => setDeleting(false)}>Cancel</button>
         </div>
       </div>}
+      {(signingIn || problem) && <SupportContact />}
     </section>
   );
 }

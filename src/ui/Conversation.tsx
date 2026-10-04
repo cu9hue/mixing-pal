@@ -1,3 +1,4 @@
+import { ReportTarget } from "../model/reports";
 import { useBusyState, beginMutation } from "../model/updates";
 import { wireReady } from "../setup/step";
 import wireVersion from "../../shared/wire-version.json";
@@ -149,6 +150,7 @@ export function Conversation({
   state,
   onTurnRunningChange,
   onAnswer,
+  onReport,
   account,
   connected,
 }: {
@@ -156,6 +158,7 @@ export function Conversation({
   state: SetState;
   onTurnRunningChange: (running: boolean) => void;
   onAnswer: () => void;
+  onReport?: (target: ReportTarget) => void;
   account: AccountState;
 }) {
   const operations = useBusyState();
@@ -500,6 +503,9 @@ export function Conversation({
             ref={i === thread.length - 1 ? newest : undefined}
           >
             <ExchangeView x={x} />
+            {onReport && (x.answer !== null || x.error !== null) && <button className="advanced__button report-trigger"
+              data-tauri-drag-region="false" disabled={operations.install}
+              onClick={(event) => { event.currentTarget.focus(); onReport({ origin: x.error ? "error" : "answer", exchange: x }); }}>Report a problem</button>}
             {x.turnId && x.move && x.answer !== null && (!busy || i !== thread.length - 1) && (
               <OutcomeRow exchange={{ turnId: x.turnId, move: x.move, answer: x.answer, tracksRead: x.tracksRead }}
                 outcomes={outcomes} sharingEnabled={account.view?.capture === true} sentCount={thread.length}
