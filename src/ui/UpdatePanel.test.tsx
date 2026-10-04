@@ -2,7 +2,7 @@
 import { Conversation } from "./Conversation";
 import { emptySet } from "../live/apply";
 import wireVersion from "../../shared/wire-version.json";
-import { FeedbackPanel } from "./FeedbackPanel";
+import { OutcomeRow } from "./OutcomeRow";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { UpdatePanel } from "./UpdatePanel";
@@ -109,11 +109,13 @@ it.each(["feedback", "delete"] as const)("refuses restart while a shared-advice 
   vi.mocked(invoke).mockImplementation(async (cmd) => cmd === "install_update" ? undefined : pending.promise);
   const busy = createBusyState();
   render(<BusyContext.Provider value={busy}>{kind === "feedback"
-    ? <FeedbackPanel turnId="turn" sharingEnabled sentCount={1} onSave={() => {}} />
+    ? <OutcomeRow exchange={{ turnId: "turn", move: "m", answer: "a" }} outcomes={[]} sharingEnabled sentCount={1} onChange={() => true} />
     : <AccountPanel account={account} />}</BusyContext.Provider>);
-  if (kind === "feedback") fireEvent.click(screen.getByRole("button", { name: "Tried it?" }));
-  else fireEvent.click(screen.getByRole("button", { name: "Delete shared advice…" }));
-  fireEvent.click(screen.getByRole("button", { name: kind === "feedback" ? "Save outcome" : "Delete shared advice" }));
+  if (kind === "feedback") fireEvent.click(screen.getByRole("button", { name: "Kept it" }));
+  else {
+    fireEvent.click(screen.getByRole("button", { name: "Delete shared advice…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete shared advice" }));
+  }
   await expect(installWhenIdle(busy)).rejects.toThrow("Finish");
   expect(invoke).not.toHaveBeenCalledWith("install_update");
   pending.resolve({ saved: true });

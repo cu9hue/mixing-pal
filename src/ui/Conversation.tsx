@@ -4,7 +4,7 @@ import wireVersion from "../../shared/wire-version.json";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AccountState, canAsk, errorMessage } from "../model/account";
-import { FeedbackPanel } from "./FeedbackPanel";
+import { OutcomeRow } from "./OutcomeRow";
 import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
@@ -500,15 +500,10 @@ export function Conversation({
             ref={i === thread.length - 1 ? newest : undefined}
           >
             <ExchangeView x={x} />
-            {x.turnId && x.answer !== null && (!busy || i !== thread.length - 1) && account.view?.access !== "development" && (
-              <FeedbackPanel turnId={x.turnId} saved={x.feedback}
-                sharingEnabled={account.view?.capture === true} sentCount={thread.length} onSave={(feedback) => {
-                if (operations.install) return;
-                if (keyRef.current?.id !== key?.id || keyRef.current?.path !== key?.path) return;
-                const updated = threadRef.current.map((entry) => entry.turnId === x.turnId ? { ...entry, feedback } : entry);
-                setThread(updated);
-                persist(key, updated, noteRef.current);
-              }} />
+            {x.turnId && x.move && x.answer !== null && (!busy || i !== thread.length - 1) && (
+              <OutcomeRow exchange={{ turnId: x.turnId, move: x.move, answer: x.answer, tracksRead: x.tracksRead }}
+                outcomes={outcomes} sharingEnabled={account.view?.capture === true} sentCount={thread.length}
+                onChange={(next) => changeOutcomes(next, key)} />
             )}
           </div>
         ))}
