@@ -69,8 +69,8 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
   if (data.action === "delete_account") await deleteAccount(env, data.member_id);
   if (data.action === "delete_turn") await deleteTurn(env, data.member_id, data.turn_id);
   if (data.action === "resolve") {
-    const read = () => env.DB.prepare("SELECT status, provisional, cost FROM requests WHERE id = ?").bind(data.request_id)
-      .first<{ status: string; provisional: number; cost: number }>();
+    const read = () => env.DB.prepare("SELECT status, provisional, cost, reserved FROM requests WHERE id = ?").bind(data.request_id)
+      .first<{ status: string; provisional: number; cost: number; reserved: number }>();
     // A final row is never changed: the same cost is a repeat, a different one is a dispute.
     const finalOutcome = async (row: { cost: number }) => {
       if (row.cost === data.cost_micro_usd) return json({ outcome: "already_final" });
@@ -88,7 +88,8 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
       env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) SELECT 'resolve', ?, ?, ? WHERE changes() > 0")
         .bind(data.request_id, now, data.reason),
     ]);
-    if (update.meta.changes) return json({ outcome: "applied" });
+    // finalize_provisional pauses the service when the cost exceeds the reservation.
+    if (update.meta.changes) return json(data.cost_micro_usd > row.reserved ? { outcome: "applied", paused: true } : { outcome: "applied" });
     // Someone else finalized the row between the read and the batch.
     return finalOutcome((await read())!);
   }

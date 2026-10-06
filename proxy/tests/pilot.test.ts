@@ -117,7 +117,7 @@ beforeEach(async () => {
       .map((table) => env.DB.prepare(`DELETE FROM "${table}"`)),
     ...(retention ? [env.DB.prepare(retention.sql)] : []),
   ]);
-  await env.DB.prepare(`UPDATE budget SET spent = 0, reserved = 0, allowance = 50000000,
+  await env.DB.prepare(`UPDATE budget SET spent = 0, reserved = 0, loss = 0, allowance = 50000000,
     paused = 0, recovery_required = 0, capture_bytes = 0, capture_allowance = 4000000000`).run();
   const objects = await env.CAPTURE.list();
   await Promise.all(objects.objects.map((o) => env.CAPTURE.delete(o.key)));
@@ -1332,6 +1332,13 @@ describe("maintenance billing", () => {
     expect(logged.mock.calls.map(([line]) => JSON.parse(String(line))))
       .toContainEqual(expect.objectContaining({ event: "provisional_usage", count: 1, amount: RESERVATION, without_id: 0 }));
   });
+  test("health reports a loss or a pause even with no provisional rows", async () => {
+    await env.DB.prepare("UPDATE budget SET loss = 5, paused = 1").run();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await maintain(env);
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line))))
+      .toContainEqual(expect.objectContaining({ event: "provisional_usage", count: 0, loss: 5, paused: 1 }));
+  });
 });
 
 describe("operator tools", () => {
@@ -1355,6 +1362,16 @@ describe("operator tools", () => {
     expect((await env.DB.prepare("SELECT spent FROM budget").first())!.spent).toBe(4000);
     expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions WHERE action = 'resolve'").first())!.n).toBe(1);
+  });
+
+  test("a resolve above the reservation reports that the service paused", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    const response = await api("/operator", { action: "resolve", request_id: id, cost_micro_usd: RESERVATION + 1,
+      reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    expect(await response.json()).toEqual({ outcome: "applied", paused: true });
+    expect((await env.DB.prepare("SELECT paused FROM budget").first())!.paused).toBe(1);
   });
 
   test("two resolves in the same millisecond audit only the one that applied", async () => {
