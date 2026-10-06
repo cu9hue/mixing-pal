@@ -49,6 +49,15 @@ describe("stream reader", () => {
     ]);
   });
 
+  test.each([
+    ["a null event", "data: null\n\n"],
+    ["an array event", "data: [1]\n\n"],
+    ["a null tool call", chunk({ tool_calls: [null] })],
+  ])("%s is malformed", async (_, event) => {
+    const end = await readCompletionStream(body(sse([chunk({ content: "Hi" }), event, chunk({}, "stop")])), opts());
+    expect(end).toMatchObject({ kind: "failed", reason: "malformed" });
+  });
+
   test("conflicting identity is malformed", async () => {
     const t = sse([chunk({ tool_calls: [{ index: 0, id: "a", type: "function", function: { name: "x", arguments: "" } }] }),
       chunk({ tool_calls: [{ index: 0, id: "z" }] }), chunk({}, "tool_calls")]);

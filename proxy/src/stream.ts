@@ -17,6 +17,7 @@ class StreamFailure extends Error {
 }
 
 interface Partial { id?: string; type?: string; name?: string; arguments: string }
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Reads OpenRouter's server-sent events into one response; never throws. */
 export async function readCompletionStream(body: ReadableStream<Uint8Array>, options: {
@@ -32,8 +33,9 @@ export async function readCompletionStream(body: ReadableStream<Uint8Array>, opt
   const apply = (data: string) => {
     if (data.length > limits.eventBytes) throw new StreamFailure("limit");
     if (data === "[DONE]") { done = true; return; }
-    let event: Record<string, unknown>;
+    let event: unknown;
     try { event = JSON.parse(data); } catch { throw new StreamFailure("malformed"); }
+    if (!isObject(event)) throw new StreamFailure("malformed");
     sawData = true;
     if (typeof event.id === "string" && response.id === undefined) { response.id = event.id; options.onId?.(event.id); }
     if (typeof event.model === "string") response.model ??= event.model;
@@ -51,8 +53,8 @@ export async function readCompletionStream(body: ReadableStream<Uint8Array>, opt
     const delta = (choice.delta ?? {}) as Record<string, unknown>;
     if (typeof delta.content === "string") response.content += delta.content;
     if (typeof delta.reasoning === "string") response.reasoning += delta.reasoning;
-    for (const raw of Array.isArray(delta.tool_calls) ? delta.tool_calls as Record<string, unknown>[] : []) {
-      if (!Number.isInteger(raw.index) || (raw.index as number) < 0) throw new StreamFailure("malformed");
+    for (const raw of Array.isArray(delta.tool_calls) ? delta.tool_calls as unknown[] : []) {
+      if (!isObject(raw) || !Number.isInteger(raw.index) || (raw.index as number) < 0) throw new StreamFailure("malformed");
       const index = raw.index as number;
       const call = calls.get(index) ?? { arguments: "" };
       if (!calls.has(index)) { if (calls.size >= limits.toolCalls) throw new StreamFailure("limit"); calls.set(index, call); }
