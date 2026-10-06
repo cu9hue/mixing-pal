@@ -18,9 +18,10 @@ const failed = () => new ApiError(502, "provider_failed", "The model could not a
 const validId = (value: unknown, secret: string) =>
   typeof value === "string" && value.length > 0 && value.length <= 200 && !value.includes(secret) ? value : undefined;
 
-/** Work that cannot finish before the reply is due is left behind, a ledger write to the lease cleanup; she still gets her answer. */
-async function bounded<T>(work: Promise<T>, respondBy: number, event = "settlement_deferred"): Promise<T | undefined> {
+/** Work that cannot finish before the reply is due keeps running after it; the lease cleanup covers a write that never lands. */
+async function bounded<T>(work: Promise<T>, respondBy: number, ctx: ExecutionContext, event = "settlement_deferred"): Promise<T | undefined> {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  ctx.waitUntil(work.catch(() => {}));
   const wait = Math.max(0, Math.min(SETTLE_TIMEOUT, respondBy - Date.now()));
   try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), wait); })]); }
   catch (error) { console.error(JSON.stringify({ event, error: String(error) })); return undefined; }
@@ -42,7 +43,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   // A late D1 reply must not start provider work near the deadline; the call was never sent, so it costs 0.
   const start = Date.now();
   if (!dispatched || !canDispatch(deadline, start)) {
-    await bounded(settle(env, id, 0, { errorCode: "not_dispatched" }), respondBy);
+    await bounded(settle(env, id, 0, { errorCode: "not_dispatched" }), respondBy, ctx);
     throw interrupted();
   }
   const capture = (kind: "model" | "model_failure", extra: Record<string, unknown>) =>
@@ -64,28 +65,28 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   } catch {
     clearTimeout(abortAt);
     clearTimeout(headersAt);
-    await bounded(settleProvisional(env, id, "provider_interrupted"), respondBy);
-    await bounded(incomplete(env, turn.id), respondBy, "turn_mark_deferred");
-    await bounded(capture("model_failure", { error: "provider_interrupted" }), respondBy, "capture_deferred");
+    await bounded(settleProvisional(env, id, "provider_interrupted"), respondBy, ctx);
+    await bounded(incomplete(env, turn.id), respondBy, ctx, "turn_mark_deferred");
+    await bounded(capture("model_failure", { error: "provider_interrupted" }), respondBy, ctx, "capture_deferred");
     throw interrupted();
   }
   clearTimeout(headersAt);
   const headerId = validId(response.headers.get("x-generation-id"), env.OPENROUTER_KEY);
-  if (headerId) await bounded(enrich(env, id, { generationId: headerId }), respondBy);
+  if (headerId) await bounded(enrich(env, id, { generationId: headerId }), respondBy, ctx);
   if (!response.ok) {
     clearTimeout(abortAt);
     void response.body?.cancel().catch(() => {});
     await bounded<unknown>(ZERO_COST.includes(response.status)
       ? settle(env, id, 0, { errorCode: `upstream_${response.status}` })
-      : settleProvisional(env, id, `upstream_${response.status}`), respondBy);
-    await bounded(incomplete(env, turn.id), respondBy, "turn_mark_deferred");
-    await bounded(capture("model_failure", { status: response.status }), respondBy, "capture_deferred");
+      : settleProvisional(env, id, `upstream_${response.status}`), respondBy, ctx);
+    await bounded(incomplete(env, turn.id), respondBy, ctx, "turn_mark_deferred");
+    await bounded(capture("model_failure", { status: response.status }), respondBy, ctx, "capture_deferred");
     throw failed();
   }
   const end: StreamEnd = response.body
     ? await readCompletionStream(response.body, { firstDataBy, idleMs: IDLE_TIMEOUT, deadline,
         onId: (chunkId) => {
-          if (!headerId) void bounded(enrich(env, id, { generationId: validId(chunkId, env.OPENROUTER_KEY) }), respondBy);
+          if (!headerId) void bounded(enrich(env, id, { generationId: validId(chunkId, env.OPENROUTER_KEY) }), respondBy, ctx);
           else if (chunkId !== headerId) console.error(JSON.stringify({ event: "generation_id_mismatch", request_id: id }));
         } })
     : { kind: "failed", reason: "truncated", response: { content: "", reasoning: "", finishReason: null, toolCalls: [] } };
@@ -97,22 +98,22 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   const clean = <T extends string | null>(value?: T) => value?.includes(env.OPENROUTER_KEY) ? undefined : value;
   const details = { provider: clean(answer.provider), finishReason: clean(answer.finishReason), durationMs: Date.now() - start,
     usage: usage.success ? usage.data : undefined };
-  if (usage.success) await bounded(settle(env, id, Math.ceil(usage.data.cost * 1_000_000), details), respondBy);
-  else await bounded(settleProvisional(env, id, end.kind === "complete" ? "missing_usage" : `stream_${end.reason}`), respondBy);
+  if (usage.success) await bounded(settle(env, id, Math.ceil(usage.data.cost * 1_000_000), details), respondBy, ctx);
+  else await bounded(settleProvisional(env, id, end.kind === "complete" ? "missing_usage" : `stream_${end.reason}`), respondBy, ctx);
   // Captures keep OpenRouter's non-stream shape, which the turn export reads.
   const raw = { id: answer.id, model: answer.model, provider: answer.provider, usage: answer.usage, choices: [{ finish_reason: answer.finishReason,
     message: { content: answer.content, reasoning: answer.reasoning, tool_calls: answer.toolCalls } }] };
   await bounded(capture(end.kind === "complete" ? "model" : "model_failure", { response: raw, reason: end.kind === "failed" ? end.reason : undefined }),
-    respondBy, "capture_deferred");
+    respondBy, ctx, "capture_deferred");
   if (end.kind === "failed") {
-    await bounded(incomplete(env, turn.id), respondBy, "turn_mark_deferred");
+    await bounded(incomplete(env, turn.id), respondBy, ctx, "turn_mark_deferred");
     throw end.reason === "timeout" || end.reason === "truncated" ? interrupted() : failed();
   }
   const text = answer.content;
   const toolCalls = releasedToolCalls(end);
   if (!text.trim() && toolCalls.length === 0) throw new ApiError(502, "empty_completion", "The model returned an empty reply. Please try again.");
   // Past the budget she gets the answer without the account view; the app reads it on its next poll.
-  const view = await bounded(account(env, memberId).then((r) => r.json()), respondBy, "account_view_skipped");
+  const view = await bounded(account(env, memberId).then((r) => r.json()), respondBy, ctx, "account_view_skipped");
   const reply = JSON.stringify({ text, tool_calls: toolCalls, turn_id: request.turn_id, request_id: id,
     capture: Boolean(turn.capture), consent_epoch: turn.consent_epoch, account: view }).split(env.OPENROUTER_KEY).join("[redacted]");
   if (new TextEncoder().encode(reply).length > MAX_REPLY) throw failed();

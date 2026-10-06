@@ -1,4 +1,4 @@
-import { createExecutionContext, env } from "cloudflare:test";
+import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
 import { hash, DAY, FIRST_DATA_TIMEOUT, MIN_RUNTIME, MODEL_TIMEOUT, RESPONSE_BUDGET, SETTLE_MARGIN } from "../src/env";
@@ -708,6 +708,26 @@ describe("response deadline", () => {
     expect(body.text).toContain("raw answer");
     expect(body.account).toBeUndefined();
     await stalled();
+  });
+
+  test("a settlement that misses the response budget still lands after the reply", async () => {
+    const user = await joined();
+    reply();
+    const receivedAt = Date.now();
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, "batch").mockImplementation(async (statements) => {
+      if (sent.length) {
+        vi.spyOn(Date, "now").mockReturnValue(receivedAt + RESPONSE_BUDGET - 200);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      return batch(statements);
+    });
+    const ctx = createExecutionContext();
+    expect((await complete(env, user.id, question(), ctx, receivedAt)).status).toBe(200);
+    expect((await env.DB.prepare("SELECT status FROM requests").first())!.status).toBe("dispatched");
+    await waitOnExecutionContext(ctx);
+    expect(await env.DB.prepare("SELECT status, provisional, cost FROM requests").first())
+      .toEqual({ status: "settled", provisional: 0, cost: 1000 });
   });
 
   test("a slow failure path never holds the error past the response budget", async () => {
