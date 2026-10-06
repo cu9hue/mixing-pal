@@ -184,3 +184,17 @@ test("report recovery is a deployment setting outside the restored database", ()
   assert.equal(recovery.vars.INFERENCE_ENABLED, "false");
   assert.equal(configuration({ vars: {} }, "staging", id).vars.REPORT_RECOVERY, "false");
 });
+
+test("stats sends an optional day count and rejects anything else", async () => {
+  const sent = [];
+  const connection = { origin: "https://api.mixingpal.com", token: "operator-token", fetch: async (_url, options) => {
+    sent.push(JSON.parse(options.body));
+    return Response.json({ days: 28 });
+  } };
+  await run(["stats"], connection, () => {});
+  await run(["stats", "7"], connection, () => {});
+  assert.deepEqual(sent, [{ action: "stats" }, { action: "stats", days: 7 }]);
+  await assert.rejects(run(["stats", "a week"], connection), /Unknown command or arguments/);
+  await assert.rejects(run(["stats", "7", "8"], connection), /Unknown command or arguments/);
+  assert.equal(sent.length, 2);
+});

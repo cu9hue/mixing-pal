@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { progressLabel } from "./progressLabel";
+import { progressLabel, readLabel } from "./progressLabel";
 import { SetState } from "../live/model";
 import { emptyTrack } from "../live/model";
 
@@ -62,6 +62,19 @@ describe("progressLabel", () => {
     expect(progressLabel("get_mixer", { track: 1 }, STATE)).toBe("reading the mixer for Pad Wide…");
     expect(progressLabel("get_arrangement", {}, STATE)).toBe("mapping the arrangement…");
     expect(progressLabel("get_device_chains", {}, STATE)).toBe("listing the devices…");
+  });
+
+  it("names the track a timeline map is about", () => {
+    expect(progressLabel("get_arrangement", { track: 1 }, STATE)).toBe("mapping the arrangement for Pad Wide…");
+    expect(progressLabel("get_arrangement", { track: 99 }, STATE)).toBe("mapping the arrangement…");
+  });
+
+  it("has a past-tense phrase beside every present one", () => {
+    expect(readLabel("get_arrangement", "Pad", true)).toBe("mapped the arrangement for Pad");
+    expect(readLabel("get_arrangement", null, true)).toBe("mapped the arrangement");
+    expect(readLabel("get_arrangement", "Pad", false)).toBe("mapping the arrangement for Pad…");
+    expect(readLabel("get_future_thing", "Pad", true)).toBe("read something");
+    expect(readLabel("get_future_thing", "Pad", false)).toBe("reading…");
   });
 
   it("falls back when the mirror has the track but not its name yet", () => {

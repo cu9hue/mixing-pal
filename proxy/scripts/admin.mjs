@@ -12,6 +12,7 @@ The token is never an argument. Only localhost may use HTTP.
   npm run admin -- report report-id            Inspect a private report (no local cache)
   npm run admin -- report-notifications         List pending/failed support emails
   npm run admin -- usage                        Balances and provisional costs
+  npm run admin -- stats [days]                 Retention, answer times, failures and hosts (default 28 days, counts only)
   npm run admin -- revoke member-id              End access and revoke sessions
   npm run admin -- delete-account member-id      Delete identity and shared content
   npm run admin -- delete-turn member-id turn-id Delete a shared turn
@@ -121,6 +122,11 @@ export async function run(args, connection, print = console.log) {
     if (reference.expires_at <= Date.now()) { await rm(file); throw new Error("This review reference expired and was removed."); }
     try { print(JSON.stringify(await operator({ action: "export", member_id: reference.member_id, turn_id: reference.turn_id }, connection), null, 2)); }
     catch (error) { if (error.status === 404 || error.status === 410) await rm(file); throw error; }
+    return;
+  }
+  if (command === "stats") {
+    if (values.length > 1 || (values.length === 1 && !/^\d+$/.test(values[0]))) throw new Error("Unknown command or arguments. Run npm run admin -- help.");
+    print(JSON.stringify(await operator({ action: "stats", ...(values[0] ? { days: Number(values[0]) } : {}) }, connection), null, 2));
     return;
   }
   const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3, conflict: 3,

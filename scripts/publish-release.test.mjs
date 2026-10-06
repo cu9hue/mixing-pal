@@ -8,7 +8,7 @@ const files = {
   'Mixing-Pal.app.tar.gz': Buffer.from('archive'),
   'Mixing-Pal.app.tar.gz.sig': Buffer.from('c2lnbmF0dXJl'.repeat(6)),
 };
-const options = { version, tag: 'v0.3.0', commit: 'a'.repeat(40), notes: 'Notes', wireVersion: 12, pubDate: '2026-09-18T12:00:00Z' };
+const options = { version, tag: 'v0.3.0', commit: 'a'.repeat(40), wireVersion: 12, pubDate: '2026-09-18T12:00:00Z' };
 function harness(overrides = {}) {
   const uploaded = [];
   const stored = new Map(overrides.stored ?? []);
@@ -52,6 +52,11 @@ test('release metadata is last and upload failure leaves it absent', async () =>
   const good = harness();
   await publishRelease(options, good.io);
   assert.equal(good.uploaded.at(-1), `releases/${version}/release.json`);
+});
+test('release notes are the version number alone', async () => {
+  const h = harness();
+  await publishRelease(options, h.io);
+  assert.equal(JSON.parse(h.stored.get(`releases/${version}/release.json`)).notes, version);
 });
 test('duplicate release and changed bytes refuse publication', async () => {
   const h = harness();
