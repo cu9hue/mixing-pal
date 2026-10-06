@@ -1,7 +1,7 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
-import { hash, DAY, MIN_RUNTIME, MODEL_TIMEOUT, RESPONSE_BUDGET, SETTLE_MARGIN } from "../src/env";
+import { hash, DAY, FIRST_DATA_TIMEOUT, MIN_RUNTIME, MODEL_TIMEOUT, RESPONSE_BUDGET, SETTLE_MARGIN } from "../src/env";
 import { admissionDeadline, settle, settleExpired } from "../src/ledger";
 import { canDispatch, complete, dispatchStatement } from "../src/completion";
 import { redeem } from "../src/account";
@@ -612,6 +612,29 @@ describe("never refused because an earlier call went wrong", () => {
     expect((await api("/v1/completions", question(), user.token)).status).toBe(502);
     expect(await env.DB.prepare("SELECT provisional, cost FROM requests").first()).toEqual({ provisional: 0, cost: 3000 });
     expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(3000);
+  });
+
+  test("a provider that sends no headers is cut off at the first-data limit", async () => {
+    const user = await joined();
+    let signal: AbortSignal | undefined;
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url, options) => {
+      if (!String(url).endsWith("/chat/completions")) return original(url, options);
+      signal = options!.signal!;
+      return new Promise((_, reject) => signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))));
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = api("/v1/completions", question(), user.token);
+      await vi.waitFor(() => expect(signal).toBeDefined());
+      await vi.advanceTimersByTimeAsync(FIRST_DATA_TIMEOUT - 1000);
+      expect(signal!.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(signal!.aborted).toBe(true);
+      expect((await pending).status).toBe(504);
+    } finally { vi.useRealTimers(); }
+    expect(await env.DB.prepare("SELECT provisional, error_code FROM requests").first())
+      .toEqual({ provisional: 1, error_code: "provider_interrupted" });
   });
 
   test("a header id without any chunk is kept for reconciliation", async () => {

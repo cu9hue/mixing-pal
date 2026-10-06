@@ -48,8 +48,11 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   const capture = (kind: "model" | "model_failure", extra: Record<string, unknown>) =>
     optionalCapture(env, turn, crypto.randomUUID(), JSON.parse(JSON.stringify({ kind, request_id: id, round: request.round,
       source: "proxy", body, at: start, duration_ms: Date.now() - start, ...extra }).split(env.OPENROUTER_KEY).join("[redacted]")), ctx);
+  const firstDataBy = start + FIRST_DATA_TIMEOUT;
   const controller = new AbortController();
   const abortAt = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+  // Headers count as first data: a silent upstream must not hold capacity until the deadline.
+  const headersAt = setTimeout(() => controller.abort(), Math.max(0, firstDataBy - Date.now()));
   let response: Response;
   try {
     response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -60,11 +63,13 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
     });
   } catch {
     clearTimeout(abortAt);
+    clearTimeout(headersAt);
     await bounded(settleProvisional(env, id, "provider_interrupted"), respondBy);
     await bounded(incomplete(env, turn.id), respondBy, "turn_mark_deferred");
     await bounded(capture("model_failure", { error: "provider_interrupted" }), respondBy, "capture_deferred");
     throw interrupted();
   }
+  clearTimeout(headersAt);
   const headerId = validId(response.headers.get("x-generation-id"), env.OPENROUTER_KEY);
   if (headerId) await bounded(enrich(env, id, { generationId: headerId }), respondBy);
   if (!response.ok) {
@@ -78,7 +83,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
     throw failed();
   }
   const end: StreamEnd = response.body
-    ? await readCompletionStream(response.body, { firstDataBy: start + FIRST_DATA_TIMEOUT, idleMs: IDLE_TIMEOUT, deadline,
+    ? await readCompletionStream(response.body, { firstDataBy, idleMs: IDLE_TIMEOUT, deadline,
         onId: (chunkId) => {
           if (!headerId) void bounded(enrich(env, id, { generationId: validId(chunkId, env.OPENROUTER_KEY) }), respondBy);
           else if (chunkId !== headerId) console.error(JSON.stringify({ event: "generation_id_mismatch", request_id: id }));
