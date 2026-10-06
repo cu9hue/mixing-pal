@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "better-auth": "1.7.4",
+    "eventsource-parser": "4.1.1",
     "zod": "4.5.4"
   },
   "overrides": {
