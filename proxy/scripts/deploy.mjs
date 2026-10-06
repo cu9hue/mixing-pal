@@ -52,9 +52,11 @@ D1. Keep it enabled through every deletion replay page and spending recovery.
 See npm run admin -- help for the restore sequence.
 
 Rollback changes only the Worker version; never reverse ledger migrations.
-Keep schema changes additive and compatible with the previous version. First
-pause admissions using the operator CLI, deploy the previous known-good
-version, run health/usage/sweep and a staging smoke, then resume.
+A Worker older than the latest ledger migration cannot admit calls. To roll
+back, pause inference (npm run admin -- pause), then deploy the previous
+version. Keep inference paused until you deploy a fixed Worker forward. On the
+fixed version, run health/usage/sweep and a staging smoke, then resume. Do not
+run recover on a rolled-back Worker.
 
 For an initial staging test use MIXINGPAL_PROXY_URL=https://api-staging.mixingpal.com
 with a debug desktop build. Public release builds always use api.mixingpal.com.
