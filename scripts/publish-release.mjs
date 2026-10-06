@@ -30,16 +30,17 @@ export function pauseChannel(channel) {
   return { paused: true, release: channel.release ?? null };
 }
 
-export async function publishRelease({ version, tag, commit, notes, wireVersion, pubDate }, io) {
+export async function publishRelease({ version, tag, commit, wireVersion, pubDate }, io) {
   if (!versionPattern.test(version) || tag !== `v${version}`) throw new Error('Tag and version disagree');
-  if (typeof notes !== 'string' || notes.length > 8000 || !Number.isInteger(wireVersion) || wireVersion < 1 || !/^[a-f0-9]{40}$/.test(commit)) throw new Error('Invalid release inputs');
+  if (!Number.isInteger(wireVersion) || wireVersion < 1 || !/^[a-f0-9]{40}$/.test(commit)) throw new Error('Invalid release inputs');
   const base = `releases/${version}/`;
   if (await io.get(releaseKey(version))) throw new Error('Version already published');
   const files = new Map();
   for (const name of names) files.set(name, await io.readFile(name));
   await io.verify(files);
+  // Apps before 0.2.8 show the notes in Settings; producers see the version only.
   const release = validateRelease({
-    version, notes, pub_date: pubDate, wire_version: wireVersion, commit,
+    version, notes: version, pub_date: pubDate, wire_version: wireVersion, commit,
     installer: { key: base + names[0], sha256: digest(files.get(names[0])), bytes: files.get(names[0]).length },
     updater: { key: base + names[1], sha256: digest(files.get(names[1])), bytes: files.get(names[1]).length, signature: files.get(names[2]).toString('utf8').trim() },
   });
@@ -145,7 +146,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const publicKey = config.plugins?.updater?.pubkey;
   if (!publicKey || !config.bundle?.createUpdaterArtifacts || !/^Developer ID Application: /.test(process.env.APPLE_SIGNING_IDENTITY ?? '') || !/^[A-Z0-9]{10}$/.test(process.env.APPLE_TEAM_ID ?? '')) throw new Error('Production signing is not configured');
   const store = r2Store({ stage: process.env.RELEASE_STAGE, accountId: process.env.CLOUDFLARE_ACCOUNT_ID, token: process.env.CLOUDFLARE_API_TOKEN });
-  await publishRelease({ version, tag: process.env.RELEASE_TAG, commit: process.env.GITHUB_SHA, notes: await readFile(process.env.RELEASE_NOTES_FILE, 'utf8'), wireVersion: JSON.parse(await readFile('shared/wire-version.json', 'utf8')).version, pubDate: new Date().toISOString() }, {
+  await publishRelease({ version, tag: process.env.RELEASE_TAG, commit: process.env.GITHUB_SHA, wireVersion: JSON.parse(await readFile('shared/wire-version.json', 'utf8')).version, pubDate: new Date().toISOString() }, {
     ...store,
     readFile: name => readFile(join(directory, name)),
     verify: () => verifyDistributedArtifacts({ directory, publicKey, version, identifier: config.identifier, team: process.env.APPLE_TEAM_ID, identity: process.env.APPLE_SIGNING_IDENTITY }),
