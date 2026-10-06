@@ -196,6 +196,11 @@ describe("admission", () => {
     await refused(req("old", "t", "m", 1, now, false), "lease_required");
   });
 
+  test("rollback: a paused service refuses an old Worker insert as paused", async () => {
+    await member("m"); await turn("t", "m"); await run("UPDATE budget SET paused = 1");
+    await refused(req("old", "t", "m", 1, now, false), "service_paused");
+  });
+
   test("capacity: five live calls refuse a sixth", async () => {
     for (let i = 0; i < 5; i++) { await member(`m${i}`); await turn(`t${i}`, `m${i}`); await req(`r${i}`, `t${i}`, `m${i}`); }
     await member("x"); await turn("tx", "x");

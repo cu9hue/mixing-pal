@@ -98,6 +98,8 @@ END;
 
 DROP TRIGGER admit_request;
 CREATE TRIGGER admit_request BEFORE INSERT ON requests BEGIN
+  -- A pause is reported first, so even a pre-0007 Worker tells the app the service is paused.
+  SELECT RAISE(ABORT, 'service_paused') WHERE EXISTS (SELECT 1 FROM budget WHERE paused = 1);
   -- A Worker that does not set a lease predates this schema; it may not admit calls.
   SELECT RAISE(ABORT, 'lease_required') WHERE NEW.lease_until IS NULL OR NEW.deadline IS NULL;
   SELECT RAISE(ABORT, 'invalid_new_request') WHERE NEW.status != 'reserved' OR NEW.provisional != 0
@@ -108,7 +110,6 @@ CREATE TRIGGER admit_request BEFORE INSERT ON requests BEGIN
     AND member_id = NEW.member_id AND status = 'running' AND deleted_at IS NULL);
   SELECT RAISE(ABORT, 'invalid_round') WHERE NEW.round != 1 + (SELECT COUNT(*) FROM requests WHERE turn_id = NEW.turn_id)
     OR EXISTS (SELECT 1 FROM requests WHERE turn_id = NEW.turn_id AND status != 'settled');
-  SELECT RAISE(ABORT, 'service_paused') WHERE EXISTS (SELECT 1 FROM budget WHERE paused = 1);
   SELECT RAISE(ABORT, 'allowance_exhausted') WHERE EXISTS (SELECT 1 FROM members WHERE id = NEW.member_id
     AND spent + reserved + NEW.reserved > allowance);
   SELECT RAISE(ABORT, 'budget_exhausted') WHERE EXISTS (SELECT 1 FROM budget WHERE spent + reserved + NEW.reserved > allowance);
