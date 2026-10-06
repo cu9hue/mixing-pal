@@ -967,3 +967,48 @@ describe("admission", () => {
     expect(admissionDeadline(0, 0)).toBe(Math.min(MODEL_TIMEOUT, RESPONSE_BUDGET - SETTLE_MARGIN));
   });
 });
+
+describe("account eligibility", () => {
+  async function stick(memberId: string) {
+    const t = crypto.randomUUID(), r = crypto.randomUUID();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(t, memberId).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(r, t, memberId, RESERVATION).run();
+    await env.DB.prepare("UPDATE requests SET status = 'dispatched' WHERE id = ?").bind(r).run();
+  }
+
+  test("an expired call stops blocking the member on the next account read, without cron", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE members SET allowance = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    await stick(user.id);
+    const view = await (await api("/v1/account", undefined, user.token)).json();
+    expect(view).toMatchObject({ can_ask: true, reserved_micro_usd: 0 });
+  });
+
+  test("a live hold counts against headroom, and can_ask no longer requires zero reserved", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE members SET reserved = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    expect((await (await api("/v1/account", undefined, user.token)).json()).can_ask).toBe(true);
+    await env.DB.prepare("UPDATE members SET allowance = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    expect((await (await api("/v1/account", undefined, user.token)).json()).can_ask).toBe(false);
+  });
+
+  test("global budget shortfall reads as paused", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE budget SET allowance = spent + ?").bind(RESERVATION - 1).run();
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ can_ask: false, service_paused: true });
+  });
+
+  test("a cleanup failure does not break the account read", async () => {
+    const user = await joined();
+    await stick(user.id);
+    await env.DB.exec("CREATE TRIGGER fail_cleanup BEFORE UPDATE OF status ON requests BEGIN SELECT RAISE(ABORT, 'unavailable'); END");
+    try {
+      const response = await api("/v1/account", undefined, user.token);
+      expect(response.status).toBe(200);
+      expect((await response.json()).reserved_micro_usd).toBe(RESERVATION);
+    } finally { await env.DB.exec("DROP TRIGGER fail_cleanup"); }
+  });
+});
