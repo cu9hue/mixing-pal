@@ -111,12 +111,15 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
       assert.equal(result.status, allowed ? 0 : 1, `${stage}: ${result.stderr}`);
       if (!allowed) { await assert.rejects(access(join(dir, "calls.jsonl"))); continue; }
       const calls = (await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+      // The bundle is checked before any migration, so a bundle error never leaves the old Worker on the new schema.
       assert.deepEqual(calls, [
+        ["deploy", "--config", `.deploy-${stage}.json`, "--dry-run"],
         ["d1", "migrations", "apply", "DB", "--config", `.deploy-${stage}.json`, "--remote"],
         ["r2", "bucket", "lifecycle", "set", `mixing-pal-${stage}-capture`, "--file", lifecycle,
           "--config", `.deploy-${stage}.json`, "--force"],
         ["deploy", "--config", `.deploy-${stage}.json`],
       ]);
+      assert.match(result.stdout, /^Deploying commit unknown$/m);
       const config = JSON.parse(await readFile(join(dir, `.deploy-${stage}.json`), "utf8"));
       assert.equal(config.vars.INFERENCE_ENABLED, "true");
       assert.equal(config.name, `mixing-pal-${stage}`);
@@ -131,6 +134,23 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
           abortMultipartUploadsTransition: { condition: { type: "Age", maxAge: 604800 } } },
       ] });
     }
+    // In a repository, deploy names the commit it ships, and checks the bundle first.
+    await rm(join(dir, "calls.jsonl"), { force: true });
+    const git = (...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: dir, encoding: "utf8" });
+    git("init", "-q"); git("commit", "-q", "--allow-empty", "-m", "release");
+    const head = git("rev-parse", "HEAD").stdout.trim();
+    const deployed = spawnSync(process.execPath, [script, "deploy", "staging"], { cwd: dir, encoding: "utf8", env: {
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+    } });
+    assert.equal(deployed.status, 0, deployed.stderr);
+    assert.match(head, /^[0-9a-f]{40}$/);
+    assert.match(deployed.stdout, new RegExp(`^Deploying commit ${head}$`, "m"));
+    assert.deepEqual((await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse), [
+      ["deploy", "--config", ".deploy-staging.json", "--dry-run"],
+      ["d1", "migrations", "apply", "DB", "--config", ".deploy-staging.json", "--remote"],
+      ["r2", "bucket", "lifecycle", "set", "mixing-pal-staging-capture", "--file", lifecycle, "--config", ".deploy-staging.json", "--force"],
+      ["deploy", "--config", ".deploy-staging.json"],
+    ]);
     await rm(join(dir, "calls.jsonl"), { force: true });
     const recovery = spawnSync(process.execPath, [script, "recovery", "staging"], { cwd: dir, encoding: "utf8", env: {
       PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",

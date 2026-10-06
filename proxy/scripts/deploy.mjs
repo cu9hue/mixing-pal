@@ -22,7 +22,7 @@ come from Wrangler login or CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN.
 
   node scripts/deploy.mjs configure staging|production
   node scripts/deploy.mjs check staging|production       Bundle without deploying
-  node scripts/deploy.mjs deploy staging|production      Apply additive migrations, deploy paused
+  node scripts/deploy.mjs deploy staging|production      Check the bundle, apply additive migrations, deploy paused
   node scripts/deploy.mjs secrets staging|production     Read secrets from environment, not argv
   node scripts/deploy.mjs enable staging|production      Deploy with inference enabled
   node scripts/deploy.mjs recovery staging|production    Pause inference and reporting before D1 restore
@@ -82,6 +82,11 @@ function wrangler(args, input) {
   if (result.error || result.status !== 0) throw new Error("Wrangler did not complete the operation.");
 }
 
+function commit() {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" });
+  return result.error || result.status !== 0 ? "unknown" : result.stdout.trim();
+}
+
 export async function run(args) {
   const [command, stage, version] = args;
   if (!command || command === "help" || command === "--help") { console.log(help); return; }
@@ -108,10 +113,14 @@ export async function run(args) {
     wrangler(["versions", "deploy", `${version}@100%`, "--config", file, "--yes"]);
     return;
   }
+  // Bundle first: a bundle error must never leave the old Worker running on the new schema.
+  wrangler(["deploy", "--config", file, "--dry-run"]);
   wrangler(["d1", "migrations", "apply", "DB", "--config", file, "--remote"]);
   const lifecycle = fileURLToPath(new URL("../r2-lifecycle.json", import.meta.url));
   wrangler(["r2", "bucket", "lifecycle", "set", `mixing-pal-${stage}-capture`, "--file", lifecycle,
     "--config", file, "--force"]);
+  // Printed beside Wrangler's version ID, so each Worker version maps to a commit.
+  console.log(`Deploying commit ${commit()}`);
   wrangler(["deploy", "--config", file]);
 }
 
