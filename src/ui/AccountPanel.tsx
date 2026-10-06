@@ -33,8 +33,8 @@ export function AccountPanel({ account }: { account: AccountState }) {
   if (view?.access === "development") return null;
   return (
     <section className={`account${signingIn ? " account--sign-in" : ""}`} aria-labelledby={`${id}-title`} data-tauri-drag-region="false">
-      <h2 id={`${id}-title`} className="account__title">{signingIn ? "Your music production assistant." : "Account"}</h2>
-      {signingIn && <p className="account__subtitle">Sign into your MixingPal account</p>}
+      <h2 id={`${id}-title`} className="account__title">{signingIn ? "A mentor for the track you're writing." : "Account"}</h2>
+      {signingIn && <p className="account__subtitle">Sign in with the email your invite came to.</p>}
       {problem && <p id={`${id}-error`} className="account__error" role="alert">{problem}</p>}
       {view === null && <>
         <p>{problem ? "Your account could not be reached." : "Checking your account…"}</p>
@@ -74,7 +74,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
         e.preventDefault();
         void act(async () => account.change(await invoke<AccountView>("account_redeem", { code: invite.trim() })));
       }}>
-        <p>Signed in as {view.email}. Enter the invitation code from Mixing Pal.</p>
+        <p>Signed in as {view.email}. Enter the invite code from your email.</p>
         <label htmlFor={`${id}-invite`}>Invitation code</label>
         <input id={`${id}-invite`} value={invite} required autoComplete="off" disabled={busy || operations.install}
           onChange={(e) => setInvite(e.target.value)} aria-describedby={problem ? `${id}-error` : undefined} />

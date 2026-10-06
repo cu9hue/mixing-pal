@@ -60,6 +60,15 @@
   max-width: 46ch;
 }
 
+/* The level question under the connected proof: a step down from the title. */
+.setup__question {
+  font-size: 17px;
+  line-height: 1.35;
+  font-weight: 500;
+  color: var(--text);
+  margin: 8px 0 6px;
+}
+
 .setup__note {
   font-size: 12.5px;
   line-height: 1.55;

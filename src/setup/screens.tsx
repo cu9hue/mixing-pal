@@ -40,11 +40,11 @@ export function InstallScreen({
 
   return (
     <>
-      <div className="setup__label">Step 3 of 6</div>
-      <h1 className="setup__title">Mixing Pal needs a small connector inside Live.</h1>
+      <div className="setup__label">Step 3 of 4</div>
+      <h1 className="setup__title">Add Mixing Pal to Live.</h1>
       <p className="setup__body">
-        It goes into your Ableton User Library, where Live keeps the things you add
-        yourself. Nothing else on your computer is touched.
+        It's a small connector that goes in your Ableton User Library. Nothing else on
+        your computer changes.
       </p>
       {error !== null && <div className="setup__error">{error}</div>}
       {askingForLibrary && (
@@ -56,10 +56,10 @@ export function InstallScreen({
         />
       )}
       <button className="setup__primary" onClick={install} disabled={busy || operations.install}>
-        {busy ? "Installing…" : askingForLibrary ? "Try again" : "Install it"}
+        {busy ? "Installing…" : askingForLibrary ? "Try again" : "Install the connector"}
       </button>
       <p className="setup__note" style={{ marginTop: 14 }}>
-        It will appear in Live as <b>{folder}</b>.
+        It shows up in Live as <b>{folder}</b>.
       </p>
     </>
   );
@@ -68,11 +68,11 @@ export function InstallScreen({
 export function OpenLiveScreen() {
   return (
     <>
-      <div className="setup__label">Step 4 of 6</div>
+      <div className="setup__label">Step 3 of 4</div>
       <h1 className="setup__title">Now open Ableton Live.</h1>
       <p className="setup__body">
-        Live only looks for connectors when it starts, so if it was already open,
-        quit it and open it again.
+        Live only looks for new connectors when it starts. If Live is open, quit it
+        and open it again.
       </p>
       <div className="setup__waiting">
         <span className="setup__waiting-dot" />
@@ -85,8 +85,8 @@ export function OpenLiveScreen() {
 export function ControlSurfaceScreen({ folder }: { folder: string }) {
   return (
     <>
-      <div className="setup__label">Step 5 of 6</div>
-      <h1 className="setup__title">Turn it on inside Live.</h1>
+      <div className="setup__label">Step 3 of 4</div>
+      <h1 className="setup__title">Turn it on in Live.</h1>
       <p className="setup__body">
         Open Live's <b>Settings → Link, Tempo &amp; MIDI</b> (called{" "}
         <b>Preferences</b> in Live 12.0 and earlier), and choose <b>{folder}</b> as a
@@ -102,11 +102,10 @@ export function ControlSurfaceScreen({ folder }: { folder: string }) {
       <div className="setup__callout">Leave Input and Output set to None.</div>
       <div className="setup__waiting">
         <span className="setup__waiting-dot" />
-        Waiting for Live to say hello…
+        Waiting for Live to connect…
       </div>
       <p className="setup__note" style={{ marginTop: 14 }}>
-        If you just installed the connector and {folder} isn't in the list, quit Live and
-        open it again — it only looks for connectors at startup.
+        Is {folder} missing from the list? Quit Live and open it again.
       </p>
     </>
   );
@@ -115,16 +114,16 @@ export function ControlSurfaceScreen({ folder }: { folder: string }) {
 export function ConnectedScreen({
   trackCount,
   trackNames,
-  onContinue,
+  experience,
 }: {
   trackCount: number;
   trackNames: string[];
-  onContinue: () => void;
+  experience: ExperienceState;
 }) {
   const named = trackNames.filter((n) => n.trim() !== "").slice(0, 4);
   return (
     <>
-      <div className="setup__label">Step 5 of 6</div>
+      <div className="setup__label">Step 4 of 4</div>
       <h1 className="setup__title">
         <span className="setup__ok-dot" />
         Connected.
@@ -133,32 +132,20 @@ export function ConnectedScreen({
           place in the product where mirroring Live earns its keep. */}
       <p className="setup__body">
         I can see <b>{trackCount} {trackCount === 1 ? "track" : "tracks"}</b>
-        {named.length > 0 && <> — {named.join(", ")}…</>}
+        {named.length > 0 && <>: {named.join(", ")}…</>}
       </p>
       {/* Required copy, not decoration. The product is called Mixing Pal
           and it cannot hear audio; this is the one screen that says so
           before she forms an expectation it cannot meet. Do not shorten
           this, and do not move it into fine print. */}
       <p className="setup__body">
-        I read your settings — devices, faders, routing, notes. I can't hear your audio,
+        I read your settings: devices, faders, routing and notes. I can't hear your audio,
         so I'll never tell you something sounds muddy. I'll tell you what's set to what,
         and what that usually means.
       </p>
-      <button className="setup__primary" onClick={onContinue}>
-        Got it
-      </button>
-    </>
-  );
-}
-
-export function ExperienceScreen({ experience }: { experience: ExperienceState }) {
-  return (
-    <>
-      <div className="setup__label">Step 6 of 6</div>
-      <h1 className="setup__title">How do you work in Live?</h1>
-      <p className="setup__body">
-        This sets which words I use. You can change it later in Settings.
-      </p>
+      {/* Picking a level is how she moves on; it finishes setup. */}
+      <h2 className="setup__question">How do you work in Live?</h2>
+      <p className="setup__body">This sets which words I use. You can change it later in Settings.</p>
       <div className="setup__choices">
         {EXPERIENCES.map((option) => (
           <button
@@ -197,12 +184,12 @@ export function SharingScreen({ account }: { account: AccountState }) {
 
   return (
     <>
-      <div className="setup__label">Step 2 of 6</div>
-      <h1 className="setup__title">Help improve Mixing Pal?</h1>
+      <div className="setup__label">Step 2 of 4</div>
+      <h1 className="setup__title">Help make my advice better?</h1>
       <p className="setup__body">
-        If you share, we keep your questions, what I read in your set, my answers, and what
-        you tell me about them. A person reads them to make my advice better. We delete them
-        after 30 days and never use them to train AI.
+        If you share, a person on our team reads your questions, what I read in your set, my
+        answers, and what you tell me about them. We delete them after 30 days. We never use
+        them to train AI.
       </p>
       <p className="setup__body">You can change this, or delete what you shared, in Settings.</p>
       <div className="setup__choices">

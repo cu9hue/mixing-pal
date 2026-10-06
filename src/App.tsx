@@ -81,8 +81,6 @@ export default function App() {
   const [connectorInstalled, setConnectorInstalled] = useState<boolean | null>(null);
   const [liveRunning, setLiveRunning] = useState(false);
   const [setupDone, setSetupDone] = useState(loadSetupDone);
-  // Completed setup bypasses connection acknowledgement on relaunch.
-  const [connectedAcknowledged, setConnectedAcknowledged] = useState(loadSetupDone);
   // Set only when she asks for a setup screen from a banner. The window
   // then opens on that screen whatever the derivation thinks, and clearing
   // it is the only way out -- so every path that sets it has one.
@@ -112,7 +110,6 @@ export default function App() {
     connectorCopied: wireCopied,
     liveRunning,
     deltasArriving: wireReady(connected, state.scriptVersion, wireVersion.version),
-    connectedAcknowledged,
     hasAccount: account.view?.access === "active" || account.view?.access === "development",
     sharingChosen: account.view?.access === "development" || account.view?.sharing_chosen === true,
     experienceChosen: experience.experience != null,
@@ -295,7 +292,6 @@ export default function App() {
             // be the only thing she could ever see again.
             setForcedStep(null);
           }}
-          onAcknowledgeConnected={() => setConnectedAcknowledged(true)}
           onExit={forcedStep !== null ? () => setForcedStep(null) : undefined}
         />
       )}

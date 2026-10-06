@@ -6,7 +6,6 @@ const DONE: SetupFacts = {
   connectorCurrent: true,
   liveRunning: true,
   deltasArriving: true,
-  connectedAcknowledged: true,
   hasAccount: true,
   sharingChosen: true,
   experienceChosen: true,
@@ -17,12 +16,15 @@ describe("currentStep", () => {
     expect(currentStep(DONE)).toBe("done");
   });
 
-  // Last, so the connected screen's proof comes before the question.
-  it("asks how she works once Live is connected and acknowledged", () => {
-    expect(currentStep({ ...DONE, experienceChosen: false })).toBe("experience");
-    expect(
-      currentStep({ ...DONE, experienceChosen: false, connectedAcknowledged: false }),
-    ).toBe("connected");
+  // The connected screen asks how she works; the choice is what finishes setup.
+  it("shows the connected screen until she picks a level, then finishes", () => {
+    expect(currentStep({ ...DONE, experienceChosen: false })).toBe("connected");
+    expect(currentStep(DONE)).toBe("done");
+  });
+
+  // Choosing in Settings while setup is open ends setup too: both read App's state.
+  it("finishes once a level exists, wherever she chose it", () => {
+    expect(currentStep({ ...DONE, experienceChosen: true })).toBe("done");
   });
 
   it("asks a new user to sign in before setting up Live", () => {
@@ -32,7 +34,6 @@ describe("currentStep", () => {
         connectorCurrent: false,
         liveRunning: false,
         deltasArriving: false,
-        connectedAcknowledged: false,
         hasAccount: false,
         sharingChosen: false,
         experienceChosen: false,
@@ -58,13 +59,13 @@ describe("currentStep", () => {
 
   it("asks her to open Live when it is not running", () => {
     expect(
-      currentStep({ ...DONE, liveRunning: false, deltasArriving: false, connectedAcknowledged: false }),
+      currentStep({ ...DONE, liveRunning: false, deltasArriving: false }),
     ).toBe("open_live");
   });
 
   it("asks her to select the Control Surface when Live is up but silent", () => {
     expect(
-      currentStep({ ...DONE, deltasArriving: false, connectedAcknowledged: false }),
+      currentStep({ ...DONE, deltasArriving: false }),
     ).toBe("control_surface");
   });
 
@@ -73,17 +74,13 @@ describe("currentStep", () => {
   // that fails on some machine must never strand someone whose setup works.
   it("trusts arriving deltas over a failed process check", () => {
     expect(
-      currentStep({ ...DONE, liveRunning: false, connectedAcknowledged: false }),
+      currentStep({ ...DONE, liveRunning: false, experienceChosen: false }),
     ).toBe("connected");
   });
 
-  // This is the right step to show *while setup is open*, and it used to be
-  // read as a reason to open setup at all: `connectedAcknowledged` starts
-  // false on every launch, so a machine set up months ago reopened the
-  // setup window every time. Whether setup opens is needsSetup's question,
-  // not this one -- see the regressions below.
-  it("shows the connected screen while setup is open and she has not moved past it", () => {
-    expect(currentStep({ ...DONE, connectedAcknowledged: false })).toBe("connected");
+  // Whether setup opens is needsSetup's question, not this one.
+  it("shows the connected screen while setup is open and no level is chosen", () => {
+    expect(currentStep({ ...DONE, experienceChosen: false })).toBe("connected");
     expect(
       needsSetup({ connectorInstalled: true, connectorCurrent: true, setupDone: true }),
     ).toBe(false);
@@ -115,7 +112,7 @@ describe("currentStep", () => {
   // Authentication is independent of Live, so it comes first.
   it("asks for an account before showing the connection confirmation", () => {
     expect(
-      currentStep({ ...DONE, connectedAcknowledged: false, hasAccount: false }),
+      currentStep({ ...DONE, experienceChosen: false, hasAccount: false }),
     ).toBe("account");
   });
 
@@ -150,13 +147,8 @@ describe("needsSetup", () => {
     expect(needsSetup({ ...READY, connectorInstalled: null, setupDone: false })).toBe(false);
   });
 
-  // The two regressions this function exists for. Both used to reopen the
-  // 600x680 setup window on top of her work.
-  it("does not reopen setup just because the connected screen was never acknowledged", () => {
-    // connectedAcknowledged resets on every launch; it is not an input here.
-    expect(needsSetup(READY)).toBe(false);
-  });
-
+  // The regression this function exists for: it used to reopen the 600x680
+  // setup window on top of her work.
   it("does not reopen setup when Live goes quiet", () => {
     // Quitting Live, or five seconds of lost traffic, is a card-level
     // state: the not_connected banner and the pill's disconnected state.

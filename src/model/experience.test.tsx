@@ -4,14 +4,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { invoke } from "@tauri-apps/api/core";
 import { createBusyState } from "./updates";
 import { useExperience } from "./experience";
-import { ExperienceScreen } from "../setup/screens";
+import { ConnectedScreen } from "../setup/screens";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 afterEach(() => { cleanup(); vi.mocked(invoke).mockReset(); });
 
 function Screen({ busy }: { busy: ReturnType<typeof createBusyState> }) {
   const experience = useExperience(busy);
   return <>
-    <ExperienceScreen experience={experience} />
+    <ConnectedScreen trackCount={0} trackNames={[]} experience={experience} />
     <output>{String(experience.experience)}</output>
   </>;
 }
