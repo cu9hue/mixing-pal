@@ -1536,6 +1536,37 @@ describe("operator tools", () => {
       .toEqual([{ detail: "booked: Provider confirmed" }]);
   });
 
+  test("resolve_without_id finalizes only the provisional rows without a generation id, once", async () => {
+    const user = await joined();
+    // With no scripted reply the provider fetch rejects before headers, so these rows have no generation id.
+    const lost = [question(), question()];
+    for (const q of lost) await api("/v1/completions", q, user.token);
+    const withId = question(); reply({ usage: null }); await api("/v1/completions", withId, user.token);
+    const final = question(); reply(); await api("/v1/completions", final, user.token);
+    const open = question();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(open.turn_id, user.id).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(open.request_id, open.turn_id, user.id, RESERVATION).run();
+    const resolve = () => api("/operator", { action: "resolve_without_id", cost_micro_usd: 4000, reason: "From OpenRouter billing" }, env.ADMIN_TOKEN);
+    expect(await (await resolve()).json()).toEqual({ outcome: "applied", resolved: 2 });
+    const row = (q: { request_id: string }) => env.DB.prepare("SELECT status, provisional, cost, error_code FROM requests WHERE id = ?")
+      .bind(q.request_id).first();
+    for (const q of lost) expect(await row(q)).toEqual({ status: "settled", provisional: 0, cost: 4000, error_code: "operator_resolved" });
+    expect(await row(withId)).toMatchObject({ status: "settled", provisional: 1, cost: RESERVATION });
+    expect(await row(final)).toMatchObject({ status: "settled", provisional: 0, cost: 1000 });
+    expect(await row(open)).toMatchObject({ status: "reserved" });
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(1000);
+    expect((await env.DB.prepare("SELECT spent FROM budget").first())!.spent).toBe(1000 + RESERVATION + 2 * 4000);
+    const audit = async () => (await env.DB.prepare("SELECT action, target, detail FROM operator_actions ORDER BY target").all()).results;
+    const expected = lost.map((q) => ({ action: "resolve", target: q.request_id, detail: "From OpenRouter billing" }))
+      .sort((x, y) => x.target.localeCompare(y.target));
+    expect(await audit()).toEqual(expected);
+    expect(await (await resolve()).json()).toEqual({ outcome: "applied", resolved: 0 });
+    expect(await audit()).toEqual(expected);
+  });
+
   test("resolve answers not_found for an unknown request", async () => {
     const response = await api("/operator", { action: "resolve", request_id: crypto.randomUUID(), cost_micro_usd: 1000, reason: "No such call" }, env.ADMIN_TOKEN);
     expect(response.status).toBe(404);

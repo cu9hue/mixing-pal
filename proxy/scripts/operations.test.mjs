@@ -88,6 +88,17 @@ test("recovery commands send verified totals and reasons to the correct scope", 
   ]);
 });
 
+test("resolve-without-id sends the cost and reason for every provisional row without an ID", async () => {
+  const sent = [];
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token", fetch: async (_url, options) => {
+    sent.push(JSON.parse(options.body)); return Response.json({ outcome: "applied", resolved: 2 });
+  } };
+  await run(["resolve-without-id", "4000", "Provider billing checked"], connection, () => {});
+  assert.deepEqual(sent, [{ action: "resolve_without_id", cost_micro_usd: 4000, reason: "Provider billing checked" }]);
+  await assert.rejects(run(["resolve-without-id", "4000"], connection), /Unknown command or arguments/);
+  assert.equal(sent.length, 1);
+});
+
 
 test("enable requires stage-specific checks before invoking Wrangler", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));

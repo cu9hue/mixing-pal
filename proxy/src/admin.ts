@@ -27,6 +27,7 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     z.object({ action: z.literal("delete_account"), member_id: z.string().max(100) }),
     z.object({ action: z.literal("delete_turn"), member_id: z.string().max(100), turn_id: z.uuid() }),
     z.object({ action: z.literal("resolve"), request_id: z.uuid(), cost_micro_usd: z.number().int().min(0).max(50_000_000), reason: z.string().min(5).max(500) }),
+    z.object({ action: z.literal("resolve_without_id"), cost_micro_usd: z.number().int().min(0).max(50_000_000), reason: z.string().min(5).max(500) }),
     z.object({ action: z.literal("conflict"), conflict_id: z.number().int().positive(), resolution: z.enum(["booked", "dismissed"]), reason: z.string().min(5).max(500) }),
     z.object({ action: z.literal("pause"), paused: z.boolean() }),
     z.object({ action: z.literal("recover"), member_id: z.string().min(1).max(100).optional(),
@@ -95,6 +96,18 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     if (update.meta.changes) return json(data.cost_micro_usd > row.reserved ? { outcome: "applied", paused: true } : { outcome: "applied" });
     // Someone else finalized the row between the read and the batch.
     return finalOutcome((await read())!);
+  }
+  if (data.action === "resolve_without_id") {
+    // A cost within the reservation never pauses the service.
+    const unresolved = "status = 'settled' AND provisional = 1 AND generation_id IS NULL AND reserved >= ?";
+    // In one transaction the audit insert matches exactly the rows the update then changes.
+    const [, update] = await env.DB.batch([
+      env.DB.prepare(`INSERT INTO operator_actions(action, target, created_at, detail) SELECT 'resolve', id, ?, ? FROM requests WHERE ${unresolved}`)
+        .bind(now, data.reason, data.cost_micro_usd),
+      env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = 0, cost = ?, updated_at = ?, error_code = 'operator_resolved'
+        WHERE ${unresolved} RETURNING id`).bind(data.cost_micro_usd, now, data.cost_micro_usd),
+    ]);
+    return json({ outcome: "applied", resolved: update.results.length });
   }
   if (data.action === "conflict") {
     const [update] = await env.DB.batch([

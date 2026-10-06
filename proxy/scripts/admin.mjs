@@ -18,6 +18,9 @@ The token is never an argument. Only localhost may use HTTP.
   npm run admin -- delete-turn member-id turn-id Delete a shared turn
   npm run admin -- resolve request-id micro-usd reason
                                                 Finalize a PROVISIONAL cost after checking the provider
+  npm run admin -- resolve-without-id micro-usd reason
+                                                Finalize every PROVISIONAL cost without a generation ID
+                                                at this cost, only from provider billing evidence
   npm run admin -- conflict conflict-id booked|dismissed reason
                                                 Resolve a disputed final cost
   npm run admin -- pause | resume               Stop or resume admissions
@@ -129,13 +132,14 @@ export async function run(args, connection, print = console.log) {
     print(JSON.stringify(await operator({ action: "stats", ...(values[0] ? { days: Number(values[0]) } : {}) }, connection), null, 2));
     return;
   }
-  const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3, conflict: 3,
+  const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3, "resolve-without-id": 2, conflict: 3,
     "recover-member": 3, "recover-budget": 2, pause: 0, resume: 0, sweep: 0, export: 3 };
   if (!(command in arity) || values.length !== arity[command]) throw new Error("Unknown command or arguments. Run npm run admin -- help.");
   const payload = command === "report" ? { action: "report", report_id: values[0] }
     : command === "invite" ? { action: "invite", email: values[0] }
     : command === "pause" || command === "resume" ? { action: "pause", paused: command === "pause" }
     : command === "resolve" ? { action: "resolve", request_id: values[0], cost_micro_usd: Number(values[1]), reason: values[2] }
+    : command === "resolve-without-id" ? { action: "resolve_without_id", cost_micro_usd: Number(values[0]), reason: values[1] }
     : command === "conflict" ? { action: "conflict", conflict_id: Number(values[0]), resolution: values[1], reason: values[2] }
     : command === "recover-member" ? { action: "recover", member_id: values[0], spent_micro_usd: Number(values[1]), reason: values[2] }
     : command === "recover-budget" ? { action: "recover", spent_micro_usd: Number(values[0]), reason: values[1] }
