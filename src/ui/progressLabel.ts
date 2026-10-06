@@ -14,6 +14,9 @@ import { SetState } from "../live/model";
  * fallback without it; the set-wide tools have one phrase each. One verb
  * per tool, all of them about reading the set: the app hears no audio, so
  * nothing here may say it is listening.
+ *
+ * The reading log shows a finished read in the past tense, so each present
+ * phrase has a past twin below, in the same order.
  */
 const PHRASE: Record<string, (trackName: string) => string> = {
   get_track_detail: (t) => `reading ${t}…`,
@@ -22,6 +25,17 @@ const PHRASE: Record<string, (trackName: string) => string> = {
   get_device_params: (t) => `looking at a device on ${t}…`,
   get_rack_contents: (t) => `opening the rack on ${t}…`,
   get_mixer: (t) => `reading the mixer for ${t}…`,
+  get_arrangement: (t) => `mapping the arrangement for ${t}…`,
+};
+
+const PAST_PHRASE: Record<string, (trackName: string) => string> = {
+  get_track_detail: (t) => `read ${t}`,
+  get_clip_notes: (t) => `read the notes in ${t}`,
+  get_arrangement_notes: (t) => `read the arrangement notes in ${t}`,
+  get_device_params: (t) => `looked at a device on ${t}`,
+  get_rack_contents: (t) => `opened the rack on ${t}`,
+  get_mixer: (t) => `read the mixer for ${t}`,
+  get_arrangement: (t) => `mapped the arrangement for ${t}`,
 };
 
 const FALLBACK: Record<string, string> = {
@@ -36,7 +50,19 @@ const FALLBACK: Record<string, string> = {
   get_mixer: "reading the mixer…",
 };
 
-function trackName(args: unknown, state: SetState): string | null {
+const PAST_FALLBACK: Record<string, string> = {
+  get_track_detail: "read a track",
+  get_clip_notes: "read the clip",
+  get_arrangement_notes: "read an arrangement clip",
+  get_device_params: "looked at a device",
+  get_rack_contents: "opened a rack",
+  get_clips: "listed the clips",
+  get_arrangement: "mapped the arrangement",
+  get_device_chains: "listed the devices",
+  get_mixer: "read the mixer",
+};
+
+export function trackName(args: unknown, state: SetState): string | null {
   if (typeof args !== "object" || args === null) return null;
   const track = (args as Record<string, unknown>).track;
   if (typeof track !== "number") return null;
@@ -45,10 +71,14 @@ function trackName(args: unknown, state: SetState): string | null {
   return state.tracks[track]?.name ?? null;
 }
 
-export function progressLabel(name: string, args: unknown, state: SetState): string {
-  const resolved = trackName(args, state);
-  const phrase = PHRASE[name];
-  if (resolved !== null && phrase !== undefined) return phrase(resolved);
+/** One read in words. `track` is the name to put in the phrase, or null for the plain one. */
+export function readLabel(name: string, track: string | null, past: boolean): string {
+  const phrase = (past ? PAST_PHRASE : PHRASE)[name];
+  if (track !== null && phrase !== undefined) return phrase(track);
   // A tool added later gets a plain sentence rather than leaking its name.
-  return FALLBACK[name] ?? "reading…";
+  return (past ? PAST_FALLBACK : FALLBACK)[name] ?? (past ? "read something" : "reading…");
+}
+
+export function progressLabel(name: string, args: unknown, state: SetState): string {
+  return readLabel(name, trackName(args, state), false);
 }

@@ -11,7 +11,7 @@ import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
 import { buildContext } from "../digest/build";
 import { BlockNode, InlineNode, parseMarkdown } from "./markdown";
-import { progressLabel } from "./progressLabel";
+import { Read, readingLog } from "./readingLog";
 import { waitingLabel } from "./waitingLabel";
 import { Exchange, begin, complete, fail } from "./thread";
 import { loadThread, saveThread } from "../model/threads";
@@ -169,9 +169,8 @@ export function Conversation({
   const goalRef = useRef<string | null>(null);
   goalRef.current = goal;
   const [goalDraft, setGoalDraft] = useState("");
-  const [progress, setProgress] = useState<string | null>(null);
-  // Reads this turn, for the waiting line. Reset when a turn starts.
-  const [toolsCalled, setToolsCalled] = useState(0);
+  // Reads this turn, for the log and the waiting line. Reset when a turn starts.
+  const [reads, setReads] = useState<Read[]>([]);
   const [busy, setBusy] = useState(false);
 
   // The identity the thread on screen is filed under, and the line above
@@ -352,7 +351,7 @@ export function Conversation({
     startedAt.current = Date.now();
     setElapsedMs(0);
     setBusy(true);
-    setToolsCalled(0);
+    setReads([]);
     onTurnRunningChange(true);
 
     // The context block rides ahead of the question as an ordinary user
@@ -369,16 +368,18 @@ export function Conversation({
 
     try {
       // runTurn reports a tool BEFORE it runs and has no "finished" signal,
-      // so the last tool's line used to linger over the whole final stretch
-      // while the model wrote prose -- the card claiming to read a track it
-      // had stopped reading. Clearing it here, rather than widening
+      // so a read would stay "in progress" over the whole final stretch while
+      // the model wrote prose -- the card claiming to read a track it had
+      // stopped reading. Marking it done here, rather than widening
       // runTurn's callback, keeps agent/loop.ts and its tests untouched.
+      // runTurn hands the same args object to both, and runs a round's tools
+      // in parallel, so that object tells the reads apart.
       const tracked: ToolRunner = {
         run: async (name, args, context) => {
           try {
             return await tauriTools.run(name, args, context);
           } finally {
-            setProgress(null);
+            setReads((all) => all.map((r) => (r.args === args ? { ...r, done: true } : r)));
           }
         },
       };
@@ -386,8 +387,7 @@ export function Conversation({
       let tracksRead: string[] = [];
       const out = await runTurn(tauriProvider(account.observe(), captureEpoch), tracked, turn, (name, args) => {
         tracksRead = withTrackRead(tracksRead, args, state);
-        setToolsCalled((n) => n + 1);
-        setProgress(progressLabel(name, args, state));
+        setReads((all) => [...all, { name, args, done: false }]);
       }, { turnId, record: (event) => invoke("turn_event", { turnId, event }) });
       // The model's note changes and move label ride at the end of its answer
       // and are not part of what she reads or what the history keeps.
@@ -409,7 +409,6 @@ export function Conversation({
       setThread(settled);
       persist(askedUnder, settled, noteRef.current);
     } finally {
-      setProgress(null);
       setBusy(false);
       operations.turn = false;
       onTurnRunningChange(false);
@@ -417,7 +416,11 @@ export function Conversation({
     }
   }
 
-  const waiting = waitingLabel({ busy, toolProgress: progress, toolsCalled, elapsedMs });
+  // The log names what is being read, so the waiting line under it only has
+  // to show the turn is alive and how long it has run.
+  const waiting = waitingLabel({ busy, toolsCalled: reads.length, elapsedMs });
+  const log = busy ? readingLog(reads, state) : [];
+  const reading = reads.some((r) => !r.done);
   const accessProblem = canAsk(account.view) ? null
     : account.view?.access !== "active" ? "Check your account access in Settings."
     : account.view.service_paused ? "Model access is temporarily paused."
@@ -513,9 +516,19 @@ export function Conversation({
               onClick={(event) => { event.currentTarget.focus(); onReport({ origin: x.error ? "error" : "answer", exchange: x }); }}>Report a problem</button>}
           </div>
         ))}
+        {log.length > 0 && (
+          <ul className="card__reads" data-tauri-drag-region="deep">
+            {log.map((line, i) => (
+              <li key={i}>
+                <span className="card__reads-mark" aria-hidden="true">{line.check ? "✓" : ""}</span>
+                {line.text}
+              </li>
+            ))}
+          </ul>
+        )}
         {waiting !== null && (
           <div
-            className={`card__progress${progress === null ? " card__progress--thinking" : ""}`}
+            className={`card__progress${reading ? "" : " card__progress--thinking"}`}
             data-tauri-drag-region="deep"
           >
             {waiting}
