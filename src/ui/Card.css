@@ -530,6 +530,27 @@
   color: var(--text-muted);
 }
 
+/* What the model has read this turn, above the waiting line. Smaller and
+   quieter than the line, so it reads as a trail rather than a second status. */
+.card__reads {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.card__reads li {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card__reads-mark {
+  display: inline-block;
+  width: 1.25em;
+}
+
 .card__progress {
   display: flex;
   align-items: center;
