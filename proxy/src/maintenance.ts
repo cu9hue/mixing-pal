@@ -109,12 +109,17 @@ export async function maintain(env: Env): Promise<void> {
     AND NOT EXISTS (SELECT 1 FROM captures c WHERE c.turn_id = t.id AND c.state != 'deleted') LIMIT 100`)
     .bind(now - 90 * DAY).all<{ id: string }>();
   for (const { id } of old.results) {
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM cost_conflicts WHERE request_id IN (SELECT id FROM requests WHERE turn_id = ?)").bind(id),
-      env.DB.prepare("DELETE FROM captures WHERE turn_id = ?").bind(id),
-      env.DB.prepare("DELETE FROM requests WHERE turn_id = ?").bind(id),
-      env.DB.prepare("DELETE FROM turns WHERE id = ?").bind(id),
-    ]);
+    // A conflict opened since the read makes request_retention roll this turn back; the next turn still goes.
+    try {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM cost_conflicts WHERE request_id IN (SELECT id FROM requests WHERE turn_id = ?) AND resolved_at IS NOT NULL").bind(id),
+        env.DB.prepare("DELETE FROM captures WHERE turn_id = ?").bind(id),
+        env.DB.prepare("DELETE FROM requests WHERE turn_id = ?").bind(id),
+        env.DB.prepare("DELETE FROM turns WHERE id = ?").bind(id),
+      ]);
+    } catch (error) {
+      console.error(JSON.stringify({ event: "prune_skipped", turn_id: id, error: String(error) }));
+    }
   }
   const health = await env.DB.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(cost), 0) AS amount, MIN(updated_at) AS oldest,
     SUM(generation_id IS NULL) AS without_id FROM requests WHERE provisional = 1`)

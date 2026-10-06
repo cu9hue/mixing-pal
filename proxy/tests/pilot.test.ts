@@ -1167,6 +1167,37 @@ describe("maintenance billing", () => {
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM turns WHERE id = ?").bind(pruned.turn_id).first())!.n).toBe(0);
   });
 
+  test("a conflict opened while its turn is pruned survives with the request, and pruning goes on", async () => {
+    const user = await joined();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 2; i++) { reply(); await api("/v1/completions", question(), user.token); }
+    await env.DB.prepare("UPDATE turns SET created_at = 0, deleted_at = 1").run();
+    // The conflict lands after the eligibility read, just before the first turn's pruning batch.
+    const prepare = env.DB.prepare.bind(env.DB), batch = env.DB.batch.bind(env.DB);
+    let pruning: string | undefined, raced: string | undefined;
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (!sql.startsWith("DELETE FROM cost_conflicts")) return statement;
+      const bind = statement.bind.bind(statement);
+      statement.bind = (turnId: string) => { pruning = turnId; return bind(turnId); };
+      return statement;
+    });
+    vi.spyOn(env.DB, "batch").mockImplementation(async (statements) => {
+      if (pruning && !raced) {
+        raced = pruning;
+        await prepare(`INSERT INTO cost_conflicts(request_id, source, recorded, reported, created_at)
+          SELECT id, 'generation', cost, cost + 1, 1 FROM requests WHERE turn_id = ?`).bind(raced).run();
+      }
+      return batch(statements);
+    });
+    await maintain(env);
+    vi.restoreAllMocks();
+    expect(raced).toBeDefined();
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE turn_id = ?").bind(raced).first())!.n).toBe(1);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cost_conflicts WHERE resolved_at IS NULL").first())!.n).toBe(1);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM turns").first())!.n).toBe(1);
+  });
+
   test("health reports provisional usage", async () => {
     const user = await joined();
     reply({ usage: null }); await api("/v1/completions", question(), user.token);
