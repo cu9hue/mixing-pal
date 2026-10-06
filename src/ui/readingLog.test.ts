@@ -91,6 +91,8 @@ describe("readingLog", () => {
       { text: "read a track", check: true },
     ]);
     expect(texts(tools.slice(0, 4).map((n) => done(n)))).toHaveLength(4);
+    const merged = [done("get_clips", { track: 0 }), done("get_clips", { track: 1 }), ...tools.slice(1).map((n) => done(n))];
+    expect(texts(merged)[0]).toBe("+3 earlier reads");
   });
 
   it("never shows a tool name or raw arguments, even for a tool it does not know", () => {

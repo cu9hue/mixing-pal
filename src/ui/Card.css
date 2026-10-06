@@ -561,9 +561,9 @@
 
 /* Only the "Thinking…" form breathes, and only its dot: the words used to
    fade with it, to 1.5:1 at the trough, so a slow turn's "3 reads so far
-   · 42s" was unreadable most of the time it was on screen. The tool line
-   names a real track and changes on its own as tools come and go, so it
-   needs no sign of life. */
+   · 42s" was unreadable most of the time it was on screen. While a read
+   runs, the log above names it and changes on its own, so the line needs
+   no sign of life. */
 .card__progress--thinking::before {
   content: "";
   flex: none;

@@ -418,7 +418,7 @@ export function Conversation({
 
   // The log names what is being read, so the waiting line under it only has
   // to show the turn is alive and how long it has run.
-  const waiting = waitingLabel({ busy, toolProgress: null, toolsCalled: reads.length, elapsedMs });
+  const waiting = waitingLabel({ busy, toolsCalled: reads.length, elapsedMs });
   const log = busy ? readingLog(reads, state) : [];
   const reading = reads.some((r) => !r.done);
   const accessProblem = canAsk(account.view) ? null

@@ -35,14 +35,15 @@ function nameList(names: string[]): string {
  * music and never a tool.
  */
 export function readingLog(reads: Read[], state: SetState): LogLine[] {
-  const groups = new Map<string, { tracks: string[]; plain: boolean; done: boolean }>();
+  const groups = new Map<string, { tracks: string[]; plain: boolean; done: boolean; reads: number }>();
   for (const { name, args, done } of reads) {
-    const group = groups.get(name) ?? { tracks: [], plain: false, done: true };
+    const group = groups.get(name) ?? { tracks: [], plain: false, done: true, reads: 0 };
     groups.set(name, group);
     const track = trackName(args, state);
     if (track === null) group.plain = true;
     else if (!group.tracks.includes(track)) group.tracks.push(track);
     group.done &&= done;
+    group.reads += 1;
   }
   const lines = [...groups].map(([name, g]) => ({
     text: readLabel(name, g.plain ? null : nameList(g.tracks), g.done),
@@ -50,5 +51,7 @@ export function readingLog(reads: Read[], state: SetState): LogLine[] {
   }));
   if (lines.length <= MAX_LINES) return lines;
   const folded = lines.length - (MAX_LINES - 1);
-  return [{ text: `+${folded} earlier reads`, check: false }, ...lines.slice(folded)];
+  // The fold counts reads, not lines: one line can stand for several.
+  const earlier = [...groups.values()].slice(0, folded).reduce((n, g) => n + g.reads, 0);
+  return [{ text: `+${earlier} earlier reads`, check: false }, ...lines.slice(folded)];
 }

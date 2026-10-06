@@ -11,8 +11,6 @@ export const SLOW_AFTER_MS = 10_000;
 export interface WaitingState {
   /** A model turn is in flight. */
   busy: boolean;
-  /** The tool currently running, from progressLabel. Null between tools. */
-  toolProgress: string | null;
   /** Tools called so far this turn, the running one included. */
   toolsCalled: number;
   elapsedMs: number;
@@ -32,20 +30,12 @@ function reads(n: number): string {
 }
 
 /**
- * What the card says while it is waiting, or null when it should say nothing.
- *
- * Three things happen in one turn and only one of them used to be visible.
- * The tool line covers the middle — "reading Pad Wide…" — but the model's
- * first round-trip before any tool runs, a turn that calls no tools at all,
- * and the final stretch while the model writes prose were all silent. This
- * fills those gaps without displacing the tool line, which names her music
- * and is strictly the better thing to show when it applies.
+ * What the card says under the reading log while it is waiting, or null when
+ * it should say nothing. The log names what is read; this line shows the turn
+ * is alive, including before the first read and after the last.
  */
-export function waitingLabel({ busy, toolProgress, toolsCalled, elapsedMs }: WaitingState): string | null {
+export function waitingLabel({ busy, toolsCalled, elapsedMs }: WaitingState): string | null {
   if (!busy) return null;
-  if (toolProgress !== null) {
-    return toolsCalled > 1 ? `${toolProgress} · ${reads(toolsCalled)}` : toolProgress;
-  }
   const verb = VERBS[Math.floor(elapsedMs / VERB_MS) % VERBS.length];
   const rest = [];
   if (toolsCalled > 0) rest.push(`${reads(toolsCalled)} so far`);
