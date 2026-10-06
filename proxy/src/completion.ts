@@ -64,7 +64,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   if (headerId) await bounded(enrich(env, id, { generationId: headerId }));
   if (!response.ok) {
     clearTimeout(abortAt);
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => {});
     await bounded(ZERO_COST.includes(response.status)
       ? settle(env, id, 0, { errorCode: `upstream_${response.status}` })
       : settleProvisional(env, id, `upstream_${response.status}`));

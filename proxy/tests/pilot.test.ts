@@ -564,6 +564,17 @@ describe("never refused because an earlier call went wrong", () => {
     expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
   });
 
+  test("a no-charge status with a broken body settles at zero", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } }), { status: 429 }) } as never);
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("provider_failed");
+    expect(await env.DB.prepare("SELECT provisional, cost FROM requests").first()).toEqual({ provisional: 0, cost: 0 });
+    expect(await env.DB.prepare("SELECT spent FROM budget").first()).toEqual({ spent: 0 });
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
+  });
+
   test("finish without usage answers and charges the member nothing", async () => {
     const user = await joined();
     reply({ usage: null });
