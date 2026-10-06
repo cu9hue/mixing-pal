@@ -15,7 +15,8 @@ export function dispatchStatement(env: Env, id: string, now: number): D1Prepared
 }
 const interrupted = () => new ApiError(504, "completion_interrupted", "The reply was interrupted. It has not been retried. You can ask again.");
 const failed = () => new ApiError(502, "provider_failed", "The model could not answer. Please try again.");
-const validId = (value: unknown) => typeof value === "string" && value.length > 0 && value.length <= 200 ? value : undefined;
+const validId = (value: unknown, secret: string) =>
+  typeof value === "string" && value.length > 0 && value.length <= 200 && !value.includes(secret) ? value : undefined;
 
 /** A ledger write that cannot finish in time is left to the lease cleanup; she still gets her answer. */
 async function bounded(write: Promise<unknown>): Promise<void> {
@@ -60,7 +61,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
     await capture("model_failure", { error: "provider_interrupted" });
     throw interrupted();
   }
-  const headerId = validId(response.headers.get("x-generation-id"));
+  const headerId = validId(response.headers.get("x-generation-id"), env.OPENROUTER_KEY);
   if (headerId) await bounded(enrich(env, id, { generationId: headerId }));
   if (!response.ok) {
     clearTimeout(abortAt);
@@ -75,7 +76,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   const end: StreamEnd = response.body
     ? await readCompletionStream(response.body, { firstDataBy: start + FIRST_DATA_TIMEOUT, idleMs: IDLE_TIMEOUT, deadline,
         onId: (chunkId) => {
-          if (!headerId) void bounded(enrich(env, id, { generationId: validId(chunkId) }));
+          if (!headerId) void bounded(enrich(env, id, { generationId: validId(chunkId, env.OPENROUTER_KEY) }));
           else if (chunkId !== headerId) console.error(JSON.stringify({ event: "generation_id_mismatch", request_id: id }));
         } })
     : { kind: "failed", reason: "truncated", response: { content: "", reasoning: "", finishReason: null, toolCalls: [] } };
@@ -83,7 +84,9 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   controller.abort();
   const answer: Assembled = end.response;
   const usage = usageSchema.safeParse(answer.usage);
-  const details = { provider: answer.provider, finishReason: answer.finishReason, durationMs: Date.now() - start,
+  // Stored metadata is exported, so provider text carrying the credential is dropped; usageSchema keeps only numbers.
+  const clean = <T extends string | null>(value?: T) => value?.includes(env.OPENROUTER_KEY) ? undefined : value;
+  const details = { provider: clean(answer.provider), finishReason: clean(answer.finishReason), durationMs: Date.now() - start,
     usage: usage.success ? usage.data : undefined };
   if (usage.success) await bounded(settle(env, id, Math.ceil(usage.data.cost * 1_000_000), details));
   else await bounded(settleProvisional(env, id, end.kind === "complete" ? "missing_usage" : `stream_${end.reason}`));

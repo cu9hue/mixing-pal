@@ -461,6 +461,19 @@ describe("metered requests", () => {
     }
   });
 
+  test("never persists or exports a provider credential carried in stream metadata", async () => {
+    const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
+    const request = question();
+    reply({ id: `gen-${env.OPENROUTER_KEY}`, provider: `host-${env.OPENROUTER_KEY}`,
+      choices: [{ finish_reason: `stop-${env.OPENROUTER_KEY}`, message: { content: "answer" } }] });
+    expect((await api("/v1/completions", request, user.token)).status).toBe(200);
+    expect(JSON.stringify((await env.DB.prepare("SELECT * FROM requests").all()).results)).not.toContain(env.OPENROUTER_KEY);
+    const exported = await api("/operator", { action: "export", member_id: user.id, turn_id: request.turn_id }, env.ADMIN_TOKEN);
+    expect(exported.status).toBe(200);
+    expect(await exported.text()).not.toContain(env.OPENROUTER_KEY);
+  });
+
   test("global allowance and round ownership are checked inside admission", async () => {
     const first = await joined();
     const second = await joined("second@example.com");
