@@ -20,7 +20,7 @@ import { Note, emptyNote, mergeNote, noteDelta } from "../notes/note";
 import { moveLabel } from "../notes/move";
 import { Outcome, withTrackRead } from "../notes/outcomes";
 import { SetRow } from "./SetRow";
-import { EXAMPLE_QUESTIONS } from "./examples";
+import { starterQuestions } from "./examples";
 import { GOAL_MAX_LENGTH } from "./goal";
 import { WhatICanSee } from "./WhatICanSee";
 
@@ -478,13 +478,12 @@ export function Conversation({
           </div>
         )}
         {recap !== null && <div className="card__recap">{recap}</div>}
-        {/* First launch, and any set with no thread yet: a header, a goal,
-            and an input said nothing about what this thing answers. The
-            examples are questions it can, phrased the way she would. */}
+        {/* First launch, and any set with no thread yet. The questions are
+            built from her set and land on what the reads answer well. */}
         {thread.length === 0 && recap === null && waiting === null && (
           <div className="card__empty">
-            <div className="card__empty-line">Ask about the set you have open. For example:</div>
-            {EXAMPLE_QUESTIONS.map((q) => (
+            <div className="card__empty-line">Ask about the set you have open. Try one:</div>
+            {starterQuestions(state).map((q) => (
               <button
                 key={q}
                 className="card__example"
