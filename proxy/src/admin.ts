@@ -6,6 +6,7 @@ import { recover, settle } from "./ledger";
 import { maintain } from "./maintenance";
 import { exportTurn } from "./export";
 import { sendInvitation } from "./invitation-email";
+import { pilotStats } from "./stats";
 
 export async function admin(request: Request, env: Env, input: unknown): Promise<Response> {
   if (!env.ADMIN_TOKEN) throw new ApiError(503, "admin_disabled", "Operator access is not configured.");
@@ -19,6 +20,7 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
   const data = z.discriminatedUnion("action", [
     z.object({ action: z.literal("invite"), email: z.email().transform((s) => s.toLowerCase()) }),
     z.object({ action: z.literal("usage") }),
+    z.object({ action: z.literal("stats"), days: z.number().int().min(1).max(90).optional() }),
     z.object({ action: z.literal("report"), report_id: z.uuid() }),
     z.object({ action: z.literal("report_notifications") }),
     z.object({ action: z.literal("revoke"), member_id: z.string().max(100) }),
@@ -53,6 +55,7 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     ]);
     return json({ budget, members: members.results, pending: pending.results });
   }
+  if (data.action === "stats") return json(await pilotStats(env, data.days ?? 28));
   if (data.action === "report") return json(await inspectReport(env, data.report_id));
   if (data.action === "report_notifications") return json((await env.DB.prepare(`SELECT id, created_at, mail_state, mail_error
     FROM support_reports WHERE state = 'ready' AND mail_state IN ('pending', 'sending', 'attention') ORDER BY created_at LIMIT 100`).all()).results);
