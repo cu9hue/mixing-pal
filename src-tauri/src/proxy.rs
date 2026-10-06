@@ -516,13 +516,13 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    // The proxy's own timeout error, not a dropped connection, must reach her.
+    // The proxy answers within RESPONSE_BUDGET; the app must wait longer, with room for the network.
     #[test]
-    fn the_app_waits_longer_than_the_proxy_waits_for_the_model() {
+    fn the_app_waits_longer_than_the_proxy_takes_to_answer() {
         let env = include_str!("../../proxy/src/env.ts");
-        let line = env.lines().find(|l| l.starts_with("export const MODEL_TIMEOUT")).unwrap();
+        let line = env.lines().find(|l| l.starts_with("export const RESPONSE_BUDGET")).unwrap();
         let millis: u64 = line.split('=').nth(1).unwrap().trim().trim_end_matches(';').replace('_', "").parse().unwrap();
-        assert!(COMPLETION_TIMEOUT >= Duration::from_millis(millis) + Duration::from_secs(20));
+        assert!(COMPLETION_TIMEOUT >= Duration::from_millis(millis) + Duration::from_secs(15));
     }
 
     #[derive(Clone, Default)]
