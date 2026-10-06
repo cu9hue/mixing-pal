@@ -1231,6 +1231,41 @@ describe("operator tools", () => {
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions WHERE action = 'resolve'").first())!.n).toBe(1);
   });
 
+  test("two resolves in the same millisecond audit only the one that applied", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    // Both commands read the row as provisional before either batch runs.
+    const batch = env.DB.batch.bind(env.DB);
+    let first: (() => void) | undefined;
+    vi.spyOn(env.DB, "batch").mockImplementation(async (statements) => {
+      if (!first) await new Promise<void>((r) => { first = r; });
+      else first();
+      return batch(statements);
+    });
+    const resolve = (cost: number) => api("/operator", { action: "resolve", request_id: id, cost_micro_usd: cost, reason: `Applied ${cost}` }, env.ADMIN_TOKEN);
+    const outcomes = await Promise.all([resolve(4000), resolve(9000)]);
+    expect(outcomes.map((r) => r.status)).toEqual([200, 200]);
+    const cost = (await env.DB.prepare("SELECT cost FROM requests WHERE id = ?").bind(id).first())!.cost;
+    expect((await env.DB.prepare("SELECT detail FROM operator_actions WHERE action = 'resolve'").all()).results)
+      .toEqual([{ detail: `Applied ${cost}` }]);
+  });
+
+  test("two conflict resolutions in the same millisecond audit only the one that applied", async () => {
+    const user = await joined();
+    reply(); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    await settle(env, id, 5000, {}, "generation");
+    const conflict = (await env.DB.prepare("SELECT id FROM cost_conflicts").first())!.id;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    for (const resolution of ["booked", "dismissed"]) {
+      await api("/operator", { action: "conflict", conflict_id: conflict, resolution, reason: "Provider confirmed" }, env.ADMIN_TOKEN);
+    }
+    expect((await env.DB.prepare("SELECT detail FROM operator_actions WHERE action = 'conflict'").all()).results)
+      .toEqual([{ detail: "booked: Provider confirmed" }]);
+  });
+
   test("resolve answers not_found for an unknown request", async () => {
     const response = await api("/operator", { action: "resolve", request_id: crypto.randomUUID(), cost_micro_usd: 1000, reason: "No such call" }, env.ADMIN_TOKEN);
     expect(response.status).toBe(404);

@@ -84,9 +84,9 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     const [update] = await env.DB.batch([
       env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = 0, cost = ?, updated_at = ?, error_code = 'operator_resolved'
         WHERE id = ? AND provisional = 1`).bind(data.cost_micro_usd, now, data.request_id),
-      env.DB.prepare(`INSERT INTO operator_actions(action, target, created_at, detail) SELECT 'resolve', ?, ?, ?
-        WHERE EXISTS (SELECT 1 FROM requests WHERE id = ? AND provisional = 0 AND error_code = 'operator_resolved' AND updated_at = ?)`)
-        .bind(data.request_id, now, data.reason, data.request_id, now),
+      // changes() counts only the update's own rows, so the audit row exists only when it applied.
+      env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) SELECT 'resolve', ?, ?, ? WHERE changes() > 0")
+        .bind(data.request_id, now, data.reason),
     ]);
     if (update.meta.changes) return json({ outcome: "applied" });
     // Someone else finalized the row between the read and the batch.
@@ -96,9 +96,8 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     const [update] = await env.DB.batch([
       env.DB.prepare("UPDATE cost_conflicts SET resolved_at = ?, resolution = ? WHERE id = ? AND resolved_at IS NULL")
         .bind(now, data.resolution, data.conflict_id),
-      env.DB.prepare(`INSERT INTO operator_actions(action, target, created_at, detail) SELECT 'conflict', ?, ?, ?
-        WHERE EXISTS (SELECT 1 FROM cost_conflicts WHERE id = ? AND resolved_at = ?)`)
-        .bind(String(data.conflict_id), now, `${data.resolution}: ${data.reason}`, data.conflict_id, now),
+      env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) SELECT 'conflict', ?, ?, ? WHERE changes() > 0")
+        .bind(String(data.conflict_id), now, `${data.resolution}: ${data.reason}`),
     ]);
     if (update.meta.changes) return json({ outcome: "applied" });
     const exists = await env.DB.prepare("SELECT 1 FROM cost_conflicts WHERE id = ?").bind(data.conflict_id).first();
