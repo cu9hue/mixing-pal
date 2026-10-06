@@ -447,7 +447,7 @@ describe("metered requests", () => {
     expect(response.status, await response.clone().text()).toBe(200);
     expect((await response.json()).text).toContain("```note");
     expect(sent[0]).toMatchObject({ model: "moonshotai/kimi-k2.6", max_tokens: 12000, reasoning: { effort: "low" },
-      provider: { only: ["inceptron/int4"], zdr: true } });
+      provider: { only: ["inceptron/int4"], zdr: true, sort: "throughput" } });
     const row = await env.DB.prepare("SELECT spent, reserved FROM members WHERE id = ?").bind(user.id).first();
     expect(row).toEqual({ spent: 1000, reserved: 0 });
     expect(await capturedObjects()).toHaveLength(0);
