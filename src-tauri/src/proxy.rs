@@ -516,7 +516,6 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    // The proxy answers within RESPONSE_BUDGET; the app must wait longer, with room for the network.
     #[test]
     fn the_app_waits_longer_than_the_proxy_takes_to_answer() {
         let env = include_str!("../../proxy/src/env.ts");

@@ -115,10 +115,7 @@ export async function settleProvisional(env: Env, id: string, errorCode: string,
   return Boolean(result.meta.changes);
 }
 
-/**
- * Dispatched calls whose lease ended, and rows a pre-0007 Worker marked unknown, are settled provisionally.
- * A row still reserved was never sent (fetch runs only after dispatch), so it is final at 0.
- */
+/** Expired dispatched calls and legacy unknown rows settle provisional; an expired reserved row was never sent, so it settles final at 0. */
 export function expiredStatement(env: Env, now: number, memberId?: string): D1PreparedStatement {
   return env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = iif(status = 'reserved', 0, 1),
     cost = iif(status = 'reserved', 0, reserved), error_code = iif(status = 'reserved', 'not_dispatched', 'worker_interrupted'),
