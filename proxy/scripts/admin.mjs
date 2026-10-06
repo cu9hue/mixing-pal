@@ -11,7 +11,7 @@ The token is never an argument. Only localhost may use HTTP.
   npm run admin -- invite email                 Email a seven-day invitation and download link
   npm run admin -- report report-id            Inspect a private report (no local cache)
   npm run admin -- report-notifications         List pending/failed support emails
-  npm run admin -- usage                        Balances and held requests
+  npm run admin -- usage                        Balances and provisional costs
   npm run admin -- revoke member-id              End access and revoke sessions
   npm run admin -- delete-account member-id      Delete identity and shared content
   npm run admin -- delete-turn member-id turn-id Delete a shared turn
@@ -39,11 +39,13 @@ retained file. Reviewed examples need a separate retention decision before
 being kept as fixtures; trace consent never grants training permission.
 
 Run usage and sweep before each pilot review. Worker error logs contain only
-event categories and IDs: provisional_usage, cost_conflict, billing_maintenance_failed,
-report_maintenance_failed, reconciliation_failed, deletion_failed,
-capture_cleanup_backlog, capture_failed, request_failed. Alert on any of these
-in Cloudflare Logs.
-For held requests without a generation ID, check the provider billing record
+event categories and IDs: provisional_usage, usage_provisional, cost_conflict,
+billing_maintenance_failed, report_maintenance_failed, reconciliation_failed,
+settlement_deferred, turn_mark_deferred, capture_deferred, account_view_skipped,
+account_cleanup_failed, prune_skipped, generation_id_mismatch, deletion_failed,
+capture_cleanup_backlog, capture_failed, report_deletion_failed,
+release_read_failed, request_failed. Alert on any of these in Cloudflare Logs.
+For provisional costs without a generation ID, check the provider billing record
 before resolve. A provisional cost is already charged to the service at its bound; resolve it only from provider evidence.
 
 Deletion sweeps run every ten minutes; capture expires at 30 days and settled
@@ -67,7 +69,7 @@ restored sessions; recovering spending never restores revoked access.
 Replay also invalidates unused invitations: they may belong to accounts lost
 by the restore. Reissue them only after checking the producer's spending.
 
-Settle surviving held requests using provider billing evidence. Recover every
+Settle surviving provisional costs using provider billing evidence. Recover every
 account's TOTAL spent amount (not an adjustment), including charges lost by
 the restore, with recover-member. usage lists unrecovered accounts first;
 repeat until none remain. Then recover-budget with the verified service total,
