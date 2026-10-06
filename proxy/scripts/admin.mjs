@@ -48,7 +48,8 @@ billing_maintenance_failed, report_maintenance_failed, reconciliation_failed,
 settlement_deferred, turn_mark_deferred, capture_deferred, account_view_skipped,
 account_cleanup_failed, prune_skipped, generation_id_mismatch, deletion_failed,
 capture_cleanup_backlog, capture_failed, report_deletion_failed,
-release_read_failed, request_failed. Alert on any of these in Cloudflare Logs.
+release_read_failed, request_failed, upstream_failed. Alert on any of these in
+Cloudflare Logs.
 For provisional costs without a generation ID, check the provider billing record
 before resolve. A provisional cost is already charged to the service at its bound; resolve it only from provider evidence.
 

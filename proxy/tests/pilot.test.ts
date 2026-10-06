@@ -586,6 +586,16 @@ describe("never refused because an earlier call went wrong", () => {
     expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
   });
 
+  test("a refused upstream call logs upstream_failed with its status", async () => {
+    const user = await joined();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    replies.push({ raw: new Response("Insufficient credits", { status: 402 }) } as never);
+    const request = question();
+    expect((await api("/v1/completions", request, user.token)).status).toBe(502);
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line))))
+      .toContainEqual({ event: "upstream_failed", request_id: request.request_id, status: 402 });
+  });
+
   test("finish without usage answers and charges the member nothing", async () => {
     const user = await joined();
     reply({ usage: null });

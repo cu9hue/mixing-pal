@@ -74,6 +74,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   const headerId = validId(response.headers.get("x-generation-id"), env.OPENROUTER_KEY);
   if (headerId) await bounded(enrich(env, id, { generationId: headerId }), respondBy, ctx);
   if (!response.ok) {
+    console.error(JSON.stringify({ event: "upstream_failed", request_id: id, status: response.status }));
     clearTimeout(abortAt);
     void response.body?.cancel().catch(() => {});
     await bounded<unknown>(ZERO_COST.includes(response.status)
