@@ -601,6 +601,8 @@ describe("never refused because an earlier call went wrong", () => {
     // The stream ends without a finish reason: a truncation, so she is told it was interrupted.
     expect((await api("/v1/completions", question(), user.token)).status).toBe(504);
     expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(3000);
+    expect(await env.DB.prepare("SELECT provisional, cost, error_code FROM requests").first())
+      .toEqual({ provisional: 0, cost: 3000, error_code: "stream_truncated" });
   });
 
   test("an error event with empty usage still charges the usage reported before it", async () => {

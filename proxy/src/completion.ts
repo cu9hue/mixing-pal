@@ -97,7 +97,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   // Stored metadata is exported, so provider text carrying the credential is dropped; usageSchema keeps only numbers.
   const clean = <T extends string | null>(value?: T) => value?.includes(env.OPENROUTER_KEY) ? undefined : value;
   const details = { provider: clean(answer.provider), finishReason: clean(answer.finishReason), durationMs: Date.now() - start,
-    usage: usage.success ? usage.data : undefined };
+    usage: usage.success ? usage.data : undefined, errorCode: end.kind === "failed" ? `stream_${end.reason}` : undefined };
   if (usage.success) await bounded(settle(env, id, Math.ceil(usage.data.cost * 1_000_000), details), respondBy, ctx);
   else await bounded(settleProvisional(env, id, end.kind === "complete" ? "missing_usage" : `stream_${end.reason}`), respondBy, ctx);
   // Captures keep OpenRouter's non-stream shape, which the turn export reads.
