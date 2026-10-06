@@ -615,6 +615,21 @@ describe("never refused because an earlier call went wrong", () => {
     expect(canDispatch(MIN_RUNTIME - 1, 0)).toBe(false);
   });
 
+  test("a dispatch whose D1 reply comes back too late never starts the provider call", async () => {
+    const user = await joined();
+    reply();
+    const prepare = env.DB.prepare.bind(env.DB);
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      if (sql.includes("SET status = 'dispatched'")) { const later = Date.now() + MODEL_TIMEOUT; vi.spyOn(Date, "now").mockReturnValue(later); }
+      return prepare(sql);
+    });
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(504);
+    expect(sent).toHaveLength(0);
+    expect(await env.DB.prepare("SELECT status, provisional, cost, error_code FROM requests").first())
+      .toEqual({ status: "settled", provisional: 0, cost: 0, error_code: "not_dispatched" });
+  });
+
   test("the guarded dispatch never moves a row whose deadline is too close, so the provider is never called", async () => {
     const user = await joined();
     const t = crypto.randomUUID(), r = crypto.randomUUID();

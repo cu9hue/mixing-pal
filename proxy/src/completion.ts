@@ -38,8 +38,10 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   await reserve(env, memberId, request, deadline);
   const turn = await ownedTurn(env, request.turn_id, memberId);
   const id = request.request_id;
+  const dispatched = (await dispatchStatement(env, id, Date.now()).run()).meta.changes;
+  // A late D1 reply must not start provider work near the deadline; the call was never sent, so it costs 0.
   const start = Date.now();
-  if (!(await dispatchStatement(env, id, start).run()).meta.changes) {
+  if (!dispatched || !canDispatch(deadline, start)) {
     await bounded(settle(env, id, 0, { errorCode: "not_dispatched" }), respondBy);
     throw interrupted();
   }
