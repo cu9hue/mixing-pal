@@ -18,7 +18,7 @@ export async function exportTurn(env: Env, memberId: string, turnId: string): Pr
     env.DB.prepare("SELECT object_key, state FROM captures WHERE turn_id = ? ORDER BY created_at")
       .bind(turn.id).all<{ object_key: string; state: string }>(),
     env.DB.prepare(`SELECT id, round, status, model, provider, generation_id, usage, finish_reason, duration_ms,
-      prompt_hash, tool_hash, policy_version, error_code FROM requests WHERE turn_id = ? ORDER BY round`)
+      prompt_hash, tool_hash, policy_version, error_code, provisional FROM requests WHERE turn_id = ? ORDER BY round`)
       .bind(turn.id).all<{ id: string; round: number; status: string }>(),
   ]);
   const events: unknown[] = [];

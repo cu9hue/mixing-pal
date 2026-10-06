@@ -1176,3 +1176,47 @@ describe("maintenance billing", () => {
       .toContainEqual(expect.objectContaining({ event: "provisional_usage", count: 1, amount: RESERVATION, without_id: 0 }));
   });
 });
+
+describe("operator tools", () => {
+  test("usage lists provisional rows and open conflicts", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const usage = await (await api("/operator", { action: "usage" }, env.ADMIN_TOKEN)).json();
+    expect(usage.pending[0]).toMatchObject({ provisional: 1, cost: RESERVATION, reserved: RESERVATION });
+    expect(usage.conflicts).toEqual([]);
+  });
+
+  test("resolve twice reports already_final and books nothing", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    const resolve = () => api("/operator", { action: "resolve", request_id: id, cost_micro_usd: 4000, reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    expect(await (await resolve()).json()).toEqual({ outcome: "applied" });
+    expect((await resolve()).status).toBe(409);
+    expect((await env.DB.prepare("SELECT spent FROM budget").first())!.spent).toBe(4000);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions WHERE action = 'resolve'").first())!.n).toBe(1);
+  });
+
+  test("a booked higher conflict adds the liability once and allows resume", async () => {
+    const user = await joined();
+    reply(); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    await settle(env, id, 5000, {}, "generation");
+    expect((await api("/operator", { action: "pause", paused: false }, env.ADMIN_TOKEN)).status).toBe(409);
+    const conflict = (await env.DB.prepare("SELECT id FROM cost_conflicts").first())!.id;
+    const book = () => api("/operator", { action: "conflict", conflict_id: conflict, resolution: "booked", reason: "Provider confirmed" }, env.ADMIN_TOKEN);
+    expect(await (await book()).json()).toEqual({ outcome: "applied" });
+    expect(await (await book()).json()).toEqual({ outcome: "already_resolved" });
+    expect((await env.DB.prepare("SELECT spent FROM budget").first())!.spent).toBe(5000);
+    expect((await api("/operator", { action: "pause", paused: false }, env.ADMIN_TOKEN)).status).toBe(200);
+  });
+
+  test("export marks provisional requests", async () => {
+    const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
+    reply({ usage: null }); const request = question(); await api("/v1/completions", request, user.token);
+    const exported = await (await api("/operator", { action: "export", member_id: user.id, turn_id: request.turn_id }, env.ADMIN_TOKEN)).json();
+    expect(exported.requests[0].provisional).toBe(1);
+  });
+});
