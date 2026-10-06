@@ -115,10 +115,14 @@ export async function settleProvisional(env: Env, id: string, errorCode: string,
   return Boolean(result.meta.changes);
 }
 
-/** Calls whose lease ended, and rows a pre-0007 Worker marked unknown, are settled provisionally. */
+/**
+ * Dispatched calls whose lease ended, and rows a pre-0007 Worker marked unknown, are settled provisionally.
+ * A row still reserved was never sent (fetch runs only after dispatch), so it is final at 0.
+ */
 export function expiredStatement(env: Env, now: number, memberId?: string): D1PreparedStatement {
-  return env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = 1, cost = reserved,
-    error_code = 'worker_interrupted', updated_at = ?, reconcile_after = ?
+  return env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = iif(status = 'reserved', 0, 1),
+    cost = iif(status = 'reserved', 0, reserved), error_code = iif(status = 'reserved', 'not_dispatched', 'worker_interrupted'),
+    updated_at = ?, reconcile_after = iif(status = 'reserved', reconcile_after, ?)
     WHERE (status = 'unknown' OR (status IN ('reserved', 'dispatched') AND lease_until <= ?))
     AND (? IS NULL OR member_id = ?) RETURNING id`).bind(now, now + RECONCILE_DELAY, now, memberId ?? null, memberId ?? null);
 }

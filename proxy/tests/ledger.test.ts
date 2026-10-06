@@ -95,10 +95,7 @@ async function finalCall() {
 async function provisionalCall() {
   await finalCall(); await turn("t2", "m"); await req("p", "t2", "m", 1, now + 4000); await provisional("p");
 }
-async function cleanup(at: number, memberId: string) {
-  await run(`UPDATE requests SET status = 'settled', provisional = 1, cost = reserved, error_code = 'worker_interrupted', reconcile_after = ?
-    WHERE (status = 'unknown' OR (status IN ('reserved', 'dispatched') AND lease_until <= ?)) AND member_id = ?`, at + 60_000, at, memberId);
-}
+const cleanup = (at: number, memberId: string) => settleExpired(env, at, memberId);
 
 beforeEach(reset);
 
@@ -404,8 +401,25 @@ describe("ledger statements", () => {
     expect(await settleExpired(env, now + 1000, "m")).toBe(0);
     expect(await settleExpired(env, now + 285_001, "m")).toBe(1);
     expect(await settleExpired(env, now + 1000)).toBe(1);
-    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE provisional = 1").first())!.n).toBe(2);
+    // r was never dispatched, so only the legacy unknown row is provisional.
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE provisional = 1").first())!.n).toBe(1);
     expect(expiredStatement(env, now)).toBeTruthy();
+  });
+
+  test("an expired reserved row was never sent and settles final at 0; an expired dispatched row stays provisional", async () => {
+    await member("m"); await turn("t", "m"); await turn("u", "m");
+    await req("r", "t", "m"); await req("d", "u", "m");
+    await run("UPDATE requests SET status = 'dispatched' WHERE id = 'd'");
+    expect(await settleExpired(env, now + 285_000, "m")).toBe(2);
+    const row = (id: string) => env.DB.prepare(`SELECT status, provisional, cost, member_cost, error_code, reconcile_after
+      FROM requests WHERE id = ?`).bind(id).first();
+    expect(await row("r")).toEqual({ status: "settled", provisional: 0, cost: 0, member_cost: 0,
+      error_code: "not_dispatched", reconcile_after: 0 });
+    expect(await row("d")).toEqual({ status: "settled", provisional: 1, cost: R, member_cost: 0,
+      error_code: "worker_interrupted", reconcile_after: now + 285_000 + 60_000 });
+    expect(await balance("m")).toEqual({ spent: 0, reserved: 0 });
+    // Only the dispatched call reaches the budget.
+    expect(await budget()).toEqual({ spent: R, reserved: 0, loss: 0, paused: 0 });
   });
 
   test("a lower conflict is recorded and does not pause", async () => {
