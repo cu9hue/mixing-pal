@@ -21,7 +21,6 @@ CREATE TABLE cost_conflicts (
 );
 
 CREATE INDEX requests_provisional ON requests(reconcile_after) WHERE provisional = 1;
-CREATE INDEX requests_open ON requests(lease_until) WHERE status IN ('reserved', 'dispatched', 'unknown');
 CREATE INDEX cost_conflicts_open ON cost_conflicts(request_id) WHERE resolved_at IS NULL;
 
 -- Replace the settlement trigger before any backfill settles a row.
