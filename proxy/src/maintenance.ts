@@ -2,20 +2,48 @@ import { retryReportMail } from "./report-email";
 import { maintainReports } from "./reports";
 import { deleteTurn } from "./capture";
 import { DAY, Env, readJson } from "./env";
-import { settle, UsageRequest } from "./ledger";
+import { settle, settleExpired } from "./ledger";
 
 const CAPTURE_DELETE_BATCH = 100;
 const CAPTURE_DELETE_BATCHES = 3;
-/** A request still in flight after this is lost; it must outlast `MODEL_TIMEOUT`. */
-export const LOST_REQUEST_AFTER = 5 * 60_000;
+
+/** OpenRouter marks a finished generation with a finish reason or a cancel; elapsed time is never proof. */
+export function generationComplete(data: Record<string, unknown>): boolean {
+  return (typeof data.finish_reason === "string" && data.finish_reason.length > 0) || data.cancelled === true;
+}
+
+async function billing(env: Env, now: number): Promise<void> {
+  await settleExpired(env, now);
+  const pending = await env.DB.prepare(`SELECT id, generation_id FROM requests WHERE provisional = 1 AND generation_id IS NOT NULL
+    AND reconcile_after <= ? ORDER BY reconcile_after LIMIT 20`).bind(now).all<{ id: string; generation_id: string }>();
+  const stopAt = Date.now() + 30_000;
+  for (const row of pending.results) {
+    if (Date.now() > stopAt) break;
+    await env.DB.prepare("UPDATE requests SET reconcile_after = ? WHERE id = ?").bind(now + 10 * 60_000, row.id).run();
+    try {
+      const response = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(row.generation_id)}`, {
+        headers: { Authorization: `Bearer ${env.OPENROUTER_KEY}` }, signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) { await response.body?.cancel(); continue; }
+      const data = ((await readJson(response)) as { data?: Record<string, unknown> })?.data ?? {};
+      const cost = data.total_cost;
+      if (generationComplete(data) && typeof cost === "number" && Number.isFinite(cost) && cost >= 0) {
+        await settle(env, row.id, Math.ceil(cost * 1_000_000), { errorCode: "reconciled" }, "generation");
+      }
+    } catch {
+      console.error(JSON.stringify({ event: "reconciliation_failed", request_id: row.id }));
+    }
+  }
+}
 
 export async function maintain(env: Env): Promise<void> {
   const now = Date.now();
-  await maintainReports(env);
-  await retryReportMail(env);
+  // Billing first and on its own: a report or cleanup failure must never hold a member's money.
+  try { await billing(env, now); }
+  catch (error) { console.error(JSON.stringify({ event: "billing_maintenance_failed", error: String(error) })); }
+  try { await maintainReports(env); await retryReportMail(env); }
+  catch (error) { console.error(JSON.stringify({ event: "report_maintenance_failed", error: String(error) })); }
   await env.DB.batch([
-    env.DB.prepare("UPDATE requests SET status = 'unknown', error_code = 'worker_interrupted', updated_at = ? WHERE status IN ('reserved', 'dispatched') AND updated_at < ?")
-      .bind(now, now - LOST_REQUEST_AFTER),
     env.DB.prepare("UPDATE turns SET status = 'interrupted', incomplete = 1 WHERE status = 'running' AND updated_at < ?").bind(now - 20 * 60_000),
     env.DB.prepare('DELETE FROM verification WHERE expiresAt < ?').bind(new Date(now).toISOString()),
     env.DB.prepare('DELETE FROM "session" WHERE expiresAt < ?').bind(new Date(now).toISOString()),
@@ -26,24 +54,6 @@ export async function maintain(env: Env): Promise<void> {
     env.DB.prepare(`DELETE FROM "user" WHERE createdAt < ? AND NOT EXISTS (SELECT 1 FROM members WHERE members.id = "user".id)`)
       .bind(new Date(now - 90 * DAY).toISOString()),
   ]);
-  const pending = await env.DB.prepare(`SELECT * FROM requests WHERE status = 'unknown' AND generation_id IS NOT NULL
-    AND reconcile_after <= ? ORDER BY reconcile_after, updated_at LIMIT 20`).bind(now).all<UsageRequest>();
-  for (const row of pending.results) {
-    await env.DB.prepare("UPDATE requests SET reconcile_after = ? WHERE id = ?").bind(now + 10 * 60_000, row.id).run();
-    try {
-      const response = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(row.generation_id!)}`, {
-        headers: { Authorization: `Bearer ${env.OPENROUTER_KEY}` }, signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) { await response.body?.cancel(); continue; }
-      const value = await readJson(response) as { data?: { total_cost?: unknown } };
-      const cost = value?.data?.total_cost;
-      if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) {
-        await settle(env, row.id, Math.ceil(cost * 1_000_000), { generationId: row.generation_id!, errorCode: "reconciled" });
-      }
-    } catch {
-      console.error(JSON.stringify({ event: "reconciliation_failed", request_id: row.id }));
-    }
-  }
   const expired = await env.DB.prepare("SELECT id, member_id FROM turns WHERE created_at <= ? AND deleted_at IS NULL LIMIT 100")
     .bind(now - 30 * DAY).all<{ id: string; member_id: string }>();
   for (const row of expired.results) await deleteTurn(env, row.member_id, row.id, true, true);
@@ -92,20 +102,26 @@ export async function maintain(env: Env): Promise<void> {
       env.DB.prepare("UPDATE deletion_jobs SET completed_at = ? WHERE member_id = ?").bind(now, id),
     ]);
   }
-  // Balances outlive individual request metadata. Never prune a held cost.
+  // Balances outlive request metadata; unresolved accounting is never pruned (request_retention enforces it).
   const old = await env.DB.prepare(`SELECT t.id FROM turns t WHERE t.created_at < ?
-    AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.turn_id = t.id AND r.status != 'settled')
+    AND NOT EXISTS (SELECT 1 FROM requests r WHERE r.turn_id = t.id AND (r.status != 'settled' OR r.provisional = 1))
+    AND NOT EXISTS (SELECT 1 FROM cost_conflicts c JOIN requests r ON r.id = c.request_id WHERE r.turn_id = t.id AND c.resolved_at IS NULL)
     AND NOT EXISTS (SELECT 1 FROM captures c WHERE c.turn_id = t.id AND c.state != 'deleted') LIMIT 100`)
     .bind(now - 90 * DAY).all<{ id: string }>();
   for (const { id } of old.results) {
     await env.DB.batch([
+      env.DB.prepare("DELETE FROM cost_conflicts WHERE request_id IN (SELECT id FROM requests WHERE turn_id = ?)").bind(id),
       env.DB.prepare("DELETE FROM captures WHERE turn_id = ?").bind(id),
       env.DB.prepare("DELETE FROM requests WHERE turn_id = ?").bind(id),
       env.DB.prepare("DELETE FROM turns WHERE id = ?").bind(id),
     ]);
   }
-  const health = await env.DB.prepare("SELECT COUNT(*) AS count FROM requests WHERE status = 'unknown'").first<{ count: number }>();
-  if (health?.count) console.error(JSON.stringify({ event: "held_usage", count: health.count }));
+  const health = await env.DB.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(cost), 0) AS amount, MIN(updated_at) AS oldest,
+    SUM(generation_id IS NULL) AS without_id FROM requests WHERE provisional = 1`)
+    .first<{ count: number; amount: number; oldest: number | null; without_id: number }>();
+  const conflicts = await env.DB.prepare("SELECT COUNT(*) AS n FROM cost_conflicts WHERE resolved_at IS NULL").first<{ n: number }>();
+  if (health?.count || conflicts?.n) console.error(JSON.stringify({ event: "provisional_usage", count: health?.count ?? 0,
+    amount: health?.amount ?? 0, oldest: health?.oldest ?? null, without_id: health?.without_id ?? 0, open_conflicts: conflicts?.n ?? 0 }));
   const journal = await env.CAPTURE.list({ prefix: "deletions/", limit: 100 });
   for (const object of journal.objects) {
     if (object.uploaded.getTime() < now - 90 * DAY) await env.CAPTURE.delete(object.key);
