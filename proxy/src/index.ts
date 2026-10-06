@@ -50,6 +50,7 @@ async function authRequest(request: Request, env: Env, path: string): Promise<Re
 }
 
 export async function handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const receivedAt = Date.now();
   const url = new URL(request.url);
   if (url.pathname === "/health" && request.method === "GET") return json({ ok: true });
   const release = await releaseRequest(request, env);
@@ -76,7 +77,7 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   if (route === "GET /v1/account") return account(env, memberId);
   if (route === "POST /v1/invites/redeem") return redeem(env, memberId, await readJson(request, 4096));
   if (route === "PUT /v1/consent") return consent(env, memberId, await readJson(request, 4096));
-  if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx);
+  if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx, receivedAt);
   if (route === "DELETE /v1/account") {
     await deleteAccount(env, memberId);
     return json({ deletion: "pending" }, 202);

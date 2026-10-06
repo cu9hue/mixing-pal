@@ -22,7 +22,7 @@ come from Wrangler login or CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN.
 
   node scripts/deploy.mjs configure staging|production
   node scripts/deploy.mjs check staging|production       Bundle without deploying
-  node scripts/deploy.mjs deploy staging|production      Apply additive migrations, deploy paused
+  node scripts/deploy.mjs deploy staging|production      Check the bundle, apply additive migrations, deploy paused
   node scripts/deploy.mjs secrets staging|production     Read secrets from environment, not argv
   node scripts/deploy.mjs enable staging|production      Deploy with inference enabled
   node scripts/deploy.mjs recovery staging|production    Pause inference and reporting before D1 restore
@@ -52,9 +52,11 @@ D1. Keep it enabled through every deletion replay page and spending recovery.
 See npm run admin -- help for the restore sequence.
 
 Rollback changes only the Worker version; never reverse ledger migrations.
-Keep schema changes additive and compatible with the previous version. First
-pause admissions using the operator CLI, deploy the previous known-good
-version, run health/usage/sweep and a staging smoke, then resume.
+A Worker older than the latest ledger migration cannot admit calls. To roll
+back, pause inference (npm run admin -- pause), then deploy the previous
+version. Keep inference paused until you deploy a fixed Worker forward. On the
+fixed version, run health/usage/sweep and a staging smoke, then resume. Do not
+run recover on a rolled-back Worker.
 
 For an initial staging test use MIXINGPAL_PROXY_URL=https://api-staging.mixingpal.com
 with a debug desktop build. Public release builds always use api.mixingpal.com.
@@ -80,6 +82,11 @@ function wrangler(args, input) {
     stdio: input === undefined ? "inherit" : ["pipe", "inherit", "inherit"], input, env: process.env,
   });
   if (result.error || result.status !== 0) throw new Error("Wrangler did not complete the operation.");
+}
+
+function commit() {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" });
+  return result.error || result.status !== 0 ? "unknown" : result.stdout.trim();
 }
 
 export async function run(args) {
@@ -108,10 +115,14 @@ export async function run(args) {
     wrangler(["versions", "deploy", `${version}@100%`, "--config", file, "--yes"]);
     return;
   }
+  // Bundle first: a bundle error must never leave the old Worker running on the new schema.
+  wrangler(["deploy", "--config", file, "--dry-run"]);
   wrangler(["d1", "migrations", "apply", "DB", "--config", file, "--remote"]);
   const lifecycle = fileURLToPath(new URL("../r2-lifecycle.json", import.meta.url));
   wrangler(["r2", "bucket", "lifecycle", "set", `mixing-pal-${stage}-capture`, "--file", lifecycle,
     "--config", file, "--force"]);
+  // Printed beside Wrangler's version ID, so each Worker version maps to a commit.
+  console.log(`Deploying commit ${commit()}`);
   wrangler(["deploy", "--config", file]);
 }
 

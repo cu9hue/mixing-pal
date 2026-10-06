@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ApiError, CAPTURE_VERSION, DAY, Env, hash, json } from "./env";
+import { settleExpired } from "./ledger";
 import { RESERVATION } from "./policy";
 
 export interface Member {
@@ -20,18 +21,25 @@ export async function member(env: Env, id: string): Promise<Member | null> {
 }
 
 export async function account(env: Env, id: string): Promise<Response> {
+  // The app polls this; settling expired calls here unblocks her without waiting for cron.
+  try { await settleExpired(env, Date.now()); }
+  catch { console.error(JSON.stringify({ event: "account_cleanup_failed", member_id: id })); }
   const [m, user, budget, latestConsent] = await Promise.all([
     member(env, id),
     env.DB.prepare('SELECT email FROM "user" WHERE id = ?').bind(id).first<{ email: string }>(),
-    env.DB.prepare("SELECT paused, recovery_required FROM budget").first<{ paused: number; recovery_required: number }>(),
+    env.DB.prepare("SELECT paused, recovery_required, allowance, spent, reserved FROM budget")
+      .first<{ paused: number; recovery_required: number; allowance: number; spent: number; reserved: number }>(),
     env.DB.prepare("SELECT version, enabled FROM consents WHERE member_id = ? ORDER BY id DESC LIMIT 1")
       .bind(id).first<{ version: string; enabled: number }>(),
   ]);
-  const servicePaused = env.INFERENCE_ENABLED !== "true" || !env.OPENROUTER_KEY || !budget || Boolean(budget.paused || budget.recovery_required || m?.recovery_required);
+  const budgetShort = !budget || budget.allowance - budget.spent - budget.reserved < RESERVATION;
+  const servicePaused = env.INFERENCE_ENABLED !== "true" || !env.OPENROUTER_KEY || !budget || budgetShort
+    || Boolean(budget.paused || budget.recovery_required || m?.recovery_required);
   return json({ id, email: user?.email ?? "", access: !m ? "invitation_required"
     : m.revoked || m.deleted_at ? "revoked" : m.period_end <= Date.now() ? "expired" : "active",
     remaining_micro_usd: m ? Math.max(0, m.allowance - m.spent - m.reserved) : 0,
-    can_ask: Boolean(!servicePaused && m && !m.revoked && !m.deleted_at && m.period_end > Date.now() && m.reserved === 0 && m.allowance - m.spent >= RESERVATION),
+    can_ask: Boolean(!servicePaused && m && !m.revoked && !m.deleted_at && m.period_end > Date.now()
+      && m.allowance - m.spent - m.reserved >= RESERVATION),
     service_paused: servicePaused,
     reserved_micro_usd: m?.reserved ?? 0, period_end: m?.period_end ?? null,
     capture: m?.capture === 1 && latestConsent?.version === CAPTURE_VERSION && latestConsent.enabled === 1,

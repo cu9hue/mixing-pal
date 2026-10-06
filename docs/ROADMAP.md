@@ -257,16 +257,14 @@ Ordered. Each item says what, why, size, and what it waits on.
     automatic injection of past outcomes for the track in focus, and a list
     of outcomes in the Notes panel where she can remove one.
 
-17. **Stream model calls.** Next, ahead of the open items above. On
-    2026-10-04 a model call hit the proxy's 165 s limit. A call cut off
-    that way leaves no generation id, so its reservation locked the producer
-    out until an operator resolved the cost by hand. The limit is now 270 s,
-    which makes this rarer but does not prevent it. With streaming, the
-    proxy gets the generation id in the first chunk, so automatic
-    reconciliation always works. The timeout can then fire only when the
-    host stops sending, never while a long reply is still arriving.
-    Streaming does not shorten a turn: the time goes to K2.6's reasoning
-    tokens and the host's speed.
+17. **No lockout from the token flow.** Built 2026-10-06. Model calls stream
+    from OpenRouter, and the proxy saves the generation id from the response
+    header. Each request has a deadline and a lease, so a dead call stops
+    blocking anyone when its lease ends. A call that ends without a known cost
+    is paid by Mixing Pal and never charged to the member; reconciliation
+    finalizes it from OpenRouter's record. A new question is admitted past an
+    earlier call that went wrong; only access, allowance, a paused service or
+    five live calls can refuse it.
 
 18. **First questions that reach the aha.** High priority, small: next
     after item 17. The empty card offers three fixed questions

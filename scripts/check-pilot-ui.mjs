@@ -77,7 +77,7 @@ if(cmd==='report_submit'){
 if(cmd==='report_list')return window.reports;
 if(cmd==='report_delete'){window.reports=window.reports.map(r=>r.id===args.id?{...r,status:'deleted'}:r);sessionStorage.setItem('reports',JSON.stringify(window.reports));return;}
 if(cmd==='turn_event')return;
-if(cmd==='model_complete'){const account={...window.account};return new Promise((resolve,reject)=>{window.failModel=()=>reject({code:'completion_unknown',message:'The reply was interrupted.'});window.finishModel=(text='A complete answer.')=>resolve({text,tool_calls:[],account});});}
+if(cmd==='model_complete'){const account={...window.account};return new Promise((resolve,reject)=>{window.failModel=()=>reject({code:'completion_interrupted',message:'The reply was interrupted. It has not been retried. You can ask again.'});window.finishModel=(text='A complete answer.')=>resolve({text,tool_calls:[],account});});}
 if(cmd==='account_delete_shared')return;
 if(cmd==='turn_feedback'){window.shared.push(args);return {saved:true};}
 throw new Error('Unexpected native call: '+cmd);
@@ -312,7 +312,7 @@ await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
 await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete').length===3);
 await page.evaluate(()=>window.failModel());
 const failed=page.locator('.card__exchange').filter({hasText:'A failed shared turn'});
-await failed.getByText('The reply was interrupted.',{exact:true}).waitFor();
+await failed.getByText('The reply was interrupted. It has not been retried. You can ask again.',{exact:true}).waitFor();
 assert.equal(await failed.locator('.outcome').count(),0,'a turn with no answer has nothing to rate');
 await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.getByRole('button',{name:'Delete shared advice…',exact:true}).click();

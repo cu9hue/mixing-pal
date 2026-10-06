@@ -1,10 +1,11 @@
-import { createExecutionContext, env } from "cloudflare:test";
+import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
-import { hash, DAY, MODEL_TIMEOUT } from "../src/env";
-import { settle } from "../src/ledger";
+import { hash, DAY, FIRST_DATA_TIMEOUT, MIN_RUNTIME, MODEL_TIMEOUT, RESPONSE_BUDGET, SETTLE_MARGIN } from "../src/env";
+import { admissionDeadline, settle, settleExpired } from "../src/ledger";
+import { canDispatch, complete, dispatchStatement } from "../src/completion";
 import { redeem } from "../src/account";
-import { LOST_REQUEST_AFTER, maintain } from "../src/maintenance";
+import { maintain } from "../src/maintenance";
 import { MAX_OUTPUT, RESERVATION, toolNames } from "../src/policy";
 import sharedTools from "../../shared/tool-names.json";
 import { runTurn } from "../../src/agent/loop";
@@ -52,10 +53,27 @@ function question(round = 1, turnId = crypto.randomUUID()) {
       model: "expensive-model", max_tokens: 999999, provider: { only: ["attacker"] } } };
 }
 
-function reply(extra: Record<string, unknown> = {}) {
-  replies.push({ id: "generation-1", provider: "DeepInfra",
+function defaultReply(extra: Record<string, unknown> = {}) {
+  return { id: "generation-1", provider: "DeepInfra",
       usage: { cost: 0.001, prompt_tokens: 100, completion_tokens: 20 },
-      choices: [{ finish_reason: "stop", message: { content: "raw answer\n```note\n+ heard example\n```" } }], ...extra });
+      choices: [{ finish_reason: "stop", message: { content: "raw answer\n```note\n+ heard example\n```" } }], ...extra };
+}
+
+function reply(extra: Record<string, unknown> = {}) {
+  replies.push(defaultReply(extra));
+}
+
+/** The scripted non-stream reply, as OpenRouter would stream it: content, tool calls, finish, then usage. */
+function toSse(reply: Record<string, unknown>): string {
+  const choice = (reply.choices as { finish_reason?: string | null; message: { content?: string | null; tool_calls?: unknown[] } }[])[0];
+  const base = { id: reply.id, provider: reply.provider, model: "moonshotai/kimi-k2.6" };
+  const events: object[] = [];
+  if (choice.message.content) events.push({ ...base, choices: [{ index: 0, delta: { content: choice.message.content }, finish_reason: null }] });
+  (choice.message.tool_calls ?? []).forEach((call, index) =>
+    events.push({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index, ...(call as object) }] }, finish_reason: null }] }));
+  events.push({ ...base, choices: [{ index: 0, delta: {}, finish_reason: choice.finish_reason ?? null }] });
+  if (reply.usage) events.push({ ...base, choices: [{ index: 0, delta: {}, finish_reason: choice.finish_reason ?? null }], usage: reply.usage });
+  return events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") + "data: [DONE]\n\n";
 }
 
 beforeEach(async () => {
@@ -80,15 +98,26 @@ beforeEach(async () => {
     }
     if (String(url) === `${provider}/api/v1/chat/completions`) {
       sent.push(JSON.parse(String(options?.body)));
-      const response = replies.shift();
-      if (!response) throw new Error("No scripted provider response");
-      return Response.json(response);
+      const scripted = replies.shift();
+      if (!scripted) throw new Error("No scripted provider response");
+      if ("hold" in scripted) await (scripted as { hold: Promise<void> }).hold;
+      if ("raw" in scripted) return scripted.raw as Response;
+      const reply = "hold" in scripted ? defaultReply() : scripted;
+      const headers = new Headers({ "Content-Type": "text/event-stream" });
+      if (typeof reply.id === "string") headers.set("X-Generation-Id", reply.id);
+      return new Response(toSse(reply), { headers });
     }
     throw new Error(`Unexpected network request: ${String(url)}`);
   });
-  await env.DB.batch(["operator_actions", "deletion_jobs", "captures", "requests", "turns", "consents", "invites", "members", "session", "account", "user", "verification", "rateLimit", "api_limits"]
-    .map((table) => env.DB.prepare(`DELETE FROM "${table}"`)));
-  await env.DB.prepare(`UPDATE budget SET spent = 0, reserved = 0, allowance = 50000000,
+  // The retention trigger refuses to delete unresolved rows, so reset drops it and puts it back.
+  const retention = await env.DB.prepare("SELECT sql FROM sqlite_master WHERE name = 'request_retention'").first<{ sql: string }>();
+  await env.DB.batch([
+    ...(retention ? [env.DB.prepare("DROP TRIGGER request_retention")] : []),
+    ...["operator_actions", "deletion_jobs", "captures", "cost_conflicts", "requests", "turns", "consents", "invites", "members", "session", "account", "user", "verification", "rateLimit", "api_limits"]
+      .map((table) => env.DB.prepare(`DELETE FROM "${table}"`)),
+    ...(retention ? [env.DB.prepare(retention.sql)] : []),
+  ]);
+  await env.DB.prepare(`UPDATE budget SET spent = 0, reserved = 0, loss = 0, allowance = 50000000,
     paused = 0, recovery_required = 0, capture_bytes = 0, capture_allowance = 4000000000`).run();
   const objects = await env.CAPTURE.list();
   await Promise.all(objects.objects.map((o) => env.CAPTURE.delete(o.key)));
@@ -236,11 +265,10 @@ describe("invited accounts", () => {
   });
 });
 
-// A call cut off by the timeout leaves no generation id, so its cost can only be resolved by hand.
-test("a reply at the output cap fits the model timeout, which ends before the sweep calls a request lost", () => {
-  // K2.6 wrote 55 to 85 tokens a second on Inceptron on 2026-10-04.
+test("the timing budget fits a full reply inside the app's 300 s limit", () => {
   expect(MODEL_TIMEOUT).toBeGreaterThanOrEqual((MAX_OUTPUT / 50) * 1000);
-  expect(MODEL_TIMEOUT).toBeLessThan(LOST_REQUEST_AFTER);
+  expect(RESPONSE_BUDGET - SETTLE_MARGIN).toBeGreaterThanOrEqual(MODEL_TIMEOUT - 5_000);
+  expect(RESPONSE_BUDGET).toBeLessThanOrEqual(300_000 - 15_000);
 });
 
 describe("metered requests", () => {
@@ -312,14 +340,17 @@ describe("metered requests", () => {
 
   test("recovery refuses unresolved or decreasing spending and keeps its audit atomic", async () => {
     const user = await joined();
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
     reply({ usage: null });
-    const request = question();
-    await api("/v1/completions", request, user.token);
+    const provisional = question();
+    expect((await api("/v1/completions", provisional, user.token)).status).toBe(200);
     await api("/operator", { action: "replay_deletions" }, env.ADMIN_TOKEN);
     const recover = (spent_micro_usd: number) => api("/operator", { action: "recover", member_id: user.id,
       spent_micro_usd, reason: "Verified recovery amount" }, env.ADMIN_TOKEN);
     expect((await recover(1000)).status).toBe(409);
-    await settle(env, request.request_id, 1000);
+    await settle(env, provisional.request_id, 500);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(1000);
     expect((await recover(999)).status).toBe(409);
     await env.DB.exec("CREATE TRIGGER fail_recovery_audit BEFORE INSERT ON operator_actions BEGIN SELECT RAISE(ABORT, 'unavailable'); END");
     try { expect((await recover(1000)).status).toBe(503); }
@@ -328,16 +359,22 @@ describe("metered requests", () => {
     expect((await recover(1000)).status).toBe(200);
   });
 
-  test("five unknown generations retain the global concurrency limit", async () => {
+  test("five live calls refuse a sixth; five dead calls do not", async () => {
+    const holds: (() => void)[] = [];
+    const pending = [];
     for (let i = 0; i < 5; i++) {
       const user = await joined(`producer-${i}@example.com`);
-      reply({ usage: null });
-      expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
-      expect((await (await api("/v1/account", undefined, user.token)).json()).can_ask).toBe(false);
+      replies.push({ hold: new Promise<void>((r) => holds.push(r)) } as never);
+      pending.push(api("/v1/completions", question(), user.token));
     }
+    await vi.waitFor(() => expect(sent).toHaveLength(5));
     const waiting = await joined("waiting@example.com");
     expect((await api("/v1/completions", question(), waiting.token)).status).toBe(429);
-    expect(sent).toHaveLength(5);
+    await env.DB.prepare("UPDATE requests SET lease_until = 1 WHERE status = 'dispatched'").run();
+    reply();
+    expect((await api("/v1/completions", question(), waiting.token)).status).toBe(200);
+    holds.forEach((h) => h());
+    await Promise.all(pending);
   });
 
   test("measures local completion overhead against the stub provider", async ({ task }) => {
@@ -346,7 +383,7 @@ describe("metered requests", () => {
     for (let i = 0; i < 20; i++) {
       reply();
       const startDirect = performance.now();
-      await (await fetch(`${provider}/api/v1/chat/completions`, { method: "POST", body: "{}" })).json();
+      await (await fetch(`${provider}/api/v1/chat/completions`, { method: "POST", body: "{}" })).text();
       const direct = performance.now() - startDirect;
       reply();
       const startProxy = performance.now();
@@ -377,44 +414,40 @@ describe("metered requests", () => {
       reply({ id: `held-${i}`, usage: null });
       expect((await api("/v1/completions", question(), i === 0 ? user.token : other.token)).status).toBe(200);
     }
+    await env.DB.prepare("UPDATE requests SET reconcile_after = 0").run();
     const original = globalThis.fetch;
-    const checked: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => {
       if (!String(url).includes("/generation?")) return original(url, options);
-      checked.push(String(url));
-      return Promise.resolve(String(url).endsWith("held-1") ? Response.json({ data: { total_cost: 0.001 } }) : new Response(null, { status: 404 }));
+      return Promise.resolve(String(url).endsWith("held-1") ? Response.json({ data: { total_cost: 0.001, finish_reason: "stop" } }) : new Response(null, { status: 404 }));
     });
     await maintain(env);
-    await maintain(env);
-    expect(checked).toHaveLength(2);
-    expect((await env.DB.prepare("SELECT status FROM requests WHERE generation_id = 'held-1'").first()).status).toBe("settled");
+    expect((await env.DB.prepare("SELECT provisional FROM requests WHERE generation_id = 'held-1'").first())!.provisional).toBe(0);
+    expect((await env.DB.prepare("SELECT provisional FROM requests WHERE generation_id = 'held-0'").first())!.provisional).toBe(1);
   });
-  test("a provider interruption holds cost; a sweep reconciles a known generation", async () => {
+  test("a cut-off charges the member nothing and admits the next question", async () => {
     const user = await joined();
-    const request = question();
-    expect((await api("/v1/completions", request, user.token)).status).toBe(504);
-    expect((await env.DB.prepare("SELECT reserved FROM budget").first()).reserved).toBe(RESERVATION);
-    expect((await api("/v1/completions", question(), user.token)).status).toBe(429);
-    expect(sent).toHaveLength(1);
-    await env.DB.prepare("UPDATE requests SET generation_id = 'known-generation'").run();
-    const original = globalThis.fetch;
-    vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => String(url).includes("/generation?")
-      ? Promise.resolve(Response.json({ data: { total_cost: 0.002 } })) : original(url, options));
-    await maintain(env);
-    expect((await env.DB.prepare("SELECT spent, reserved FROM budget").first())).toEqual({ spent: 2000, reserved: 0 });
+    replies.push({ raw: new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } }),
+      { headers: { "X-Generation-Id": "known-generation", "Content-Type": "text/event-stream" } }) } as never);
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(504);
+    expect((await response.json()).error.code).toBe("completion_interrupted");
+    expect(await env.DB.prepare("SELECT spent, reserved FROM members WHERE id = ?").bind(user.id).first()).toEqual({ spent: 0, reserved: 0 });
+    expect(await env.DB.prepare("SELECT spent, reserved FROM budget").first()).toEqual({ spent: RESERVATION, reserved: 0 });
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
   });
 
-  test("a settlement failure cannot silently release its reservation", async () => {
+  test("a settlement failure still answers, and the lease cleanup settles the row later", async () => {
     const user = await joined();
     await env.DB.exec("CREATE TRIGGER fail_settlement BEFORE UPDATE OF cost ON requests BEGIN SELECT RAISE(ABORT, 'unavailable'); END");
     try {
       reply();
-      expect((await api("/v1/completions", question(), user.token)).status).toBe(503);
-      expect((await env.DB.prepare("SELECT reserved FROM budget").first()).reserved).toBe(RESERVATION);
-      await env.DB.prepare("UPDATE requests SET updated_at = ?").bind(Date.now() - 6 * 60_000).run();
-      await maintain(env);
-      expect((await env.DB.prepare("SELECT status FROM requests").first()).status).toBe("unknown");
+      expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+      expect((await env.DB.prepare("SELECT status FROM requests").first())!.status).toBe("dispatched");
     } finally { await env.DB.exec("DROP TRIGGER fail_settlement"); }
+    await env.DB.prepare("UPDATE requests SET lease_until = 1").run();
+    await settleExpired(env, Date.now());
+    expect(await env.DB.prepare("SELECT status, provisional FROM requests").first()).toEqual({ status: "settled", provisional: 1 });
   });
 
   test("never exposes a provider credential in a reply or capture", async () => {
@@ -428,6 +461,19 @@ describe("metered requests", () => {
     }
   });
 
+  test("never persists or exports a provider credential carried in stream metadata", async () => {
+    const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
+    const request = question();
+    reply({ id: `gen-${env.OPENROUTER_KEY}`, provider: `host-${env.OPENROUTER_KEY}`,
+      choices: [{ finish_reason: `stop-${env.OPENROUTER_KEY}`, message: { content: "answer" } }] });
+    expect((await api("/v1/completions", request, user.token)).status).toBe(200);
+    expect(JSON.stringify((await env.DB.prepare("SELECT * FROM requests").all()).results)).not.toContain(env.OPENROUTER_KEY);
+    const exported = await api("/operator", { action: "export", member_id: user.id, turn_id: request.turn_id }, env.ADMIN_TOKEN);
+    expect(exported.status).toBe(200);
+    expect(await exported.text()).not.toContain(env.OPENROUTER_KEY);
+  });
+
   test("global allowance and round ownership are checked inside admission", async () => {
     const first = await joined();
     const second = await joined("second@example.com");
@@ -437,7 +483,7 @@ describe("metered requests", () => {
     expect((await api("/v1/completions", question(2, request.turn_id), second.token)).status).toBe(409);
     expect((await api("/v1/completions", question(7), first.token)).status).toBe(400);
     await env.DB.prepare("UPDATE budget SET allowance = spent").run();
-    expect((await api("/v1/completions", question(), second.token)).status).toBe(402);
+    expect((await api("/v1/completions", question(), second.token)).status).toBe(503);
     expect(sent).toHaveLength(1);
   });
   test("applies server policy and settles actual cost without persisting project content", async () => {
@@ -446,7 +492,7 @@ describe("metered requests", () => {
     const response = await api("/v1/completions", question(), user.token);
     expect(response.status, await response.clone().text()).toBe(200);
     expect((await response.json()).text).toContain("```note");
-    expect(sent[0]).toMatchObject({ model: "moonshotai/kimi-k2.6", max_tokens: 12000, reasoning: { effort: "low" },
+    expect(sent[0]).toMatchObject({ model: "moonshotai/kimi-k2.6", max_tokens: 12000, stream: true, reasoning: { effort: "low" },
       provider: { only: ["inceptron/int4"], zdr: true, sort: "throughput" } });
     const row = await env.DB.prepare("SELECT spent, reserved FROM members WHERE id = ?").bind(user.id).first();
     expect(row).toEqual({ spent: 1000, reserved: 0 });
@@ -497,15 +543,233 @@ describe("metered requests", () => {
     expect((await env.DB.prepare("SELECT spent FROM budget").first()).spent).toBe(1000);
   });
 
-  test("missing usage holds a reservation and blocks the next tool round", async () => {
+  test("missing usage answers, charges the member nothing, and lets the tool round continue", async () => {
     const user = await joined();
     const request = question();
     reply({ usage: null, choices: [{ finish_reason: "tool_calls", message: { tool_calls: [
       { id: "call-1", type: "function", function: { name: "get_arrangement", arguments: "{}" } },
     ] } }] });
-    expect((await api("/v1/completions", request, user.token)).status).toBe(503);
-    expect((await env.DB.prepare("SELECT status, reserved FROM requests").first())).toEqual({ status: "unknown", reserved: RESERVATION });
-    expect((await api("/v1/completions", question(2, request.turn_id), user.token)).status).toBe(409);
+    const first = await api("/v1/completions", request, user.token);
+    expect(first.status).toBe(200);
+    expect((await first.json()).tool_calls).toHaveLength(1);
+    expect(await env.DB.prepare("SELECT provisional, member_cost FROM requests").first()).toEqual({ provisional: 1, member_cost: 0 });
+    reply();
+    expect((await api("/v1/completions", question(2, request.turn_id), user.token)).status).toBe(200);
+  });
+});
+
+describe("never refused because an earlier call went wrong", () => {
+  test.each([
+    ["5xx before the stream", () => replies.push({ raw: new Response("{}", { status: 503 }) } as never), 502],
+    ["error event inside the stream", () => replies.push({ raw: new Response(
+      'data: {"id":"g","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]}\n\ndata: {"error":{"code":502}}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } }) } as never), 502],
+    ["no scripted reply (network failure)", () => {}, 504],
+  ])("%s", async (_, script, status) => {
+    const user = await joined();
+    script();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(status);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
+    expect((await (await api("/v1/account", undefined, user.token)).json()).can_ask).toBe(true);
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+  });
+
+  test("a no-charge status with a broken body settles at zero", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } }), { status: 429 }) } as never);
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("provider_failed");
+    expect(await env.DB.prepare("SELECT provisional, cost FROM requests").first()).toEqual({ provisional: 0, cost: 0 });
+    expect(await env.DB.prepare("SELECT spent FROM budget").first()).toEqual({ spent: 0 });
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
+  });
+
+  test("a refused upstream call logs upstream_failed with its status", async () => {
+    const user = await joined();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    replies.push({ raw: new Response("Insufficient credits", { status: 402 }) } as never);
+    const request = question();
+    expect((await api("/v1/completions", request, user.token)).status).toBe(502);
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line))))
+      .toContainEqual({ event: "upstream_failed", request_id: request.request_id, status: 402 });
+  });
+
+  test("finish without usage answers and charges the member nothing", async () => {
+    const user = await joined();
+    reply({ usage: null });
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first()).toEqual({ spent: 0 });
+  });
+
+  test("usage then a failure charges the usage and sends no tool calls", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response(
+      'data: {"id":"g","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c","type":"function","function":{"name":"get_mixer","arguments":"{"}}]},"finish_reason":null}],"usage":{"cost":0.003,"prompt_tokens":1,"completion_tokens":1}}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } }) } as never);
+    // The stream ends without a finish reason: a truncation, so she is told it was interrupted.
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(504);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(3000);
+    expect(await env.DB.prepare("SELECT provisional, cost, error_code FROM requests").first())
+      .toEqual({ provisional: 0, cost: 3000, error_code: "stream_truncated" });
+  });
+
+  test("an error event with empty usage still charges the usage reported before it", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response(
+      'data: {"id":"g","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}],"usage":{"cost":0.003,"prompt_tokens":1,"completion_tokens":1}}\n\n'
+      + 'data: {"error":{"code":502},"usage":{}}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } }) } as never);
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(502);
+    expect(await env.DB.prepare("SELECT provisional, cost FROM requests").first()).toEqual({ provisional: 0, cost: 3000 });
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(3000);
+  });
+
+  test("a provider that sends no headers is cut off at the first-data limit", async () => {
+    const user = await joined();
+    let signal: AbortSignal | undefined;
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url, options) => {
+      if (!String(url).endsWith("/chat/completions")) return original(url, options);
+      signal = options!.signal!;
+      return new Promise((_, reject) => signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))));
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = api("/v1/completions", question(), user.token);
+      await vi.waitFor(() => expect(signal).toBeDefined());
+      await vi.advanceTimersByTimeAsync(FIRST_DATA_TIMEOUT - 1000);
+      expect(signal!.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(signal!.aborted).toBe(true);
+      expect((await pending).status).toBe(504);
+    } finally { vi.useRealTimers(); }
+    expect(await env.DB.prepare("SELECT provisional, error_code FROM requests").first())
+      .toEqual({ provisional: 1, error_code: "provider_interrupted" });
+  });
+
+  test("a reply above 1.5 MiB charges its usage, marks the missing capture, and fails", async () => {
+    const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
+    const event = (choice: object, extra = {}) => `data: ${JSON.stringify({ id: "big", choices: [{ index: 0, ...choice }], ...extra })}\n\n`;
+    const half = event({ delta: { content: "a".repeat(800_000) }, finish_reason: null });
+    replies.push({ raw: new Response(half + half + event({ delta: {}, finish_reason: "stop" },
+      { usage: { cost: 0.002, prompt_tokens: 1, completion_tokens: 1 } }) + "data: [DONE]\n\n",
+      { headers: { "Content-Type": "text/event-stream" } }) } as never);
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("provider_failed");
+    expect(await env.DB.prepare("SELECT provisional, cost, member_cost FROM requests").first())
+      .toEqual({ provisional: 0, cost: 2000, member_cost: 2000 });
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(2000);
+    // The capture is larger than MAX_BODY, so the turn records that its evidence is missing.
+    expect(await capturedObjects()).toHaveLength(0);
+    expect((await env.DB.prepare("SELECT incomplete FROM turns").first())!.incomplete).toBe(1);
+  });
+
+  test("a header id without any chunk is kept for reconciliation", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response("", { headers: { "X-Generation-Id": "header-only", "Content-Type": "text/event-stream" } }) } as never);
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(504);
+    expect(await env.DB.prepare("SELECT generation_id, provisional FROM requests").first()).toEqual({ generation_id: "header-only", provisional: 1 });
+  });
+
+  test("a dispatch needs at least MIN_RUNTIME before its deadline", () => {
+    expect(canDispatch(MIN_RUNTIME, 0)).toBe(true);
+    expect(canDispatch(MIN_RUNTIME - 1, 0)).toBe(false);
+  });
+
+  test("a dispatch whose D1 reply comes back too late never starts the provider call", async () => {
+    const user = await joined();
+    reply();
+    const prepare = env.DB.prepare.bind(env.DB);
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      if (sql.includes("SET status = 'dispatched'")) { const later = Date.now() + MODEL_TIMEOUT; vi.spyOn(Date, "now").mockReturnValue(later); }
+      return prepare(sql);
+    });
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(504);
+    expect(sent).toHaveLength(0);
+    expect(await env.DB.prepare("SELECT status, provisional, cost, error_code FROM requests").first())
+      .toEqual({ status: "settled", provisional: 0, cost: 0, error_code: "not_dispatched" });
+  });
+
+  test("the guarded dispatch never moves a row whose deadline is too close, so the provider is never called", async () => {
+    const user = await joined();
+    const t = crypto.randomUUID(), r = crypto.randomUUID();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(t, user.id).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', ?, ?)`)
+      .bind(r, t, user.id, RESERVATION, Date.now() + MIN_RUNTIME - 1, Date.now() + MIN_RUNTIME + SETTLE_MARGIN).run();
+    expect((await dispatchStatement(env, r, Date.now()).run()).meta.changes).toBe(0);
+    expect((await env.DB.prepare("SELECT status FROM requests WHERE id = ?").bind(r).first())!.status).toBe("reserved");
+  });
+});
+
+describe("response deadline", () => {
+  // Once the call settles, the clock reads 200 ms before the reply is due, and statements matching `match` take 2 s.
+  function slowAfterSettling(receivedAt: number, match: string) {
+    const prepare = env.DB.prepare.bind(env.DB);
+    let stalled: Promise<unknown> = Promise.resolve();
+    const slow = (statement: D1PreparedStatement): D1PreparedStatement => {
+      const { bind, first, run } = statement;
+      const later = (work: () => Promise<unknown>) => (stalled = new Promise((r) => setTimeout(r, 2000)).then(work));
+      return Object.assign(statement, { bind: (...values: unknown[]) => slow(bind.apply(statement, values)),
+        first: (...args: never[]) => later(() => first.apply(statement, args)), run: () => later(() => run.apply(statement)) });
+    };
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      if (sent.length && sql.startsWith("UPDATE requests SET status = 'settled'")) vi.spyOn(Date, "now").mockReturnValue(receivedAt + RESPONSE_BUDGET - 200);
+      return sql.includes(match) ? slow(prepare(sql)) : prepare(sql);
+    });
+    return () => stalled;
+  }
+  const late = () => new Promise((r) => setTimeout(() => r("late"), 1500));
+
+  test("a slow account read never holds the answer past the response budget", async () => {
+    const user = await joined();
+    reply();
+    const receivedAt = Date.now();
+    const stalled = slowAfterSettling(receivedAt, "SELECT paused, recovery_required");
+    const answer = complete(env, user.id, question(), createExecutionContext(), receivedAt);
+    expect(await Promise.race([answer.then(() => "on time"), late()])).toBe("on time");
+    const body = await (await answer).json();
+    expect(body.text).toContain("raw answer");
+    expect(body.account).toBeUndefined();
+    await stalled();
+  });
+
+  test("a settlement that misses the response budget still lands after the reply", async () => {
+    const user = await joined();
+    reply();
+    const receivedAt = Date.now();
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, "batch").mockImplementation(async (statements) => {
+      if (sent.length) {
+        vi.spyOn(Date, "now").mockReturnValue(receivedAt + RESPONSE_BUDGET - 200);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      return batch(statements);
+    });
+    const ctx = createExecutionContext();
+    expect((await complete(env, user.id, question(), ctx, receivedAt)).status).toBe(200);
+    expect((await env.DB.prepare("SELECT status FROM requests").first())!.status).toBe("dispatched");
+    await waitOnExecutionContext(ctx);
+    expect(await env.DB.prepare("SELECT status, provisional, cost FROM requests").first())
+      .toEqual({ status: "settled", provisional: 0, cost: 1000 });
+  });
+
+  test("a slow failure path never holds the error past the response budget", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response("{}", { status: 503 }) } as never);
+    const receivedAt = Date.now();
+    const stalled = slowAfterSettling(receivedAt, "UPDATE turns SET incomplete = 1");
+    const answer = complete(env, user.id, question(), createExecutionContext(), receivedAt);
+    expect(await Promise.race([answer.then(() => "on time", () => "on time"), late()])).toBe("on time");
+    await expect(answer).rejects.toMatchObject({ status: 502 });
+    await stalled();
   });
 });
 
@@ -960,5 +1224,458 @@ describe("capture and deletion", () => {
     expect(await chosen()).toBe(false);
     await api("/v1/consent", { enabled: false, version: "quality-2026-09-17" }, user.token, "PUT");
     expect(await chosen()).toBe(true);
+  });
+});
+
+describe("admission", () => {
+  test("a new turn supersedes the member's running turn and is admitted while the old call is live", async () => {
+    const user = await joined();
+    const first = question();
+    let release!: () => void;
+    replies.push({ hold: new Promise<void>((r) => { release = r; }) } as never);
+    const pending = api("/v1/completions", first, user.token);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    reply();
+    const second = question();
+    expect((await api("/v1/completions", second, user.token)).status).toBe(200);
+    expect((await env.DB.prepare("SELECT status FROM turns WHERE id = ?").bind(first.turn_id).first())!.status).toBe("superseded");
+    release();
+    expect((await pending).status).toBe(200);
+    expect((await api("/v1/completions", question(2, first.turn_id), user.token)).status).toBe(409);
+  });
+
+  test("a late finish after the lease cleanup finalizes the provisional row and charges the member nothing", async () => {
+    const user = await joined();
+    let release!: () => void;
+    replies.push({ hold: new Promise<void>((r) => { release = r; }) } as never);
+    const pending = api("/v1/completions", question(), user.token);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await env.DB.prepare("UPDATE requests SET lease_until = 1").run();
+    expect((await (await api("/v1/account", undefined, user.token)).json()).reserved_micro_usd).toBe(0);
+    expect(await env.DB.prepare("SELECT provisional, error_code FROM requests").first())
+      .toEqual({ provisional: 1, error_code: "worker_interrupted" });
+    release();
+    expect((await pending).status).toBe(200);
+    expect(await env.DB.prepare("SELECT status, provisional, cost, member_cost FROM requests").first())
+      .toEqual({ status: "settled", provisional: 0, cost: 1000, member_cost: 0 });
+    expect(await env.DB.prepare("SELECT spent, reserved FROM members WHERE id = ?").bind(user.id).first()).toEqual({ spent: 0, reserved: 0 });
+    expect(await env.DB.prepare("SELECT spent, reserved FROM budget").first()).toEqual({ spent: 1000, reserved: 0 });
+  });
+
+  test("an expired lease is settled provisionally at admission and the member is admitted", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE members SET allowance = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    const stuck = question();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(stuck.turn_id, user.id).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(stuck.request_id, stuck.turn_id, user.id, RESERVATION).run();
+    await env.DB.prepare("UPDATE requests SET status = 'dispatched' WHERE id = ?").bind(stuck.request_id).run();
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT provisional, member_cost FROM requests WHERE id = ?").bind(stuck.request_id).first())
+      .toEqual({ provisional: 1, member_cost: 0 });
+  });
+
+  test("concurrent admissions with one reservation of headroom", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE members SET allowance = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    reply(); reply();
+    const results = await Promise.all([api("/v1/completions", question(), user.token), api("/v1/completions", question(), user.token)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 402]);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM turns WHERE status = 'superseded'").first())!.n).toBeLessThanOrEqual(1);
+  });
+
+  test("global budget exhaustion is reported as a pause", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE budget SET allowance = spent").run();
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("service_paused");
+  });
+
+  test("the model deadline shrinks by the time spent before admission", () => {
+    expect(admissionDeadline(0, 10_000)).toBe(RESPONSE_BUDGET - SETTLE_MARGIN);
+    expect(admissionDeadline(0, 0)).toBe(Math.min(MODEL_TIMEOUT, RESPONSE_BUDGET - SETTLE_MARGIN));
+  });
+});
+
+describe("account eligibility", () => {
+  async function stick(memberId: string, sent = true) {
+    const t = crypto.randomUUID(), r = crypto.randomUUID();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(t, memberId).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(r, t, memberId, RESERVATION).run();
+    if (sent) await env.DB.prepare("UPDATE requests SET status = 'dispatched' WHERE id = ?").bind(r).run();
+  }
+
+  test("an expired call stops blocking the member on the next account read, without cron", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE members SET allowance = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    await stick(user.id);
+    const view = await (await api("/v1/account", undefined, user.token)).json();
+    expect(view).toMatchObject({ can_ask: true, reserved_micro_usd: 0 });
+  });
+
+  test("another member's expired call stops holding the global budget, without her polling or cron", async () => {
+    const a = await joined("a@example.com");
+    const b = await joined("b@example.com");
+    await env.DB.prepare("UPDATE budget SET allowance = ?").bind(RESERVATION + 1000).run();
+    await stick(a.id, false);
+    expect(await (await api("/v1/account", undefined, b.token)).json()).toMatchObject({ can_ask: true, service_paused: false });
+    await stick(a.id, false);
+    reply();
+    expect((await api("/v1/completions", question(), b.token)).status).toBe(200);
+  });
+
+  test("a live hold counts against headroom, and can_ask no longer requires zero reserved", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE members SET reserved = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    expect((await (await api("/v1/account", undefined, user.token)).json()).can_ask).toBe(true);
+    await env.DB.prepare("UPDATE members SET allowance = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    expect((await (await api("/v1/account", undefined, user.token)).json()).can_ask).toBe(false);
+  });
+
+  test("global budget shortfall reads as paused", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE budget SET allowance = spent + ?").bind(RESERVATION - 1).run();
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ can_ask: false, service_paused: true });
+  });
+
+  test("a cleanup failure does not break the account read", async () => {
+    const user = await joined();
+    await stick(user.id);
+    await env.DB.exec("CREATE TRIGGER fail_cleanup BEFORE UPDATE OF status ON requests BEGIN SELECT RAISE(ABORT, 'unavailable'); END");
+    try {
+      const response = await api("/v1/account", undefined, user.token);
+      expect(response.status).toBe(200);
+      expect((await response.json()).reserved_micro_usd).toBe(RESERVATION);
+    } finally { await env.DB.exec("DROP TRIGGER fail_cleanup"); }
+  });
+});
+
+describe("maintenance billing", () => {
+  test("reconciliation needs completion evidence", async () => {
+    const user = await joined();
+    reply({ id: "gen-a", usage: null });
+    await api("/v1/completions", question(), user.token);
+    await env.DB.prepare("UPDATE requests SET reconcile_after = 0").run();
+    const original = globalThis.fetch;
+    let body: unknown = { data: { total_cost: 0.002 } };
+    vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => String(url).includes("/generation?")
+      ? Promise.resolve(Response.json(body)) : original(url, options));
+    await maintain(env);
+    expect((await env.DB.prepare("SELECT provisional FROM requests").first())!.provisional).toBe(1);
+    body = { data: { total_cost: 0.002, finish_reason: "stop" } };
+    await env.DB.prepare("UPDATE requests SET reconcile_after = 0").run();
+    await maintain(env);
+    expect(await env.DB.prepare("SELECT provisional, cost FROM requests").first()).toEqual({ provisional: 0, cost: 2000 });
+  });
+
+  test("a cancelled generation with no finish reason is terminal evidence", async () => {
+    const user = await joined();
+    reply({ id: "gen-c", usage: null });
+    await api("/v1/completions", question(), user.token);
+    await env.DB.prepare("UPDATE requests SET reconcile_after = 0").run();
+    const original = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => String(url).includes("/generation?")
+      ? Promise.resolve(Response.json({ data: { total_cost: 0.002, cancelled: true } })) : original(url, options));
+    await maintain(env);
+    expect(await env.DB.prepare("SELECT provisional, cost FROM requests").first()).toEqual({ provisional: 0, cost: 2000 });
+  });
+
+  test("a refused reconciliation is logged; a missing generation is not", async () => {
+    const user = await joined();
+    reply({ id: "gen-401", usage: null }); await api("/v1/completions", question(), user.token);
+    reply({ id: "gen-404", usage: null }); await api("/v1/completions", question(), user.token);
+    await env.DB.prepare("UPDATE requests SET reconcile_after = 0").run();
+    const original = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => String(url).includes("/generation?")
+      ? Promise.resolve(new Response(null, { status: String(url).endsWith("gen-401") ? 401 : 404 })) : original(url, options));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await maintain(env);
+    const id = async (generation: string) => (await env.DB.prepare("SELECT id FROM requests WHERE generation_id = ?").bind(generation).first())!.id;
+    const failures = logged.mock.calls.map(([line]) => JSON.parse(String(line))).filter((line) => line.event === "reconciliation_failed");
+    expect(failures).toEqual([{ event: "reconciliation_failed", request_id: await id("gen-401"), status: 401 }]);
+  });
+
+  test("billing runs even when report maintenance fails", async () => {
+    const user = await joined();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES ('t-old', ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(user.id).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES ('r-old', 't-old', ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(user.id, RESERVATION).run();
+    await env.DB.prepare("UPDATE requests SET status = 'dispatched' WHERE id = 'r-old'").run();
+    // Hiding the table makes maintainReports throw "no such table".
+    await env.DB.exec("ALTER TABLE support_reports RENAME TO support_reports_hidden");
+    try { await maintain(env); }
+    finally { await env.DB.exec("ALTER TABLE support_reports_hidden RENAME TO support_reports"); }
+    expect((await env.DB.prepare("SELECT provisional FROM requests WHERE id = 'r-old'").first())!.provisional).toBe(1);
+  });
+
+  test("pruning keeps provisional and conflicted turns and removes resolved conflicts first", async () => {
+    const user = await joined();
+    reply({ usage: null }); const kept = question(); await api("/v1/completions", kept, user.token);
+    reply(); const pruned = question(); await api("/v1/completions", pruned, user.token);
+    const prunedId = (await env.DB.prepare("SELECT id FROM requests WHERE turn_id = ?").bind(pruned.turn_id).first())!.id;
+    await env.DB.prepare("INSERT INTO cost_conflicts(request_id, source, recorded, reported, created_at, resolved_at, resolution) VALUES (?, 'operator', 1000, 900, 1, 2, 'dismissed')").bind(prunedId).run();
+    await env.DB.prepare("UPDATE turns SET created_at = 0, deleted_at = 1").run();
+    await maintain(env);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM turns WHERE id = ?").bind(kept.turn_id).first())!.n).toBe(1);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM turns WHERE id = ?").bind(pruned.turn_id).first())!.n).toBe(0);
+  });
+
+  test("a conflict opened while its turn is pruned survives with the request, and pruning goes on", async () => {
+    const user = await joined();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 2; i++) { reply(); await api("/v1/completions", question(), user.token); }
+    await env.DB.prepare("UPDATE turns SET created_at = 0, deleted_at = 1").run();
+    // The conflict lands after the eligibility read, just before the first turn's pruning batch.
+    const prepare = env.DB.prepare.bind(env.DB), batch = env.DB.batch.bind(env.DB);
+    let pruning: string | undefined, raced: string | undefined;
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (!sql.startsWith("DELETE FROM cost_conflicts")) return statement;
+      const bind = statement.bind.bind(statement);
+      statement.bind = (turnId: string) => { pruning = turnId; return bind(turnId); };
+      return statement;
+    });
+    vi.spyOn(env.DB, "batch").mockImplementation(async (statements) => {
+      if (pruning && !raced) {
+        raced = pruning;
+        await prepare(`INSERT INTO cost_conflicts(request_id, source, recorded, reported, created_at)
+          SELECT id, 'generation', cost, cost + 1, 1 FROM requests WHERE turn_id = ?`).bind(raced).run();
+      }
+      return batch(statements);
+    });
+    await maintain(env);
+    vi.restoreAllMocks();
+    expect(raced).toBeDefined();
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE turn_id = ?").bind(raced).first())!.n).toBe(1);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cost_conflicts WHERE resolved_at IS NULL").first())!.n).toBe(1);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM turns").first())!.n).toBe(1);
+  });
+
+  test("health reports provisional usage", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await maintain(env);
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line))))
+      .toContainEqual(expect.objectContaining({ event: "provisional_usage", count: 1, amount: RESERVATION, without_id: 0 }));
+  });
+  test("health reports a loss or a pause even with no provisional rows", async () => {
+    await env.DB.prepare("UPDATE budget SET loss = 5, paused = 1").run();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await maintain(env);
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line))))
+      .toContainEqual(expect.objectContaining({ event: "provisional_usage", count: 0, loss: 5, paused: 1 }));
+  });
+});
+
+describe("operator tools", () => {
+  test("usage lists provisional rows and open conflicts", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const usage = await (await api("/operator", { action: "usage" }, env.ADMIN_TOKEN)).json();
+    expect(usage.pending[0]).toMatchObject({ provisional: 1, cost: RESERVATION, reserved: RESERVATION });
+    expect(usage.conflicts).toEqual([]);
+  });
+
+  test("resolve twice reports already_final and books nothing", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    const resolve = () => api("/operator", { action: "resolve", request_id: id, cost_micro_usd: 4000, reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    expect(await (await resolve()).json()).toEqual({ outcome: "applied" });
+    const again = await resolve();
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual({ outcome: "already_final" });
+    expect((await env.DB.prepare("SELECT spent FROM budget").first())!.spent).toBe(4000);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions WHERE action = 'resolve'").first())!.n).toBe(1);
+  });
+
+  test("a resolve above the reservation reports that the service paused", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    const response = await api("/operator", { action: "resolve", request_id: id, cost_micro_usd: RESERVATION + 1,
+      reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    expect(await response.json()).toEqual({ outcome: "applied", paused: true });
+    expect((await env.DB.prepare("SELECT paused FROM budget").first())!.paused).toBe(1);
+  });
+
+  test("two resolves in the same millisecond audit only the one that applied", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    // Both commands read the row as provisional before either batch runs.
+    const batch = env.DB.batch.bind(env.DB);
+    let first: (() => void) | undefined;
+    vi.spyOn(env.DB, "batch").mockImplementation(async (statements) => {
+      if (!first) await new Promise<void>((r) => { first = r; });
+      else first();
+      return batch(statements);
+    });
+    const resolve = (cost: number) => api("/operator", { action: "resolve", request_id: id, cost_micro_usd: cost, reason: `Applied ${cost}` }, env.ADMIN_TOKEN);
+    const outcomes = await Promise.all([resolve(4000), resolve(9000)]);
+    expect(outcomes.map((r) => r.status)).toEqual([200, 200]);
+    const cost = (await env.DB.prepare("SELECT cost FROM requests WHERE id = ?").bind(id).first())!.cost;
+    expect((await env.DB.prepare("SELECT detail FROM operator_actions WHERE action = 'resolve'").all()).results)
+      .toEqual([{ detail: `Applied ${cost}` }]);
+  });
+
+  test("two conflict resolutions in the same millisecond audit only the one that applied", async () => {
+    const user = await joined();
+    reply(); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    await settle(env, id, 5000, {}, "generation");
+    const conflict = (await env.DB.prepare("SELECT id FROM cost_conflicts").first())!.id;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    for (const resolution of ["booked", "dismissed"]) {
+      await api("/operator", { action: "conflict", conflict_id: conflict, resolution, reason: "Provider confirmed" }, env.ADMIN_TOKEN);
+    }
+    expect((await env.DB.prepare("SELECT detail FROM operator_actions WHERE action = 'conflict'").all()).results)
+      .toEqual([{ detail: "booked: Provider confirmed" }]);
+  });
+
+  test("resolve_without_id finalizes only the provisional rows without a generation id, once", async () => {
+    const user = await joined();
+    // With no scripted reply the provider fetch rejects before headers, so these rows have no generation id.
+    const lost = [question(), question()];
+    for (const q of lost) await api("/v1/completions", q, user.token);
+    const withId = question(); reply({ usage: null }); await api("/v1/completions", withId, user.token);
+    const final = question(); reply(); await api("/v1/completions", final, user.token);
+    const open = question();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(open.turn_id, user.id).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(open.request_id, open.turn_id, user.id, RESERVATION).run();
+    const resolve = () => api("/operator", { action: "resolve_without_id", cost_micro_usd: 4000, reason: "From OpenRouter billing" }, env.ADMIN_TOKEN);
+    expect(await (await resolve()).json()).toEqual({ outcome: "applied", resolved: 2 });
+    const row = (q: { request_id: string }) => env.DB.prepare("SELECT status, provisional, cost, error_code FROM requests WHERE id = ?")
+      .bind(q.request_id).first();
+    for (const q of lost) expect(await row(q)).toEqual({ status: "settled", provisional: 0, cost: 4000, error_code: "operator_resolved" });
+    expect(await row(withId)).toMatchObject({ status: "settled", provisional: 1, cost: RESERVATION });
+    expect(await row(final)).toMatchObject({ status: "settled", provisional: 0, cost: 1000 });
+    expect(await row(open)).toMatchObject({ status: "reserved" });
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(1000);
+    expect((await env.DB.prepare("SELECT spent FROM budget").first())!.spent).toBe(1000 + RESERVATION + 2 * 4000);
+    const audit = async () => (await env.DB.prepare("SELECT action, target, detail FROM operator_actions ORDER BY target").all()).results;
+    const expected = lost.map((q) => ({ action: "resolve", target: q.request_id, detail: "From OpenRouter billing" }))
+      .sort((x, y) => x.target.localeCompare(y.target));
+    expect(await audit()).toEqual(expected);
+    expect(await (await resolve()).json()).toEqual({ outcome: "applied", resolved: 0 });
+    expect(await audit()).toEqual(expected);
+  });
+
+  test("resolve answers not_found for an unknown request", async () => {
+    const response = await api("/operator", { action: "resolve", request_id: crypto.randomUUID(), cost_micro_usd: 1000, reason: "No such call" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe("not_found");
+  });
+
+  // Reconciliation finalizes the request and pruning deletes it right after resolve's first read.
+  function pruneAfterFirstRead(id: string) {
+    const prepare = env.DB.prepare.bind(env.DB);
+    let pruned = false;
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (pruned || !sql.startsWith("SELECT status, provisional, cost, reserved FROM requests")) return statement;
+      const bind = statement.bind.bind(statement);
+      statement.bind = (...values: unknown[]) => {
+        const bound = bind(...values);
+        const first = bound.first.bind(bound);
+        bound.first = (async () => {
+          const row = await first();
+          pruned = true;
+          await prepare("UPDATE requests SET status = 'settled', provisional = 0, cost = 2000 WHERE id = ? AND provisional = 1").bind(id).run();
+          await prepare("DELETE FROM requests WHERE id = ?").bind(id).run();
+          return row;
+        }) as never;
+        return bound;
+      };
+      return statement;
+    });
+  }
+
+  test("resolve answers not_found when the request is pruned between its reads", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first<{ id: string }>())!.id;
+    pruneAfterFirstRead(id);
+    const response = await api("/operator", { action: "resolve", request_id: id, cost_micro_usd: 4000, reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe("not_found");
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions").first())!.n).toBe(0);
+  });
+
+  test("resolve answers not_found when the request is pruned before its conflict is recorded", async () => {
+    const user = await joined();
+    reply(); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first<{ id: string }>())!.id;
+    pruneAfterFirstRead(id);
+    const response = await api("/operator", { action: "resolve", request_id: id, cost_micro_usd: 9000, reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe("not_found");
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cost_conflicts").first())!.n).toBe(0);
+  });
+
+  test("resolve with a different cost on a final row records a conflict and changes nothing", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    const resolve = (cost: number) => api("/operator", { action: "resolve", request_id: id, cost_micro_usd: cost, reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    await resolve(4000);
+    const response = await resolve(9000);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "conflict" });
+    expect(await env.DB.prepare("SELECT source, recorded, reported FROM cost_conflicts WHERE request_id = ?").bind(id).first())
+      .toEqual({ source: "operator", recorded: 4000, reported: 9000 });
+    expect((await env.DB.prepare("SELECT cost FROM requests WHERE id = ?").bind(id).first())!.cost).toBe(4000);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
+  });
+
+  test("resolve refuses a request that has not ended", async () => {
+    const user = await joined();
+    const open = question();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(open.turn_id, user.id).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(open.request_id, open.turn_id, user.id, RESERVATION).run();
+    const response = await api("/operator", { action: "resolve", request_id: open.request_id, cost_micro_usd: 1000, reason: "Too early" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("request_not_provisional");
+  });
+
+  test("a booked higher conflict adds the liability once and allows resume", async () => {
+    const user = await joined();
+    reply(); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    await settle(env, id, 5000, {}, "generation");
+    expect((await api("/operator", { action: "pause", paused: false }, env.ADMIN_TOKEN)).status).toBe(409);
+    const conflict = (await env.DB.prepare("SELECT id FROM cost_conflicts").first())!.id;
+    const book = () => api("/operator", { action: "conflict", conflict_id: conflict, resolution: "booked", reason: "Provider confirmed" }, env.ADMIN_TOKEN);
+    expect(await (await book()).json()).toEqual({ outcome: "applied" });
+    expect(await (await book()).json()).toEqual({ outcome: "already_resolved" });
+    expect((await env.DB.prepare("SELECT spent FROM budget").first())!.spent).toBe(5000);
+    expect((await api("/operator", { action: "pause", paused: false }, env.ADMIN_TOKEN)).status).toBe(200);
+  });
+
+  test("export marks provisional requests", async () => {
+    const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
+    reply({ usage: null }); const request = question(); await api("/v1/completions", request, user.token);
+    const exported = await (await api("/operator", { action: "export", member_id: user.id, turn_id: request.turn_id }, env.ADMIN_TOKEN)).json();
+    expect(exported.requests[0].provisional).toBe(1);
   });
 });

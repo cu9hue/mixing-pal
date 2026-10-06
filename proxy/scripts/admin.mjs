@@ -11,13 +11,18 @@ The token is never an argument. Only localhost may use HTTP.
   npm run admin -- invite email                 Email a seven-day invitation and download link
   npm run admin -- report report-id            Inspect a private report (no local cache)
   npm run admin -- report-notifications         List pending/failed support emails
-  npm run admin -- usage                        Balances and held requests
+  npm run admin -- usage                        Balances and provisional costs
   npm run admin -- stats [days]                 Retention, answer times, failures and hosts (default 28 days, counts only)
   npm run admin -- revoke member-id              End access and revoke sessions
   npm run admin -- delete-account member-id      Delete identity and shared content
   npm run admin -- delete-turn member-id turn-id Delete a shared turn
   npm run admin -- resolve request-id micro-usd reason
-                                                Resolve UNKNOWN cost after checking the provider
+                                                Finalize a PROVISIONAL cost after checking the provider
+  npm run admin -- resolve-without-id micro-usd reason
+                                                Finalize every PROVISIONAL cost without a generation ID
+                                                at this cost, only from provider billing evidence
+  npm run admin -- conflict conflict-id booked|dismissed reason
+                                                Resolve a disputed final cost
   npm run admin -- pause | resume               Stop or resume admissions
   npm run admin -- sweep                        Run reconciliation and deletion now
   npm run admin -- replay-deletions             Replay deletions and revocations after a D1 restore
@@ -38,11 +43,15 @@ retained file. Reviewed examples need a separate retention decision before
 being kept as fixtures; trace consent never grants training permission.
 
 Run usage and sweep before each pilot review. Worker error logs contain only
-event categories and IDs: held_usage, reconciliation_failed, deletion_failed,
-capture_cleanup_backlog, capture_failed, request_failed. Alert on any of these
-in Cloudflare Logs.
-For held requests without a generation ID, check the provider billing record
-before resolve. Do not release a reservation just because time passed.
+event categories and IDs: provisional_usage, usage_provisional, cost_conflict,
+billing_maintenance_failed, report_maintenance_failed, reconciliation_failed,
+settlement_deferred, turn_mark_deferred, capture_deferred, account_view_skipped,
+account_cleanup_failed, prune_skipped, generation_id_mismatch, deletion_failed,
+capture_cleanup_backlog, capture_failed, report_deletion_failed,
+release_read_failed, request_failed, upstream_failed. Alert on any of these in
+Cloudflare Logs.
+For provisional costs without a generation ID, check the provider billing record
+before resolve. A provisional cost is already charged to the service at its bound; resolve it only from provider evidence.
 
 Deletion sweeps run every ten minutes; capture expires at 30 days and settled
 operational records at 90 days. D1 Time Travel backups can retain earlier data
@@ -65,7 +74,7 @@ restored sessions; recovering spending never restores revoked access.
 Replay also invalidates unused invitations: they may belong to accounts lost
 by the restore. Reissue them only after checking the producer's spending.
 
-Settle surviving held requests using provider billing evidence. Recover every
+Settle surviving provisional costs using provider billing evidence. Recover every
 account's TOTAL spent amount (not an adjustment), including charges lost by
 the restore, with recover-member. usage lists unrecovered accounts first;
 repeat until none remain. Then recover-budget with the verified service total,
@@ -124,13 +133,15 @@ export async function run(args, connection, print = console.log) {
     print(JSON.stringify(await operator({ action: "stats", ...(values[0] ? { days: Number(values[0]) } : {}) }, connection), null, 2));
     return;
   }
-  const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3,
+  const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3, "resolve-without-id": 2, conflict: 3,
     "recover-member": 3, "recover-budget": 2, pause: 0, resume: 0, sweep: 0, export: 3 };
   if (!(command in arity) || values.length !== arity[command]) throw new Error("Unknown command or arguments. Run npm run admin -- help.");
   const payload = command === "report" ? { action: "report", report_id: values[0] }
     : command === "invite" ? { action: "invite", email: values[0] }
     : command === "pause" || command === "resume" ? { action: "pause", paused: command === "pause" }
     : command === "resolve" ? { action: "resolve", request_id: values[0], cost_micro_usd: Number(values[1]), reason: values[2] }
+    : command === "resolve-without-id" ? { action: "resolve_without_id", cost_micro_usd: Number(values[0]), reason: values[1] }
+    : command === "conflict" ? { action: "conflict", conflict_id: Number(values[0]), resolution: values[1], reason: values[2] }
     : command === "recover-member" ? { action: "recover", member_id: values[0], spent_micro_usd: Number(values[1]), reason: values[2] }
     : command === "recover-budget" ? { action: "recover", spent_micro_usd: Number(values[0]), reason: values[1] }
     : { action: command.replaceAll("-", "_"), ...(values[0] ? { member_id: values[0] } : {}), ...(values[1] ? { turn_id: values[1] } : {}) };
