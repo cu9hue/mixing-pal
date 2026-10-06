@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
 import { hash, DAY, MIN_RUNTIME, MODEL_TIMEOUT, RESPONSE_BUDGET, SETTLE_MARGIN } from "../src/env";
 import { admissionDeadline, settle, settleExpired } from "../src/ledger";
-import { canDispatch, dispatchStatement } from "../src/completion";
+import { canDispatch, complete, dispatchStatement } from "../src/completion";
 import { redeem } from "../src/account";
 import { maintain } from "../src/maintenance";
 import { MAX_OUTPUT, RESERVATION, toolNames } from "../src/policy";
@@ -626,6 +626,50 @@ describe("never refused because an earlier call went wrong", () => {
       .bind(r, t, user.id, RESERVATION, Date.now() + MIN_RUNTIME - 1, Date.now() + MIN_RUNTIME + SETTLE_MARGIN).run();
     expect((await dispatchStatement(env, r, Date.now()).run()).meta.changes).toBe(0);
     expect((await env.DB.prepare("SELECT status FROM requests WHERE id = ?").bind(r).first())!.status).toBe("reserved");
+  });
+});
+
+describe("response deadline", () => {
+  // Once the call settles, the clock reads 200 ms before the reply is due, and statements matching `match` take 2 s.
+  function slowAfterSettling(receivedAt: number, match: string) {
+    const prepare = env.DB.prepare.bind(env.DB);
+    let stalled: Promise<unknown> = Promise.resolve();
+    const slow = (statement: D1PreparedStatement): D1PreparedStatement => {
+      const { bind, first, run } = statement;
+      const later = (work: () => Promise<unknown>) => (stalled = new Promise((r) => setTimeout(r, 2000)).then(work));
+      return Object.assign(statement, { bind: (...values: unknown[]) => slow(bind.apply(statement, values)),
+        first: (...args: never[]) => later(() => first.apply(statement, args)), run: () => later(() => run.apply(statement)) });
+    };
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      if (sent.length && sql.startsWith("UPDATE requests SET status = 'settled'")) vi.spyOn(Date, "now").mockReturnValue(receivedAt + RESPONSE_BUDGET - 200);
+      return sql.includes(match) ? slow(prepare(sql)) : prepare(sql);
+    });
+    return () => stalled;
+  }
+  const late = () => new Promise((r) => setTimeout(() => r("late"), 1500));
+
+  test("a slow account read never holds the answer past the response budget", async () => {
+    const user = await joined();
+    reply();
+    const receivedAt = Date.now();
+    const stalled = slowAfterSettling(receivedAt, "SELECT paused, recovery_required");
+    const answer = complete(env, user.id, question(), createExecutionContext(), receivedAt);
+    expect(await Promise.race([answer.then(() => "on time"), late()])).toBe("on time");
+    const body = await (await answer).json();
+    expect(body.text).toContain("raw answer");
+    expect(body.account).toBeUndefined();
+    await stalled();
+  });
+
+  test("a slow failure path never holds the error past the response budget", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response("{}", { status: 503 }) } as never);
+    const receivedAt = Date.now();
+    const stalled = slowAfterSettling(receivedAt, "UPDATE turns SET incomplete = 1");
+    const answer = complete(env, user.id, question(), createExecutionContext(), receivedAt);
+    expect(await Promise.race([answer.then(() => "on time", () => "on time"), late()])).toBe("on time");
+    await expect(answer).rejects.toMatchObject({ status: 502 });
+    await stalled();
   });
 });
 
