@@ -95,7 +95,7 @@ async function finalCall() {
 async function provisionalCall() {
   await finalCall(); await turn("t2", "m"); await req("p", "t2", "m", 1, now + 4000); await provisional("p");
 }
-const cleanup = (at: number, memberId: string) => settleExpired(env, at, memberId);
+const cleanup = (at: number) => settleExpired(env, at);
 
 beforeEach(reset);
 
@@ -237,7 +237,7 @@ describe("pre-0007 Worker after the migration", () => {
   test("V3-1: account cleanup converts a late legacy unknown row", async () => {
     await member("m", R); await turn("t", "m"); await req("r", "t", "m");
     await run("UPDATE requests SET status = 'unknown' WHERE id = 'r'");
-    await cleanup(now + 1000, "m");
+    await cleanup(now + 1000);
     expect(await balance("m")).toEqual({ spent: 0, reserved: 0 });
     expect(await budget()).toMatchObject({ spent: R, reserved: 0 });
   });
@@ -245,7 +245,7 @@ describe("pre-0007 Worker after the migration", () => {
   test("V3-1: and the member can ask again", async () => {
     await member("m", R); await turn("t", "m"); await req("r", "t", "m");
     await run("UPDATE requests SET status = 'unknown' WHERE id = 'r'");
-    await cleanup(now + 1000, "m");
+    await cleanup(now + 1000);
     await run("UPDATE turns SET status = 'superseded' WHERE id = 't'");
     await turn("t2", "m"); await req("r2", "t2", "m", 1, now + 2000);
     expect(await env.DB.prepare("SELECT status FROM requests WHERE id = 'r2'").first()).toEqual({ status: "reserved" });
@@ -407,13 +407,12 @@ describe("ledger statements", () => {
       .toEqual({ generation_id: "gen-1", provider: "Inceptron", finish_reason: "stop", cost: 500 });
   });
 
-  test("settleExpired converts expired and legacy unknown rows, scoped to a member when asked", async () => {
+  test("settleExpired converts expired and legacy unknown rows of every member", async () => {
     await member("m"); await member("n"); await turn("t", "m"); await turn("u", "n");
     await req("r", "t", "m"); await req("s", "u", "n");
     await env.DB.prepare("UPDATE requests SET status = 'unknown' WHERE id = 's'").run();
-    expect(await settleExpired(env, now + 1000, "m")).toBe(0);
-    expect(await settleExpired(env, now + 285_001, "m")).toBe(1);
     expect(await settleExpired(env, now + 1000)).toBe(1);
+    expect(await settleExpired(env, now + 285_001)).toBe(1);
     // r was never dispatched, so only the legacy unknown row is provisional.
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE provisional = 1").first())!.n).toBe(1);
     expect(expiredStatement(env, now)).toBeTruthy();
@@ -423,7 +422,7 @@ describe("ledger statements", () => {
     await member("m"); await turn("t", "m"); await turn("u", "m");
     await req("r", "t", "m"); await req("d", "u", "m");
     await run("UPDATE requests SET status = 'dispatched' WHERE id = 'd'");
-    expect(await settleExpired(env, now + 285_000, "m")).toBe(2);
+    expect(await settleExpired(env, now + 285_000)).toBe(2);
     const row = (id: string) => env.DB.prepare(`SELECT status, provisional, cost, member_cost, error_code, reconcile_after
       FROM requests WHERE id = ?`).bind(id).first();
     expect(await row("r")).toEqual({ status: "settled", provisional: 0, cost: 0, member_cost: 0,

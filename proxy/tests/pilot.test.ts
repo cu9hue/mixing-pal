@@ -1292,14 +1292,14 @@ describe("admission", () => {
 });
 
 describe("account eligibility", () => {
-  async function stick(memberId: string) {
+  async function stick(memberId: string, sent = true) {
     const t = crypto.randomUUID(), r = crypto.randomUUID();
     await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
       VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(t, memberId).run();
     await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
       reserved, status, created_at, updated_at, model, deadline, lease_until)
       VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(r, t, memberId, RESERVATION).run();
-    await env.DB.prepare("UPDATE requests SET status = 'dispatched' WHERE id = ?").bind(r).run();
+    if (sent) await env.DB.prepare("UPDATE requests SET status = 'dispatched' WHERE id = ?").bind(r).run();
   }
 
   test("an expired call stops blocking the member on the next account read, without cron", async () => {
@@ -1308,6 +1308,17 @@ describe("account eligibility", () => {
     await stick(user.id);
     const view = await (await api("/v1/account", undefined, user.token)).json();
     expect(view).toMatchObject({ can_ask: true, reserved_micro_usd: 0 });
+  });
+
+  test("another member's expired call stops holding the global budget, without her polling or cron", async () => {
+    const a = await joined("a@example.com");
+    const b = await joined("b@example.com");
+    await env.DB.prepare("UPDATE budget SET allowance = ?").bind(RESERVATION + 1000).run();
+    await stick(a.id, false);
+    expect(await (await api("/v1/account", undefined, b.token)).json()).toMatchObject({ can_ask: true, service_paused: false });
+    await stick(a.id, false);
+    reply();
+    expect((await api("/v1/completions", question(), b.token)).status).toBe(200);
   });
 
   test("a live hold counts against headroom, and can_ask no longer requires zero reserved", async () => {

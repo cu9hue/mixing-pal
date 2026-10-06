@@ -34,7 +34,7 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
     await env.DB.batch([
       env.DB.prepare("UPDATE turns SET status = 'superseded' WHERE member_id = ? AND id != ? AND status = 'running'")
         .bind(memberId, input.turn_id),
-      expiredStatement(env, now, memberId),
+      expiredStatement(env, now),
       env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
         SELECT ?, id, ?, ?, ?, ?, consent_epoch,
           CASE WHEN consent_epoch = ? AND capture = 1 AND EXISTS (
@@ -116,17 +116,17 @@ export async function settleProvisional(env: Env, id: string, errorCode: string,
 }
 
 /** Expired dispatched calls and legacy unknown rows settle provisional; an expired reserved row was never sent, so it settles final at 0. */
-export function expiredStatement(env: Env, now: number, memberId?: string): D1PreparedStatement {
+export function expiredStatement(env: Env, now: number): D1PreparedStatement {
   return env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = iif(status = 'reserved', 0, 1),
     cost = iif(status = 'reserved', 0, reserved), error_code = iif(status = 'reserved', 'not_dispatched', 'worker_interrupted'),
     updated_at = ?, reconcile_after = iif(status = 'reserved', reconcile_after, ?)
     WHERE (status = 'unknown' OR (status IN ('reserved', 'dispatched') AND lease_until <= ?))
-    AND (? IS NULL OR member_id = ?) RETURNING id`).bind(now, now + RECONCILE_DELAY, now, memberId ?? null, memberId ?? null);
+    RETURNING id`).bind(now, now + RECONCILE_DELAY, now);
 }
 
-export async function settleExpired(env: Env, now: number, memberId?: string): Promise<number> {
+export async function settleExpired(env: Env, now: number): Promise<number> {
   // meta.changes also counts the rows the triggers update, so count the returned rows.
-  return (await expiredStatement(env, now, memberId).all()).results.length;
+  return (await expiredStatement(env, now).all()).results.length;
 }
 
 export async function recordConflict(env: Env, id: string, source: string, recorded: number, reported: number): Promise<void> {
