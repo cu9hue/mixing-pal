@@ -1265,6 +1265,21 @@ describe("maintenance billing", () => {
     expect(await env.DB.prepare("SELECT provisional, cost FROM requests").first()).toEqual({ provisional: 0, cost: 2000 });
   });
 
+  test("a refused reconciliation is logged; a missing generation is not", async () => {
+    const user = await joined();
+    reply({ id: "gen-401", usage: null }); await api("/v1/completions", question(), user.token);
+    reply({ id: "gen-404", usage: null }); await api("/v1/completions", question(), user.token);
+    await env.DB.prepare("UPDATE requests SET reconcile_after = 0").run();
+    const original = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => String(url).includes("/generation?")
+      ? Promise.resolve(new Response(null, { status: String(url).endsWith("gen-401") ? 401 : 404 })) : original(url, options));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await maintain(env);
+    const id = async (generation: string) => (await env.DB.prepare("SELECT id FROM requests WHERE generation_id = ?").bind(generation).first())!.id;
+    const failures = logged.mock.calls.map(([line]) => JSON.parse(String(line))).filter((line) => line.event === "reconciliation_failed");
+    expect(failures).toEqual([{ event: "reconciliation_failed", request_id: await id("gen-401"), status: 401 }]);
+  });
+
   test("billing runs even when report maintenance fails", async () => {
     const user = await joined();
     vi.spyOn(console, "error").mockImplementation(() => {});

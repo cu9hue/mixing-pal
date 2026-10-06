@@ -24,7 +24,12 @@ async function billing(env: Env, now: number): Promise<void> {
       const response = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(row.generation_id)}`, {
         headers: { Authorization: `Bearer ${env.OPENROUTER_KEY}` }, signal: AbortSignal.timeout(5000),
       });
-      if (!response.ok) { await response.body?.cancel(); continue; }
+      if (!response.ok) {
+        // A 404 can be a generation OpenRouter has not recorded yet; any other status needs an operator.
+        if (response.status !== 404) console.error(JSON.stringify({ event: "reconciliation_failed", request_id: row.id, status: response.status }));
+        await response.body?.cancel();
+        continue;
+      }
       const data = ((await readJson(response)) as { data?: Record<string, unknown> })?.data ?? {};
       const cost = data.total_cost;
       if (generationComplete(data) && typeof cost === "number" && Number.isFinite(cost) && cost >= 0) {
