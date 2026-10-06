@@ -2,7 +2,7 @@ import { inspectReport } from "./reports";
 import { z } from "zod";
 import { deleteAccount, deleteTurn, replayDeletions, revokeAccess } from "./capture";
 import { ApiError, DAY, Env, hash, json, privateHash } from "./env";
-import { recover } from "./ledger";
+import { recover, recordConflict } from "./ledger";
 import { maintain } from "./maintenance";
 import { exportTurn } from "./export";
 import { sendInvitation } from "./invitation-email";
@@ -69,8 +69,18 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
   if (data.action === "delete_account") await deleteAccount(env, data.member_id);
   if (data.action === "delete_turn") await deleteTurn(env, data.member_id, data.turn_id);
   if (data.action === "resolve") {
-    const row = await env.DB.prepare("SELECT provisional FROM requests WHERE id = ?").bind(data.request_id).first<{ provisional: number }>();
-    if (row?.provisional !== 1) throw new ApiError(409, "request_not_provisional", "Only a provisional cost can be resolved.");
+    const read = () => env.DB.prepare("SELECT status, provisional, cost FROM requests WHERE id = ?").bind(data.request_id)
+      .first<{ status: string; provisional: number; cost: number }>();
+    // A final row is never changed: the same cost is a repeat, a different one is a dispute.
+    const finalOutcome = async (row: { cost: number }) => {
+      if (row.cost === data.cost_micro_usd) return json({ outcome: "already_final" });
+      await recordConflict(env, data.request_id, "operator", row.cost, data.cost_micro_usd);
+      return json({ outcome: "conflict" });
+    };
+    const row = await read();
+    if (!row) throw new ApiError(404, "not_found", "No such request.");
+    if (row.status !== "settled") throw new ApiError(409, "request_not_provisional", "Only a provisional cost can be resolved.");
+    if (row.provisional !== 1) return finalOutcome(row);
     const [update] = await env.DB.batch([
       env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = 0, cost = ?, updated_at = ?, error_code = 'operator_resolved'
         WHERE id = ? AND provisional = 1`).bind(data.cost_micro_usd, now, data.request_id),
@@ -78,7 +88,9 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
         WHERE EXISTS (SELECT 1 FROM requests WHERE id = ? AND provisional = 0 AND error_code = 'operator_resolved' AND updated_at = ?)`)
         .bind(data.request_id, now, data.reason, data.request_id, now),
     ]);
-    return json({ outcome: update.meta.changes ? "applied" : "already_final" });
+    if (update.meta.changes) return json({ outcome: "applied" });
+    // Someone else finalized the row between the read and the batch.
+    return finalOutcome((await read())!);
   }
   if (data.action === "conflict") {
     const [update] = await env.DB.batch([

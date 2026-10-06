@@ -1192,10 +1192,46 @@ describe("operator tools", () => {
     const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
     const resolve = () => api("/operator", { action: "resolve", request_id: id, cost_micro_usd: 4000, reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
     expect(await (await resolve()).json()).toEqual({ outcome: "applied" });
-    expect((await resolve()).status).toBe(409);
+    const again = await resolve();
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual({ outcome: "already_final" });
     expect((await env.DB.prepare("SELECT spent FROM budget").first())!.spent).toBe(4000);
     expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions WHERE action = 'resolve'").first())!.n).toBe(1);
+  });
+
+  test("resolve answers not_found for an unknown request", async () => {
+    const response = await api("/operator", { action: "resolve", request_id: crypto.randomUUID(), cost_micro_usd: 1000, reason: "No such call" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe("not_found");
+  });
+
+  test("resolve with a different cost on a final row records a conflict and changes nothing", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first())!.id;
+    const resolve = (cost: number) => api("/operator", { action: "resolve", request_id: id, cost_micro_usd: cost, reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    await resolve(4000);
+    const response = await resolve(9000);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "conflict" });
+    expect(await env.DB.prepare("SELECT source, recorded, reported FROM cost_conflicts WHERE request_id = ?").bind(id).first())
+      .toEqual({ source: "operator", recorded: 4000, reported: 9000 });
+    expect((await env.DB.prepare("SELECT cost FROM requests WHERE id = ?").bind(id).first())!.cost).toBe(4000);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
+  });
+
+  test("resolve refuses a request that has not ended", async () => {
+    const user = await joined();
+    const open = question();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(open.turn_id, user.id).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(open.request_id, open.turn_id, user.id, RESERVATION).run();
+    const response = await api("/operator", { action: "resolve", request_id: open.request_id, cost_micro_usd: 1000, reason: "Too early" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("request_not_provisional");
   });
 
   test("a booked higher conflict adds the liability once and allows resume", async () => {
