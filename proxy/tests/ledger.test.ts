@@ -1,5 +1,6 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeEach, describe, expect, test } from "vitest";
+import { enrich, expiredStatement, recordConflict, settle, settleExpired, settleProvisional } from "../src/ledger";
 
 const R = 310144;
 const now = 1_000_000;
@@ -347,5 +348,55 @@ describe("legal transitions", () => {
     await run("UPDATE requests SET generation_id = 'gen-1' WHERE id = 'r'"); await final("r", 700);
     await turn("t2", "m"); await req("z", "t2", "m", 1, now + 4000); await final("z", 0);
     expect(await balance("m")).toEqual({ spent: 700, reserved: 0 });
+  });
+});
+
+describe("ledger statements", () => {
+  test("settle reports applied, already_final, conflict and not_found", async () => {
+    await member("m"); await turn("t", "m"); await req("r", "t", "m");
+    expect(await settle(env, "r", 1000, { provider: "Inceptron" })).toBe("applied");
+    expect(await settle(env, "r", 1000)).toBe("already_final");
+    expect(await settle(env, "r", 1200, {}, "generation")).toBe("conflict");
+    expect(await settle(env, "missing", 1)).toBe("not_found");
+    expect(await env.DB.prepare("SELECT source, recorded, reported FROM cost_conflicts").first())
+      .toEqual({ source: "generation", recorded: 1000, reported: 1200 });
+    expect((await budget())!.paused).toBe(1);
+    expect((await env.DB.prepare("SELECT provider FROM requests").first())!.provider).toBe("Inceptron");
+  });
+
+  test("settle finalizes a provisional row without charging the member", async () => {
+    await member("m"); await turn("t", "m"); await req("r", "t", "m");
+    expect(await settleProvisional(env, "r", "provider_interrupted", now)).toBe(true);
+    expect(await settleProvisional(env, "r", "provider_interrupted", now)).toBe(false);
+    expect((await env.DB.prepare("SELECT reconcile_after FROM requests").first())!.reconcile_after).toBe(now + 60_000);
+    expect(await settle(env, "r", 700, {}, "generation")).toBe("applied");
+    expect(await balance("m")).toEqual({ spent: 0, reserved: 0 });
+    expect((await budget())!.spent).toBe(700);
+  });
+
+  test("enrich fills only empty metadata and never cost", async () => {
+    await member("m"); await turn("t", "m"); await req("r", "t", "m");
+    await enrich(env, "r", { generationId: "gen-1" });
+    await settle(env, "r", 500, { provider: "Inceptron" });
+    await enrich(env, "r", { provider: "Other", finishReason: "stop", generationId: "gen-2" });
+    expect(await env.DB.prepare("SELECT generation_id, provider, finish_reason, cost FROM requests").first())
+      .toEqual({ generation_id: "gen-1", provider: "Inceptron", finish_reason: "stop", cost: 500 });
+  });
+
+  test("settleExpired converts expired and legacy unknown rows, scoped to a member when asked", async () => {
+    await member("m"); await member("n"); await turn("t", "m"); await turn("u", "n");
+    await req("r", "t", "m"); await req("s", "u", "n");
+    await env.DB.prepare("UPDATE requests SET status = 'unknown' WHERE id = 's'").run();
+    expect(await settleExpired(env, now + 1000, "m")).toBe(0);
+    expect(await settleExpired(env, now + 285_001, "m")).toBe(1);
+    expect(await settleExpired(env, now + 1000)).toBe(1);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE provisional = 1").first())!.n).toBe(2);
+    expect(expiredStatement(env, now)).toBeTruthy();
+  });
+
+  test("a lower conflict is recorded and does not pause", async () => {
+    await member("m"); await turn("t", "m"); await req("r", "t", "m"); await settle(env, "r", 1000);
+    await recordConflict(env, "r", "operator", 1000, 900);
+    expect((await budget())!.paused).toBe(0);
   });
 });

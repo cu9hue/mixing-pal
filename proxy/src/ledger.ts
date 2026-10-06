@@ -1,4 +1,4 @@
-import { ApiError, CAPTURE_VERSION, Env, MODEL, hash, privateHash } from "./env";
+import { ApiError, CAPTURE_VERSION, Env, MODEL, RECONCILE_DELAY, hash, privateHash } from "./env";
 import { CompletionInput, POLICY_VERSION, RESERVATION } from "./policy";
 
 export interface UsageRequest {
@@ -60,23 +60,68 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
   }
 }
 
-export async function settle(env: Env, id: string, cost: number, details: {
+export type Settlement = "applied" | "already_final" | "conflict" | "not_found";
+export interface SettleDetails {
   generationId?: string; provider?: string; usage?: unknown; finishReason?: string | null;
   errorCode?: string; durationMs?: number;
-} = {}): Promise<void> {
-  if (!Number.isSafeInteger(cost) || cost < 0) throw new Error("Invalid settlement cost");
-  await env.DB.prepare(`UPDATE requests SET status = 'settled', cost = ?, updated_at = ?,
-    generation_id = COALESCE(?, generation_id), provider = ?, usage = ?, finish_reason = ?, error_code = ?, duration_ms = ?
-    WHERE id = ? AND status != 'settled'`)
-    .bind(cost, Date.now(), details.generationId ?? null, details.provider ?? null,
-      details.usage ? JSON.stringify(details.usage) : null, details.finishReason ?? null,
-      details.errorCode ?? null, details.durationMs ?? null, id).run();
 }
 
-export async function unknown(env: Env, id: string, errorCode: string): Promise<void> {
-  await env.DB.prepare(`UPDATE requests SET status = 'unknown', error_code = ?, updated_at = ?
-    WHERE id = ? AND status != 'settled'`).bind(errorCode, Date.now(), id).run();
-  console.error(JSON.stringify({ event: "usage_unknown", request_id: id, code: errorCode }));
+function enrichStatement(env: Env, id: string, d: SettleDetails): D1PreparedStatement {
+  return env.DB.prepare(`UPDATE requests SET generation_id = COALESCE(generation_id, ?), provider = COALESCE(provider, ?),
+    usage = COALESCE(usage, ?), finish_reason = COALESCE(finish_reason, ?), duration_ms = COALESCE(duration_ms, ?)
+    WHERE id = ?`).bind(d.generationId ?? null, d.provider ?? null, d.usage ? JSON.stringify(d.usage) : null,
+    d.finishReason ?? null, d.durationMs ?? null, id);
+}
+
+/** Metadata only; a cost never changes through here. */
+export async function enrich(env: Env, id: string, details: SettleDetails): Promise<void> {
+  await enrichStatement(env, id, details).run();
+}
+
+/** A known cost: final for an open or provisional row; a different cost on a final row is a conflict. */
+export async function settle(env: Env, id: string, cost: number, details: SettleDetails = {}, source = "stream"): Promise<Settlement> {
+  if (!Number.isSafeInteger(cost) || cost < 0) throw new Error("Invalid settlement cost");
+  const [result] = await env.DB.batch([
+    env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = 0, cost = ?, updated_at = ?,
+      error_code = COALESCE(?, error_code) WHERE id = ? AND (status != 'settled' OR provisional = 1)`)
+      .bind(cost, Date.now(), details.errorCode ?? null, id),
+    enrichStatement(env, id, details),
+  ]);
+  if (result.meta.changes) return "applied";
+  const row = await env.DB.prepare("SELECT cost FROM requests WHERE id = ?").bind(id).first<{ cost: number }>();
+  if (!row) return "not_found";
+  if (row.cost === cost) return "already_final";
+  await recordConflict(env, id, source, row.cost, cost);
+  return "conflict";
+}
+
+/** The call ended and its cost is unknown: Mixing Pal pays it until reconciliation. */
+export async function settleProvisional(env: Env, id: string, errorCode: string, now = Date.now()): Promise<boolean> {
+  const result = await env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = 1, cost = reserved,
+    error_code = ?, updated_at = ?, reconcile_after = ? WHERE id = ? AND status != 'settled'`)
+    .bind(errorCode, now, now + RECONCILE_DELAY, id).run();
+  if (result.meta.changes) console.error(JSON.stringify({ event: "usage_provisional", request_id: id, code: errorCode }));
+  return Boolean(result.meta.changes);
+}
+
+/** Calls whose lease ended, and rows a pre-0007 Worker marked unknown, are settled provisionally. */
+export function expiredStatement(env: Env, now: number, memberId?: string): D1PreparedStatement {
+  return env.DB.prepare(`UPDATE requests SET status = 'settled', provisional = 1, cost = reserved,
+    error_code = 'worker_interrupted', updated_at = ?, reconcile_after = ?
+    WHERE (status = 'unknown' OR (status IN ('reserved', 'dispatched') AND lease_until <= ?))
+    AND (? IS NULL OR member_id = ?) RETURNING id`).bind(now, now + RECONCILE_DELAY, now, memberId ?? null, memberId ?? null);
+}
+
+export async function settleExpired(env: Env, now: number, memberId?: string): Promise<number> {
+  // meta.changes also counts the rows the triggers update, so count the returned rows.
+  return (await expiredStatement(env, now, memberId).all()).results.length;
+}
+
+export async function recordConflict(env: Env, id: string, source: string, recorded: number, reported: number): Promise<void> {
+  await env.DB.prepare(`INSERT INTO cost_conflicts(request_id, source, recorded, reported, created_at)
+    VALUES (?, ?, ?, ?, ?) ON CONFLICT(request_id, source, reported) DO NOTHING`)
+    .bind(id, source, recorded, reported, Date.now()).run();
+  console.error(JSON.stringify({ event: "cost_conflict", request_id: id, source, recorded, reported }));
 }
 
 export async function recover(env: Env, memberId: string | undefined, spent: number, reason: string): Promise<void> {
@@ -84,6 +129,7 @@ export async function recover(env: Env, memberId: string | undefined, spent: num
   const guard = `id = ? AND recovery_required = 1 AND reserved = 0 AND spent <= ?
     AND EXISTS (SELECT 1 FROM budget WHERE paused = 1 AND recovery_required = 1)
     AND NOT EXISTS (SELECT 1 FROM requests WHERE status != 'settled'${memberId === undefined ? "" : " AND member_id = members.id"})
+    AND NOT EXISTS (SELECT 1 FROM requests WHERE provisional = 1${memberId === undefined ? "" : " AND member_id = members.id"})
     ${memberId === undefined ? "AND NOT EXISTS (SELECT 1 FROM members WHERE recovery_required = 1) AND (SELECT COALESCE(SUM(spent), 0) FROM members) <= ?" : ""}`;
   const values = memberId === undefined ? [1, spent, spent] : [memberId, spent];
   const result = await env.DB.batch([
@@ -93,6 +139,6 @@ export async function recover(env: Env, memberId: string | undefined, spent: num
     env.DB.prepare(`UPDATE ${table} SET spent = ?, recovery_required = 0 WHERE ${guard}`).bind(spent, ...values),
   ]);
   if (!result[1].meta.changes) {
-    throw new ApiError(409, "recovery_not_ready", "Settle held requests first, recover each account before the global budget, and never reduce recorded spending.");
+    throw new ApiError(409, "recovery_not_ready", "Resolve provisional costs first, recover each account before the global budget, and never reduce recorded spending.");
   }
 }

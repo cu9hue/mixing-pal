@@ -21,6 +21,15 @@ export const MAX_FEEDBACK_BODY = 32 * 1024;
 export const MODEL = "moonshotai/kimi-k2.6";
 // A reply at the output cap must finish: 12,000 tokens at 50 a second is 240 s.
 export const MODEL_TIMEOUT = 270_000;
+// The handler answers within RESPONSE_BUDGET, 15 s under the app's 300 s limit.
+export const RESPONSE_BUDGET = 285_000;
+export const SETTLE_MARGIN = 15_000;
+export const MIN_RUNTIME = 30_000;
+export const FIRST_DATA_TIMEOUT = 60_000;
+export const IDLE_TIMEOUT = 60_000;
+export const SETTLE_TIMEOUT = 10_000;
+// OpenRouter's generation statistics lag the call.
+export const RECONCILE_DELAY = 60_000;
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
