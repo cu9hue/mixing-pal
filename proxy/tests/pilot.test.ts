@@ -509,6 +509,68 @@ describe("metered requests", () => {
   });
 });
 
+describe("pilot stats", () => {
+  // One answered model call, then the turn moved to `at`, lasting `seconds`, ending as `status`.
+  async function turn(token: string, at: number, seconds: number, status: string) {
+    reply({ usage: { cost: 0.001, prompt_tokens: 100, completion_tokens: 200 } });
+    const request = question();
+    expect((await api("/v1/completions", request, token)).status).toBe(200);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE turns SET created_at = ?, updated_at = ?, status = ? WHERE id = ?").bind(at, at + seconds * 1000, status, request.turn_id),
+      env.DB.prepare("UPDATE requests SET created_at = ?, duration_ms = 4000 WHERE turn_id = ?").bind(at, request.turn_id),
+    ]);
+    return request;
+  }
+
+  test("reports retention, speed, failures and hosts without project content", async () => {
+    const a = await joined("a@example.com");
+    const b = await joined("b@example.com");
+    const now = Date.now();
+    const yesterday = Math.floor((now - DAY) / DAY) * DAY;
+    await turn(a.token, now - 10 * DAY, 10, "complete");
+    await turn(a.token, yesterday + 3_600_000, 20, "complete");
+    const failed = await turn(a.token, yesterday + 7_200_000, 90, "failed");
+    await turn(b.token, now - 2 * DAY, 40, "complete");
+    await env.DB.prepare("UPDATE requests SET error_code = 'upstream_429' WHERE turn_id = ?").bind(failed.turn_id).run();
+    await turn(b.token, now - 40 * DAY, 5, "complete");
+
+    const response = await api("/operator", { action: "stats" }, env.ADMIN_TOKEN);
+    expect(response.status, await response.clone().text()).toBe(200);
+    const stats = await response.json() as Record<string, any>;
+    expect(stats.days).toBe(28);
+    expect(stats.weeks).toEqual([
+      { starts: now - 28 * DAY, members: 0, returning: 0, turns: 0 },
+      { starts: now - 21 * DAY, members: 0, returning: 0, turns: 0 },
+      { starts: now - 14 * DAY, members: 1, returning: 0, turns: 1 },
+      { starts: now - 7 * DAY, members: 2, returning: 1, turns: 3 },
+    ].map((w) => ({ ...w, starts: expect.any(Number) })));
+    expect(stats.turns).toEqual({ total: 4, by_status: { complete: 3, failed: 1 }, incomplete: 0,
+      complete_seconds_p50: 20, complete_seconds_p95: 40, per_member_per_active_day_median: 1 });
+    expect(stats.errors).toEqual([{ code: "upstream_429", count: 1 }]);
+    expect(stats.hosts).toEqual([{ host: "DeepInfra", calls: 4, seconds_median: 4, tokens_per_second_median: 50 }]);
+    expect(stats.members).toEqual([
+      { id: a.id, turns: 3, active_days: 2, last_seen: yesterday + 7_200_000 },
+      { id: b.id, turns: 1, active_days: 1, last_seen: now - 2 * DAY },
+    ]);
+    expect(JSON.stringify(stats)).not.toContain("secret project");
+
+    const week = await (await api("/operator", { action: "stats", days: 7 }, env.ADMIN_TOKEN)).json() as Record<string, any>;
+    expect(week.turns.total).toBe(3);
+    // Ten days still count two whole weeks of retention; the totals keep to ten days.
+    const ten = await (await api("/operator", { action: "stats", days: 10 }, env.ADMIN_TOKEN)).json() as Record<string, any>;
+    expect([ten.weeks.map((w: { turns: number }) => w.turns), ten.turns.total]).toEqual([[1, 3], 3]);
+    expect((await api("/operator", { action: "stats", days: 91 }, env.ADMIN_TOKEN)).status).toBe(400);
+    expect((await api("/operator", { action: "stats" }, "wrong-token")).status).toBe(401);
+  });
+
+  test("an empty pilot reports zeros, not errors", async () => {
+    const stats = await (await api("/operator", { action: "stats", days: 7 }, env.ADMIN_TOKEN)).json() as Record<string, any>;
+    expect(stats.turns).toEqual({ total: 0, by_status: {}, incomplete: 0,
+      complete_seconds_p50: null, complete_seconds_p95: null, per_member_per_active_day_median: null });
+    expect([stats.weeks.length, stats.hosts, stats.members, stats.errors]).toEqual([1, [], [], []]);
+  });
+});
+
 describe("capture and deletion", () => {
   test("the global capture allowance rejects new objects before R2 storage can grow", async () => {
     const user = await joined();
