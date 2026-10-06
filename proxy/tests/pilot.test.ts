@@ -1583,6 +1583,52 @@ describe("operator tools", () => {
     expect((await response.json()).error.code).toBe("not_found");
   });
 
+  // Reconciliation finalizes the request and pruning deletes it right after resolve's first read.
+  function pruneAfterFirstRead(id: string) {
+    const prepare = env.DB.prepare.bind(env.DB);
+    let pruned = false;
+    vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (pruned || !sql.startsWith("SELECT status, provisional, cost, reserved FROM requests")) return statement;
+      const bind = statement.bind.bind(statement);
+      statement.bind = (...values: unknown[]) => {
+        const bound = bind(...values);
+        const first = bound.first.bind(bound);
+        bound.first = (async () => {
+          const row = await first();
+          pruned = true;
+          await prepare("UPDATE requests SET status = 'settled', provisional = 0, cost = 2000 WHERE id = ? AND provisional = 1").bind(id).run();
+          await prepare("DELETE FROM requests WHERE id = ?").bind(id).run();
+          return row;
+        }) as never;
+        return bound;
+      };
+      return statement;
+    });
+  }
+
+  test("resolve answers not_found when the request is pruned between its reads", async () => {
+    const user = await joined();
+    reply({ usage: null }); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first<{ id: string }>())!.id;
+    pruneAfterFirstRead(id);
+    const response = await api("/operator", { action: "resolve", request_id: id, cost_micro_usd: 4000, reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe("not_found");
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions").first())!.n).toBe(0);
+  });
+
+  test("resolve answers not_found when the request is pruned before its conflict is recorded", async () => {
+    const user = await joined();
+    reply(); await api("/v1/completions", question(), user.token);
+    const id = (await env.DB.prepare("SELECT id FROM requests").first<{ id: string }>())!.id;
+    pruneAfterFirstRead(id);
+    const response = await api("/operator", { action: "resolve", request_id: id, cost_micro_usd: 9000, reason: "From OpenRouter activity" }, env.ADMIN_TOKEN);
+    expect(response.status).toBe(404);
+    expect((await response.json()).error.code).toBe("not_found");
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cost_conflicts").first())!.n).toBe(0);
+  });
+
   test("resolve with a different cost on a final row records a conflict and changes nothing", async () => {
     const user = await joined();
     reply({ usage: null }); await api("/v1/completions", question(), user.token);

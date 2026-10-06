@@ -129,11 +129,17 @@ export async function settleExpired(env: Env, now: number): Promise<number> {
   return (await expiredStatement(env, now).all()).results.length;
 }
 
-export async function recordConflict(env: Env, id: string, source: string, recorded: number, reported: number): Promise<void> {
-  await env.DB.prepare(`INSERT INTO cost_conflicts(request_id, source, recorded, reported, created_at)
-    VALUES (?, ?, ?, ?, ?) ON CONFLICT(request_id, source, reported) DO NOTHING`)
-    .bind(id, source, recorded, reported, Date.now()).run();
+/** Pruning can delete the request first; then nothing is recorded and the result is false. */
+export async function recordConflict(env: Env, id: string, source: string, recorded: number, reported: number): Promise<boolean> {
+  const [, conflict] = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO cost_conflicts(request_id, source, recorded, reported, created_at)
+      SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM requests WHERE id = ?) ON CONFLICT(request_id, source, reported) DO NOTHING`)
+      .bind(id, source, recorded, reported, Date.now(), id),
+    env.DB.prepare("SELECT 1 FROM cost_conflicts WHERE request_id = ? AND source = ? AND reported = ?").bind(id, source, reported),
+  ]);
+  if (!conflict.results.length) return false;
   console.error(JSON.stringify({ event: "cost_conflict", request_id: id, source, recorded, reported }));
+  return true;
 }
 
 export async function recover(env: Env, memberId: string | undefined, spent: number, reason: string): Promise<void> {

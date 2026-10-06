@@ -1,5 +1,5 @@
 import { applyD1Migrations, env } from "cloudflare:test";
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { enrich, expiredStatement, recordConflict, settle, settleExpired, settleProvisional } from "../src/ledger";
 
 const R = 310144;
@@ -98,6 +98,7 @@ async function provisionalCall() {
 const cleanup = (at: number) => settleExpired(env, at);
 
 beforeEach(reset);
+afterEach(() => vi.restoreAllMocks());
 
 describe("settlement triggers", () => {
   test("final known cost charges member and budget", async () => {
@@ -436,7 +437,14 @@ describe("ledger statements", () => {
 
   test("a lower conflict is recorded and does not pause", async () => {
     await member("m"); await turn("t", "m"); await req("r", "t", "m"); await settle(env, "r", 1000);
-    await recordConflict(env, "r", "operator", 1000, 900);
+    expect(await recordConflict(env, "r", "operator", 1000, 900)).toBe(true);
     expect((await budget())!.paused).toBe(0);
+  });
+
+  test("a conflict on a deleted request inserts nothing, logs nothing and does not throw", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await recordConflict(env, "missing", "operator", 1000, 900)).toBe(false);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM cost_conflicts").first())!.n).toBe(0);
+    expect(logged).not.toHaveBeenCalled();
   });
 });

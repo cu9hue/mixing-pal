@@ -75,14 +75,16 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
   if (data.action === "resolve") {
     const read = () => env.DB.prepare("SELECT status, provisional, cost, reserved FROM requests WHERE id = ?").bind(data.request_id)
       .first<{ status: string; provisional: number; cost: number; reserved: number }>();
+    const notFound = () => new ApiError(404, "not_found", "No such request.");
     // A final row is never changed: the same cost is a repeat, a different one is a dispute.
-    const finalOutcome = async (row: { cost: number }) => {
+    const finalOutcome = async (row: { cost: number } | null) => {
+      if (!row) throw notFound();
       if (row.cost === data.cost_micro_usd) return json({ outcome: "already_final" });
-      await recordConflict(env, data.request_id, "operator", row.cost, data.cost_micro_usd);
+      if (!await recordConflict(env, data.request_id, "operator", row.cost, data.cost_micro_usd)) throw notFound();
       return json({ outcome: "conflict" });
     };
     const row = await read();
-    if (!row) throw new ApiError(404, "not_found", "No such request.");
+    if (!row) throw notFound();
     if (row.status !== "settled") throw new ApiError(409, "request_not_provisional", "Only a provisional cost can be resolved.");
     if (row.provisional !== 1) return finalOutcome(row);
     const [update] = await env.DB.batch([
@@ -94,8 +96,8 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     ]);
     // finalize_provisional pauses the service when the cost exceeds the reservation.
     if (update.meta.changes) return json(data.cost_micro_usd > row.reserved ? { outcome: "applied", paused: true } : { outcome: "applied" });
-    // Someone else finalized the row between the read and the batch.
-    return finalOutcome((await read())!);
+    // Someone else finalized the row between the read and the batch, and pruning may have deleted it since.
+    return finalOutcome(await read());
   }
   if (data.action === "resolve_without_id") {
     // A cost within the reservation never pauses the service.
