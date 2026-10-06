@@ -1,4 +1,4 @@
-import { ApiError, CAPTURE_VERSION, Env, MODEL, RECONCILE_DELAY, hash, privateHash } from "./env";
+import { ApiError, CAPTURE_VERSION, Env, MODEL, MODEL_TIMEOUT, RECONCILE_DELAY, RESPONSE_BUDGET, SETTLE_MARGIN, hash, privateHash } from "./env";
 import { CompletionInput, POLICY_VERSION, RESERVATION } from "./policy";
 
 export interface UsageRequest {
@@ -11,7 +11,12 @@ export interface UsageRequest {
   reserved: number;
 }
 
-export async function reserve(env: Env, memberId: string, input: CompletionInput): Promise<void> {
+/** The model's absolute end: never past the handler's own budget for answering the app. */
+export function admissionDeadline(receivedAt: number, now = Date.now()): number {
+  return Math.min(now + MODEL_TIMEOUT, receivedAt + RESPONSE_BUDGET - SETTLE_MARGIN);
+}
+
+export async function reserve(env: Env, memberId: string, input: CompletionInput, deadline: number): Promise<void> {
   const now = Date.now();
   const [bodyHash, promptHash, toolHash] = await Promise.all([
     privateHash(env.AUTH_SECRET, JSON.stringify(input)),
@@ -27,6 +32,9 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
   }
   try {
     await env.DB.batch([
+      env.DB.prepare("UPDATE turns SET status = 'superseded' WHERE member_id = ? AND id != ? AND status = 'running'")
+        .bind(memberId, input.turn_id),
+      expiredStatement(env, now, memberId),
       env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
         SELECT ?, id, ?, ?, ?, ?, consent_epoch,
           CASE WHEN consent_epoch = ? AND capture = 1 AND EXISTS (
@@ -36,10 +44,10 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
         ON CONFLICT(id) DO NOTHING`)
         .bind(input.turn_id, now, now, input.app_version, input.wire_version, input.capture_epoch ?? null, CAPTURE_VERSION, memberId),
       env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash,
-        policy_version, reserved, status, created_at, updated_at, model)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?)`)
+        policy_version, reserved, status, created_at, updated_at, model, deadline, lease_until)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?)`)
         .bind(input.request_id, input.turn_id, memberId, input.round, bodyHash, promptHash, toolHash,
-          POLICY_VERSION, RESERVATION, now, now, MODEL),
+          POLICY_VERSION, RESERVATION, now, now, MODEL, deadline, deadline + SETTLE_MARGIN),
       env.DB.prepare("UPDATE turns SET updated_at = ? WHERE id = ? AND member_id = ?").bind(now, input.turn_id, memberId),
     ]);
   } catch (error) {
@@ -49,12 +57,15 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
       ["turn_closed", 409, "This conversation turn has ended. Ask again to start a new turn."],
       ["invalid_round", 409, "This turn cannot start another model request."],
       ["allowance_exhausted", 402, "The pilot allowance is used up. Contact Mixing Pal for access."],
-      ["busy", 429, "Another request is still running. Please wait before asking again."],
+      ["busy", 429, "Mixing Pal is busy. Try again in a moment."],
       ["service_paused", 503, "Model access is temporarily paused."],
+      ["budget_exhausted", 503, "Model access is temporarily paused."],
+      ["lease_required", 503, "Model access is temporarily paused."],
       ["UNIQUE constraint", 409, "This request has already been submitted."],
     ];
     for (const [code, status, message] of errors) {
-      if (text.includes(code)) throw new ApiError(status, code === "UNIQUE constraint" ? "duplicate_request" : code, message);
+      if (text.includes(code)) throw new ApiError(status, code === "UNIQUE constraint" ? "duplicate_request"
+        : ["budget_exhausted", "lease_required"].includes(code) ? "service_paused" : code, message);
     }
     throw error;
   }

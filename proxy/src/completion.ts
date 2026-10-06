@@ -1,16 +1,17 @@
 import { account } from "./account";
 import { incomplete, optionalCapture, ownedTurn } from "./capture";
 import { ApiError, Env, MAX_BODY, MODEL_TIMEOUT, json, readJson } from "./env";
-import { reserve, settle, unknown } from "./ledger";
+import { admissionDeadline, reserve, settle, settleProvisional } from "./ledger";
 import { completionInput, providerBody, responseSchema, routes, usageSchema } from "./policy";
 
-export async function complete(env: Env, memberId: string, input: unknown, ctx: ExecutionContext): Promise<Response> {
+export async function complete(env: Env, memberId: string, input: unknown, ctx: ExecutionContext, receivedAt: number): Promise<Response> {
   const request = completionInput.parse(input);
   if (env.INFERENCE_ENABLED !== "true" || !env.OPENROUTER_KEY) {
     throw new ApiError(503, "service_paused", "Model access is not enabled yet.");
   }
   const body = providerBody(request, await routes());
-  await reserve(env, memberId, request);
+  const deadline = admissionDeadline(receivedAt);
+  await reserve(env, memberId, request, deadline);
   const turn = await ownedTurn(env, request.turn_id, memberId);
   await env.DB.prepare("UPDATE requests SET status = 'dispatched', updated_at = ? WHERE id = ? AND status = 'reserved'")
     .bind(Date.now(), request.request_id).run();
@@ -27,7 +28,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
     status = response.status;
     raw = await readJson(response, MAX_BODY * 2);
   } catch {
-    await unknown(env, request.request_id, "provider_interrupted");
+    await settleProvisional(env, request.request_id, "provider_interrupted");
     await incomplete(env, turn.id);
     await optionalCapture(env, turn, crypto.randomUUID(), { kind: "model_failure", request_id: request.request_id,
       round: request.round, source: "proxy", body, error: "provider_interrupted", at: start }, ctx);
@@ -38,7 +39,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
     if ([400, 401, 402, 403, 404, 413, 422, 429].includes(status)) {
       await settle(env, request.request_id, 0, { errorCode: `upstream_${status}`, durationMs });
     } else {
-      await unknown(env, request.request_id, `upstream_${status}`);
+      await settleProvisional(env, request.request_id, `upstream_${status}`);
     }
     await incomplete(env, turn.id);
     const response = JSON.parse(JSON.stringify(raw).split(env.OPENROUTER_KEY).join("[redacted]"));
@@ -64,7 +65,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
       errorCode: parsed.success ? undefined : "invalid_completion",
     });
   } else {
-    await unknown(env, request.request_id, "missing_usage");
+    await settleProvisional(env, request.request_id, "missing_usage");
   }
   await optionalCapture(env, turn, crypto.randomUUID(), { kind: "model", request_id: request.request_id,
     round: request.round, source: "proxy", body, response: safe, at: start, duration_ms: durationMs }, ctx);

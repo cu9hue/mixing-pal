@@ -1,8 +1,8 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
-import { hash, DAY, MODEL_TIMEOUT } from "../src/env";
-import { settle } from "../src/ledger";
+import { hash, DAY, MODEL_TIMEOUT, RESPONSE_BUDGET, SETTLE_MARGIN } from "../src/env";
+import { admissionDeadline, settle } from "../src/ledger";
 import { redeem } from "../src/account";
 import { LOST_REQUEST_AFTER, maintain } from "../src/maintenance";
 import { MAX_OUTPUT, RESERVATION, toolNames } from "../src/policy";
@@ -52,10 +52,14 @@ function question(round = 1, turnId = crypto.randomUUID()) {
       model: "expensive-model", max_tokens: 999999, provider: { only: ["attacker"] } } };
 }
 
-function reply(extra: Record<string, unknown> = {}) {
-  replies.push({ id: "generation-1", provider: "DeepInfra",
+function defaultReply(extra: Record<string, unknown> = {}) {
+  return { id: "generation-1", provider: "DeepInfra",
       usage: { cost: 0.001, prompt_tokens: 100, completion_tokens: 20 },
-      choices: [{ finish_reason: "stop", message: { content: "raw answer\n```note\n+ heard example\n```" } }], ...extra });
+      choices: [{ finish_reason: "stop", message: { content: "raw answer\n```note\n+ heard example\n```" } }], ...extra };
+}
+
+function reply(extra: Record<string, unknown> = {}) {
+  replies.push(defaultReply(extra));
 }
 
 beforeEach(async () => {
@@ -80,14 +84,21 @@ beforeEach(async () => {
     }
     if (String(url) === `${provider}/api/v1/chat/completions`) {
       sent.push(JSON.parse(String(options?.body)));
-      const response = replies.shift();
-      if (!response) throw new Error("No scripted provider response");
-      return Response.json(response);
+      const scripted = replies.shift();
+      if (!scripted) throw new Error("No scripted provider response");
+      if ("hold" in scripted) { await scripted.hold; return Response.json(defaultReply()); }
+      return Response.json(scripted);
     }
     throw new Error(`Unexpected network request: ${String(url)}`);
   });
-  await env.DB.batch(["operator_actions", "deletion_jobs", "captures", "requests", "turns", "consents", "invites", "members", "session", "account", "user", "verification", "rateLimit", "api_limits"]
-    .map((table) => env.DB.prepare(`DELETE FROM "${table}"`)));
+  // The retention trigger refuses to delete unresolved rows, so reset drops it and puts it back.
+  const retention = await env.DB.prepare("SELECT sql FROM sqlite_master WHERE name = 'request_retention'").first<{ sql: string }>();
+  await env.DB.batch([
+    ...(retention ? [env.DB.prepare("DROP TRIGGER request_retention")] : []),
+    ...["operator_actions", "deletion_jobs", "captures", "cost_conflicts", "requests", "turns", "consents", "invites", "members", "session", "account", "user", "verification", "rateLimit", "api_limits"]
+      .map((table) => env.DB.prepare(`DELETE FROM "${table}"`)),
+    ...(retention ? [env.DB.prepare(retention.sql)] : []),
+  ]);
   await env.DB.prepare(`UPDATE budget SET spent = 0, reserved = 0, allowance = 50000000,
     paused = 0, recovery_required = 0, capture_bytes = 0, capture_allowance = 4000000000`).run();
   const objects = await env.CAPTURE.list();
@@ -437,7 +448,7 @@ describe("metered requests", () => {
     expect((await api("/v1/completions", question(2, request.turn_id), second.token)).status).toBe(409);
     expect((await api("/v1/completions", question(7), first.token)).status).toBe(400);
     await env.DB.prepare("UPDATE budget SET allowance = spent").run();
-    expect((await api("/v1/completions", question(), second.token)).status).toBe(402);
+    expect((await api("/v1/completions", question(), second.token)).status).toBe(503);
     expect(sent).toHaveLength(1);
   });
   test("applies server policy and settles actual cost without persisting project content", async () => {
@@ -898,5 +909,61 @@ describe("capture and deletion", () => {
     expect(await chosen()).toBe(false);
     await api("/v1/consent", { enabled: false, version: "quality-2026-09-17" }, user.token, "PUT");
     expect(await chosen()).toBe(true);
+  });
+});
+
+describe("admission", () => {
+  test("a new turn supersedes the member's running turn and is admitted while the old call is live", async () => {
+    const user = await joined();
+    const first = question();
+    let release!: () => void;
+    replies.push({ hold: new Promise<void>((r) => { release = r; }) } as never);
+    const pending = api("/v1/completions", first, user.token);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    reply();
+    const second = question();
+    expect((await api("/v1/completions", second, user.token)).status).toBe(200);
+    expect((await env.DB.prepare("SELECT status FROM turns WHERE id = ?").bind(first.turn_id).first())!.status).toBe("superseded");
+    release();
+    expect((await pending).status).toBe(200);
+    expect((await api("/v1/completions", question(2, first.turn_id), user.token)).status).toBe(409);
+  });
+
+  test("an expired lease is settled provisionally at admission and the member is admitted", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE members SET allowance = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    const stuck = question();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(stuck.turn_id, user.id).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', 1, 2)`).bind(stuck.request_id, stuck.turn_id, user.id, RESERVATION).run();
+    await env.DB.prepare("UPDATE requests SET status = 'dispatched' WHERE id = ?").bind(stuck.request_id).run();
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT provisional, member_cost FROM requests WHERE id = ?").bind(stuck.request_id).first())
+      .toEqual({ provisional: 1, member_cost: 0 });
+  });
+
+  test("concurrent admissions with one reservation of headroom", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE members SET allowance = ? WHERE id = ?").bind(RESERVATION, user.id).run();
+    reply(); reply();
+    const results = await Promise.all([api("/v1/completions", question(), user.token), api("/v1/completions", question(), user.token)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 402]);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM turns WHERE status = 'superseded'").first())!.n).toBeLessThanOrEqual(1);
+  });
+
+  test("global budget exhaustion is reported as a pause", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE budget SET allowance = spent").run();
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe("service_paused");
+  });
+
+  test("the model deadline shrinks by the time spent before admission", () => {
+    expect(admissionDeadline(0, 10_000)).toBe(RESPONSE_BUDGET - SETTLE_MARGIN);
+    expect(admissionDeadline(0, 0)).toBe(Math.min(MODEL_TIMEOUT, RESPONSE_BUDGET - SETTLE_MARGIN));
   });
 });
