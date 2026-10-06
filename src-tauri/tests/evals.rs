@@ -395,6 +395,67 @@ async fn notes_in_a_follow_up_are_read_not_taken_from_an_old_answer() {
 
 const NOTES_CORRECT: (&str, &str) = ("notes_correct", "The answer says the FM Bass plays only D1 in bars 1 to 12. It attributes no other pitch to the FM Bass in those bars; naming earlier wrong notes only to correct them is fine.");
 
+const DROP_CONTENTS: &[(&str, &str)] = &[
+    ("drop_contents", "The answer says the Drums and the Vox play in the Drop (from bar 17), and that the Pad is missing there until it returns at bar 25. It names no other part as playing in the Drop."),
+    ("bass_unread", "The answer does not say the Bass is silent, empty or missing in the Drop. Mentioning the Bass passes only if the answer says its timeline could not be read."),
+];
+
+#[tokio::test]
+async fn a_starter_section_question_reads_the_timeline() {
+    async fn once() -> (Turn, Verdict) {
+        let q = "What plays in Drop, and what's missing?";
+        let turn = ask(q).await;
+        let verdict = match checked(&turn, &["get_arrangement"]) {
+            Some(v) => v,
+            None => common::judged(q, &turn, DROP_CONTENTS).await,
+        };
+        (turn, verdict)
+    }
+    rate("starter_section", once).await;
+}
+
+const NO_HEARING: (&str, &str) = ("no_hearing", "The answer makes no claim about how anything sounds, for example that a part sounds thin, muddy, dull or weak.");
+
+const PAD_CHAIN: &[(&str, &str)] = &[
+    ("empty_chain", "The answer says the Pad has no devices on it. It names no device as being on the Pad."),
+    ("one_step", "The answer suggests at least one concrete thing to try on the Pad, such as a device to add or a setting to change."),
+    NO_HEARING,
+];
+
+#[tokio::test]
+async fn a_starter_chain_question_reads_the_chain() {
+    async fn once() -> (Turn, Verdict) {
+        let q = "What's on the Pad chain, and what would you try?";
+        let turn = ask(q).await;
+        let verdict = match checked(&turn, &["get_device_chains"]) {
+            Some(v) => v,
+            None => common::judged(q, &turn, PAD_CHAIN).await,
+        };
+        (turn, verdict)
+    }
+    rate("starter_chain", once).await;
+}
+
+const FULL_TRACK: &[(&str, &str)] = &[
+    ("from_the_set", "The answer names at least two of the set's tracks (909 Kick, Clap, Closed Hat, Stab, Voice FX, FM Bass, Tubular Bass, 808) and places at least one suggestion at a bar or a section."),
+    ("next_step", "The answer gives at least one concrete next step the producer can do in Live now, such as copying a part to new bars, adding a section, or bringing a part in later."),
+    NO_HEARING,
+];
+
+#[tokio::test]
+async fn a_starter_full_track_question_reads_the_set_first() {
+    async fn once() -> (Turn, Verdict) {
+        let q = "I'm stuck at 8 bars. How do I turn this into a full track?";
+        let turn = ask_oneshot(&[], q).await;
+        let verdict = match checked(&turn, &["get_arrangement"]) {
+            Some(v) => v,
+            None => common::judged(q, &turn, FULL_TRACK).await,
+        };
+        (turn, verdict)
+    }
+    rate("starter_full_track", once).await;
+}
+
 /// A pilot-shaped thread: every answer claims a fresh read, and the hat
 /// entry, the Tubular Bass chain, and the bass notes in them are invented.
 fn pilot_history() -> Vec<ChatMessage> {
