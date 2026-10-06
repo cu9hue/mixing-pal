@@ -44,9 +44,13 @@ const budget = async () => env.DB.prepare("SELECT spent, reserved, loss, paused 
 async function refused(statement: Promise<unknown>, code: string) {
   await expect(statement).rejects.toThrow(code);
 }
-async function conflict(requestId: string, recorded: number, reported: number) {
-  await run("INSERT INTO cost_conflicts(request_id, source, recorded, reported, created_at) VALUES (?, 'generation', ?, ?, 1)",
-    requestId, recorded, reported);
+async function conflict(requestId: string, recorded: number, reported: number, source = "generation") {
+  await run("INSERT INTO cost_conflicts(request_id, source, recorded, reported, created_at) VALUES (?, ?, ?, ?, 1)",
+    requestId, source, recorded, reported);
+}
+async function booked(source: string, reported: number) {
+  await conflict("r", 1000, reported, source);
+  await run("UPDATE cost_conflicts SET resolved_at = 2, resolution = 'booked' WHERE request_id = 'r' AND source = ?", source);
 }
 
 // Builds the rows at schema 0006, then applies every migration over them.
@@ -271,6 +275,16 @@ describe("cost conflicts", () => {
     await run("UPDATE cost_conflicts SET resolved_at = 2, resolution = 'booked' WHERE request_id = 'r'");
     expect(await budget()).toMatchObject({ spent: R + 1, reserved: 0, loss: 1 });
     expect(await balance("m")).toEqual({ spent: 1000, reserved: 0 });
+  });
+
+  test("V3-2: two bookings of one liability count it and its loss once", async () => {
+    await finalCall(); await booked("operator", 320_000); await booked("generation", 320_000);
+    expect(await budget()).toMatchObject({ spent: 320_000, reserved: 0, loss: 320_000 - R });
+  });
+
+  test("V3-2: a higher booking adds only the part above the earlier one", async () => {
+    await finalCall(); await booked("operator", 1500); await booked("generation", 1600);
+    expect(await budget()).toMatchObject({ spent: 1600, reserved: 0, loss: 0 });
   });
 
   test("V3-2: resume works after resolution", async () => {

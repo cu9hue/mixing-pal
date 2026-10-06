@@ -78,11 +78,15 @@ CREATE TRIGGER conflict_pause AFTER INSERT ON cost_conflicts WHEN NEW.reported >
   UPDATE budget SET paused = 1 WHERE id = 1;
 END;
 
--- Resolving a higher conflict books the outstanding liability once; the member's charge never changes.
+-- Resolving a higher conflict books only the liability not already booked for that request, and its loss once.
+-- The member's charge never changes.
 CREATE TRIGGER conflict_resolve AFTER UPDATE OF resolved_at ON cost_conflicts
 WHEN OLD.resolved_at IS NULL AND NEW.resolved_at IS NOT NULL AND NEW.resolution = 'booked' BEGIN
-  UPDATE budget SET spent = spent + MAX(NEW.reported - NEW.recorded, 0),
-    loss = loss + MAX(NEW.reported - MAX(NEW.recorded, (SELECT reserved FROM requests WHERE id = NEW.request_id)), 0)
+  UPDATE budget SET spent = spent + MAX(NEW.reported - MAX(NEW.recorded, (SELECT COALESCE(MAX(reported), 0) FROM cost_conflicts
+      WHERE request_id = NEW.request_id AND resolution = 'booked' AND resolved_at IS NOT NULL AND id != NEW.id)), 0),
+    loss = loss + MAX(NEW.reported - MAX(NEW.recorded, (SELECT reserved FROM requests WHERE id = NEW.request_id),
+      (SELECT COALESCE(MAX(reported), 0) FROM cost_conflicts
+        WHERE request_id = NEW.request_id AND resolution = 'booked' AND resolved_at IS NOT NULL AND id != NEW.id)), 0)
     WHERE id = 1;
 END;
 
