@@ -64,6 +64,21 @@ describe("stream reader", () => {
     expect((await readCompletionStream(body(sse([chunk({ content: "Hi" }, "stop")], "")), opts())).kind).toBe("complete");
   });
 
+  test("an unterminated last event is truncated, even after a finish reason", async () => {
+    const last = `data: ${JSON.stringify(chunk({}, "stop", { usage }))}`;
+    for (const tail of ["", "\n"]) {
+      const t = sse([chunk({ content: "Hi" }, "stop")], "") + last + tail;
+      expect(await readCompletionStream(body(t), opts())).toMatchObject({ kind: "failed", reason: "truncated" });
+    }
+    const half = sse([chunk({ content: "Hi" }, "stop")], "") + last.slice(0, 40);
+    expect(await readCompletionStream(body(half), opts())).toMatchObject({ kind: "failed", reason: "truncated" });
+  });
+
+  test("a terminated last event without [DONE] is complete with its usage", async () => {
+    const t = sse([chunk({ content: "Hi" }, "stop"), chunk({}, "stop", { usage })], "");
+    expect(await readCompletionStream(body(t), opts())).toMatchObject({ kind: "complete", response: { usage } });
+  });
+
   test("an error event fails the stream", async () => {
     const t = sse([chunk({ content: "Hi" }), { error: { code: 502, message: "upstream" }, choices: [{ index: 0, delta: {}, finish_reason: "error" }] }]);
     expect(await readCompletionStream(body(t), opts())).toMatchObject({ kind: "failed", reason: "error" });

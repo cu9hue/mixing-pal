@@ -13,7 +13,7 @@ export type StreamEnd = { kind: "complete"; response: Assembled }
 export const STREAM_LIMITS = { wireBytes: 16 * 1024 * 1024, eventBytes: 1024 * 1024, toolCalls: 32, argumentChars: 65_536 };
 
 class StreamFailure extends Error {
-  constructor(public reason: "error" | "limit" | "malformed", public detail?: unknown) { super(reason); }
+  constructor(public reason: "error" | "limit" | "malformed" | "truncated", public detail?: unknown) { super(reason); }
 }
 
 interface Partial { id?: string; type?: string; name?: string; arguments: string }
@@ -27,7 +27,7 @@ export async function readCompletionStream(body: ReadableStream<Uint8Array>, opt
   const now = options.now ?? Date.now;
   const response: Assembled = { content: "", reasoning: "", finishReason: null, toolCalls: [] };
   const calls = new Map<number, Partial>();
-  let wire = 0, sawData = false, done = false, failure: StreamFailure | undefined;
+  let wire = 0, sawData = false, done = false, ending = false, failure: StreamFailure | undefined;
 
   const apply = (data: string) => {
     if (data.length > limits.eventBytes) throw new StreamFailure("limit");
@@ -68,7 +68,7 @@ export async function readCompletionStream(body: ReadableStream<Uint8Array>, opt
     }
   };
 
-  const parser = createParser({ onEvent: (event) => { if (!failure && !done) { try { apply(event.data); } catch (e) { failure = e as StreamFailure; } } } });
+  const parser = createParser({ onEvent: (event) => { if (!failure && !done) { try { if (ending) throw new StreamFailure("truncated"); apply(event.data); } catch (e) { failure = e as StreamFailure; } } } });
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const finish = (end: StreamEnd): StreamEnd => {
@@ -87,6 +87,9 @@ export async function readCompletionStream(body: ReadableStream<Uint8Array>, opt
       if (next === "timeout") return finish({ kind: "failed", reason: "timeout", response });
       if (next.done) {
         parser.feed(decoder.decode());
+        // reset({ consume: true }) drops a pending event. A closing blank line dispatches it, and that means truncation.
+        ending = true;
+        parser.feed("\n\n");
         break;
       }
       wire += next.value.length;
