@@ -637,6 +637,25 @@ describe("never refused because an earlier call went wrong", () => {
       .toEqual({ provisional: 1, error_code: "provider_interrupted" });
   });
 
+  test("a reply above 1.5 MiB charges its usage, marks the missing capture, and fails", async () => {
+    const user = await joined();
+    await api("/v1/consent", { enabled: true, version: "quality-2026-09-17" }, user.token, "PUT");
+    const event = (choice: object, extra = {}) => `data: ${JSON.stringify({ id: "big", choices: [{ index: 0, ...choice }], ...extra })}\n\n`;
+    const half = event({ delta: { content: "a".repeat(800_000) }, finish_reason: null });
+    replies.push({ raw: new Response(half + half + event({ delta: {}, finish_reason: "stop" },
+      { usage: { cost: 0.002, prompt_tokens: 1, completion_tokens: 1 } }) + "data: [DONE]\n\n",
+      { headers: { "Content-Type": "text/event-stream" } }) } as never);
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("provider_failed");
+    expect(await env.DB.prepare("SELECT provisional, cost, member_cost FROM requests").first())
+      .toEqual({ provisional: 0, cost: 2000, member_cost: 2000 });
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(2000);
+    // The capture is larger than MAX_BODY, so the turn records that its evidence is missing.
+    expect(await capturedObjects()).toHaveLength(0);
+    expect((await env.DB.prepare("SELECT incomplete FROM turns").first())!.incomplete).toBe(1);
+  });
+
   test("a header id without any chunk is kept for reconciliation", async () => {
     const user = await joined();
     replies.push({ raw: new Response("", { headers: { "X-Generation-Id": "header-only", "Content-Type": "text/event-stream" } }) } as never);
@@ -1149,6 +1168,24 @@ describe("admission", () => {
     release();
     expect((await pending).status).toBe(200);
     expect((await api("/v1/completions", question(2, first.turn_id), user.token)).status).toBe(409);
+  });
+
+  test("a late finish after the lease cleanup finalizes the provisional row and charges the member nothing", async () => {
+    const user = await joined();
+    let release!: () => void;
+    replies.push({ hold: new Promise<void>((r) => { release = r; }) } as never);
+    const pending = api("/v1/completions", question(), user.token);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await env.DB.prepare("UPDATE requests SET lease_until = 1").run();
+    expect((await (await api("/v1/account", undefined, user.token)).json()).reserved_micro_usd).toBe(0);
+    expect(await env.DB.prepare("SELECT provisional, error_code FROM requests").first())
+      .toEqual({ provisional: 1, error_code: "worker_interrupted" });
+    release();
+    expect((await pending).status).toBe(200);
+    expect(await env.DB.prepare("SELECT status, provisional, cost, member_cost FROM requests").first())
+      .toEqual({ status: "settled", provisional: 0, cost: 1000, member_cost: 0 });
+    expect(await env.DB.prepare("SELECT spent, reserved FROM members WHERE id = ?").bind(user.id).first()).toEqual({ spent: 0, reserved: 0 });
+    expect(await env.DB.prepare("SELECT spent, reserved FROM budget").first()).toEqual({ spent: 1000, reserved: 0 });
   });
 
   test("an expired lease is settled provisionally at admission and the member is admitted", async () => {

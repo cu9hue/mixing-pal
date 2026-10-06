@@ -375,6 +375,14 @@ describe("ledger statements", () => {
     expect((await env.DB.prepare("SELECT provider FROM requests").first())!.provider).toBe("Inceptron");
   });
 
+  test("an overrun settled on an open row charges the member the reservation and books the rest to loss", async () => {
+    await member("m"); await turn("t", "m"); await req("r", "t", "m");
+    expect(await settle(env, "r", R + 5000)).toBe("applied");
+    expect(await balance("m")).toEqual({ spent: R, reserved: 0 });
+    expect((await env.DB.prepare("SELECT member_cost FROM requests").first())!.member_cost).toBe(R);
+    expect(await budget()).toEqual({ spent: R + 5000, reserved: 0, loss: 5000, paused: 1 });
+  });
+
   test("settle finalizes a provisional row without charging the member", async () => {
     await member("m"); await turn("t", "m"); await req("r", "t", "m");
     expect(await settleProvisional(env, "r", "provider_interrupted", now)).toBe(true);
