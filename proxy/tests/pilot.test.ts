@@ -1,10 +1,11 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
-import { hash, DAY, MODEL_TIMEOUT, RESPONSE_BUDGET, SETTLE_MARGIN } from "../src/env";
-import { admissionDeadline, settle } from "../src/ledger";
+import { hash, DAY, MIN_RUNTIME, MODEL_TIMEOUT, RESPONSE_BUDGET, SETTLE_MARGIN } from "../src/env";
+import { admissionDeadline, settle, settleExpired } from "../src/ledger";
+import { canDispatch, dispatchStatement } from "../src/completion";
 import { redeem } from "../src/account";
-import { LOST_REQUEST_AFTER, maintain } from "../src/maintenance";
+import { maintain } from "../src/maintenance";
 import { MAX_OUTPUT, RESERVATION, toolNames } from "../src/policy";
 import sharedTools from "../../shared/tool-names.json";
 import { runTurn } from "../../src/agent/loop";
@@ -62,6 +63,19 @@ function reply(extra: Record<string, unknown> = {}) {
   replies.push(defaultReply(extra));
 }
 
+/** The scripted non-stream reply, as OpenRouter would stream it: content, tool calls, finish, then usage. */
+function toSse(reply: Record<string, unknown>): string {
+  const choice = (reply.choices as { finish_reason?: string | null; message: { content?: string | null; tool_calls?: unknown[] } }[])[0];
+  const base = { id: reply.id, provider: reply.provider, model: "moonshotai/kimi-k2.6" };
+  const events: object[] = [];
+  if (choice.message.content) events.push({ ...base, choices: [{ index: 0, delta: { content: choice.message.content }, finish_reason: null }] });
+  (choice.message.tool_calls ?? []).forEach((call, index) =>
+    events.push({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index, ...(call as object) }] }, finish_reason: null }] }));
+  events.push({ ...base, choices: [{ index: 0, delta: {}, finish_reason: choice.finish_reason ?? null }] });
+  if (reply.usage) events.push({ ...base, choices: [{ index: 0, delta: {}, finish_reason: choice.finish_reason ?? null }], usage: reply.usage });
+  return events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") + "data: [DONE]\n\n";
+}
+
 beforeEach(async () => {
   sent = [];
   replies = [];
@@ -86,8 +100,12 @@ beforeEach(async () => {
       sent.push(JSON.parse(String(options?.body)));
       const scripted = replies.shift();
       if (!scripted) throw new Error("No scripted provider response");
-      if ("hold" in scripted) { await scripted.hold; return Response.json(defaultReply()); }
-      return Response.json(scripted);
+      if ("hold" in scripted) await (scripted as { hold: Promise<void> }).hold;
+      if ("raw" in scripted) return scripted.raw as Response;
+      const reply = "hold" in scripted ? defaultReply() : scripted;
+      const headers = new Headers({ "Content-Type": "text/event-stream" });
+      if (typeof reply.id === "string") headers.set("X-Generation-Id", reply.id);
+      return new Response(toSse(reply), { headers });
     }
     throw new Error(`Unexpected network request: ${String(url)}`);
   });
@@ -247,11 +265,10 @@ describe("invited accounts", () => {
   });
 });
 
-// A call cut off by the timeout leaves no generation id, so its cost can only be resolved by hand.
-test("a reply at the output cap fits the model timeout, which ends before the sweep calls a request lost", () => {
-  // K2.6 wrote 55 to 85 tokens a second on Inceptron on 2026-10-04.
+test("the timing budget fits a full reply inside the app's 300 s limit", () => {
   expect(MODEL_TIMEOUT).toBeGreaterThanOrEqual((MAX_OUTPUT / 50) * 1000);
-  expect(MODEL_TIMEOUT).toBeLessThan(LOST_REQUEST_AFTER);
+  expect(RESPONSE_BUDGET - SETTLE_MARGIN).toBeGreaterThanOrEqual(MODEL_TIMEOUT - 5_000);
+  expect(RESPONSE_BUDGET).toBeLessThanOrEqual(300_000 - 15_000);
 });
 
 describe("metered requests", () => {
@@ -323,14 +340,17 @@ describe("metered requests", () => {
 
   test("recovery refuses unresolved or decreasing spending and keeps its audit atomic", async () => {
     const user = await joined();
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
     reply({ usage: null });
-    const request = question();
-    await api("/v1/completions", request, user.token);
+    const provisional = question();
+    expect((await api("/v1/completions", provisional, user.token)).status).toBe(200);
     await api("/operator", { action: "replay_deletions" }, env.ADMIN_TOKEN);
     const recover = (spent_micro_usd: number) => api("/operator", { action: "recover", member_id: user.id,
       spent_micro_usd, reason: "Verified recovery amount" }, env.ADMIN_TOKEN);
     expect((await recover(1000)).status).toBe(409);
-    await settle(env, request.request_id, 1000);
+    await settle(env, provisional.request_id, 500);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(1000);
     expect((await recover(999)).status).toBe(409);
     await env.DB.exec("CREATE TRIGGER fail_recovery_audit BEFORE INSERT ON operator_actions BEGIN SELECT RAISE(ABORT, 'unavailable'); END");
     try { expect((await recover(1000)).status).toBe(503); }
@@ -339,16 +359,22 @@ describe("metered requests", () => {
     expect((await recover(1000)).status).toBe(200);
   });
 
-  test("five unknown generations retain the global concurrency limit", async () => {
+  test("five live calls refuse a sixth; five dead calls do not", async () => {
+    const holds: (() => void)[] = [];
+    const pending = [];
     for (let i = 0; i < 5; i++) {
       const user = await joined(`producer-${i}@example.com`);
-      reply({ usage: null });
-      expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
-      expect((await (await api("/v1/account", undefined, user.token)).json()).can_ask).toBe(false);
+      replies.push({ hold: new Promise<void>((r) => holds.push(r)) } as never);
+      pending.push(api("/v1/completions", question(), user.token));
     }
+    await vi.waitFor(() => expect(sent).toHaveLength(5));
     const waiting = await joined("waiting@example.com");
     expect((await api("/v1/completions", question(), waiting.token)).status).toBe(429);
-    expect(sent).toHaveLength(5);
+    await env.DB.prepare("UPDATE requests SET lease_until = 1 WHERE status = 'dispatched'").run();
+    reply();
+    expect((await api("/v1/completions", question(), waiting.token)).status).toBe(200);
+    holds.forEach((h) => h());
+    await Promise.all(pending);
   });
 
   test("measures local completion overhead against the stub provider", async ({ task }) => {
@@ -357,7 +383,7 @@ describe("metered requests", () => {
     for (let i = 0; i < 20; i++) {
       reply();
       const startDirect = performance.now();
-      await (await fetch(`${provider}/api/v1/chat/completions`, { method: "POST", body: "{}" })).json();
+      await (await fetch(`${provider}/api/v1/chat/completions`, { method: "POST", body: "{}" })).text();
       const direct = performance.now() - startDirect;
       reply();
       const startProxy = performance.now();
@@ -400,32 +426,30 @@ describe("metered requests", () => {
     expect(checked).toHaveLength(2);
     expect((await env.DB.prepare("SELECT status FROM requests WHERE generation_id = 'held-1'").first()).status).toBe("settled");
   });
-  test("a provider interruption holds cost; a sweep reconciles a known generation", async () => {
+  test("a cut-off charges the member nothing and admits the next question", async () => {
     const user = await joined();
-    const request = question();
-    expect((await api("/v1/completions", request, user.token)).status).toBe(504);
-    expect((await env.DB.prepare("SELECT reserved FROM budget").first()).reserved).toBe(RESERVATION);
-    expect((await api("/v1/completions", question(), user.token)).status).toBe(429);
-    expect(sent).toHaveLength(1);
-    await env.DB.prepare("UPDATE requests SET generation_id = 'known-generation'").run();
-    const original = globalThis.fetch;
-    vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => String(url).includes("/generation?")
-      ? Promise.resolve(Response.json({ data: { total_cost: 0.002 } })) : original(url, options));
-    await maintain(env);
-    expect((await env.DB.prepare("SELECT spent, reserved FROM budget").first())).toEqual({ spent: 2000, reserved: 0 });
+    replies.push({ raw: new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } }),
+      { headers: { "X-Generation-Id": "known-generation", "Content-Type": "text/event-stream" } }) } as never);
+    const response = await api("/v1/completions", question(), user.token);
+    expect(response.status).toBe(504);
+    expect((await response.json()).error.code).toBe("completion_interrupted");
+    expect(await env.DB.prepare("SELECT spent, reserved FROM members WHERE id = ?").bind(user.id).first()).toEqual({ spent: 0, reserved: 0 });
+    expect(await env.DB.prepare("SELECT spent, reserved FROM budget").first()).toEqual({ spent: RESERVATION, reserved: 0 });
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
   });
 
-  test("a settlement failure cannot silently release its reservation", async () => {
+  test("a settlement failure still answers, and the lease cleanup settles the row later", async () => {
     const user = await joined();
     await env.DB.exec("CREATE TRIGGER fail_settlement BEFORE UPDATE OF cost ON requests BEGIN SELECT RAISE(ABORT, 'unavailable'); END");
     try {
       reply();
-      expect((await api("/v1/completions", question(), user.token)).status).toBe(503);
-      expect((await env.DB.prepare("SELECT reserved FROM budget").first()).reserved).toBe(RESERVATION);
-      await env.DB.prepare("UPDATE requests SET updated_at = ?").bind(Date.now() - 6 * 60_000).run();
-      await maintain(env);
-      expect((await env.DB.prepare("SELECT status FROM requests").first()).status).toBe("unknown");
+      expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+      expect((await env.DB.prepare("SELECT status FROM requests").first())!.status).toBe("dispatched");
     } finally { await env.DB.exec("DROP TRIGGER fail_settlement"); }
+    await env.DB.prepare("UPDATE requests SET lease_until = 1").run();
+    await settleExpired(env, Date.now());
+    expect(await env.DB.prepare("SELECT status, provisional FROM requests").first()).toEqual({ status: "settled", provisional: 1 });
   });
 
   test("never exposes a provider credential in a reply or capture", async () => {
@@ -457,7 +481,7 @@ describe("metered requests", () => {
     const response = await api("/v1/completions", question(), user.token);
     expect(response.status, await response.clone().text()).toBe(200);
     expect((await response.json()).text).toContain("```note");
-    expect(sent[0]).toMatchObject({ model: "moonshotai/kimi-k2.6", max_tokens: 12000, reasoning: { effort: "low" },
+    expect(sent[0]).toMatchObject({ model: "moonshotai/kimi-k2.6", max_tokens: 12000, stream: true, reasoning: { effort: "low" },
       provider: { only: ["inceptron/int4"], zdr: true, sort: "throughput" } });
     const row = await env.DB.prepare("SELECT spent, reserved FROM members WHERE id = ?").bind(user.id).first();
     expect(row).toEqual({ spent: 1000, reserved: 0 });
@@ -508,15 +532,78 @@ describe("metered requests", () => {
     expect((await env.DB.prepare("SELECT spent FROM budget").first()).spent).toBe(1000);
   });
 
-  test("missing usage holds a reservation and blocks the next tool round", async () => {
+  test("missing usage answers, charges the member nothing, and lets the tool round continue", async () => {
     const user = await joined();
     const request = question();
     reply({ usage: null, choices: [{ finish_reason: "tool_calls", message: { tool_calls: [
       { id: "call-1", type: "function", function: { name: "get_arrangement", arguments: "{}" } },
     ] } }] });
-    expect((await api("/v1/completions", request, user.token)).status).toBe(503);
-    expect((await env.DB.prepare("SELECT status, reserved FROM requests").first())).toEqual({ status: "unknown", reserved: RESERVATION });
-    expect((await api("/v1/completions", question(2, request.turn_id), user.token)).status).toBe(409);
+    const first = await api("/v1/completions", request, user.token);
+    expect(first.status).toBe(200);
+    expect((await first.json()).tool_calls).toHaveLength(1);
+    expect(await env.DB.prepare("SELECT provisional, member_cost FROM requests").first()).toEqual({ provisional: 1, member_cost: 0 });
+    reply();
+    expect((await api("/v1/completions", question(2, request.turn_id), user.token)).status).toBe(200);
+  });
+});
+
+describe("never refused because an earlier call went wrong", () => {
+  test.each([
+    ["5xx before the stream", () => replies.push({ raw: new Response("{}", { status: 503 }) } as never), 502],
+    ["error event inside the stream", () => replies.push({ raw: new Response(
+      'data: {"id":"g","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]}\n\ndata: {"error":{"code":502}}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } }) } as never), 502],
+    ["no scripted reply (network failure)", () => {}, 504],
+  ])("%s", async (_, script, status) => {
+    const user = await joined();
+    script();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(status);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(0);
+    expect((await (await api("/v1/account", undefined, user.token)).json()).can_ask).toBe(true);
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+  });
+
+  test("finish without usage answers and charges the member nothing", async () => {
+    const user = await joined();
+    reply({ usage: null });
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first()).toEqual({ spent: 0 });
+  });
+
+  test("usage then a failure charges the usage and sends no tool calls", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response(
+      'data: {"id":"g","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c","type":"function","function":{"name":"get_mixer","arguments":"{"}}]},"finish_reason":null}],"usage":{"cost":0.003,"prompt_tokens":1,"completion_tokens":1}}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } }) } as never);
+    // The stream ends without a finish reason: a truncation, so she is told it was interrupted.
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(504);
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(3000);
+  });
+
+  test("a header id without any chunk is kept for reconciliation", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response("", { headers: { "X-Generation-Id": "header-only", "Content-Type": "text/event-stream" } }) } as never);
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(504);
+    expect(await env.DB.prepare("SELECT generation_id, provisional FROM requests").first()).toEqual({ generation_id: "header-only", provisional: 1 });
+  });
+
+  test("a dispatch needs at least MIN_RUNTIME before its deadline", () => {
+    expect(canDispatch(MIN_RUNTIME, 0)).toBe(true);
+    expect(canDispatch(MIN_RUNTIME - 1, 0)).toBe(false);
+  });
+
+  test("the guarded dispatch never moves a row whose deadline is too close, so the provider is never called", async () => {
+    const user = await joined();
+    const t = crypto.randomUUID(), r = crypto.randomUUID();
+    await env.DB.prepare(`INSERT INTO turns(id, member_id, created_at, updated_at, app_version, wire_version, consent_epoch, capture)
+      VALUES (?, ?, 0, 0, '0.2.9', 14, 0, 0)`).bind(t, user.id).run();
+    await env.DB.prepare(`INSERT INTO requests(id, turn_id, member_id, round, body_hash, prompt_hash, tool_hash, policy_version,
+      reserved, status, created_at, updated_at, model, deadline, lease_until)
+      VALUES (?, ?, ?, 1, 'b', 'p', 't', 'v', ?, 'reserved', 0, 0, 'm', ?, ?)`)
+      .bind(r, t, user.id, RESERVATION, Date.now() + MIN_RUNTIME - 1, Date.now() + MIN_RUNTIME + SETTLE_MARGIN).run();
+    expect((await dispatchStatement(env, r, Date.now()).run()).meta.changes).toBe(0);
+    expect((await env.DB.prepare("SELECT status FROM requests WHERE id = ?").bind(r).first())!.status).toBe("reserved");
   });
 });
 

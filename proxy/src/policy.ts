@@ -60,7 +60,7 @@ export async function routes(): Promise<string[]> {
 
 export function providerBody(input: CompletionInput, only: string[]) {
   return { model: MODEL, messages: input.body.messages, tools: input.body.tools,
-    tool_choice: "auto", max_tokens: MAX_OUTPUT, stream: false, reasoning: { effort: "low" },
+    tool_choice: "auto", max_tokens: MAX_OUTPUT, stream: true, reasoning: { effort: "low" },
     // The approved hosts differ up to 10x in speed at the same moment, and by
     // time of day; without a sort OpenRouter favours the cheapest, not the fastest.
     provider: { only, sort: "throughput", require_parameters: true, data_collection: "deny", zdr: true,
@@ -73,9 +73,3 @@ export const usageSchema = z.object({ cost: z.number().finite().nonnegative(),
   prompt_tokens: z.number().int().nonnegative(), completion_tokens: z.number().int().nonnegative(),
   total_tokens: z.number().int().nonnegative().optional(),
   prompt_tokens_details: tokenDetails.optional(), completion_tokens_details: tokenDetails.optional() });
-export const responseSchema = z.object({ id: z.string().max(200).optional(),
-  model: z.string().max(200).optional(), provider: z.string().max(200).optional(),
-  usage: z.unknown().optional(),
-  choices: z.array(z.object({ finish_reason: z.string().max(100).nullable().optional(),
-    message: z.object({ content: z.string().nullable().optional(), tool_calls: z.array(toolCall).max(32).optional() }) })).min(1).max(1),
-});
