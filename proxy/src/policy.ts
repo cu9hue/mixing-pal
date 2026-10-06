@@ -61,7 +61,9 @@ export async function routes(): Promise<string[]> {
 export function providerBody(input: CompletionInput, only: string[]) {
   return { model: MODEL, messages: input.body.messages, tools: input.body.tools,
     tool_choice: "auto", max_tokens: MAX_OUTPUT, stream: false, reasoning: { effort: "low" },
-    provider: { only, require_parameters: true, data_collection: "deny", zdr: true,
+    // The approved hosts differ up to 10x in speed at the same moment, and by
+    // time of day; without a sort OpenRouter favours the cheapest, not the fastest.
+    provider: { only, sort: "throughput", require_parameters: true, data_collection: "deny", zdr: true,
       max_price: { prompt: MAX_PROMPT_PRICE, completion: MAX_COMPLETION_PRICE, request: 0 } } };
 }
 
