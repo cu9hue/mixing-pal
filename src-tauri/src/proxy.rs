@@ -16,7 +16,7 @@ const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 const MAX_EVENT: usize = 1024 * 1024;
 const MAX_OUTBOX: usize = 20 * MAX_EVENT;
 const OUTBOX_AGE: u64 = 24 * 60 * 60 * 1000;
-/// Longer than the proxy's `MODEL_TIMEOUT`, so its own error arrives first.
+/// At least the proxy's `RESPONSE_BUDGET` plus 15 s for the network, so the proxy's own error arrives first.
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize)]
