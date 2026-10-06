@@ -84,6 +84,11 @@ describe("stream reader", () => {
     expect(await readCompletionStream(body(t), opts())).toMatchObject({ kind: "failed", reason: "error" });
   });
 
+  test("a malformed usage on a later event keeps the last valid usage", async () => {
+    const t = sse([chunk({ content: "Hi" }, null, { usage }), { error: { code: 502 }, usage: {} }]);
+    expect(await readCompletionStream(body(t), opts())).toMatchObject({ kind: "failed", reason: "error", response: { usage } });
+  });
+
   test("length withholds tool calls", async () => {
     const t = sse([chunk({ tool_calls: [{ index: 0, id: "a", type: "function", function: { name: "get_clips", arguments: "{" } }] }), chunk({}, "length")]);
     const end = await readCompletionStream(body(t), opts());

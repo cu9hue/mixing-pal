@@ -1,5 +1,5 @@
 import { createParser } from "eventsource-parser";
-import { toolCall } from "./policy";
+import { toolCall, usageSchema } from "./policy";
 
 export interface Assembled {
   id?: string; model?: string; provider?: string; content: string; reasoning: string;
@@ -38,7 +38,8 @@ export async function readCompletionStream(body: ReadableStream<Uint8Array>, opt
     if (typeof event.id === "string" && response.id === undefined) { response.id = event.id; options.onId?.(event.id); }
     if (typeof event.model === "string") response.model ??= event.model;
     if (typeof event.provider === "string") response.provider ??= event.provider;
-    if (event.usage && typeof event.usage === "object") response.usage = event.usage;
+    // A later malformed usage, as on an error event, must not erase the cost already reported.
+    if (usageSchema.safeParse(event.usage).success) response.usage = event.usage;
     if (event.error) throw new StreamFailure("error", event.error);
     const choice = (Array.isArray(event.choices) ? event.choices[0] : undefined) as Record<string, unknown> | undefined;
     if (!choice) return;

@@ -603,6 +603,17 @@ describe("never refused because an earlier call went wrong", () => {
     expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(3000);
   });
 
+  test("an error event with empty usage still charges the usage reported before it", async () => {
+    const user = await joined();
+    replies.push({ raw: new Response(
+      'data: {"id":"g","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}],"usage":{"cost":0.003,"prompt_tokens":1,"completion_tokens":1}}\n\n'
+      + 'data: {"error":{"code":502},"usage":{}}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } }) } as never);
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(502);
+    expect(await env.DB.prepare("SELECT provisional, cost FROM requests").first()).toEqual({ provisional: 0, cost: 3000 });
+    expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(3000);
+  });
+
   test("a header id without any chunk is kept for reconciliation", async () => {
     const user = await joined();
     replies.push({ raw: new Response("", { headers: { "X-Generation-Id": "header-only", "Content-Type": "text/event-stream" } }) } as never);
