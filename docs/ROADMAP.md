@@ -207,15 +207,14 @@ Ordered. Each item says what, why, size, and what it waits on.
     the point. This is a prompt change, so it needs a craft property and a
     run of the craft evals before it ships.
 
-11. **Recap on return.** When she reopens a set after a break, the card
-    opens with a short recap of last time: the goal, what she tried, and
-    what she decided. It is built from the set's saved thread and notes, so
-    it costs no model call. She can dismiss it.
-    High priority for retention, and next. Today the card shows only a
-    count line ("Earlier on this set · 3 exchanges · last 2 days ago"),
-    which says nothing about what she did. The check-in from #66 already
-    asks how her last move went when she comes back; the recap must sit
-    with it, not stack on top of it.
+11. **Recap on return.** Built 2026-10-08. When she reopens a set after a
+    break of 3 hours or more, the card opens on a "Last time" recap: her
+    last question, the newest three rated moves with what she heard, and the
+    newest two decided notes. The earlier answers fold behind "Show N
+    earlier answers". It is built from the saved thread, outcome log and
+    notes, so it costs no model call. The check-in from #66 keeps asking
+    about the newest move, and the recap never repeats it. × hides the recap
+    until the next break.
 
 12. **Kimi K2.6 as the default.** Built 2026-10-03. A pilot trace showed
     MiniMax M3 claiming reads it never made, misreading a set built from

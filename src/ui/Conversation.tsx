@@ -26,6 +26,8 @@ import { SetRow } from "./SetRow";
 import { starterQuestions } from "./examples";
 import { GOAL_MAX_LENGTH } from "./goal";
 import { WhatICanSee } from "./WhatICanSee";
+import { Recap, recapFor } from "./recap";
+import { RecapView } from "./RecapView";
 
 const MAX_HISTORY_MESSAGES = 12;
 
@@ -186,6 +188,10 @@ export function Conversation({
   const keyRef = useRef(key);
   keyRef.current = key;
   const [recap, setRecap] = useState<string | null>(null);
+  // After a break, what she did last time stands in for the restored
+  // exchanges, which stay folded until she asks for them.
+  const [lastTime, setLastTime] = useState<Recap | null>(null);
+  const [folded, setFolded] = useState(0);
   const threadRef = useRef<Exchange[]>([]);
   threadRef.current = thread;
   // The set's note rides beside the thread: same key, same switch, same
@@ -274,11 +280,11 @@ export function Conversation({
       setCheckin(null);
       setEditing(null);
       setHistory(historyFrom(merged, MAX_HISTORY_MESSAGES));
-      setRecap(
-        saved !== null && restored.length > 0
-          ? recapLine(restored.length, saved.saved_at, Math.floor(Date.now() / 1000))
-          : null,
-      );
+      const now = Math.floor(Date.now() / 1000);
+      const back = saved === null ? null : recapFor(restored, restoredOutcomes, restoredNote, saved.saved_at, now);
+      setLastTime(back);
+      setFolded(back === null ? 0 : restored.length);
+      setRecap(saved !== null && restored.length > 0 && back === null ? recapLine(restored.length, saved.saved_at, now) : null);
       if (carried.length > 0 || noteCarried || carriedOutcomes.length > 0) persist(target, merged, restoredNote, restoredGoal);
     }, SWITCH_HOLD_MS);
     return () => {
@@ -503,6 +509,12 @@ export function Conversation({
           </div>
         )}
         {recap !== null && <div className="card__recap">{recap}</div>}
+        {lastTime !== null && <RecapView recap={lastTime} onDismiss={() => setLastTime(null)} />}
+        {folded > 0 && (
+          <button className="recap__fold" onClick={() => setFolded(0)}>
+            Show {folded} earlier answer{folded === 1 ? "" : "s"}<span aria-hidden="true"> ›</span>
+          </button>
+        )}
         {/* First launch, and any set with no thread yet. The questions are
             built from her set and land on what the reads answer well. */}
         {thread.length === 0 && recap === null && waiting === null && (
@@ -522,7 +534,7 @@ export function Conversation({
             ))}
           </div>
         )}
-        {thread.map((x, i) => (
+        {thread.map((x, i) => i < folded ? null : (
           <div
             key={x.turnId ?? `${key?.id}:${key?.path}:${i}`}
             className="card__exchange"

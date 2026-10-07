@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { Conversation } from "./Conversation";
@@ -222,7 +222,8 @@ it("forgets an open check-in when the set changes", async () => {
     const a = args as { setId: string; exchanges: unknown; goal: unknown; note: unknown; nextBullet: unknown; outcomes: unknown };
     if (command === "load_thread") return saved[a.setId] ?? { exchanges: [], goal: "finish this track", saved_at: 1, next_bullet: 1, note: [] };
     if (command === "save_thread") {
-      saved[a.setId] = { exchanges: a.exchanges, goal: a.goal, saved_at: 1, next_bullet: a.nextBullet, note: a.note, outcomes: a.outcomes };
+      // Rust stamps the save with its own clock.
+      saved[a.setId] = { exchanges: a.exchanges, goal: a.goal, saved_at: Math.floor(Date.now() / 1000), next_bullet: a.nextBullet, note: a.note, outcomes: a.outcomes };
       return;
     }
     if (command === "model_complete") return { text: "Cut it.\n```move\n«Pad», mud: cut 300 Hz\n```" };
@@ -248,4 +249,61 @@ it("forgets an open check-in when the set changes", async () => {
   expect(strip()).toBeNull();
   fireEvent.click(screen.getByLabelText("Ask about the set"));
   expect(strip()).toBeTruthy();
+});
+
+describe("returning to a set", () => {
+  const SAVED = 1_000_000;
+  const exchanges = [
+    { question: "What's on the Bass chain?", answer: "First answer.", error: null, turnId: "t1", move: "Cut 200 Hz on the bass" },
+    { question: "What should I work on next?", answer: "Second answer.", error: null, turnId: "t2", move: "Shorten the kick tail" },
+  ];
+  const outcomes = [{ turnId: "t2", move: "Shorten the kick tail", outcome: "kept", heard: "tighter", tracks: [], answer: "", at: SAVED }];
+  async function open(savedAt: number, now: number, log: unknown[] = outcomes) {
+    vi.setSystemTime(now * 1000);
+    vi.mocked(invoke).mockImplementation(async (command) => command === "load_thread"
+      ? { exchanges, goal: "finish this track", saved_at: savedAt, next_bullet: 1,
+          note: [{ id: "b0", kind: "decided", text: "Keep the vocal dry", at: SAVED, hers: true }], outcomes: log }
+      : undefined);
+    render(<Conversation state={{ ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version }} connected account={account}
+      onTurnRunningChange={() => {}} onAnswer={() => {}} />);
+    await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+  }
+
+  it("after a break, shows a recap in place of the earlier answers until she unfolds them", async () => {
+    await open(SAVED, SAVED + 2 * 24 * 60 * 60);
+    const recap = screen.getByRole("region", { name: "Last time" });
+    expect(recap.textContent).toContain("2 days ago");
+    expect(recap.textContent).toContain("What should I work on next?");
+    expect(recap.textContent).toContain("Shorten the kick tail");
+    expect(recap.textContent).toContain("tighter");
+    expect(recap.textContent).toContain("Keep the vocal dry");
+    expect(screen.queryByText("First answer.")).toBeNull();
+    expect(screen.queryByText("Second answer.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 earlier answers" }));
+    expect(screen.getByText("First answer.")).toBeTruthy();
+    expect(screen.getByText("Second answer.")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Last time" })).toBeTruthy();
+  });
+
+  it("dismisses the recap and keeps the fold", async () => {
+    await open(SAVED, SAVED + 2 * 24 * 60 * 60);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss the recap" }));
+    expect(screen.queryByRole("region", { name: "Last time" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Show 2 earlier answers" })).toBeTruthy();
+    expect(screen.queryByText("First answer.")).toBeNull();
+  });
+
+  it("leaves an unrated newest move to the check-in", async () => {
+    await open(SAVED, SAVED + 2 * 24 * 60 * 60, []);
+    expect(screen.getByRole("region", { name: "Last time" }).textContent).not.toContain("Shorten the kick tail");
+    fireEvent.click(screen.getByLabelText("Ask about the set"));
+    expect(screen.getByRole("region", { name: "How did the last move go?" })).toBeTruthy();
+  });
+
+  it("without a break, shows the full thread as before", async () => {
+    await open(SAVED, SAVED + 60 * 60);
+    expect(screen.queryByRole("region", { name: "Last time" })).toBeNull();
+    expect(screen.getByText("First answer.")).toBeTruthy();
+    expect(screen.getByText(/Earlier on this set · 2 exchanges/)).toBeTruthy();
+  });
 });
