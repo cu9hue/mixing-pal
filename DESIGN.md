@@ -69,8 +69,9 @@ The existing CSS variables remain the source of truth. This React app does not u
 
 - The only entry sequence is sign in, connect Ableton, optionally name the Live set's goal in the card, then chat. One action starts chatting with or without a goal; each set keeps that choice with its conversation.
 - Signed-out views omit Live status, chat, goals, notes, and data summaries.
-- Sign-in centers “Your music production assistant.” above “Sign into your MixingPal account”. Its field label stays left aligned. The exact invitation-email placeholder remains in the field. `--accent` provides the acid-green action and focus ring.
+- Sign-in centers “A mentor for the track you're writing.” above “Sign in with the email your invite came to.” Its field label stays left aligned. The exact invitation-email placeholder remains in the field. `--accent` provides the acid-green action and focus ring.
 - Prompt ideas are 44px minimum-height buttons. They fill the composer but never send a request.
+- An answer's feedback stays out of the way: nothing sits under a fresh answer, a rated one gets one muted result line, and each answer's ⋯ menu holds “Change how it went” and “Report a problem”. The check-in “How did the last move go?” appears flat in the footer above the composer only when she comes back, never as a card, and never blocks the composer.
 - `:focus-visible` uses the existing 2px accent outline. Buttons retain default, hover, active, disabled, error, and success states where applicable.
 - Motion is limited to 120ms colour transitions and respects existing reduced-motion rules.
 
