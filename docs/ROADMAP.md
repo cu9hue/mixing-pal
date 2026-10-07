@@ -211,9 +211,11 @@ Ordered. Each item says what, why, size, and what it waits on.
     opens with a short recap of last time: the goal, what she tried, and
     what she decided. It is built from the set's saved thread and notes, so
     it costs no model call. She can dismiss it.
-    High priority for retention, next after item 18. Today the card shows
-    only a count line ("Earlier on this set · 3 exchanges · last 2 days
-    ago"), which says nothing about what she did.
+    High priority for retention, and next. Today the card shows only a
+    count line ("Earlier on this set · 3 exchanges · last 2 days ago"),
+    which says nothing about what she did. The check-in from #66 already
+    asks how her last move went when she comes back; the recap must sit
+    with it, not stack on top of it.
 
 12. **Kimi K2.6 as the default.** Built 2026-10-03. A pilot trace showed
     MiniMax M3 claiming reads it never made, misreading a set built from
@@ -266,18 +268,13 @@ Ordered. Each item says what, why, size, and what it waits on.
     earlier call that went wrong; only access, allowance, a paused service or
     five live calls can refuse it.
 
-18. **First questions that reach the aha.** High priority, small: next
-    after item 17. The empty card offers three fixed questions
-    (`src/ui/examples.ts`). Two of them, "What is masking the kick?" and
-    "Is the low end too busy?", ask for a sound judgement, the answer type
-    the craft evals score lowest, because the model cannot hear. A new
-    producer's first answer should show the product at its best: an answer
-    about her own set that she can check by ear. Build the questions from
-    the open set (its track names and its arrangement), lean on what the
-    reads answer well (structure, what comes in when, what is on a chain),
-    and include the core promise: how this loop could become a track. Give
-    them a design pass too; they read as an afterthought today. Measure the
-    first click and the first kept move once usage events exist.
+18. **First questions that reach the aha.** Done 2026-10-07 (#65). The
+    empty card builds its three starter questions from the open set: a
+    section from its locators, the chain on the selected or first named
+    track, and how to turn the loop into a full track. None of them asks
+    for a sound judgement. Three eval scenarios cover these questions.
+    Next: measure the first click and the first kept move once usage events
+    exist.
 
 ## When the waitlist says go
 
