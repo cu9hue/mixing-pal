@@ -119,6 +119,9 @@ await page.screenshot({path:`${artifacts}/settings-footer-${phase}-${ceiling}.pn
 }
 await page.evaluate(()=>document.documentElement.style.setProperty('--card-max-height','520px'));
 await page.getByRole('heading',{name:'App updates',exact:true}).scrollIntoViewIfNeeded();
+// DESIGN.md: Settings controls share one neutral outline, so Check for updates reads as a button.
+const outline=name=>page.getByRole('button',{name,exact:true}).evaluate(e=>getComputedStyle(e).borderTopColor);
+assert.equal(await outline('Check for updates'),await outline('Reinstall'),'Check for updates has the Settings outline');
 await page.screenshot({path:`${artifacts}/settings-update-${phase}.png`});
 await done.click();
 assert.equal(await composer.inputValue(),'Keep my draft','settings must preserve the chat draft');
@@ -273,6 +276,13 @@ await page.evaluate(text=>window.finishModel(text),MOVE);
 await page.waitForTimeout(100);
 assert.equal(await page.getByLabel('Share advice and outcomes to help improve Mixing Pal').isChecked(),true);
 await page.screenshot({path:`${artifacts}/settings.png`});
+await page.getByRole('button',{name:'Delete account…',exact:true}).click();
+const keep=page.getByRole('button',{name:'Cancel',exact:true});
+assert.equal(await keep.evaluate(e=>e===document.activeElement),true,'the delete confirmation starts on Cancel');
+assert.equal(await page.getByRole('button',{name:'Delete my account',exact:true}).evaluate(e=>getComputedStyle(e).borderTopColor),'rgb(255, 47, 58)','the irreversible step is red (--error)');
+await page.screenshot({path:`${artifacts}/settings-delete-account.png`});
+await keep.click();
+assert.equal(await page.getByRole('button',{name:'Delete my account',exact:true}).count(),0,'Cancel closes the confirmation');
 assert.equal(await page.getByText('Optional. Save your questions, relevant set context, tool reads, raw answers and outcomes for human review for 30 days.').count(),0,'settings should not lead with the sharing explanation');
 await page.getByRole('button',{name:'How sharing works',exact:true}).click();
 await page.getByRole('tooltip').waitFor();

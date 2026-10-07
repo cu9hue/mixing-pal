@@ -127,6 +127,14 @@
   outline-offset: 2px;
 }
 
+/* Only the irreversible step is red; Cancel keeps the neutral outline. Scoped
+   through .account__actions to outrank Settings' shared button rule. */
+.account .account__actions .account__danger,
+.account .account__actions .account__danger:hover:not(:disabled) {
+  border-color: var(--error);
+  color: var(--error-label);
+}
+
 .account button:disabled {
   opacity: 0.55;
   cursor: default;
