@@ -147,8 +147,7 @@ describe("needsSetup", () => {
     expect(needsSetup({ ...READY, connectorInstalled: null, setupDone: false })).toBe(false);
   });
 
-  // The regression this function exists for: it used to reopen the 600x680
-  // setup window on top of her work.
+  // Setup must never reopen the 600x680 window on top of her work.
   it("does not reopen setup when Live goes quiet", () => {
     // Quitting Live, or five seconds of lost traffic, is a card-level
     // state: the not_connected banner and the pill's disconnected state.

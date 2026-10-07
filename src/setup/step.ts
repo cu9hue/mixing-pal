@@ -7,7 +7,6 @@ export type SetupStep =
   | "sharing"
   | "done";
 
-/** setupDone keeps returning users in the card. */
 export interface SetupFacts {
   connectorInstalled: boolean;
   connectorCurrent: boolean;
@@ -67,17 +66,8 @@ export interface SetupNeed {
 /**
  * Whether to show the setup window.
  *
- * Deliberately narrower than `currentStep`. Setup used to open whenever
- * `currentStep` was not "done", which conflated "first run is incomplete"
- * with "we are not hearing from Live right now" -- so quitting Live, or
- * five seconds of lost traffic, threw the 600x680 setup window on top of
- * her work and re-centred it. It also made the `not_connected`
- * banner and the pill's disconnected state unreachable: the staleness that
- * should show them forced setup mode instead.
- *
- * Disconnection is a card-level state, not a first-run state. Only three
- * things reopen setup: the connector is missing, the connector is too old
- * to talk to this app, or she never finished setup.
+ * Narrower than `currentStep`: a quiet Live (quit, or five seconds of lost
+ * traffic) is a card-level state for the banner and the pill, not a reason to reopen setup.
  */
 export function needsSetup(need: SetupNeed): boolean {
   // Guessing "not installed" before connector_status answers would flash

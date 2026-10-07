@@ -9,11 +9,8 @@ function realName(name: string | null | undefined): string | null {
 }
 
 /**
- * What the empty card offers: three questions about the set that is open,
- * each one the app answers from its reads rather than by ear. Structure and
- * a device chain are what the reads answer best; the last is the promise,
- * how this becomes a finished track. A click fills the input and leaves the
- * send to her.
+ * Three questions about the open set, each answerable from reads rather than by ear.
+ * A click fills the input and leaves the send to her.
  */
 export function starterQuestions(state: SetState): string[] {
   const cues = [...state.cuePoints].sort((a, b) => a.time - b.time);
