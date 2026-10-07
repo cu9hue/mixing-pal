@@ -5,7 +5,10 @@ import wireVersion from "../../shared/wire-version.json";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AccountState, canAsk, errorMessage } from "../model/account";
-import { OutcomeRow } from "./OutcomeRow";
+import { checkinTarget } from "./checkin";
+import { MoveBox } from "./MoveBox";
+import { MoveCheckin } from "./MoveCheckin";
+import { AnswerMenu } from "./AnswerMenu";
 import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
@@ -196,6 +199,23 @@ export function Conversation({
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
   const outcomesRef = useRef<Outcome[]>([]);
   outcomesRef.current = outcomes;
+  // The check-in is opened by her coming back, not by the answer landing.
+  // Its turn is fixed once open, so rating it does not close it before the heard step.
+  const [checkin, setCheckin] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const dismissed = useRef<Set<string>>(new Set());
+  const target = checkinTarget(thread, outcomes, dismissed.current, busy);
+  const offerCheckin = useRef<() => void>(() => {});
+  offerCheckin.current = () => { if (target?.turnId) setCheckin(target.turnId); };
+  useEffect(() => {
+    const onFocus = () => offerCheckin.current();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+  function closeCheckin() {
+    if (checkin !== null) dismissed.current.add(checkin);
+    setCheckin(null);
+  }
   // A save that failed, shown above the thread until one succeeds. The
   // note is hers by hand; a write that silently failed would lose it with
   // the row still showing it applied.
@@ -337,6 +357,7 @@ export function Conversation({
     if (asked === "" || busy || goal === null || key === null || !canAsk(account.view)) return;
     if (!wireReady(connected, state.scriptVersion, wireVersion.version) || !beginMutation(operations, "turn")) return;
     setInput("");
+    closeCheckin();
     pinned.current = true;
     // Saved under the key current when the question was asked. A switch
     // waits for the turn, so this is the key the answer lands under too.
@@ -506,13 +527,15 @@ export function Conversation({
           >
             <ExchangeView x={x} />
             {x.turnId && x.move && x.answer !== null && (!busy || i !== thread.length - 1) && (
-              <OutcomeRow exchange={{ turnId: x.turnId, move: x.move, answer: x.answer, tracksRead: x.tracksRead }}
-                outcomes={outcomes} sharingEnabled={account.view?.capture === true}
-                onChange={(next) => changeOutcomes(next, key)} />
+              <MoveBox exchange={{ turnId: x.turnId, move: x.move, answer: x.answer, tracksRead: x.tracksRead }}
+                outcomes={outcomes} editing={editing === x.turnId} sharingEnabled={account.view?.capture === true}
+                onChange={(next) => changeOutcomes(next, key)} onDone={() => setEditing(null)} />
             )}
-            {onReport && (x.answer !== null || x.error !== null) && <button className="report-link report-trigger"
-              data-tauri-drag-region="false" disabled={operations.install}
-              onClick={(event) => { event.currentTarget.focus(); onReport({ origin: x.error ? "error" : "answer", exchange: x }); }}>Report a problem</button>}
+            {(x.answer !== null || x.error !== null) && (
+              <AnswerMenu canChange={Boolean(x.turnId && x.move && x.answer !== null)} disabled={operations.install}
+                onChangeOutcome={() => setEditing(x.turnId ?? null)}
+                onReport={onReport && (() => onReport({ origin: x.error ? "error" : "answer", exchange: x }))} />
+            )}
           </div>
         ))}
         {log.length > 0 && (
@@ -535,6 +558,14 @@ export function Conversation({
         )}
       </div>
       <div className="card__footer">
+        {(() => {
+          const open = thread.find((x) => x.turnId !== undefined && x.turnId === checkin);
+          return open?.turnId && open.move && open.answer !== null && (
+            <MoveCheckin exchange={{ turnId: open.turnId, move: open.move, answer: open.answer, tracksRead: open.tracksRead }}
+              outcomes={outcomes} sharingEnabled={account.view?.capture === true}
+              onChange={(next) => changeOutcomes(next, key)} onClose={closeCheckin} />
+          );
+        })()}
         {accessProblem && <div id="chat-access-status" className="card__access-status" role="status">{accessProblem}</div>}
         <input
           ref={inputRef}
@@ -546,6 +577,9 @@ export function Conversation({
           aria-describedby={accessProblem ? "chat-access-status" : undefined}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
+          // A click counts too: after a send the input keeps focus, so no focus event follows.
+          onFocus={() => offerCheckin.current()}
+          onClick={() => offerCheckin.current()}
         />
         {/* Permanent and non-dismissible. From here the app can state wrong
             things fluently, in prose, about her music, and it cannot hear

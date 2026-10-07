@@ -22,7 +22,7 @@ export function AnswerMenu({ canChange, disabled, onChangeOutcome, onReport }: {
     <button ref={button} type="button" className="answer-menu__button" aria-label="More actions"
       aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen((o) => !o)}>⋯</button>
     {open && <div className="answer-menu__list" role="menu"
-      onKeyDown={(e) => { if (e.key === "Escape") { setOpen(false); button.current?.focus(); } }}>
+      onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
       {canChange && <button type="button" role="menuitem" onClick={() => { setOpen(false); onChangeOutcome(); }}>
         Change how it went</button>}
       {/* The report sheet returns focus to whatever had it when it opened. */}

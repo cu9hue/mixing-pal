@@ -149,3 +149,13 @@ it("is done after clearing a rating", () => {
   fireEvent.click(kept());
   expect(done).toHaveBeenCalledTimes(2);
 });
+
+it("keeps Escape in the heard field from closing the card", () => {
+  const card = vi.fn();
+  window.addEventListener("keydown", card);
+  render(<Harness />);
+  fireEvent.click(kept());
+  fireEvent.keyDown(screen.getByLabelText("What did you hear?"), { key: "Escape" });
+  window.removeEventListener("keydown", card);
+  expect(card).not.toHaveBeenCalled();
+});

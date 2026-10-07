@@ -80,3 +80,13 @@ it("offers only a report on a turn with no move, and closes on Escape", () => {
   fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
   expect(screen.queryByRole("menu")).toBeNull();
 });
+
+it("keeps Escape in the menu from closing the card", () => {
+  const card = vi.fn();
+  window.addEventListener("keydown", card);
+  render(<AnswerMenu canChange disabled={false} onChangeOutcome={() => {}} onReport={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  window.removeEventListener("keydown", card);
+  expect(card).not.toHaveBeenCalled();
+});

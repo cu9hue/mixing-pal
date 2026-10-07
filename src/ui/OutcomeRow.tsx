@@ -96,7 +96,8 @@ export function OutcomeRow({ exchange, outcomes, sharingEnabled, onChange, onSki
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") { e.preventDefault(); saveHeard(); }
-            else if (e.key === "Escape") closeHeard();
+            // Escape steps back out of the field only, not out of the card.
+            else if (e.key === "Escape") { e.stopPropagation(); closeHeard(); }
           }}
           onBlur={() => { if (!escaping.current) saveHeard(); }} />
         {/* Keeps focus in the field, so the click saves once rather than racing the blur. */}

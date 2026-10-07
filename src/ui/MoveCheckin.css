@@ -51,6 +51,11 @@
   right: 0;
 }
 
+/* Later exchanges start below a divider; keep the ⋯ beside their question. */
+.card__exchange + .card__exchange .answer-menu {
+  top: var(--space-3-5);
+}
+
 .answer-menu__button {
   border: none;
   background: none;
