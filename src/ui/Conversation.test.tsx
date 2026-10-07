@@ -157,7 +157,7 @@ const strip = () => screen.queryByRole("region", { name: "How did the last move 
 
 it("waits until she comes back before asking how the move went", async () => {
   const input = await answered();
-  expect(screen.getByText("Your move")).toBeTruthy();
+  expect(screen.getByText("Cut it.")).toBeTruthy();
   expect(strip()).toBeNull();
   fireEvent.focus(input);
   expect(strip()).toBeTruthy();
@@ -198,5 +198,54 @@ it("asks when she clicks into an input that already has focus", async () => {
   input.focus();
   expect(strip()).toBeNull();
   fireEvent.click(input);
+  expect(strip()).toBeTruthy();
+});
+
+it("puts focus on the choices after Change how it went", async () => {
+  await answered();
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Change how it went" }));
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Kept it" }));
+});
+
+it("shows one set of choices when she edits the move the check-in would ask about", async () => {
+  const input = await answered();
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Change how it went" }));
+  fireEvent.click(input);
+  expect(screen.getAllByRole("button", { name: "Kept it" })).toHaveLength(1);
+});
+
+it("forgets an open check-in when the set changes", async () => {
+  const saved: Record<string, unknown> = {};
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    const a = args as { setId: string; exchanges: unknown; goal: unknown; note: unknown; nextBullet: unknown; outcomes: unknown };
+    if (command === "load_thread") return saved[a.setId] ?? { exchanges: [], goal: "finish this track", saved_at: 1, next_bullet: 1, note: [] };
+    if (command === "save_thread") {
+      saved[a.setId] = { exchanges: a.exchanges, goal: a.goal, saved_at: 1, next_bullet: a.nextBullet, note: a.note, outcomes: a.outcomes };
+      return;
+    }
+    if (command === "model_complete") return { text: "Cut it.\n```move\n«Pad», mud: cut 300 Hz\n```" };
+  });
+  const base = { ...emptySet(), scriptVersion: wireVersion.version, tracks: { 0: { ...emptyTrack(), name: "Pad" } } };
+  const setA = { ...base, setId: "A", setPath: "/a.als" };
+  const setB = { ...base, setId: "B", setPath: "/b.als" };
+  const view = (state: typeof setA) => <Conversation state={state} connected account={account} onTurnRunningChange={() => {}} onAnswer={() => {}} />;
+  const { rerender } = render(view(setA));
+  await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+  const input = screen.getByLabelText("Ask about the set");
+  fireEvent.change(input, { target: { value: "How is the pad?" } });
+  await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  fireEvent.click(screen.getByLabelText("Ask about the set"));
+  expect(strip()).toBeTruthy();
+  rerender(view(setB));
+  await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+  expect(strip()).toBeNull();
+  rerender(view(setA));
+  await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+  expect(screen.getByText("Cut it.")).toBeTruthy();
+  expect(strip()).toBeNull();
+  fireEvent.click(screen.getByLabelText("Ask about the set"));
   expect(strip()).toBeTruthy();
 });

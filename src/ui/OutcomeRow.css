@@ -4,9 +4,15 @@
   color: var(--text-muted);
 }
 
+.outcome__question {
+  color: var(--text);
+  margin-bottom: var(--space-1-5);
+}
+
+/* The three choices stay on one row. */
 .outcome__choices {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--space-1-5);
 }
 

@@ -12,11 +12,10 @@ afterEach(cleanup);
 const exchange = { turnId: "t1", move: "«Clap» + «Closed Hat»: duplicate bars 9-16 to 17-24", answer: "Do it.", tracksRead: [] };
 const rated = (heard = ""): Outcome => ({ turnId: "t1", move: exchange.move, outcome: "undone", heard, tracks: [], answer: "Do it.", at: 1 });
 
-it("shows the move, and the result once rated", () => {
-  const { rerender } = render(<MoveBox exchange={exchange} outcomes={[]} editing={false} sharingEnabled={false} onChange={() => true} onDone={() => {}} />);
-  expect(screen.getByText("Your move")).toBeTruthy();
-  expect(screen.getByText(exchange.move)).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Kept it" })).toBeNull();
+it("shows nothing until rated, then one quiet result line", () => {
+  const { container, rerender } = render(<MoveBox exchange={exchange} outcomes={[]} editing={false} sharingEnabled={false} onChange={() => true} onDone={() => {}} />);
+  // The answer's own Move line carries the move; nothing repeats it.
+  expect(container.textContent).toBe("");
   rerender(<MoveBox exchange={exchange} outcomes={[rated("too busy")]} editing={false} sharingEnabled={false} onChange={() => true} onDone={() => {}} />);
   expect(screen.getByText("Undid it · “too busy”")).toBeTruthy();
 });
@@ -45,9 +44,12 @@ it("asks how the last move went, and closes after the heard step", () => {
   const close = vi.fn();
   render(<Strip onClose={close} />);
   expect(screen.getByRole("region", { name: "How did the last move go?" })).toBeTruthy();
-  expect(screen.getByText(exchange.move)).toBeTruthy();
+  expect(screen.getByText("How did the last move go?")).toBeTruthy();
+  expect(screen.queryByText(exchange.move)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Kept it" }));
   expect(close).not.toHaveBeenCalled();
+  // The heard prompt replaces the question: one row, nothing stacked.
+  expect(screen.queryByText("How did the last move go?")).toBeNull();
   fireEvent.keyDown(screen.getByLabelText("What did you hear?"), { key: "Enter" });
   expect(close).toHaveBeenCalledTimes(1);
 });
@@ -89,4 +91,16 @@ it("keeps Escape in the menu from closing the card", () => {
   fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
   window.removeEventListener("keydown", card);
   expect(card).not.toHaveBeenCalled();
+});
+
+it("keeps Escape on the open menu's button from closing the card", () => {
+  const card = vi.fn();
+  window.addEventListener("keydown", card);
+  render(<AnswerMenu canChange disabled={false} onChangeOutcome={() => {}} onReport={() => {}} />);
+  const button = screen.getByRole("button", { name: "More actions" });
+  fireEvent.click(button);
+  fireEvent.keyDown(button, { key: "Escape" });
+  window.removeEventListener("keydown", card);
+  expect(card).not.toHaveBeenCalled();
+  expect(screen.queryByRole("menu")).toBeNull();
 });

@@ -285,7 +285,8 @@ assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='model_co
 await page.evaluate(text=>window.finishModel(text),MOVE);
 await page.getByText('A new turn after opting in',{exact:true}).waitFor();
 const exchange=page.locator('.card__exchange').filter({hasText:'A new turn after opting in'});
-await exchange.locator('.move-box').waitFor();
+await exchange.getByText('A complete answer.',{exact:true}).waitFor();
+assert.equal(await exchange.locator('.move-result').count(),0,'nothing under a fresh answer');
 assert.equal(await page.locator('.checkin').count(),0,'no check-in the moment the answer lands');
 await page.screenshot({path:`${artifacts}/answer-closed.png`});
 assert.equal(await page.getByText('```move').count(),0,'the move block is not shown');
@@ -320,7 +321,9 @@ await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete
 await page.evaluate(()=>window.failModel());
 const failed=page.locator('.card__exchange').filter({hasText:'A failed shared turn'});
 await failed.getByText('The reply was interrupted. It has not been retried. You can ask again.',{exact:true}).waitFor();
-assert.equal(await failed.locator('.move-box').count(),0,'a turn with no answer has nothing to rate');
+await failed.getByRole('button',{name:'More actions',exact:true}).click();
+assert.equal(await page.getByRole('menuitem',{name:'Change how it went',exact:true}).count(),0,'a turn with no answer has nothing to rate');
+await page.getByRole('menuitem',{name:'Report a problem',exact:true}).press('Escape');
 await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.getByRole('button',{name:'Delete shared advice…',exact:true}).click();
 await page.getByRole('button',{name:'Delete shared advice',exact:true}).click();

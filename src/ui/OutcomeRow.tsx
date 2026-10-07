@@ -6,10 +6,12 @@ import "./OutcomeRow.css";
 
 export const RATING_LABELS: Record<Rating, string> = { kept: "Kept it", undone: "Undid it" };
 
-export function OutcomeRow({ exchange, outcomes, sharingEnabled, onChange, onSkip, onDone }: {
+export function OutcomeRow({ exchange, outcomes, sharingEnabled, question, onChange, onSkip, onDone }: {
   exchange: RatedExchange;
   outcomes: Outcome[];
   sharingEnabled: boolean;
+  /** Shown above the choices; the heard prompt takes its place. */
+  question?: string;
   onChange: (next: Outcome[]) => boolean;
   onSkip?: () => void;
   onDone?: () => void;
@@ -78,6 +80,7 @@ export function OutcomeRow({ exchange, outcomes, sharingEnabled, onChange, onSki
   }
 
   return <div className="outcome" data-tauri-drag-region="false">
+    {!hearing && question && <div className="outcome__question">{question}</div>}
     {!hearing && <div className="outcome__choices">
       {(["kept", "undone"] as const).map((o) => (
         <button key={o} type="button" className="outcome__choice" aria-pressed={latest?.outcome === o}

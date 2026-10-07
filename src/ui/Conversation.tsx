@@ -206,7 +206,8 @@ export function Conversation({
   const dismissed = useRef<Set<string>>(new Set());
   const target = checkinTarget(thread, outcomes, dismissed.current, busy);
   const offerCheckin = useRef<() => void>(() => {});
-  offerCheckin.current = () => { if (target?.turnId) setCheckin(target.turnId); };
+  // Not while she is already editing that move from its menu: one set of choices at a time.
+  offerCheckin.current = () => { if (target?.turnId && editing !== target.turnId) setCheckin(target.turnId); };
   useEffect(() => {
     const onFocus = () => offerCheckin.current();
     window.addEventListener("focus", onFocus);
@@ -269,6 +270,9 @@ export function Conversation({
       keyRef.current = target;
       setKey(target);
       setThread(merged);
+      // Another set's check-in or editor must not come back with this one.
+      setCheckin(null);
+      setEditing(null);
       setHistory(historyFrom(merged, MAX_HISTORY_MESSAGES));
       setRecap(
         saved !== null && restored.length > 0
@@ -533,7 +537,7 @@ export function Conversation({
             )}
             {(x.answer !== null || x.error !== null) && (
               <AnswerMenu canChange={Boolean(x.turnId && x.move && x.answer !== null)} disabled={operations.install}
-                onChangeOutcome={() => setEditing(x.turnId ?? null)}
+                onChangeOutcome={() => { setEditing(x.turnId ?? null); if (checkin === x.turnId) setCheckin(null); }}
                 onReport={onReport && (() => onReport({ origin: x.error ? "error" : "answer", exchange: x }))} />
             )}
           </div>

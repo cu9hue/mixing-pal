@@ -9,10 +9,9 @@ export function MoveCheckin({ exchange, outcomes, sharingEnabled, onChange, onCl
   onChange: (next: Outcome[]) => boolean;
   onClose: () => void;
 }) {
+  // No move text: the check-in is always about the answer just above.
   return <section className="checkin" aria-label="How did the last move go?" data-tauri-drag-region="false">
-    <div className="checkin__title">How did the last move go?</div>
-    <div className="checkin__move">{exchange.move}</div>
-    <OutcomeRow exchange={exchange} outcomes={outcomes} sharingEnabled={sharingEnabled} onChange={onChange}
-      onSkip={onClose} onDone={onClose} />
+    <OutcomeRow exchange={exchange} outcomes={outcomes} sharingEnabled={sharingEnabled}
+      question="How did the last move go?" onChange={onChange} onSkip={onClose} onDone={onClose} />
   </section>;
 }

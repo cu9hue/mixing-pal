@@ -1,25 +1,5 @@
-.move-box {
-  margin-top: var(--space-2-5);
-  padding: var(--space-2) var(--space-2-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--surface-raised);
-}
-
-.move-box__label {
-  font-size: var(--text-xs, 11px);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
-
-.move-box__text {
-  font-size: var(--text-sm);
-  color: var(--text);
-}
-
-.move-box__result {
-  margin-top: var(--space-1-5);
+.move-result {
+  margin-top: var(--space-2);
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
@@ -29,16 +9,6 @@
   padding: var(--space-2-5) var(--space-3);
   border-top: 1px solid var(--border);
   background: var(--surface-raised);
-}
-
-.checkin__title {
-  font-size: var(--text-sm);
-  color: var(--text);
-}
-
-.checkin__move {
-  font-size: var(--text-sm);
-  color: var(--text-muted);
 }
 
 .card__exchange {
