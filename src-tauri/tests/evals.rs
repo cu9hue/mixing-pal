@@ -414,7 +414,9 @@ async fn a_starter_section_question_reads_the_timeline() {
     rate("starter_section", once).await;
 }
 
-const NO_HEARING: (&str, &str) = ("no_hearing", "The answer makes no claim about how the set sounds now, for example that a part sounds thin, muddy, dull or weak. Saying what a change would do, such as \"a reverb adds space\", is fine.");
+// The craft ontology in the system prompt: energy, density, contrast and
+// repetition are readable from the set; tone, loudness, masking and feel are not.
+const NO_HEARING: (&str, &str) = ("no_hearing", "The answer gives no verdict on an ear-only quality of the set as it is now: tone, timbre, loudness, masking, groove or feel, or how it sounds (for example muddy, harsh, thin, punchy, or 'already sounds like a drop'). Claims about energy, density, contrast or repetition pass when they rest on what plays where. Saying what a change would do, or what to listen for after it, passes.");
 
 const PAD_CHAIN: &[(&str, &str)] = &[
     ("empty_chain", "The answer says the Pad has no devices on it. It names no device as being on the Pad."),
