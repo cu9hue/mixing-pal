@@ -507,7 +507,7 @@ export function Conversation({
             <ExchangeView x={x} />
             {x.turnId && x.move && x.answer !== null && (!busy || i !== thread.length - 1) && (
               <OutcomeRow exchange={{ turnId: x.turnId, move: x.move, answer: x.answer, tracksRead: x.tracksRead }}
-                outcomes={outcomes} sharingEnabled={account.view?.capture === true} sentCount={thread.length}
+                outcomes={outcomes} sharingEnabled={account.view?.capture === true}
                 onChange={(next) => changeOutcomes(next, key)} />
             )}
             {onReport && (x.answer !== null || x.error !== null) && <button className="report-link report-trigger"

@@ -109,7 +109,7 @@ it.each(["feedback", "delete"] as const)("refuses restart while a shared-advice 
   vi.mocked(invoke).mockImplementation(async (cmd) => cmd === "install_update" ? undefined : pending.promise);
   const busy = createBusyState();
   render(<BusyContext.Provider value={busy}>{kind === "feedback"
-    ? <OutcomeRow exchange={{ turnId: "turn", move: "m", answer: "a" }} outcomes={[]} sharingEnabled sentCount={1} onChange={() => true} />
+    ? <OutcomeRow exchange={{ turnId: "turn", move: "m", answer: "a" }} outcomes={[]} sharingEnabled onChange={() => true} />
     : <AccountPanel account={account} />}</BusyContext.Provider>);
   if (kind === "feedback") fireEvent.click(screen.getByRole("button", { name: "Kept it" }));
   else {

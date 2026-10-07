@@ -1,48 +1,77 @@
-/* A minor action reads as text under the answer, not as a control competing with it. */
 .outcome {
   margin-top: var(--space-2);
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
-.outcome__link {
-  border: none;
-  background: none;
-  padding: 0;
+.outcome__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+}
+
+/* One tap answers the mentor, so each choice is a real target. */
+.outcome__choice {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  padding: var(--space-1) var(--space-2-5);
   font: inherit;
-  color: var(--text-muted);
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
-.outcome__link:hover:not(:disabled) {
-  color: var(--text-secondary);
-}
-
-.outcome__link[aria-pressed="true"] {
+.outcome__choice:hover:not(:disabled) {
   color: var(--text);
-  font-weight: 600;
-  text-decoration: none;
 }
 
-.outcome__link:focus-visible,
-.outcome__heard:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.outcome__choice[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.outcome__prompt {
+  color: var(--text);
+  margin-bottom: var(--space-1-5);
+}
+
+.outcome__optional {
+  color: var(--text-muted);
+}
+
+.outcome__heard-line {
+  display: flex;
+  gap: var(--space-1-5);
 }
 
 .outcome__heard {
-  display: block;
+  flex: 1;
+  min-width: 0;
   box-sizing: border-box;
-  width: 100%;
-  margin-top: var(--space-1-5);
   padding: var(--space-1-5) var(--space-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--surface-sunken);
   color: var(--text);
   font: inherit;
+}
+
+.outcome__save {
+  border: none;
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: var(--surface);
+  padding: var(--space-1-5) var(--space-2-5);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.outcome__choice:focus-visible,
+.outcome__heard:focus-visible,
+.outcome__save:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .outcome__status {
