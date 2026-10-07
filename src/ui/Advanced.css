@@ -232,9 +232,7 @@
 }
 
 .updates__check {
-  border-color: transparent;
   font-size: var(--text-sm);
-  color: var(--text-muted);
 }
 
 .updates__actions .advanced__button {

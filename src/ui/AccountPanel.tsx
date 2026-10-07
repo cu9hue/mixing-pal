@@ -1,6 +1,6 @@
 import { SupportContact } from "./ReportProblem";
 import { useBusyState, beginMutation } from "../model/updates";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AccountState, AccountView, errorMessage } from "../model/account";
 import { SharingConsent } from "./SharingConsent";
@@ -17,6 +17,13 @@ export function AccountPanel({ account }: { account: AccountState }) {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deletingShared, setDeletingShared] = useState(false);
+  const keep = useRef<HTMLButtonElement>(null);
+  // The confirmation opens below the fold of a scrolling panel; bring it to her, on Cancel.
+  useEffect(() => {
+    if (!deleting) return;
+    keep.current?.scrollIntoView?.({ block: "nearest" });
+    keep.current?.focus();
+  }, [deleting]);
   const [sharedDeleted, setSharedDeleted] = useState(false);
   const view = account.view;
   const problem = error ?? account.error;
@@ -123,12 +130,12 @@ export function AccountPanel({ account }: { account: AccountState }) {
         <button disabled={busy || operations.install} onClick={() => setDeleting(true)}>Delete account…</button>
       </div>}
       {deleting && <div>
-        <p>Delete your account and shared advice? This ends your access. Your local set notes stay on this laptop.</p>
+        <p>Delete your account? This can't be undone. Your pilot access ends, and you'd need a new invitation to come back. Everything you shared is deleted. Your set notes stay on this laptop.</p>
         <div className="account__actions">
-          <button disabled={busy || operations.install} onClick={() => void act(async () => {
+          <button className="account__danger" disabled={busy || operations.install} onClick={() => void act(async () => {
             await invoke("account_delete"); account.change({ access: "signed_out", capture: false }); setDeleting(false);
-          })}>Delete account and shared advice</button>
-          <button disabled={busy || operations.install} onClick={() => setDeleting(false)}>Cancel</button>
+          })}>Delete my account</button>
+          <button ref={keep} disabled={busy || operations.install} onClick={() => setDeleting(false)}>Cancel</button>
         </div>
       </div>}
       {(signingIn || problem) && <SupportContact />}
