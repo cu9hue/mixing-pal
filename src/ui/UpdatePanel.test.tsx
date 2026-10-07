@@ -75,7 +75,7 @@ it.each(["setup", "reinstall", "settings", "account"] as const)("blocks install 
       : kind === "account" ? <AccountPanel account={account} />
       : <Advanced account={development} experience={experience} scriptVersion={12} onClose={() => {}} />}
   </BusyContext.Provider>);
-  const label = { setup: "Install it", reinstall: "Reinstall", settings: "Save", account: "Sign out" }[kind];
+  const label = { setup: "Install the connector", reinstall: "Reinstall", settings: "Save", account: "Sign out" }[kind];
   const button = await screen.findByRole("button", { name: label });
   fireEvent.click(button);
   await expect(installWhenIdle(busy)).rejects.toThrow("Finish");
@@ -99,7 +99,7 @@ it.each(["setup", "reinstall", "settings", "account"] as const)("refuses a new %
       : kind === "account" ? <AccountPanel account={account} />
       : <Advanced account={development} experience={experience} scriptVersion={12} onClose={() => {}} />}
   </BusyContext.Provider>);
-  const label = { setup: "Install it", reinstall: "Reinstall", settings: "Save", account: "Sign out" }[kind];
+  const label = { setup: "Install the connector", reinstall: "Reinstall", settings: "Save", account: "Sign out" }[kind];
   fireEvent.click(await screen.findByRole("button", { name: label }));
   expect(commands).not.toContain(kind === "settings" ? "save_settings" : kind === "account" ? "account_sign_out" : "install_connector");
 });

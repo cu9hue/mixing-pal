@@ -3,7 +3,6 @@ import { SetupStep } from "./step";
 import {
   ConnectedScreen,
   ControlSurfaceScreen,
-  ExperienceScreen,
   InstallScreen,
   OpenLiveScreen,
   SharingScreen,
@@ -16,11 +15,10 @@ const TICK: Record<SetupStep, number> = {
   account: 0,
   sharing: 1,
   install: 2,
-  open_live: 3,
-  control_surface: 4,
-  connected: 4,
-  experience: 5,
-  done: 5,
+  open_live: 2,
+  control_surface: 2,
+  connected: 3,
+  done: 3,
 };
 
 export function Setup({
@@ -31,7 +29,6 @@ export function Setup({
   trackCount,
   trackNames,
   onFactsChanged,
-  onAcknowledgeConnected,
   onExit,
 }: {
   account: AccountState;
@@ -41,7 +38,6 @@ export function Setup({
   trackCount: number;
   trackNames: string[];
   onFactsChanged: () => void;
-  onAcknowledgeConnected: () => void;
   /** Present only when she opened setup from a banner rather than because
       first run is unfinished. Then this is her way back to the card. */
   onExit?: () => void;
@@ -51,7 +47,7 @@ export function Setup({
   return (
     <div className="setup" data-tauri-drag-region>
       <div className="setup__bar">
-        {[0, 1, 2, 3, 4, 5].map((i) => (
+        {[0, 1, 2, 3].map((i) => (
           <span
             key={i}
             className={`setup__tick ${
@@ -70,14 +66,13 @@ export function Setup({
           <ConnectedScreen
             trackCount={trackCount}
             trackNames={trackNames}
-            onContinue={onAcknowledgeConnected}
+            experience={experience}
           />
         )}
         {step === "sharing" && <SharingScreen account={account} />}
-        {step === "experience" && <ExperienceScreen experience={experience} />}
         {step === "account" && (
           <>
-            <div className="setup__label">Step 1 of 6</div>
+            <div className="setup__label">Step 1 of 4</div>
             <AccountPanel account={account} />
           </>
         )}

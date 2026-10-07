@@ -349,11 +349,10 @@ await setup.getByLabel('Six-digit sign-in code').fill('123456');
 await setup.getByRole('button',{name:'Sign in',exact:true}).click();
 await setup.getByLabel('Invitation code').fill('example-invite-code');
 await setup.getByRole('button',{name:'Join the free pilot'}).click();
-await setup.getByText('Step 2 of 6',{exact:true}).waitFor();
+await setup.getByText('Step 2 of 4',{exact:true}).waitFor();
 await page.screenshot({path:`${artifacts}/fresh-sharing.png`});
 await setup.getByRole('button',{name:/^Don't share/}).click();
 assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_consent').at(-1).args.enabled),false);
-await setup.getByRole('button',{name:'Got it',exact:true}).click();
 await setup.getByText('How do you work in Live?',{exact:true}).waitFor();
 await page.screenshot({path:`${artifacts}/fresh-experience.png`});
 // Choosing in Settings must end the setup step too: both read App's state.
