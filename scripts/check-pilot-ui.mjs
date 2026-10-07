@@ -289,6 +289,11 @@ await exchange.getByText('A complete answer.',{exact:true}).waitFor();
 assert.equal(await exchange.locator('.move-result').count(),0,'nothing under a fresh answer');
 assert.equal(await page.locator('.checkin').count(),0,'no check-in the moment the answer lands');
 await page.screenshot({path:`${artifacts}/answer-closed.png`});
+// The ⋯ shares the header chevron's 24px target and its vertical line.
+const menuBox=await exchange.getByRole('button',{name:'More actions',exact:true}).boundingBox();
+const chevronBox=await page.locator('.card__chevron').first().boundingBox();
+assert.ok(menuBox.width>=24 && menuBox.height>=24,'the ⋯ is at least a 24px target');
+assert.ok(Math.abs((menuBox.x+menuBox.width/2)-(chevronBox.x+chevronBox.width/2))<=1,'the ⋯ lines up under the header chevron');
 assert.equal(await page.getByText('```move').count(),0,'the move block is not shown');
 await page.getByLabel('Ask about the set',{exact:true}).click();
 const checkin=page.getByRole('region',{name:'How did the last move go?'});
