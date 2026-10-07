@@ -33,6 +33,7 @@ export function OutcomeRow({ exchange, outcomes, sharingEnabled, question, onCha
 
   function share(outcome: Rating, heard: string) {
     if (!sharingEnabled) return;
+    // The first share claims the slot now, so a restart cannot slip in first.
     const next = sharing.current ? sharing.current.then(() => send(outcome, heard)) : send(outcome, heard);
     sharing.current = next;
     void next.finally(() => { if (sharing.current === next) sharing.current = null; });

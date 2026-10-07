@@ -9,7 +9,6 @@
   margin-bottom: var(--space-1-5);
 }
 
-/* The three choices stay on one row. */
 .outcome__choices {
   display: flex;
   flex-wrap: nowrap;
