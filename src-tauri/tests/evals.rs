@@ -414,7 +414,7 @@ async fn a_starter_section_question_reads_the_timeline() {
     rate("starter_section", once).await;
 }
 
-const NO_HEARING: (&str, &str) = ("no_hearing", "The answer makes no claim about how anything sounds, for example that a part sounds thin, muddy, dull or weak.");
+const NO_HEARING: (&str, &str) = ("no_hearing", "The answer makes no claim about how the set sounds now, for example that a part sounds thin, muddy, dull or weak. Saying what a change would do, such as \"a reverb adds space\", is fine.");
 
 const PAD_CHAIN: &[(&str, &str)] = &[
     ("empty_chain", "The answer says the Pad has no devices on it. It names no device as being on the Pad."),
