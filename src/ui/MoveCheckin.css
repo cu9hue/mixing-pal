@@ -1,0 +1,93 @@
+.move-box {
+  margin-top: var(--space-2-5);
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+
+.move-box__label {
+  font-size: var(--text-xs, 11px);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.move-box__text {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.move-box__result {
+  margin-top: var(--space-1-5);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* Above the input: the first thing she sees when she comes back, never in her way. */
+.checkin {
+  padding: var(--space-2-5) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.checkin__title {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.checkin__move {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.card__exchange {
+  position: relative;
+}
+
+.answer-menu {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+.answer-menu__button {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  line-height: 1;
+  padding: var(--space-0-5) var(--space-1);
+  cursor: pointer;
+}
+
+.answer-menu__list {
+  position: absolute;
+  right: 0;
+  z-index: 2;
+  display: grid;
+  min-width: 170px;
+  padding: var(--space-1) 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+
+.answer-menu__list button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: var(--space-1-5) var(--space-2-5);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.answer-menu__list button:hover,
+.answer-menu__list button:focus-visible,
+.answer-menu__button:focus-visible {
+  color: var(--text);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
