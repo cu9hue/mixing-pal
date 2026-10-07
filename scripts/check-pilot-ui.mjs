@@ -293,6 +293,8 @@ assert.equal(await page.getByText('```move').count(),0,'the move block is not sh
 await page.getByLabel('Ask about the set',{exact:true}).click();
 const checkin=page.getByRole('region',{name:'How did the last move go?'});
 await checkin.waitFor();
+// DESIGN.md: no nested cards. The check-in sits flat in the footer, like the access status line.
+assert.deepEqual(await checkin.evaluate(e=>{const c=getComputedStyle(e);return [c.backgroundColor,c.borderTopWidth];}),['rgba(0, 0, 0, 0)','0px'],'the check-in is not a card inside the footer');
 await page.screenshot({path:`${artifacts}/checkin.png`});
 await checkin.getByRole('button',{name:'Undid it',exact:true}).click();
 await page.waitForFunction(()=>window.shared.length===1);

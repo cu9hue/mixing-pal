@@ -4,11 +4,13 @@
   color: var(--text-muted);
 }
 
-/* Above the input: the first thing she sees when she comes back, never in her way. */
+/* Flat in the footer above the input, like the access status line: no card inside the card. */
 .checkin {
-  padding: var(--space-2-5) var(--space-3);
-  border-top: 1px solid var(--border);
-  background: var(--surface-raised);
+  margin-bottom: var(--space-2-5);
+}
+
+.checkin .outcome {
+  margin-top: 0;
 }
 
 .card__exchange {
