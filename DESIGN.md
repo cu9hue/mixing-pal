@@ -72,6 +72,7 @@ The existing CSS variables remain the source of truth. This React app does not u
 - Sign-in centers “A mentor for the track you're writing.” above “Sign in with the email your invite came to.” Its field label stays left aligned. The exact invitation-email placeholder remains in the field. `--accent` provides the acid-green action and focus ring.
 - Prompt ideas are 44px minimum-height buttons. They fill the composer but never send a request.
 - An answer's feedback stays out of the way: nothing sits under a fresh answer, a rated one gets one muted result line, and each answer's ⋯ menu holds “Change how it went” and “Report a problem”. The check-in “How did the last move go?” appears flat in the footer above the composer only when she comes back, never as a card, and never blocks the composer.
+- After a break of 3 hours or more, a set reopens on a flat “Last time” recap: her last question, the newest three rated moves with what she heard, and the newest two decided notes. It stands in for the earlier answers, which unfold from “Show N earlier answers”. It never repeats the move the check-in asks about. × hides it until the next break. A shorter break shows the full thread.
 - `:focus-visible` uses the existing 2px accent outline. Buttons retain default, hover, active, disabled, error, and success states where applicable.
 - Motion is limited to 120ms colour transitions and respects existing reduced-motion rules.
 

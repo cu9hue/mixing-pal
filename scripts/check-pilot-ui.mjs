@@ -64,6 +64,13 @@ if(cmd==='set_window_mode'){window.geometry=args;return window.resizeNative(args
 if(cmd==='load_thread'){
   if(window.savedThreads[args.setId])return window.savedThreads[args.setId];
   if(['C','D','fresh-set'].includes(args.setId))return null;
+  if(args.setId==='R'){const at=Math.floor(Date.now()/1000)-2*86400,id=n=>'3333333'+n+'-3333-4333-8333-333333333333';return {saved_at:at,goal:'Make the drop hit harder',next_bullet:1,
+    note:[{id:'b0',kind:'decided',text:'Keep the vocal dry until the second drop',at,hers:true}],
+    exchanges:[{turnId:id(1),question:'Why does the drop feel weaker than the intro?',answer:'Answer for R one',error:null,move:'«Kick»: shorten the tail to 180 ms'},
+      {turnId:id(2),question:'What is on the Pad chain?',answer:'Answer for R two',error:null,move:'«Pad»: sidechain to the kick'},
+      {turnId:id(3),question:'What should I work on next to finish this track before the weekend?',answer:'Answer for R three',error:null,move:'«Bass»: cut 200 Hz'}],
+    outcomes:[{turnId:id(1),move:'«Kick»: shorten the tail to 180 ms',outcome:'kept',heard:'tighter now',tracks:[],answer:'',at},
+      {turnId:id(2),move:'«Pad»: sidechain to the kick',outcome:'undone',heard:'too pumpy',tracks:[],answer:'',at:at+1}]};}
   return {saved_at:Math.floor(Date.now()/1000),goal:args.setId==='default'?'Finish this arrangement':'Goal for '+args.setId,note:[],next_bullet:0,
     exchanges:args.setId==='default'?[]:[{turnId:args.setId==='B'?'22222222-2222-4222-8222-222222222222':'11111111-1111-4111-8111-111111111111',question:'Question for '+args.setId,answer:'Answer for '+args.setId,error:null,move:'«Drums», test move '+args.setId}],outcomes:[]};
 }
@@ -217,6 +224,19 @@ await page.goto('http://127.0.0.1:1423?access=active');
 await page.getByLabel('Ask about the set',{exact:true}).waitFor();
 }
 async function openSet(id){await page.evaluate(id=>window.switchSet(id),id);}
+// After a break the recap stands in for the earlier answers, and the check-in still asks about the newest move.
+await openSet('R');
+const lastTime=page.getByRole('region',{name:'Last time'});
+await lastTime.waitFor();
+assert.equal(await page.getByText('Answer for R one',{exact:true}).count(),0,'the recap folds the earlier answers');
+assert.deepEqual(await lastTime.evaluate(e=>{const c=getComputedStyle(e);return [c.backgroundColor,c.borderTopWidth];}),['rgba(0, 0, 0, 0)','0px'],'the recap is not a card inside the card');
+assert.equal(await lastTime.getByText('cut 200 Hz',{exact:false}).count(),0,'the recap leaves the unrated newest move to the check-in');
+await page.getByLabel('Ask about the set',{exact:true}).click();
+await page.getByRole('region',{name:'How did the last move go?'}).waitFor();
+await page.screenshot({path:`${artifacts}/recap.png`});
+await page.getByRole('button',{name:'Show 3 earlier answers',exact:true}).click();
+await page.getByText('Answer for R one',{exact:true}).waitFor();
+await page.screenshot({path:`${artifacts}/recap-unfolded.png`});
 await openSet('C');
 await page.getByLabel('Goal (optional)',{exact:true}).waitFor();
 const promptBottom=await page.getByRole('button',{name:'Start chatting',exact:true}).evaluate(button=>button.getBoundingClientRect().bottom);

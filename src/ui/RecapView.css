@@ -1,0 +1,91 @@
+/* Flat at the top of the thread, like the check-in in the footer: no card inside the card. */
+.recap {
+  margin-bottom: var(--space-3-5);
+  font-size: var(--text-sm);
+}
+
+.recap__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1-5);
+}
+
+.recap__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.recap__when {
+  color: var(--text-faint);
+}
+
+/* The answer menu's 24px target, at the far right like the ⋯. */
+.recap__dismiss {
+  margin-left: auto;
+  min-width: 24px;
+  min-height: 24px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: var(--text-md);
+  line-height: 1;
+  color: var(--glyph-faint);
+  cursor: pointer;
+}
+
+.recap__dismiss:hover {
+  color: var(--text-secondary);
+}
+
+.recap__lines {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: var(--space-2-5);
+  row-gap: var(--space-1);
+  margin: 0;
+}
+
+.recap__line {
+  display: contents;
+}
+
+.recap__line dt {
+  color: var(--text-faint);
+}
+
+.recap__line dd {
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+}
+
+/* A text action, not a box: folding is minor next to asking. */
+.recap__fold {
+  display: block;
+  margin-bottom: var(--space-3-5);
+  min-height: 24px;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.recap__fold:hover {
+  color: var(--text);
+}
+
+/* The thread under the recap starts below the same divider as a later exchange. */
+.recap + .card__exchange,
+.recap__fold + .card__exchange {
+  margin-top: var(--space-3-5);
+  padding-top: var(--space-3-5);
+  border-top: 1px solid var(--border);
+}
