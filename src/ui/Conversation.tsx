@@ -131,7 +131,6 @@ function renderBlocks(blocks: BlockNode[]): ReactNode {
 const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
   return (
     <>
-      <div className="card__question">{x.question}</div>
       {x.answer !== null && (
         <div className="card__answer selectable" data-tauri-drag-region="false">
           {renderBlocks(parseMarkdown(x.answer))}
@@ -541,16 +540,23 @@ export function Conversation({
             data-tauri-drag-region="deep"
             ref={i === thread.length - 1 ? newest : undefined}
           >
+            <div className="card__question-row">
+              <div className="card__question">{x.question}</div>
+              {(x.answer !== null || x.error !== null) && (
+                <AnswerMenu canChange={Boolean(x.turnId && x.move && x.answer !== null)} disabled={operations.install}
+                  onChangeOutcome={() => { setEditing(x.turnId ?? null); if (checkin === x.turnId) setCheckin(null); }}
+                  onReport={onReport && (() => onReport({ origin: x.error ? "error" : "answer", exchange: x }))} />
+              )}
+            </div>
             <ExchangeView x={x} />
+            {x.error !== null && onReport && (
+              <button className="report-link report-trigger" disabled={operations.install}
+                onClick={() => onReport({ origin: "error", exchange: x })}>Report this</button>
+            )}
             {x.turnId && x.move && x.answer !== null && (!busy || i !== thread.length - 1) && (
               <MoveBox exchange={{ turnId: x.turnId, move: x.move, answer: x.answer, tracksRead: x.tracksRead }}
                 outcomes={outcomes} editing={editing === x.turnId} sharingEnabled={account.view?.capture === true}
                 onChange={(next) => changeOutcomes(next, key)} onDone={() => setEditing(null)} />
-            )}
-            {(x.answer !== null || x.error !== null) && (
-              <AnswerMenu canChange={Boolean(x.turnId && x.move && x.answer !== null)} disabled={operations.install}
-                onChangeOutcome={() => { setEditing(x.turnId ?? null); if (checkin === x.turnId) setCheckin(null); }}
-                onReport={onReport && (() => onReport({ origin: x.error ? "error" : "answer", exchange: x }))} />
             )}
           </div>
         ))}
@@ -600,7 +606,16 @@ export function Conversation({
         {/* Permanent and non-dismissible. From here the app can state wrong
             things fluently, in prose, about her music, and it cannot hear
             any of it. */}
-        <div className="card__disclaimer">AI can make mistakes. Treat responses as suggestions.</div>
+        <div className="card__disclaimer">
+          AI can make mistakes. Treat responses as suggestions.
+          {onReport && (() => {
+            // The newest settled exchange is what a report is most likely about.
+            const newest = [...thread].reverse().find((x) => x.answer !== null || x.error !== null);
+            return <button className="card__report" disabled={operations.install}
+              onClick={() => onReport(newest ? { origin: newest.error ? "error" : "answer", exchange: newest } : { origin: "settings" })}>
+              Report a problem</button>;
+          })()}
+        </div>
       </div>
       <WhatICanSee state={state} />
     </>

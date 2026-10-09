@@ -319,11 +319,13 @@ await exchange.getByText('A complete answer.',{exact:true}).waitFor();
 assert.equal(await exchange.locator('.move-result').count(),0,'nothing under a fresh answer');
 assert.equal(await page.locator('.checkin').count(),0,'no check-in the moment the answer lands');
 await page.screenshot({path:`${artifacts}/answer-closed.png`});
-// The ⋯ shares the header chevron's 24px target and its vertical line.
+// The ⋯ follows the question's text on its line, and the footer always offers a report.
 const menuBox=await exchange.getByRole('button',{name:'More actions',exact:true}).boundingBox();
-const chevronBox=await page.locator('.card__chevron').first().boundingBox();
+const questionBox=await exchange.locator('.card__question').boundingBox();
 assert.ok(menuBox.width>=24 && menuBox.height>=24,'the ⋯ is at least a 24px target');
-assert.ok(Math.abs((menuBox.x+menuBox.width/2)-(chevronBox.x+chevronBox.width/2))<=1,'the ⋯ lines up under the header chevron');
+assert.ok(menuBox.x>=questionBox.x+questionBox.width && menuBox.x-(questionBox.x+questionBox.width)<=8,'the ⋯ sits right after the question');
+assert.ok(menuBox.y<questionBox.y+questionBox.height && menuBox.y+menuBox.height>questionBox.y,'the ⋯ is on the question line');
+assert.equal(await page.locator('.card__footer').getByRole('button',{name:'Report a problem',exact:true}).isVisible(),true,'the footer offers a report');
 assert.equal(await page.getByText('```move').count(),0,'the move block is not shown');
 await page.getByLabel('Ask about the set',{exact:true}).click();
 const checkin=page.getByRole('region',{name:'How did the last move go?'});
@@ -358,8 +360,11 @@ await page.waitForFunction(()=>window.requests.filter(x=>x.cmd==='model_complete
 await page.evaluate(()=>window.failModel());
 const failed=page.locator('.card__exchange').filter({hasText:'A failed shared turn'});
 await failed.getByText('The reply was interrupted. It has not been retried. You can ask again.',{exact:true}).waitFor();
+assert.equal(await failed.getByRole('button',{name:'Report this',exact:true}).isVisible(),true,'a failed answer offers a report right under it');
+await page.screenshot({path:`${artifacts}/failed-report.png`});
 await failed.getByRole('button',{name:'More actions',exact:true}).click();
 assert.equal(await page.getByRole('menuitem',{name:'Change how it went',exact:true}).count(),0,'a turn with no answer has nothing to rate');
+await page.screenshot({path:`${artifacts}/answer-menu-open.png`});
 await page.getByRole('menuitem',{name:'Report a problem',exact:true}).press('Escape');
 await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.getByRole('button',{name:'Delete shared advice…',exact:true}).click();

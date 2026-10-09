@@ -124,3 +124,8 @@ it("keeps the full reference available if clipboard permission is denied", async
   expect(notice.textContent).toContain("cf4df1ef-7976-452c-a57b-309fe5985624");
   expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
 });
+
+it("names the question a report is about", () => {
+  form();
+  expect(screen.getByText("About “Why?”")).toBeTruthy();
+});

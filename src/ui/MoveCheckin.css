@@ -17,18 +17,20 @@
   position: relative;
 }
 
+/* The ⋯ follows the question's text, where she is already reading. */
+.card__question-row {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
 .answer-menu {
-  position: absolute;
-  top: 0;
-  right: 0;
+  flex: none;
 }
 
-/* Later exchanges start below a divider; keep the ⋯ beside their question. */
-.card__exchange + .card__exchange .answer-menu {
-  top: var(--space-3-5);
-}
-
-/* The header chevron's 24px target, so the ⋯ lines up under it. */
+/* The header chevron's 24px target. */
 .answer-menu__button {
   display: inline-flex;
   align-items: center;
@@ -40,7 +42,7 @@
   padding: 0;
   font-size: var(--text-md);
   line-height: 1;
-  color: var(--glyph-faint);
+  color: var(--text-muted);
   cursor: pointer;
 }
 
@@ -48,9 +50,11 @@
   color: var(--text-secondary);
 }
 
+/* Under the question row, from its left edge, so it never runs off the card. */
 .answer-menu__list {
   position: absolute;
-  right: 0;
+  top: 100%;
+  left: 0;
   z-index: 2;
   display: grid;
   min-width: 170px;

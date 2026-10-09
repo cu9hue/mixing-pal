@@ -307,3 +307,45 @@ describe("returning to a set", () => {
     expect(screen.getByText(/Earlier on this set · 2 exchanges/)).toBeTruthy();
   });
 });
+
+describe("reporting a problem", () => {
+  async function ask(reply: () => Promise<unknown>) {
+    const onReport = vi.fn();
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "load_thread") return null;
+      if (command === "model_complete") return reply();
+    });
+    render(<Conversation state={{ ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version }} connected account={account}
+      onTurnRunningChange={() => {}} onAnswer={() => {}} onReport={onReport} />);
+    await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+    fireEvent.click(screen.getByRole("button", { name: "Start chatting" }));
+    return onReport;
+  }
+  async function send(question: string) {
+    const input = screen.getByLabelText("Ask about the set");
+    fireEvent.change(input, { target: { value: question } });
+    await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  it("offers a report from the footer before anything is asked, with no conversation", async () => {
+    const onReport = await ask(async () => ({ text: "Fine." }));
+    fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
+    expect(onReport).toHaveBeenCalledWith({ origin: "settings" });
+  });
+
+  it("reports the newest answer from the footer", async () => {
+    const onReport = await ask(async () => ({ text: "Fine." }));
+    await send("How is the pad?");
+    fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
+    expect(onReport).toHaveBeenCalledWith({ origin: "answer", exchange: expect.objectContaining({ question: "How is the pad?", answer: "Fine." }) });
+  });
+
+  it("puts a report link right under a failed answer", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const onReport = await ask(async () => { throw { code: "completion_interrupted", message: "The reply was interrupted." }; });
+    await send("How is the pad?");
+    fireEvent.click(screen.getByRole("button", { name: "Report this" }));
+    expect(onReport).toHaveBeenCalledWith({ origin: "error", exchange: expect.objectContaining({ question: "How is the pad?" }) });
+  });
+});

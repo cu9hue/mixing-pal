@@ -405,7 +405,6 @@
   font-size: var(--text-md);
   line-height: 1.5;
   color: var(--text-muted);
-  margin-bottom: var(--space-3);
 }
 
 .card__empty {
@@ -636,6 +635,28 @@
   line-height: 1.5;
   color: var(--text-faint);
   margin-top: var(--space-2);
+}
+
+/* Always in the same place, as text: reporting is minor next to asking, but never hidden. */
+.card__report {
+  display: block;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.card__report:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.card__report:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* The note list, opened by the chip in the set's row and closed by default. */
