@@ -607,13 +607,13 @@ export function Conversation({
             things fluently, in prose, about her music, and it cannot hear
             any of it. */}
         <div className="card__disclaimer">
-          AI can make mistakes. Treat responses as suggestions.
+          AI can make mistakes.
           {onReport && (() => {
             // The newest settled exchange is what a report is most likely about.
             const newest = [...thread].reverse().find((x) => x.answer !== null || x.error !== null);
-            return <button className="card__report" disabled={operations.install}
+            return <>{" "}<button className="card__report" disabled={operations.install}
               onClick={() => onReport(newest ? { origin: newest.error ? "error" : "answer", exchange: newest } : { origin: "settings" })}>
-              Report a problem</button>;
+              Report a problem</button></>;
           })()}
         </div>
       </div>

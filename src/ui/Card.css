@@ -639,7 +639,6 @@
 
 /* Always in the same place, as text: reporting is minor next to asking, but never hidden. */
 .card__report {
-  display: block;
   border: none;
   background: none;
   padding: 0;
