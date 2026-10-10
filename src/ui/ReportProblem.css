@@ -65,7 +65,7 @@
 .report-link:active:not(:disabled) { background: var(--surface-sunken); }
 .report-link:disabled { opacity: 0.55; cursor: default; }
 .report-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.report-trigger { display: block; margin-top: var(--space-1); }
+.report-trigger { display: block; margin-top: var(--space-1); padding-left: 0; padding-right: 0; }
 .report-support { margin-top: var(--space-5); }
 .report-support .advanced__heading { margin-bottom: var(--space-1); }
 .report-history__toggle { text-decoration: none; }

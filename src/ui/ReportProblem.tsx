@@ -64,6 +64,8 @@ export function ReportProblem({ target, accountId, email, onClose }: {
       finally { setBusy(false); operations.accountMutation = false; }
     }}>
       <div className="report__body">
+        {/* The footer link reports the newest answer, so say which one. */}
+        {target.exchange && <p className="report__hint report__about">About “{target.exchange.question}”</p>}
         <label htmlFor={`${id}-description`}>What went wrong?</label>
         <textarea ref={descriptionInput} id={`${id}-description`} className="advanced__input" rows={3}
           required maxLength={4000} value={description} disabled={busy || Boolean(attempt.current)}

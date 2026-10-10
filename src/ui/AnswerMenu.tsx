@@ -21,7 +21,7 @@ export function AnswerMenu({ canChange, disabled, onChangeOutcome, onReport }: {
   // On the root, so Escape works whether focus is on the button or in the list.
   return <div className="answer-menu" ref={root} data-tauri-drag-region="false"
     onKeyDown={(e) => { if (open && e.key === "Escape") { e.stopPropagation(); setOpen(false); button.current?.focus(); } }}>
-    <button ref={button} type="button" className="answer-menu__button" aria-label="More actions"
+    <button ref={button} type="button" className="answer-menu__button" aria-label="More actions" title="More actions"
       aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen((o) => !o)}>⋯</button>
     {open && <div className="answer-menu__list" role="menu">
       {canChange && <button type="button" role="menuitem" onClick={() => { setOpen(false); onChangeOutcome(); }}>
