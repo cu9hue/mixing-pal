@@ -441,3 +441,83 @@ async fn a_long_history_of_invented_reads_does_not_replace_a_timeline_read() {
     }
     rate("long_history_hat_entry", once).await;
 }
+
+/// A 1-bar, four-note bass loop stretched to two bars on the timeline. A
+/// real answer about a clip of this shape said the track had only four notes.
+fn looped() -> Value {
+    common::load("loop-set.json")
+}
+
+/// Free: no provider. Pins the fix: the note read lists the notes as they
+/// play, eight across bars 2 and 3, each pointing back to its clip note.
+#[tokio::test]
+async fn the_loop_fixture_lists_the_notes_as_they_play() {
+    let f = looped();
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f).await))),
+    };
+    let notes = execute(&ctx, "get_arrangement_notes", &json!({"track": 1, "index": 0})).await;
+    assert_eq!(notes.missing_reason, None);
+    let v = &notes.value;
+    assert_eq!((&v["view"], &v["count"], &v["source_notes"], &v["loop_passes"]), (&json!("played"), &json!(8), &json!(4), &json!(2)), "{v}");
+    assert_eq!(v["loop"], "a 1-bar loop of 4 notes played 2 times, bars 2-3");
+    let listed: Vec<(&str, &str, &str)> = v["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| (n["note"].as_str().unwrap(), n["timeline_position"].as_str().unwrap(), n["clip_position"].as_str().unwrap()))
+        .collect();
+    assert_eq!(listed[..5], [("A1", "2.1.1", "1.1.1"), ("C2", "2.2.1", "1.2.1"), ("E2", "2.3.1", "1.3.1"), ("G2", "2.4.1", "1.4.1"), ("A1", "3.1.1", "1.1.1")]);
+}
+
+/// Free: the same clip stretched to 80 bars is past the cap, so a whole read
+/// lists the clip once and says how to see a section as it plays.
+#[tokio::test]
+async fn a_long_loop_reads_as_source_until_a_range_is_given() {
+    let f = long_looped();
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f).await))),
+    };
+    let whole = execute(&ctx, "get_arrangement_notes", &json!({"track": 1, "index": 0})).await;
+    assert_eq!((&whole.value["view"], &whole.value["count"], &whole.value["loop_passes"]), (&json!("source"), &json!(4), &json!(80)), "{}", whole.value);
+    assert!(whole.value["view_reason"].as_str().unwrap().contains("start_beats"), "{}", whole.value);
+    assert_eq!(whole.value["loop"], "a 1-bar loop of 4 notes played 80 times, bars 2-81");
+    let bars = execute(&ctx, "get_arrangement_notes", &json!({"track": 1, "index": 0, "start_beats": 4, "end_beats": 12})).await;
+    assert_eq!((&bars.value["view"], &bars.value["count"]), (&json!("played"), &json!(8)), "{}", bars.value);
+}
+
+fn long_looped() -> Value {
+    let mut f = looped();
+    f["tracks"][1]["arrangement"][0]["length"] = json!(320.0);
+    f
+}
+
+const EDIT_EVERY_PASS: (&str, &str) = ("edit_applies_to_every_pass", "The bass in bars 2 and 3 comes from one 1-bar looped clip, so changing a note in the clip changes it in every bar the loop plays. If the answer proposes changing notes, it must not tell the producer to change one bar and leave the other as it is, unless it says the clip must first be consolidated or split. An answer that proposes no note edit passes.");
+
+fn bass_described(span: &str) -> String {
+    format!("The Bass clip holds four notes, A1, C2, E2, G2, each an eighth note long and starting on a beat, in a 1-bar loop {span}. So bars 2 and 3 each play those four notes, one per beat. The answer need not say the clip loops. It fails only if it says something false about what the bass plays in bars 2-3: that it has only four notes there, that bar 3 is empty or differs from bar 2, that the four notes are spread over both bars (a 'two-bar phrase' or 'two-bar arpeggio' of these notes), that notes sound on every eighth note or at another wrong rate, or that it plays eight different notes. Listing A1, C2, E2, G2 on each beat in bars 2-3 passes. Judge only this; other claims are out of scope.")
+}
+
+async fn loop_question(fixture: Value, span: &str) -> (Turn, Verdict) {
+    let q = "is the bass out of place in bars 2-3?";
+    let turn = common::ask(fixture, &common::context("loop-context.txt"), q).await;
+    let read_it = turn.calls.iter().any(|c| c.name == "get_arrangement_notes" && c.args["track"] == 1);
+    let verdict = match common::base_verdict(&turn) {
+        Some(v) => v,
+        None if !read_it => Verdict::Fail(format!("never read the Bass notes: {:?}", turn.called)),
+        None => common::judged(q, &turn, &[("bass_described_truly", &bass_described(span)), EDIT_EVERY_PASS]).await,
+    };
+    (turn, verdict)
+}
+
+#[tokio::test]
+async fn a_looped_clip_is_counted_as_it_plays_not_as_it_is_stored() {
+    rate("looped_clip_counted_as_played", || loop_question(looped(), "stretched over bars 2 and 3")).await;
+}
+
+#[tokio::test]
+async fn a_long_looped_clip_is_still_described_as_it_plays() {
+    rate("long_looped_clip_counted_as_played", || loop_question(long_looped(), "that starts at bar 2 and plays for 80 bars")).await;
+}

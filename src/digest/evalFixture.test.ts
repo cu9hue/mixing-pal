@@ -8,6 +8,8 @@ import craftFixture from "../../shared/craft-set.json";
 import craftContext from "../../shared/craft-context.txt?raw";
 import oneshotFixture from "../../shared/oneshot-set.json";
 import oneshotContext from "../../shared/oneshot-context.txt?raw";
+import loopFixture from "../../shared/loop-set.json";
+import loopContext from "../../shared/loop-context.txt?raw";
 
 // Each fixture is one eval suite's set, and Rust builds its fake Live from
 // the same file. Rust cannot call buildContext, so the rendered digest is
@@ -39,6 +41,7 @@ describe.each([
   ["eval-set.json", evalFixture, evalContext],
   ["craft-set.json", craftFixture, craftContext],
   ["oneshot-set.json", oneshotFixture, oneshotContext],
+  ["loop-set.json", loopFixture, loopContext],
 ])("the fixture %s", (_name, fixture, context) => {
   it("renders to the checked-in context block", () => {
     const expected = context.replace(/\n$/, "");
