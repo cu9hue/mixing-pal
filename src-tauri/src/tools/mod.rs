@@ -158,11 +158,11 @@ pub fn tool_schema() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "The MIDI notes of one arrangement-view clip. view says which list notes is. With view played, notes lists what sounds, in song order: a source note appears once per loop pass, with timeline_position where it sounds in the song, clip_position where it lives in the clip, and pass, the loop pass it belongs to. When the clip loops, loop says so in words, such as \"a 1-bar loop of 4 notes played 2 times, bars 2-3\": say that when you describe the part. count is how many notes sound; source_notes is how many the clip holds, the number the producer sees in the clip editor. Describe the part by what plays: a 1-bar loop of four notes stretched over two bars is eight notes, four in each bar. Edits happen in the clip: deleting or moving a source note changes every pass. Give edit instructions by clip_position, and use timeline_position to say where a note sounds. To change one pass only, the producer must first consolidate or split the clip; say so. Muted source notes do not sound and must be excluded from rhythm or harmony claims; they are listed once under muted_notes. Supply start_beats and end_beats, song beats as in get_arrangement, to list only the notes that start sounding inside that range; a note held into the range from before it is not listed. When more than 256 notes would be listed, the read is partial, or note_offset is set, view is source and view_reason says why. notes then lists each source note once: start is absolute source beat time as shown in Live's clip editor, and timeline_position is where the note first sounds in the song. Playback starts at the start marker and wraps from the loop end to the loop start, so a note before the marker can first sound on the second pass; a note with no timeline_position never sounds in this placement. A note with mute true does not sound. A looping clip repeats every repeats_every_beats (repeats_every_bars) until length_beats ends: loop_passes counts the passes through the loop in this placement, and loop_pass_starts gives where each pass begins in the song. Never call the portion after one loop silent. duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with probability below 1 plays on only that share of passes. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes start_position, one-based bar.beat.sixteenth, and length_bars. loop_region and note_range are in the clip's own source time, like clip_position, not song time. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. If its notes change during the read, the result is missing with clip_changed: read again once the clip is stable. An audio clip returns missing_reason not_midi_clip. In the source view, output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging. pre_midi_effects lists the top-level MIDI effects that are on, such as Scale, Chord or Arpeggiator, ahead of the track's instrument: they change the notes before they sound, so these are the notes the clip sends, before those effects. MIDI effects inside a Rack are not checked; open the Rack with get_rack_contents. pre_midi_effects_unread means the chain could not be read to check.",
+                "description": "The MIDI notes of one arrangement-view clip. view says which list notes is. With view played, notes lists what sounds, in song order: a source note appears once per loop pass, with timeline_position where it sounds in the song, clip_position where it lives in the clip, and pass, the loop pass it belongs to. When the clip loops, loop says so in words, such as \"a 1-bar loop of 4 notes played 2 times, bars 2-3\": say that when you describe the part. count is how many notes sound; source_notes is how many the clip holds, the number the producer sees in the clip editor. Describe the part by what plays: a 1-bar loop of four notes stretched over two bars is eight notes, four in each bar. Edits happen in the clip: deleting or moving a source note changes every pass. Give edit instructions by clip_position, and use timeline_position to say where a note sounds. To change one pass only, the producer must first consolidate or split the clip; say so. Muted source notes do not sound and must be excluded from rhythm or harmony claims; they are listed once under muted_notes. Supply start_beats and end_beats, song beats as in get_arrangement, to list only the notes that start sounding inside that range; a note held into the range from before it is not listed. When more than 256 notes would be listed, the clip is muted, or its notes cannot be placed, view is source and view_reason says why; a partial read or a note_offset above 0 also returns the source view, and a partial read leaves out source_notes. notes then lists each source note once: start is absolute source beat time as shown in Live's clip editor, and timeline_position is where the note first sounds in the song. Playback starts at the start marker and wraps from the loop end to the loop start, so a note before the marker can first sound on the second pass; a note with no timeline_position never sounds in this placement. A note with mute true does not sound. A looping clip repeats every repeats_every_beats (repeats_every_bars) until length_beats ends: loop_passes counts the passes through the loop in this placement, and loop_pass_starts gives where each pass begins in the song. Never call the portion after one loop silent. duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with probability below 1 plays on only that share of passes; one at 0 never plays and is not listed as sounding. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes start_position, one-based bar.beat.sixteenth, and length_bars. loop_region and note_range are in the clip's own source time, like clip_position, not song time. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. If its notes change during the read, the result is missing with clip_changed: read again once the clip is stable. An audio clip returns missing_reason not_midi_clip. In the source view, output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging. pre_midi_effects lists the top-level MIDI effects that are on, such as Scale, Chord or Arpeggiator, ahead of the track's instrument: they change the notes before they sound, so these are the notes the clip sends, before those effects. MIDI effects inside a Rack are not checked; open the Rack with get_rack_contents. pre_midi_effects_unread means the chain could not be read to check.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "note_offset": {"type":"integer","minimum":0,"description":"Start at this offset in the ordered source notes; use next_note_offset to continue a capped output. Setting it returns the source view."},
+                        "note_offset": {"type":"integer","minimum":0,"description":"Start at this offset in the ordered source notes; use next_note_offset to continue a capped output. Above 0 it returns the source view."},
                         "track": { "type": "integer", "description": "Zero-based track index." },
                         "index": { "type": "integer", "description": "The clip's position in that track's arrangement, as reported by get_arrangement." },
                         "start_beats": {"type":"number","minimum":0,"description":"Optional inclusive range start in song beats; without end_beats the range runs to the end of the clip. In 4/4 bars 2–3 are [4,12)."},
@@ -572,6 +572,14 @@ const MAX_UNROLLED_NOTES: usize = 256;
 enum SourceView {
     TooMany,
     Unplaceable,
+    Muted,
+    /// A note_offset page or a partial read: the source notes as asked.
+    Paged,
+}
+
+/// A note that can sound: unmuted, and with a chance to play above zero.
+fn can_sound(note: &clip_notes::Note) -> bool {
+    !note.mute && note.probability > 0.0
 }
 
 /// The unmuted notes as they sound in the song, in order, each once per loop
@@ -590,7 +598,7 @@ fn played_notes(
     let mut played: Vec<(f64, &clip_notes::Note)> = notes
         .notes
         .iter()
-        .filter(|n| !n.mute)
+        .filter(|n| can_sound(n))
         .flat_map(|n| sounding_times(n.start, start, length, marker, region).map(move |t| (t, n)))
         .filter(|(t, _)| range.is_none_or(|(from, to)| *t >= from && *t < to))
         .take(MAX_UNROLLED_NOTES + 1)
@@ -622,6 +630,7 @@ fn loop_summary(
     signature: (i64, i64),
     start: f64,
     length: f64,
+    marker: f64,
     passes: usize,
     region: &clip_notes::LoopRegion,
 ) -> Option<String> {
@@ -629,14 +638,24 @@ fn loop_summary(
     let period = region.end_beats - region.start_beats;
     let bars = period / beats_per_bar;
     let size = if (bars - bars.round()).abs() < 1e-9 { format!("{}-bar", bars.round()) } else { format!("{period}-beat") };
-    let count = notes.notes.iter().filter(|n| !n.mute && n.start >= region.start_beats && n.start < region.end_beats).count();
+    let count = notes.notes.iter().filter(|n| can_sound(n) && n.start >= region.start_beats && n.start < region.end_beats).count();
     let notes_word = if count == 1 { "note" } else { "notes" };
     let times = if passes == 1 { "once".to_owned() } else { format!("{passes} times") };
     // One-based bars, the last one the bar the placement ends inside.
     let first = (start / beats_per_bar).floor() as i64 + 1;
     let last = ((start + length) / beats_per_bar - 1e-9).ceil() as i64;
     let span = if last <= first { format!("bar {first}") } else { format!("bars {first}-{last}") };
-    Some(format!("a {size} loop of {count} {notes_word} played {times}, {span}"))
+    // A pass that does not hold the whole loop does not play all its notes.
+    let mut partial = Vec::new();
+    if marker > region.start_beats + 1e-9 && marker < region.end_beats {
+        partial.push("the first pass starts mid-loop");
+    }
+    let last_pass_end = first_wrap(start, marker, region).map(|wrap| wrap + (passes - 1) as f64 * period);
+    if last_pass_end.is_some_and(|end| start + length < end - 1e-9) {
+        partial.push("the last pass is cut short");
+    }
+    let partial = if partial.is_empty() { String::new() } else { format!("; {}", partial.join(" and ")) };
+    Some(format!("a {size} loop of {count} {notes_word} played {times}, {span}{partial}"))
 }
 
 /// The loop's passes: how many there are and where each begins in the song.
@@ -652,7 +671,7 @@ fn add_loop_passes(
     };
     let passes = loop_pass_count(start, length, marker, region);
     payload["loop_passes"] = json!(passes);
-    if let Some(summary) = signature.and_then(|signature| loop_summary(notes, signature, start, length, passes, region)) {
+    if let Some(summary) = signature.and_then(|signature| loop_summary(notes, signature, start, length, marker, passes, region)) {
         payload["loop"] = json!(summary);
     }
     if let Some(grid) = signature.and_then(grid) {
@@ -681,6 +700,93 @@ fn arrangement_note_payload(
         }
     }
     payload
+}
+
+/// The get_arrangement_notes result: the played view when it can be listed,
+/// else the source notes from `note_offset`. Also returns why output was
+/// trimmed, if it was.
+fn arrangement_notes_payload(
+    mut result: arrangement::ArrangementClipNotes,
+    signature: Option<(i64, i64)>,
+    note_offset: usize,
+    range: Option<(f64, f64)>,
+) -> (serde_json::Value, Option<String>) {
+    let source_complete = result.notes.missing_reason.is_none();
+    let total_read = result.notes.notes.len();
+    let played = if result.muted {
+        Err(SourceView::Muted)
+    } else if note_offset == 0 && source_complete {
+        played_notes(&result.notes, signature, result.start, result.length, range)
+    } else {
+        Err(SourceView::Paged)
+    };
+    let mut payload = json!({
+        "source_start_beats": result.notes.source_start_beats,
+        "note_range": result.notes.note_range.as_ref().map(|range| loop_region_payload(range.start_beats, range.end_beats, signature)),
+        "name": result.name,
+        "start_beats": result.start,
+        "length_beats": result.length,
+        "muted": result.muted,
+        "is_midi": result.is_midi,
+        "loop_region": result.loop_region.map(|region| {
+            loop_region_payload(region.start_beats, region.end_beats, signature)
+        }),
+    });
+    // A partial read holds only the notes that arrived, not the clip's total.
+    if source_complete {
+        payload["source_notes"] = json!(total_read);
+    }
+    if let Some((from, to)) = range {
+        payload["range"] = json!({ "start_beats": from, "end_beats": to.is_finite().then_some(to) });
+    }
+    // Before the source view pages the notes: the loop is all of them.
+    add_loop_passes(&mut payload, &result.notes, signature, result.start, result.length);
+    let trimmed = match played {
+        Ok(list) => {
+            payload["view"] = json!("played");
+            payload["count"] = json!(list.len());
+            payload["notes"] = json!(list);
+            let mut muted: Vec<_> = result.notes.notes.iter().filter(|n| n.mute).cloned().collect();
+            let trimmed = trim_notes_for_model(&mut muted);
+            if !muted.is_empty() {
+                let listed = notes_payload(&muted, signature, None);
+                payload["muted_notes"] = json!(listed.as_array().unwrap().iter().map(|n| json!({
+                    "note": n["note"], "pitch": n["pitch"], "clip_position": n["clip_position"],
+                })).collect::<Vec<_>>());
+            }
+            trimmed
+        }
+        Err(why) => {
+            result.notes.notes.drain(..note_offset.min(total_read));
+            let next_note_offset = (source_complete && total_read.saturating_sub(note_offset) > MAX_NOTES_FOR_MODEL)
+                .then_some(note_offset + MAX_NOTES_FOR_MODEL);
+            let trimmed = trim_notes_for_model(&mut result.notes.notes);
+            payload["view"] = json!("source");
+            let reason = match why {
+                SourceView::TooMany => Some(format!("more than {MAX_UNROLLED_NOTES} notes sound here; supply start_beats and end_beats to list a section as it plays")),
+                SourceView::Muted => Some("the clip is muted, so none of its notes sound".to_owned()),
+                SourceView::Unplaceable => Some("the time signature or the clip's start marker is unknown, so the notes cannot be placed in the song".to_owned()),
+                SourceView::Paged => None,
+            };
+            if let Some(reason) = reason {
+                payload["view_reason"] = json!(reason);
+            }
+            payload["note_offset"] = json!(note_offset);
+            payload["next_note_offset"] = json!(next_note_offset);
+            payload["count"] = json!(result.notes.notes.len());
+            payload["notes"] = arrangement_note_payload(&result.notes, signature, result.start, result.length);
+            trimmed
+        }
+    };
+    add_bar_timing(&mut payload, result.start, result.length, signature);
+    if let Some(region) = &result.notes.loop_region {
+        let period = region.end_beats - region.start_beats;
+        payload["repeats_every_beats"] = json!(period);
+        if let Some(bars) = signature.and_then(beats_per_bar) {
+            payload["repeats_every_bars"] = json!(period / bars);
+        }
+    }
+    (payload, trimmed)
 }
 
 fn loop_region_payload(
@@ -1433,78 +1539,18 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             }
 
             match outcome {
-                Ok(mut result) => {
+                Ok(result) => {
                     // An emptied read is not an empty clip: say what happened.
                     if result.notes.missing_reason.as_deref() == Some("clip_changed") {
                         return ToolResult::missing("clip_changed");
                     }
-                    let signature = time_signature(&ctx.coalescer);
-                    let source_complete = result.notes.missing_reason.is_none();
-                    if note_offset > 0 && !source_complete {
+                    if note_offset > 0 && result.notes.missing_reason.is_some() {
                         return ToolResult::missing(&format!("cannot_continue_partial_note_read: {}", result.notes.missing_reason.as_deref().unwrap()));
                     }
-                    let total_read = result.notes.notes.len();
-                    let played = if note_offset == 0 && source_complete {
-                        played_notes(&result.notes, signature, result.start, result.length, range)
-                    } else {
-                        Err(SourceView::Unplaceable)
-                    };
-                    let mut payload = json!({
-                        "source_notes": total_read,
-                        "source_start_beats": result.notes.source_start_beats,
-                        "note_range": result.notes.note_range.as_ref().map(|range| loop_region_payload(range.start_beats, range.end_beats, signature)),
-                        "name": result.name,
-                        "start_beats": result.start,
-                        "length_beats": result.length,
-                        "muted": result.muted,
-                        "is_midi": result.is_midi,
-                        "loop_region": result.loop_region.map(|region| {
-                            loop_region_payload(region.start_beats, region.end_beats, signature)
-                        }),
-                    });
-                    if let Some((from, to)) = range {
-                        payload["range"] = json!({ "start_beats": from, "end_beats": to.is_finite().then_some(to) });
-                    }
-                    let mut trimmed = None;
-                    match played {
-                        Ok(list) => {
-                            payload["view"] = json!("played");
-                            payload["count"] = json!(list.len());
-                            payload["notes"] = json!(list);
-                            let muted: Vec<_> = result.notes.notes.iter().filter(|n| n.mute).cloned().collect();
-                            if !muted.is_empty() {
-                                let listed = notes_payload(&muted, signature, None);
-                                payload["muted_notes"] = json!(listed.as_array().unwrap().iter().map(|n| json!({
-                                    "note": n["note"], "pitch": n["pitch"], "clip_position": n["clip_position"],
-                                })).collect::<Vec<_>>());
-                            }
-                        }
-                        Err(why) => {
-                            result.notes.notes.drain(..note_offset.min(total_read));
-                            let next_note_offset = (source_complete && total_read.saturating_sub(note_offset) > MAX_NOTES_FOR_MODEL)
-                                .then_some(note_offset + MAX_NOTES_FOR_MODEL);
-                            trimmed = trim_notes_for_model(&mut result.notes.notes);
-                            payload["view"] = json!("source");
-                            if let SourceView::TooMany = why {
-                                payload["view_reason"] = json!(format!("more than {MAX_UNROLLED_NOTES} notes sound here; supply start_beats and end_beats to list a section as it plays"));
-                            }
-                            payload["note_offset"] = json!(note_offset);
-                            payload["next_note_offset"] = json!(next_note_offset);
-                            payload["count"] = json!(result.notes.notes.len());
-                            payload["notes"] = arrangement_note_payload(&result.notes, signature, result.start, result.length);
-                        }
-                    }
-                    add_bar_timing(&mut payload, result.start, result.length, signature);
-                    add_loop_passes(&mut payload, &result.notes, signature, result.start, result.length);
-                    if let Some(region) = &result.notes.loop_region {
-                        let period = region.end_beats - region.start_beats;
-                        payload["repeats_every_beats"] = json!(period);
-                        if let Some(bars) = signature.and_then(beats_per_bar) {
-                            payload["repeats_every_bars"] = json!(period / bars);
-                        }
-                    }
+                    let missing_reason = result.notes.missing_reason.clone();
+                    let (mut payload, trimmed) = arrangement_notes_payload(result, time_signature(&ctx.coalescer), note_offset, range);
                     add_pre_midi_effects(&mut payload, pre_effects);
-                    ToolResult::live(payload, joined_reason(result.notes.missing_reason, trimmed))
+                    ToolResult::live(payload, joined_reason(missing_reason, trimmed))
                 }
                 Err(arrangement::ArrangementNotesError::NotMidi) => {
                     ToolResult::missing("not_midi_clip")
@@ -1947,7 +1993,7 @@ mod tests {
         assert_eq!(once["loop"], json!("a 1-bar loop of 3 notes played once, bar 2"));
         let mut odd = json!({});
         add_loop_passes(&mut odd, &bass_loop(4.0, &[]), Some((7, 8)), 0.0, 7.0);
-        assert_eq!(odd["loop"], json!("a 4-beat loop of 4 notes played 2 times, bars 1-2"));
+        assert_eq!(odd["loop"], json!("a 4-beat loop of 4 notes played 2 times, bars 1-2; the last pass is cut short"));
     }
 
     #[test]
@@ -1978,6 +2024,86 @@ mod tests {
         assert_eq!(payload["loop_passes"], json!(100));
         assert_eq!(payload["loop"], json!("a 1-bar loop of 4 notes played 100 times, bars 1-100"));
         assert_eq!(payload["loop_pass_starts"].as_array().unwrap().len(), MAX_LISTED_PASSES);
+    }
+
+    #[test]
+    fn a_note_that_can_never_play_is_not_listed_as_sounding() {
+        let mut clip = bass_loop(4.0, &[]);
+        clip.notes[1].probability = 0.0;
+        let played = played_notes(&clip, Some((4, 4)), 4.0, 4.0, None).ok().unwrap();
+        let at: Vec<_> = played.iter().map(|n| n["note"].as_str().unwrap()).collect();
+        assert_eq!(at, ["A1", "E2", "G2"]);
+        let mut payload = json!({});
+        add_loop_passes(&mut payload, &clip, Some((4, 4)), 4.0, 4.0);
+        assert_eq!(payload["loop"], json!("a 1-bar loop of 3 notes played once, bar 2"));
+    }
+
+    // From the marker at beat 3, one beat of a four-note loop plays only G2.
+    #[test]
+    fn a_partial_pass_is_named_in_the_loop_summary() {
+        let mut clip = bass_loop(4.0, &[]);
+        clip.source_start_beats = Some(3.0);
+        let played = played_notes(&clip, Some((4, 4)), 0.0, 1.0, None).ok().unwrap();
+        assert_eq!(played.len(), 1);
+        let mut payload = json!({});
+        add_loop_passes(&mut payload, &clip, Some((4, 4)), 0.0, 1.0);
+        assert_eq!(payload["loop"], json!("a 1-bar loop of 4 notes played once, bar 1; the first pass starts mid-loop"));
+        let mut both = json!({});
+        add_loop_passes(&mut both, &clip, Some((4, 4)), 0.0, 6.0);
+        assert_eq!(both["loop"], json!("a 1-bar loop of 4 notes played 3 times, bars 1-2; the first pass starts mid-loop and the last pass is cut short"));
+    }
+
+    fn placed(clip: clip_notes::ClipNotes, muted: bool) -> arrangement::ArrangementClipNotes {
+        arrangement::ArrangementClipNotes {
+            name: Some("Bass".into()), start: 4.0, length: 8.0, muted, is_midi: true,
+            loop_region: Some(arrangement::LoopRegion { start_beats: 0.0, end_beats: 4.0 }), notes: clip,
+        }
+    }
+
+    #[test]
+    fn a_muted_clip_is_read_as_source_and_says_why() {
+        let (payload, _) = arrangement_notes_payload(placed(bass_loop(4.0, &[]), true), Some((4, 4)), 0, None);
+        assert_eq!(payload["view"], "source");
+        assert!(payload["view_reason"].as_str().unwrap().contains("muted"), "{payload}");
+    }
+
+    #[test]
+    fn a_clip_that_cannot_be_placed_says_why() {
+        let (payload, _) = arrangement_notes_payload(placed(bass_loop(4.0, &[]), false), None, 0, None);
+        assert_eq!(payload["view"], "source");
+        assert!(payload["view_reason"].as_str().unwrap().contains("time signature"), "{payload}");
+    }
+
+    #[test]
+    fn a_partial_read_does_not_give_its_note_count_as_the_clip_total() {
+        let mut clip = bass_loop(4.0, &[]);
+        clip.missing_reason = Some("too_large".into());
+        let (payload, _) = arrangement_notes_payload(placed(clip, false), Some((4, 4)), 0, None);
+        assert_eq!(payload["view"], "source");
+        assert!(payload.get("source_notes").is_none(), "{payload}");
+        let (whole, _) = arrangement_notes_payload(placed(bass_loop(4.0, &[]), false), Some((4, 4)), 0, None);
+        assert_eq!(whole["source_notes"], 4);
+    }
+
+    // The second page holds one note; the loop still holds all four.
+    #[test]
+    fn a_later_page_still_describes_the_whole_loop() {
+        let (payload, _) = arrangement_notes_payload(placed(bass_loop(4.0, &[]), false), Some((4, 4)), 3, None);
+        assert_eq!(payload["count"], 1);
+        assert_eq!(payload["loop"], json!("a 1-bar loop of 4 notes played 2 times, bars 2-3"));
+    }
+
+    #[test]
+    fn muted_notes_are_capped_like_any_note_list() {
+        let note = |start| clip_notes::Note {
+            pitch: 45, note: "A1".into(), start, duration: 0.25, velocity: 100.0, mute: true, probability: 1.0,
+        };
+        let mut clip = bass_loop(4.0, &[]);
+        clip.notes.extend((0..MAX_NOTES_FOR_MODEL + 5).map(|i| note(i as f64 / 1024.0)));
+        let (payload, trimmed) = arrangement_notes_payload(placed(clip, false), Some((4, 4)), 0, None);
+        assert_eq!(payload["view"], "played");
+        assert_eq!(payload["muted_notes"].as_array().unwrap().len(), MAX_NOTES_FOR_MODEL);
+        assert!(trimmed.unwrap().contains("omitted 5"));
     }
 
     // The pilot's «Dorian #4» was a Scale device ahead of the instrument:
