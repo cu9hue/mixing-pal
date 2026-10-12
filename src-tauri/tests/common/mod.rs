@@ -1272,18 +1272,24 @@ pub struct Tally {
     passes: usize,
     voids: Vec<String>,
     failures: Vec<(String, String, String, Value)>,
+    /// Passing answers, kept so a red batch can be compared with its greens.
+    passing: Vec<(String, Value)>,
     turn_ms: Vec<u64>,
 }
 
 impl Tally {
     pub fn new(scenario: &'static str) -> Self {
-        Tally { scenario, passes: 0, voids: vec![], failures: vec![], turn_ms: vec![] }
+        Tally { scenario, passes: 0, voids: vec![], failures: vec![], passing: vec![], turn_ms: vec![] }
     }
 
     pub fn add(&mut self, turn: &Turn, verdict: Verdict) {
         self.turn_ms.push(turn.turn_ms);
         match verdict {
-            Verdict::Pass => self.passes += 1,
+            Verdict::Pass => {
+                self.passes += 1;
+                let calls = turn.calls.iter().map(|c| json!([c.name, c.args, c.missing_reason])).collect();
+                self.passing.push((turn.answer.clone(), calls));
+            }
             Verdict::Void(e) => self.voids.push(e),
             Verdict::Fail(reason) => {
                 let calls = turn.calls.iter().map(|c| json!([c.name, c.args, c.missing_reason])).collect();
@@ -1305,6 +1311,7 @@ impl Tally {
             "median_turn_ms": median_turn_ms,
             "failures": self.failures.iter().map(|(r, a, raw, calls)| json!({"reason": r, "answer": a, "raw_answer": raw, "calls": calls})).collect::<Vec<_>>(),
             "void_reasons": self.voids,
+            "passing": self.passing.iter().map(|(a, calls)| json!({"answer": a, "calls": calls})).collect::<Vec<_>>(),
         });
         if let Ok(path) = std::env::var("MIXINGPAL_EVAL_REPORT") {
             use std::io::Write;

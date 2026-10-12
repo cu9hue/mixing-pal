@@ -1,0 +1,66 @@
+{
+  "goal": "rolling minimal groove",
+  "song": {
+    "tempo": 124,
+    "isPlaying": false,
+    "rootNote": 9,
+    "scaleName": "Minor",
+    "signatureNumerator": 4,
+    "signatureDenominator": 4,
+    "selectedTrack": 1,
+    "scriptVersion": 5,
+    "cuePoints": [],
+    "cuePointsTotal": 0,
+    "setId": null,
+    "setName": null,
+    "setPath": null
+  },
+  "tracks": [
+    {
+      "name": "Drums",
+      "volumeDb": "-3.0 dB",
+      "mute": false,
+      "solo": false,
+      "midi": true,
+      "silent": false,
+      "clips": [],
+      "devices": ["Drum Rack"],
+      "racks": [true],
+      "arrangement": [
+        { "name": "Beat", "start": 0.0, "length": 32.0, "loop": [0.0, 4.0], "sourceEnd": 4.0 }
+      ],
+      "arrangementNotes": {
+        "0": [
+          { "pitch": 36, "start": 0.0 },
+          { "pitch": 36, "start": 1.0 },
+          { "pitch": 36, "start": 2.0 },
+          { "pitch": 36, "start": 3.0 }
+        ]
+      },
+      "notes": {}
+    },
+    {
+      "name": "Bass",
+      "volumeDb": "-5.0 dB",
+      "mute": false,
+      "solo": false,
+      "midi": true,
+      "silent": false,
+      "clips": [],
+      "devices": [],
+      "racks": [],
+      "arrangement": [
+        { "name": "Bass", "start": 4.0, "length": 8.0, "loop": [0.0, 4.0], "sourceEnd": 4.0 }
+      ],
+      "arrangementNotes": {
+        "0": [
+          { "pitch": 45, "start": 0.0 },
+          { "pitch": 48, "start": 1.0 },
+          { "pitch": 52, "start": 2.0 },
+          { "pitch": 55, "start": 3.0 }
+        ]
+      },
+      "notes": {}
+    }
+  ]
+}
