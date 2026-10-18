@@ -189,6 +189,108 @@ describe("invited accounts", () => {
     expect(logo.content_type).toBe("image/png");
   });
 
+  describe("sign-in codes", () => {
+    const email = "producer@example.com";
+    async function sendCode() {
+      await env.DB.prepare("INSERT INTO invites(code_hash, email, expires_at) VALUES (?, ?, ?)")
+        .bind(crypto.randomUUID(), email, Date.now() + DAY).run();
+      expect((await api("/auth/email-otp/send-verification-otp", { email })).status).toBe(200);
+      return otpSent;
+    }
+    async function signIn(otp: string) {
+      const response = await api("/auth/sign-in/email-otp", { email, otp });
+      return { status: response.status, body: await response.json() as { error?: { code: string; message: string } } };
+    }
+    const wrong = (otp: string) => otp === "000000" ? "111111" : "000000";
+
+    test("a resent code is the same code, so the first email still works", async () => {
+      const first = await sendCode();
+      expect((await api("/auth/email-otp/send-verification-otp", { email })).status).toBe(200);
+      expect(otpSent).toBe(first);
+      expect((await signIn(first)).status).toBe(200);
+    });
+
+    test("two sends at once email one code, and it works", async () => {
+      await env.DB.prepare("INSERT INTO invites(code_hash, email, expires_at) VALUES (?, ?, ?)")
+        .bind(crypto.randomUUID(), email, Date.now() + DAY).run();
+      const responses = await Promise.all([1, 2].map(() => api("/auth/email-otp/send-verification-otp", { email })));
+      expect(responses.map((response) => response.status)).toEqual([200, 200]);
+      const deliveries = vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "https://api.resend.com/emails");
+      expect(deliveries).toHaveLength(1);
+      expect((await signIn(otpSent)).status).toBe(200);
+      expect((await env.DB.prepare("SELECT count(*) AS n FROM sign_in_sends").first<{ n: number }>())!.n).toBe(0);
+    });
+
+    test("a code lasts fifteen minutes and the email says so", async () => {
+      const before = Date.now();
+      await sendCode();
+      const row = await env.DB.prepare('SELECT "expiresAt" FROM "verification"').first<{ expiresAt: string }>();
+      const lifetime = new Date(row!.expiresAt).getTime() - before;
+      expect(lifetime).toBeGreaterThan(14 * 60_000);
+      expect(lifetime).toBeLessThanOrEqual(15 * 60_000 + 5_000);
+      const delivery = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "https://api.resend.com/emails");
+      const sentEmail = JSON.parse(String(delivery![1]?.body));
+      expect(sentEmail.text).toContain("15 minutes");
+      expect(sentEmail.html).toContain("15 minutes");
+    });
+
+    test("a code is resent only within 15 minutes of the first email, so it lives 30 minutes at most", async () => {
+      const first = await sendCode();
+      // The code was first sent 16 minutes ago and a resend since then kept it unexpired.
+      await env.DB.prepare('UPDATE "verification" SET "createdAt" = ?')
+        .bind(new Date(Date.now() - 16 * 60_000).toISOString()).run();
+      expect((await api("/auth/email-otp/send-verification-otp", { email })).status).toBe(200);
+      expect(otpSent).not.toBe(first);
+      expect((await env.DB.prepare('SELECT count(*) AS n FROM "verification"').first<{ n: number }>())!.n).toBe(1);
+      expect((await signIn(first)).status).toBe(400);
+      expect((await signIn(otpSent)).status).toBe(200);
+    });
+
+    test("the subject carries the code", async () => {
+      const otp = await sendCode();
+      const delivery = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "https://api.resend.com/emails");
+      expect(JSON.parse(String(delivery![1]?.body)).subject).toBe(`${otp} is your Mixing Pal sign-in code`);
+    });
+
+    test("an expired code says it expired", async () => {
+      const otp = await sendCode();
+      await env.DB.prepare('UPDATE "verification" SET "expiresAt" = ?').bind(new Date(Date.now() - 1000).toISOString()).run();
+      const result = await signIn(otp);
+      expect(result.status).toBe(400);
+      expect(result.body.error).toMatchObject({ code: "code_expired" });
+      expect(result.body.error!.message).toMatch(/expired/i);
+    });
+
+    test("a wrong code says it is wrong", async () => {
+      const otp = await sendCode();
+      const result = await signIn(wrong(otp));
+      expect(result.status).toBe(400);
+      expect(result.body.error).toMatchObject({ code: "code_invalid" });
+      expect(result.body.error!.message).toMatch(/isn't right/);
+    });
+
+    test("a code stored hashed before codes were encrypted gives way to a new one", async () => {
+      await env.DB.prepare("INSERT INTO invites(code_hash, email, expires_at) VALUES (?, ?, ?)")
+        .bind(crypto.randomUUID(), email, Date.now() + DAY).run();
+      const now = new Date().toISOString();
+      await env.DB.prepare('INSERT INTO "verification"(id, identifier, value, "expiresAt", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?)')
+        .bind("pre-deploy", `sign-in-otp-${email}`, "n4bQgYhMfWWaL-qgxVrQFaO_TxsrC4Is0V1sFbDwCgg:0",
+          new Date(Date.now() + 120_000).toISOString(), now, now).run();
+      expect((await signIn("123456")).body.error).toMatchObject({ code: "code_invalid" });
+      expect((await api("/auth/email-otp/send-verification-otp", { email })).status).toBe(200);
+      expect((await signIn(otpSent)).status).toBe(200);
+    });
+
+    test("three wrong codes lock the code and say to request a new one", async () => {
+      const otp = await sendCode();
+      for (let attempt = 0; attempt < 3; attempt++) await signIn(wrong(otp));
+      const result = await signIn(otp);
+      expect(result.status).toBe(403);
+      expect(result.body.error).toMatchObject({ code: "too_many_attempts" });
+      expect(result.body.error!.message).toMatch(/new code/i);
+    });
+  });
+
   test("account availability follows the deployment inference switch", async () => {
     const user = await joined();
     const enabled = env.INFERENCE_ENABLED;
