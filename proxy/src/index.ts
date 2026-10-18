@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { account, consent, rateLimit, redeem } from "./account";
 import { admin } from "./admin";
-import { auth, authenticate } from "./auth";
+import { auth, authenticate, CODE_LIFETIME_MINUTES } from "./auth";
 import { deleteAccount, deleteShared, deleteTurn, event, feedback } from "./capture";
 import { complete } from "./completion";
 import { ApiError, Env, MAX_FEEDBACK_BODY, json, privateHash, readJson } from "./env";
@@ -10,7 +10,18 @@ import { notifyReport } from "./report-email";
 import { submitReport, reportReceipt, deleteReport, requireReportAccess, MAX_REPORT_BODY } from "./reports";
 import { releaseRequest } from "./releases";
 
+// Better Auth's code-check failures, told apart so the producer knows what to do next.
+const SIGN_IN_FAILURES: Record<string, [string, string]> = {
+  OTP_EXPIRED: ["code_expired", "This code has expired. Request a new one."],
+  INVALID_OTP: ["code_invalid", "That code isn't right. Check it and try again."],
+  TOO_MANY_ATTEMPTS: ["too_many_attempts", "Too many wrong tries. Request a new code."],
+};
+
+// Longer than the Resend call's 10-second timeout, so a live send always holds its claim.
+const SEND_CLAIM_MS = 30_000;
+
 async function authRequest(request: Request, env: Env, path: string): Promise<Response> {
+  let release: (() => Promise<unknown>) | undefined;
   const allowed = ["/auth/email-otp/send-verification-otp", "/auth/sign-in/email-otp", "/auth/sign-out", "/auth/get-session"];
   if (!allowed.includes(path)) throw new ApiError(404, "not_found", "Not found.");
   if (path === "/auth/get-session") {
@@ -28,15 +39,32 @@ async function authRequest(request: Request, env: Env, path: string): Promise<Re
       if (path.includes("send-verification")) return json({ success: true });
       throw new ApiError(401, "sign_in_failed", "The code is invalid or expired. Check your invitation email.");
     }
+    if (path.includes("send-verification")) {
+      // Two concurrent sends would each mint a code, and the earlier email's code would fail.
+      const key = await privateHash(env.AUTH_SECRET, input.email);
+      const now = Date.now();
+      const claim = await env.DB.prepare(`INSERT INTO sign_in_sends(email_hash, until) VALUES (?, ?)
+        ON CONFLICT(email_hash) DO UPDATE SET until = excluded.until WHERE sign_in_sends.until < ?`)
+        .bind(key, now + SEND_CLAIM_MS, now).run();
+      if (!claim.meta.changes) return json({ success: true });
+      release = () => env.DB.prepare("DELETE FROM sign_in_sends WHERE email_hash = ?").bind(key).run();
+      // A resend repeats a code only within its first window, so a code lives two windows at most.
+      // The identifier is Better Auth's sign-in OTP key.
+      await env.DB.prepare('DELETE FROM "verification" WHERE identifier = ? AND "createdAt" < ?')
+        .bind(`sign-in-otp-${input.email}`, new Date(now - CODE_LIFETIME_MINUTES * 60_000).toISOString()).run();
+    }
     const headers = new Headers(request.headers);
     headers.delete("Cookie");
     request = new Request(request.url, { method: "POST", headers,
       body: JSON.stringify(path.includes("send-verification") ? { email: input.email, type: "sign-in" } : input) });
   }
-  const response = await auth(env).handler(request);
+  let response: Response;
+  try { response = await auth(env).handler(request); } finally { await release?.(); }
   if (!response.ok) {
-    await response.body?.cancel();
-    return json({ error: { code: "sign_in_failed", message: "Sign-in failed. Check the code or request a new one." } }, response.status);
+    const failure = await response.json<{ code?: string }>().catch(() => null);
+    const [code, message] = SIGN_IN_FAILURES[failure?.code ?? ""]
+      ?? ["sign_in_failed", "Sign-in failed. Check the code or request a new one."];
+    return json({ error: { code, message } }, response.status);
   }
   // Better Auth clears its cookie even when the database deletion fails.
   // A bearer session must actually be gone before the desktop drops its key.
