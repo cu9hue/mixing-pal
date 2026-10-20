@@ -739,4 +739,22 @@ mod tests {
 
         assert_eq!(rx.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty));
     }
+
+    // Two Drum Rack pads read at once: the dotted path is one key argument,
+    // so "0.0.0" and "0.1.0" can never resolve each other.
+    #[test]
+    fn sibling_device_paths_resolve_their_own_replies() {
+        let mut t = RequestTable::new();
+        let now = Instant::now();
+        let addr = "/live/mixingpal/get/sample";
+        let key = |path: &str| vec![OscType::Int(0), OscType::Int(2), OscType::String(path.into())];
+        let Registration::New(kick) = t.register(now, addr, &key("0.0.0")) else { panic!("kick") };
+        let Registration::New(snare) = t.register(now, addr, &key("0.1.0")) else { panic!("snare") };
+        let mut reply = key("0.1.0");
+        reply.push(OscType::String("ok".into()));
+        assert_eq!(t.resolve(&msg(addr, reply)).completed, Some(snare));
+        let mut reply = key("0.0.0");
+        reply.push(OscType::String("ok".into()));
+        assert_eq!(t.resolve(&msg(addr, reply)).completed, Some(kick));
+    }
 }

@@ -148,7 +148,11 @@ pub fn key_arity(addr: &str) -> KeyArity {
         // Same role as the session clip's own window ordinal: what makes
         // two windows of ONE arrangement clip distinct keys, and what lets
         // `clip_notes::get_notes_at` share the decoder unmodified.
-        | "/live/arrangement_clip/get/notes_window" => KeyArity::Args(3),
+        | "/live/arrangement_clip/get/notes_window"
+        // (track, kind, target) in, echoed back before the record. target is
+        // always a string -- a slot, an index, or DevicePath::wire() -- so
+        // sibling Drum Rack pads key apart. See tools/sample.rs.
+        | "/live/mixingpal/get/sample" => KeyArity::Args(3),
 
         "/live/song/get/track_data"
         | "/live/song/get/track_names"
@@ -250,6 +254,7 @@ mod tests {
             ("/live/mixingpal/get/track_mixer", KeyArity::Args(1)),
             ("/live/mixingpal/get/return_mixer", KeyArity::Args(1)),
             ("/live/mixingpal/get/master_mixer", KeyArity::None),
+            ("/live/mixingpal/get/sample", KeyArity::Args(3)),
             // Keyless: args vary between requests but the reply echoes nothing.
             ("/live/song/get/track_data", KeyArity::Unkeyed),
             ("/live/song/get/track_names", KeyArity::Unkeyed),
