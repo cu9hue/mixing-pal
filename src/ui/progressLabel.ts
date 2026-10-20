@@ -24,6 +24,7 @@ const PHRASE: Record<string, (trackName: string) => string> = {
   get_arrangement_notes: (t) => `reading the arrangement notes in ${t}…`,
   get_device_params: (t) => `looking at a device on ${t}…`,
   get_rack_contents: (t) => `opening the rack on ${t}…`,
+  get_sample: (t) => `looking at a sample on ${t}…`,
   get_mixer: (t) => `reading the mixer for ${t}…`,
   get_arrangement: (t) => `mapping the arrangement for ${t}…`,
 };
@@ -34,6 +35,7 @@ const PAST_PHRASE: Record<string, (trackName: string) => string> = {
   get_arrangement_notes: (t) => `read the arrangement notes in ${t}`,
   get_device_params: (t) => `looked at a device on ${t}`,
   get_rack_contents: (t) => `opened the rack on ${t}`,
+  get_sample: (t) => `looked at a sample on ${t}`,
   get_mixer: (t) => `read the mixer for ${t}`,
   get_arrangement: (t) => `mapped the arrangement for ${t}`,
 };
@@ -44,6 +46,7 @@ const FALLBACK: Record<string, string> = {
   get_arrangement_notes: "reading an arrangement clip…",
   get_device_params: "looking at a device…",
   get_rack_contents: "opening a rack…",
+  get_sample: "looking at a sample…",
   get_clips: "listing the clips…",
   get_arrangement: "mapping the arrangement…",
   get_device_chains: "listing the devices…",
@@ -56,6 +59,7 @@ const PAST_FALLBACK: Record<string, string> = {
   get_arrangement_notes: "read an arrangement clip",
   get_device_params: "looked at a device",
   get_rack_contents: "opened a rack",
+  get_sample: "looked at a sample",
   get_clips: "listed the clips",
   get_arrangement: "mapped the arrangement",
   get_device_chains: "listed the devices",

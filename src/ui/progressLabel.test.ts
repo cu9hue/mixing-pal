@@ -87,6 +87,10 @@ describe("progressLabel", () => {
     expect(progressLabel("get_track_detail", null, STATE)).toBe("reading a track…");
   });
 
+  it("names the track a sample is read from", () => {
+    expect(progressLabel("get_sample", { track: 0, slot: 0 }, STATE)).toMatch(/^looking at a sample on /);
+  });
+
   it("has something to say about a tool it has never heard of", () => {
     expect(progressLabel("get_future_thing", { track: 1 }, STATE)).toBe("reading…");
   });
@@ -101,6 +105,8 @@ describe("progressLabel", () => {
       ["get_arrangement_notes", { track: 99, index: 0 }],
       ["get_device_params", { track: 1, path: "0/1" }],
       ["get_rack_contents", { track: 1, path: "0" }],
+      ["get_sample", { track: 1, slot: 0 }],
+      ["get_sample", { track: 99, path: [0, 2, 0] }],
       ["get_clips", {}],
       ["get_arrangement", {}],
       ["get_device_chains", {}],
