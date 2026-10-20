@@ -172,7 +172,7 @@ pub fn decode_reply(reply: &[OscType], track: i32, target: &SampleTarget) -> Res
     }
     let status = string(reply.get(3))?.ok_or(SampleError::Malformed)?;
     if status != "ok" {
-        return STATUSES.iter().find(|s| **s == status).map(|s| Err(SampleError::Refused(*s))).unwrap_or(Err(SampleError::Malformed));
+        return Err(STATUSES.into_iter().find(|s| *s == status).map_or(SampleError::Malformed, SampleError::Refused));
     }
     let at = |i: usize| reply.get(4 + i);
     let path = string(at(0))?.ok_or(SampleError::Malformed)?;
