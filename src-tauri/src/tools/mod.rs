@@ -242,6 +242,27 @@ pub fn tool_schema() -> serde_json::Value {
                     "required": ["track", "path"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_sample",
+                "description": "The sample behind one audio clip or one Simpler, read from Live at call time: the file name only (never its folder), the file's length and sample rate, warp (false or the mode, such as Complex), gain, transpose and detune, and region: the part of the file that plays, as seconds of the file, with plays saying it in words. For an arrangement clip, plays includes the bars and, when it loops, how many times, such as \"a 1-bar loop played 4 times\"; an unwarped loop is counted at the current tempo. A session clip says what it plays when launched. A Simpler gives its mode (Classic, One-Shot, Slice): in Classic and One-Shot the pitch follows the MIDI note and C3 plays the sample at its original pitch plus Transpose and Detune; in Slice, slices is the count and each note plays one slice. Pass exactly one of slot (a session clip, from get_clips), index (an arrangement clip, from get_arrangement) or path (a Simpler, as in get_device_params; a Drum Rack pad's Simpler is [rack, chain, device] from get_rack_contents). This describes the file and Live's settings, not what the mix sounds like: devices, the fader and the rest of the set are not in it. missing_reason not_audio_clip is a MIDI clip; empty_slot, no_such_target, not_a_simpler, no_sample (an empty Simpler), multisample_not_readable, sampler_not_readable and path_too_long say why nothing was read; region_unavailable keeps the settings without a region.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "track": { "type": "integer", "description": "Zero-based track index." },
+                        "slot": { "type": "integer", "minimum": 0, "description": "A session clip slot, as reported by get_clips." },
+                        "index": { "type": "integer", "minimum": 0, "description": "An arrangement clip's position on the track's timeline, as reported by get_arrangement." },
+                        "path": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "description": "Zero-based indices from the track to a Simpler, alternating device and chain, as in get_device_params. Always an odd number of entries, at most 9."
+                        }
+                    },
+                    "required": ["track"]
+                }
+            }
         }
     ])
 }
@@ -272,6 +293,25 @@ fn int_arg(args: &serde_json::Value, name: &str) -> Option<i64> {
 fn track_and_path(args: &serde_json::Value) -> Option<(i64, DevicePath)> {
     let track = int_arg(args, "track").filter(|t| (0..=i64::from(i32::MAX)).contains(t))?;
     Some((track, DevicePath::parse(args.get("path"))?))
+}
+
+/// get_sample's track and its one target. More than one target, or none, is
+/// refused rather than guessed.
+fn sample_target(args: &serde_json::Value) -> Option<(i64, sample::SampleTarget)> {
+    let track = int_arg(args, "track").filter(|t| (0..=i64::from(i32::MAX)).contains(t))?;
+    let given = ["slot", "index", "path"].iter().filter(|k| args.get(**k).is_some()).count();
+    if given != 1 {
+        return None;
+    }
+    let index = |name| int_arg(args, name).filter(|i| (0..=i64::from(i32::MAX)).contains(i)).map(|i| i as i32);
+    let target = if args.get("slot").is_some() {
+        sample::SampleTarget::Slot(index("slot")?)
+    } else if args.get("index").is_some() {
+        sample::SampleTarget::Index(index("index")?)
+    } else {
+        sample::SampleTarget::Device(DevicePath::parse(args.get("path"))?)
+    };
+    Some((track, target))
 }
 
 /// One track's mirrored name, used as its identity across a paged query.
@@ -1814,6 +1854,41 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 }
             }
         }
+        "get_sample" => {
+            let Some((track, target)) = sample_target(args) else {
+                return ToolResult::missing("bad_arguments");
+            };
+            if known_track_is_out_of_range(&ctx.coalescer, track) {
+                return ToolResult::missing("track_out_of_range");
+            }
+            let query = match ctx.query.lock() {
+                Ok(q) => q.clone(),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            let Some(query) = query else {
+                return ToolResult::missing("not_connected");
+            };
+            let before = track_identity(&ctx.coalescer, track);
+            let outcome = sample::get_sample(&query, track as i32, &target, sample::QUERY_TIMEOUT).await;
+            if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
+                return ToolResult::missing("topology_changed");
+            }
+            match outcome {
+                Ok(read) => {
+                    let (payload, missing) = sample::sample_payload(&read, target.kind(), time_signature(&ctx.coalescer));
+                    ToolResult::live(payload, missing.map(str::to_owned))
+                }
+                Err(sample::SampleError::Refused(reason)) => ToolResult::missing(reason),
+                Err(sample::SampleError::Malformed) => ToolResult::missing("malformed_reply"),
+                Err(sample::SampleError::Query(QueryError::NoReply)) => ToolResult::missing(
+                    "no_reply: the track may not exist, the connector may need updating, or Live did not answer",
+                ),
+                Err(sample::SampleError::Query(QueryError::Busy)) => ToolResult::missing("busy"),
+                Err(sample::SampleError::Query(QueryError::Transport(e))) => {
+                    ToolResult::missing(&format!("transport_error: {e}"))
+                }
+            }
+        }
         _ => ToolResult::missing("unknown_tool"),
     }
 }
@@ -2762,6 +2837,47 @@ mod tests {
         let ctx = disconnected_ctx(one_track_mirror());
         let r = execute(&ctx, "get_arrangement", &json!({})).await;
         assert_eq!(r.missing_reason.as_deref(), Some("not_in_mirror"));
+    }
+
+    #[tokio::test]
+    async fn get_sample_needs_exactly_one_target() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        for args in [
+            json!({ "track": 0 }),
+            json!({ "track": 0, "slot": 0, "index": 0 }),
+            json!({ "track": 0, "index": 0, "path": [0] }),
+            json!({ "track": 0, "slot": -1 }),
+            json!({ "track": -1, "slot": 0 }),
+            json!({ "track": 0, "path": [0, 1] }),
+            json!({ "slot": 0 }),
+        ] {
+            let r = execute(&ctx, "get_sample", &args).await;
+            assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"), "{args}");
+        }
+    }
+
+    #[tokio::test]
+    async fn get_sample_before_the_socket_binds_says_so() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "slot": 0 })).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("not_connected"));
+    }
+
+    #[tokio::test]
+    async fn get_sample_on_a_silent_live_says_no_reply() {
+        // A wire-14 connector knows no such address and answers nothing.
+        let ctx = answering_ctx(one_track_mirror()).await;
+        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "index": 0 })).await;
+        assert!(r.missing_reason.as_deref().unwrap().starts_with("no_reply"), "{:?}", r.missing_reason);
+        assert_eq!(r.value, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn the_sample_description_says_it_is_not_the_mix() {
+        let schema = tool_schema();
+        let d = schema.as_array().unwrap().iter().find(|t| t["function"]["name"] == "get_sample").unwrap()["function"]["description"].as_str().unwrap().to_string();
+        assert!(d.contains("not what the mix sounds like"), "{d}");
+        assert!(d.contains("file name only"), "{d}");
     }
 
     #[tokio::test]
