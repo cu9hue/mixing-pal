@@ -7,6 +7,7 @@ pub mod fence;
 pub mod mixer;
 pub mod path;
 pub mod rack_contents;
+pub mod sample;
 pub mod track_detail;
 
 use crate::deltas::Coalescer;
