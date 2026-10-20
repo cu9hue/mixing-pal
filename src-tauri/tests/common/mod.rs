@@ -749,6 +749,72 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
+                "/live/mixingpal/get/sample" => {
+                    // `(track, kind, target)` echoed, then the record
+                    // `sample_replies.py` builds, from the fixture's
+                    // `sample` objects (values shaped like Task 3's real-Live replies).
+                    let (Some(kind), Some(target)) = (int_at(1), str_at(2)) else { continue };
+                    let holder = match kind {
+                        0 => track["clips"].as_array().and_then(|c| c.iter().find(|c| c["slot"].as_i64().map(|s| s.to_string()) == Some(target.clone()))).cloned(),
+                        1 => target.parse::<usize>().ok().and_then(|i| track["arrangement"].get(i).cloned()),
+                        _ => track["deviceDetail"].get(target.as_str()).cloned(),
+                    };
+                    let mut reply = vec![req.args[0].clone(), req.args[1].clone(), req.args[2].clone()];
+                    let Some(holder) = holder else {
+                        reply.push(OscType::String("no_such_target".into()));
+                        let _ = live.send_to(app_port, &req.addr, reply).await;
+                        continue;
+                    };
+                    let Some(s) = holder.get("sample").cloned() else {
+                        reply.push(OscType::String(if kind == 2 { "not_a_simpler" } else { "not_audio_clip" }.into()));
+                        let _ = live.send_to(app_port, &req.addr, reply).await;
+                        continue;
+                    };
+                    let f = |k: &str| OscType::Float(s[k].as_f64().unwrap_or(0.0) as f32);
+                    reply.extend([
+                        OscType::String("ok".into()),
+                        OscType::String(s["file"].as_str().unwrap().into()),
+                        f("rate"),
+                        OscType::Int(s["frames"].as_i64().unwrap() as i32),
+                        OscType::Bool(s["warping"].as_bool().unwrap()),
+                        OscType::Int(s["warpMode"].as_i64().unwrap() as i32),
+                        OscType::String(s["gain"].as_str().unwrap().into()),
+                        f("transpose"),
+                        f("detune"),
+                    ]);
+                    let intervals = s["intervals"].as_array().cloned().unwrap_or_default();
+                    reply.push(OscType::Int(intervals.len() as i32));
+                    for i in &intervals {
+                        reply.extend([
+                            OscType::Float(i[0].as_f64().unwrap() as f32),
+                            OscType::Float(i[1].as_f64().unwrap() as f32),
+                            OscType::Int(i[2].as_i64().unwrap() as i32),
+                            OscType::Int(i[3].as_i64().unwrap() as i32),
+                        ]);
+                    }
+                    if kind == 2 {
+                        reply.extend([
+                            OscType::Int(s["mode"].as_i64().unwrap() as i32),
+                            OscType::Int(s["slices"].as_i64().unwrap() as i32),
+                            OscType::Nil,
+                            OscType::Nil,
+                        ]);
+                    } else {
+                        let start = holder["start"].as_f64();
+                        let looped = holder["loop"].as_array();
+                        reply.extend([
+                            OscType::Bool(looped.is_some()),
+                            OscType::Bool(false),
+                            f("startMarker"),
+                            OscType::Float(looped.map_or(0.0, |l| l[0].as_f64().unwrap()) as f32),
+                            OscType::Float(looped.map_or(0.0, |l| l[1].as_f64().unwrap()) as f32),
+                            start.map_or(OscType::Nil, |v| OscType::Float(v as f32)),
+                            start.map_or(OscType::Nil, |v| OscType::Float((v + holder["length"].as_f64().unwrap()) as f32)),
+                            f("tempo"),
+                        ]);
+                    }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
                 _ => {} // an address the fixture cannot answer
             }
         }

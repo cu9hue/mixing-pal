@@ -557,6 +557,27 @@ fn long_looped() -> Value {
     f
 }
 
+/// Free: the transposed vocal reads back with its transpose and loop, and no
+/// folder of its path reaches the result.
+#[tokio::test]
+async fn the_sample_fixture_reads_the_vocal_and_the_simpler() {
+    let f = common::load("sample-set.json");
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f).await))),
+    };
+    let vox = execute(&ctx, "get_sample", &json!({"track": 0, "index": 0})).await;
+    assert_eq!(vox.missing_reason, None, "{}", vox.value);
+    assert_eq!((&vox.value["transpose_semitones"], &vox.value["warp"]), (&json!(9.0), &json!("Complex")));
+    assert_eq!(vox.value["region"]["plays"], "plays 0.00-3.85 s of the file, bars 17-20, a 2-bar loop played 2 times");
+    let text = vox.value.to_string();
+    assert!(!text.contains("Users") && !text.contains("Vocals"), "{text}");
+    let perc = execute(&ctx, "get_sample", &json!({"track": 1, "path": [0]})).await;
+    assert_eq!((&perc.value["mode"], &perc.value["source"]), (&json!("One-Shot"), &json!("simpler")));
+    let midi = execute(&ctx, "get_sample", &json!({"track": 1, "slot": 0})).await;
+    assert!(midi.missing_reason.is_some());
+}
+
 const EDIT_EVERY_PASS: (&str, &str) = ("edit_applies_to_every_pass", "The bass in bars 2 and 3 comes from one 1-bar looped clip, so changing a note in the clip changes it in every bar the loop plays. If the answer proposes changing notes, it must not tell the producer to change one bar and leave the other as it is, unless it says the clip must first be consolidated or split. An answer that proposes no note edit passes.");
 
 fn bass_described(span: &str) -> String {
@@ -583,4 +604,20 @@ async fn a_looped_clip_is_counted_as_it_plays_not_as_it_is_stored() {
 #[tokio::test]
 async fn a_long_looped_clip_is_still_described_as_it_plays() {
     rate("long_looped_clip_counted_as_played", || loop_question(long_looped(), "that starts at bar 2 and plays for 80 bars")).await;
+}
+
+#[tokio::test]
+async fn a_transposed_vocal_is_named_as_transposed() {
+    rate("vocal_transpose_named", || async {
+        let q = "why does the vocal sound off?";
+        let f = common::load("sample-set.json");
+        let turn = common::ask(f, &common::context("sample-context.txt"), q).await;
+        let read_it = turn.calls.iter().any(|c| c.name == "get_sample" && c.args["track"] == 0);
+        let verdict = match common::base_verdict(&turn) {
+            Some(v) => v,
+            None if !read_it => Verdict::Fail(format!("never read the vocal's sample: {:?}", turn.called)),
+            None => common::judged(q, &turn, &[("transpose_named", "The Vox clip is transposed up 9 semitones in Complex warp mode. The answer passes if it names the transpose (9 semitones, +9, or up nine) as a likely cause. It fails if it never mentions the transpose, or if it claims to hear the vocal (\"it sounds thin\", \"I can hear\") rather than reading Live's settings. Judge only this.")]).await,
+        };
+        (turn, verdict)
+    }).await;
 }

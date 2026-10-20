@@ -1,0 +1,84 @@
+{
+  "goal": "melodic house, vocal hook in the drop",
+  "song": {
+    "tempo": 124,
+    "isPlaying": false,
+    "rootNote": 9,
+    "scaleName": "Minor",
+    "signatureNumerator": 4,
+    "signatureDenominator": 4,
+    "selectedTrack": 0,
+    "scriptVersion": 15,
+    "cuePoints": [],
+    "cuePointsTotal": 0,
+    "setId": null,
+    "setName": null,
+    "setPath": null
+  },
+  "tracks": [
+    {
+      "name": "Vox",
+      "volumeDb": "-6.0 dB",
+      "mute": false,
+      "solo": false,
+      "midi": false,
+      "silent": false,
+      "clips": [],
+      "devices": ["EQ Eight"],
+      "racks": [false],
+      "arrangement": [
+        {
+          "name": "Hook",
+          "start": 64.0,
+          "length": 16.0,
+          "loop": [0.0, 8.0],
+          "sample": {
+            "file": "/Users/someone/Music/Samples/Vocals/Hook Am 124.wav",
+            "rate": 44100.0,
+            "frames": 170000,
+            "warping": true,
+            "warpMode": 4,
+            "gain": "0.00 dB",
+            "transpose": 9,
+            "detune": 0.0,
+            "startMarker": 0.0,
+            "tempo": 124.0,
+            "intervals": [[0.0, 8.0, 0, 170000]]
+          }
+        }
+      ],
+      "notes": {}
+    },
+    {
+      "name": "Perc",
+      "volumeDb": "-10.0 dB",
+      "mute": false,
+      "solo": false,
+      "midi": true,
+      "silent": false,
+      "clips": [],
+      "devices": ["Simpler"],
+      "racks": [false],
+      "arrangement": [],
+      "deviceDetail": {
+        "0": {
+          "params": [],
+          "sample": {
+            "file": "/Users/someone/Music/Samples/Drums/Perc 2.wav",
+            "rate": 44100.0,
+            "frames": 10493,
+            "warping": false,
+            "warpMode": 0,
+            "gain": "0.00 dB",
+            "transpose": 0.0,
+            "detune": 0.0,
+            "mode": 1,
+            "slices": 0,
+            "intervals": [[0, 10493, 0, 10493]]
+          }
+        }
+      },
+      "notes": {}
+    }
+  ]
+}
