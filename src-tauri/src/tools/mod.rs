@@ -624,6 +624,49 @@ fn played_notes(
         .collect())
 }
 
+/// A placement's loop passes in words, shared by MIDI notes and samples:
+/// the loop's size ("1-bar"), how often it plays ("2 times"), the bars it
+/// spans, and "; the last pass is cut short" when a pass is partial.
+struct PassWords {
+    size: String,
+    times: String,
+    span: String,
+    partial: String,
+}
+
+/// "bar 2" or "bars 2-3": one-based, the last the bar the placement ends inside.
+fn bar_span(start: f64, length: f64, beats_per_bar: f64) -> String {
+    let first = (start / beats_per_bar).floor() as i64 + 1;
+    let last = ((start + length) / beats_per_bar - 1e-9).ceil() as i64;
+    if last <= first { format!("bar {first}") } else { format!("bars {first}-{last}") }
+}
+
+fn pass_words(
+    signature: (i64, i64),
+    start: f64,
+    length: f64,
+    marker: f64,
+    passes: usize,
+    region: &clip_notes::LoopRegion,
+) -> Option<PassWords> {
+    let beats_per_bar = beats_per_bar(signature)?;
+    let period = region.end_beats - region.start_beats;
+    let bars = period / beats_per_bar;
+    let size = if (bars - bars.round()).abs() < 1e-9 { format!("{}-bar", bars.round()) } else { format!("{period}-beat") };
+    let times = if passes == 1 { "once".to_owned() } else { format!("{passes} times") };
+    // A pass that does not hold the whole loop does not play all of it.
+    let mut partial = Vec::new();
+    if marker > region.start_beats + 1e-9 && marker < region.end_beats {
+        partial.push("the first pass starts mid-loop");
+    }
+    let last_pass_end = first_wrap(start, marker, region).map(|wrap| wrap + (passes - 1) as f64 * period);
+    if last_pass_end.is_some_and(|end| start + length < end - 1e-9) {
+        partial.push("the last pass is cut short");
+    }
+    let partial = if partial.is_empty() { String::new() } else { format!("; {}", partial.join(" and ")) };
+    Some(PassWords { size, times, span: bar_span(start, length, beats_per_bar), partial })
+}
+
 /// The loop in words, such as "a 1-bar loop of 4 notes played 2 times, bars
 /// 2-3". Models quote a ready sentence; they do not reliably add up passes.
 fn loop_summary(
@@ -635,27 +678,9 @@ fn loop_summary(
     passes: usize,
     region: &clip_notes::LoopRegion,
 ) -> Option<String> {
-    let beats_per_bar = beats_per_bar(signature)?;
-    let period = region.end_beats - region.start_beats;
-    let bars = period / beats_per_bar;
-    let size = if (bars - bars.round()).abs() < 1e-9 { format!("{}-bar", bars.round()) } else { format!("{period}-beat") };
+    let PassWords { size, times, span, partial } = pass_words(signature, start, length, marker, passes, region)?;
     let count = notes.notes.iter().filter(|n| can_sound(n) && n.start >= region.start_beats && n.start < region.end_beats).count();
     let notes_word = if count == 1 { "note" } else { "notes" };
-    let times = if passes == 1 { "once".to_owned() } else { format!("{passes} times") };
-    // One-based bars, the last one the bar the placement ends inside.
-    let first = (start / beats_per_bar).floor() as i64 + 1;
-    let last = ((start + length) / beats_per_bar - 1e-9).ceil() as i64;
-    let span = if last <= first { format!("bar {first}") } else { format!("bars {first}-{last}") };
-    // A pass that does not hold the whole loop does not play all its notes.
-    let mut partial = Vec::new();
-    if marker > region.start_beats + 1e-9 && marker < region.end_beats {
-        partial.push("the first pass starts mid-loop");
-    }
-    let last_pass_end = first_wrap(start, marker, region).map(|wrap| wrap + (passes - 1) as f64 * period);
-    if last_pass_end.is_some_and(|end| start + length < end - 1e-9) {
-        partial.push("the last pass is cut short");
-    }
-    let partial = if partial.is_empty() { String::new() } else { format!("; {}", partial.join(" and ")) };
     Some(format!("a {size} loop of {count} {notes_word} played {times}, {span}{partial}"))
 }
 
@@ -2037,6 +2062,15 @@ mod tests {
         let mut payload = json!({});
         add_loop_passes(&mut payload, &clip, Some((4, 4)), 4.0, 4.0);
         assert_eq!(payload["loop"], json!("a 1-bar loop of 3 notes played once, bar 2"));
+    }
+
+    #[test]
+    fn pass_words_describe_a_loop_without_counting_notes() {
+        let region = clip_notes::LoopRegion { start_beats: 0.0, end_beats: 4.0 };
+        let words = pass_words((4, 4), 152.0, 14.0, 0.0, 4, &region).unwrap();
+        assert_eq!((words.size.as_str(), words.times.as_str(), words.span.as_str(), words.partial.as_str()),
+            ("1-bar", "4 times", "bars 39-42", "; the last pass is cut short"));
+        assert_eq!(bar_span(4.0, 4.0, 4.0), "bar 2");
     }
 
     // From the marker at beat 3, one beat of a four-note loop plays only G2.
