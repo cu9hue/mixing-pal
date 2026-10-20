@@ -42,7 +42,10 @@ from ..abletonosc.handler import AbletonOSCHandler
 # name to chain listings, the automation state of parameters, the track,
 # return, and master mixer reads, and each note's probability; a stale script
 # answers the old record shapes, which must not be decoded as the new ones.
-WIRE_VERSION = 14
+# Version 15 adds /live/mixingpal/get/sample: an audio clip's or Simpler's
+# file, settings and played region. A stale script knows no such address,
+# so get_sample reports no_reply and every other read keeps working.
+WIRE_VERSION = 15
 
 
 class VersionHandler(AbletonOSCHandler):

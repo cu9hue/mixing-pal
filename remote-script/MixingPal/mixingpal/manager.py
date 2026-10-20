@@ -8,6 +8,7 @@ from .rack import RackHandler
 from .view import ViewOverrideHandler
 from .version import VersionHandler
 from .set_identity import SetIdentityHandler
+from .sample import SampleHandler
 
 
 class MixingPalManager(Manager):
@@ -30,4 +31,5 @@ class MixingPalManager(Manager):
                 ViewOverrideHandler(self),
                 VersionHandler(self),
                 SetIdentityHandler(self),
+                SampleHandler(self),
             ]
