@@ -7,6 +7,7 @@ pub mod fence;
 pub mod mixer;
 pub mod path;
 pub mod rack_contents;
+pub mod sample;
 pub mod track_detail;
 
 use crate::deltas::Coalescer;
@@ -241,6 +242,27 @@ pub fn tool_schema() -> serde_json::Value {
                     "required": ["track", "path"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_sample",
+                "description": "The sample behind one audio clip or one Simpler, read from Live at call time: the file name only (never its folder), the file's length and sample rate, warp (false or the mode, such as Complex), gain, transpose and detune, and region: the part of the file that plays, as seconds of the file, with plays saying it in words. For an arrangement clip, plays includes the bars and, when it loops, how many times, such as \"a 1-bar loop played 4 times\"; an unwarped loop is counted at the current tempo. A session clip says what it plays when launched. A Simpler gives its mode (Classic, One-Shot, Slice): in Classic and One-Shot the pitch follows the MIDI note and C3 plays the sample at its original pitch plus Transpose and Detune; in Slice, slices is the count of slices cut from that region. Pass exactly one of slot (a session clip, from get_clips), index (an arrangement clip, from get_arrangement) or path (a Simpler, as in get_device_params; a Drum Rack pad's Simpler is [rack, chain, device] from get_rack_contents). This describes the file and Live's settings, not what the mix sounds like: devices, the fader and the rest of the set are not in it. missing_reason not_audio_clip is a MIDI clip; empty_slot, no_such_target, not_a_simpler, no_sample (an empty Simpler), multisample_not_readable, sampler_not_readable and path_too_long say why nothing was read; region_unavailable keeps the settings without a region.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "track": { "type": "integer", "description": "Zero-based track index." },
+                        "slot": { "type": "integer", "minimum": 0, "description": "A session clip slot, as reported by get_clips." },
+                        "index": { "type": "integer", "minimum": 0, "description": "An arrangement clip's position on the track's timeline, as reported by get_arrangement." },
+                        "path": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "description": "Zero-based indices from the track to a Simpler, alternating device and chain, as in get_device_params. Always an odd number of entries, at most 9."
+                        }
+                    },
+                    "required": ["track"]
+                }
+            }
         }
     ])
 }
@@ -271,6 +293,25 @@ fn int_arg(args: &serde_json::Value, name: &str) -> Option<i64> {
 fn track_and_path(args: &serde_json::Value) -> Option<(i64, DevicePath)> {
     let track = int_arg(args, "track").filter(|t| (0..=i64::from(i32::MAX)).contains(t))?;
     Some((track, DevicePath::parse(args.get("path"))?))
+}
+
+/// get_sample's track and its one target. More than one target, or none, is
+/// refused rather than guessed.
+fn sample_target(args: &serde_json::Value) -> Option<(i64, sample::SampleTarget)> {
+    let track = int_arg(args, "track").filter(|t| (0..=i64::from(i32::MAX)).contains(t))?;
+    let given = ["slot", "index", "path"].iter().filter(|k| args.get(**k).is_some()).count();
+    if given != 1 {
+        return None;
+    }
+    let index = |name| int_arg(args, name).filter(|i| (0..=i64::from(i32::MAX)).contains(i)).map(|i| i as i32);
+    let target = if args.get("slot").is_some() {
+        sample::SampleTarget::Slot(index("slot")?)
+    } else if args.get("index").is_some() {
+        sample::SampleTarget::Index(index("index")?)
+    } else {
+        sample::SampleTarget::Device(DevicePath::parse(args.get("path"))?)
+    };
+    Some((track, target))
 }
 
 /// One track's mirrored name, used as its identity across a paged query.
@@ -623,6 +664,49 @@ fn played_notes(
         .collect())
 }
 
+/// A placement's loop passes in words, shared by MIDI notes and samples:
+/// the loop's size ("1-bar"), how often it plays ("2 times"), the bars it
+/// spans, and "; the last pass is cut short" when a pass is partial.
+struct PassWords {
+    size: String,
+    times: String,
+    span: String,
+    partial: String,
+}
+
+/// "bar 2" or "bars 2-3": one-based, the last the bar the placement ends inside.
+fn bar_span(start: f64, length: f64, beats_per_bar: f64) -> String {
+    let first = (start / beats_per_bar).floor() as i64 + 1;
+    let last = ((start + length) / beats_per_bar - 1e-9).ceil() as i64;
+    if last <= first { format!("bar {first}") } else { format!("bars {first}-{last}") }
+}
+
+fn pass_words(
+    signature: (i64, i64),
+    start: f64,
+    length: f64,
+    marker: f64,
+    passes: usize,
+    region: &clip_notes::LoopRegion,
+) -> Option<PassWords> {
+    let beats_per_bar = beats_per_bar(signature)?;
+    let period = region.end_beats - region.start_beats;
+    let bars = period / beats_per_bar;
+    let size = if (bars - bars.round()).abs() < 1e-9 { format!("{}-bar", bars.round()) } else { format!("{period}-beat") };
+    let times = if passes == 1 { "once".to_owned() } else { format!("{passes} times") };
+    // A pass that does not hold the whole loop does not play all of it.
+    let mut partial = Vec::new();
+    if marker > region.start_beats + 1e-9 && marker < region.end_beats {
+        partial.push("the first pass starts mid-loop");
+    }
+    let last_pass_end = first_wrap(start, marker, region).map(|wrap| wrap + (passes - 1) as f64 * period);
+    if last_pass_end.is_some_and(|end| start + length < end - 1e-9) {
+        partial.push("the last pass is cut short");
+    }
+    let partial = if partial.is_empty() { String::new() } else { format!("; {}", partial.join(" and ")) };
+    Some(PassWords { size, times, span: bar_span(start, length, beats_per_bar), partial })
+}
+
 /// The loop in words, such as "a 1-bar loop of 4 notes played 2 times, bars
 /// 2-3". Models quote a ready sentence; they do not reliably add up passes.
 fn loop_summary(
@@ -634,27 +718,9 @@ fn loop_summary(
     passes: usize,
     region: &clip_notes::LoopRegion,
 ) -> Option<String> {
-    let beats_per_bar = beats_per_bar(signature)?;
-    let period = region.end_beats - region.start_beats;
-    let bars = period / beats_per_bar;
-    let size = if (bars - bars.round()).abs() < 1e-9 { format!("{}-bar", bars.round()) } else { format!("{period}-beat") };
+    let PassWords { size, times, span, partial } = pass_words(signature, start, length, marker, passes, region)?;
     let count = notes.notes.iter().filter(|n| can_sound(n) && n.start >= region.start_beats && n.start < region.end_beats).count();
     let notes_word = if count == 1 { "note" } else { "notes" };
-    let times = if passes == 1 { "once".to_owned() } else { format!("{passes} times") };
-    // One-based bars, the last one the bar the placement ends inside.
-    let first = (start / beats_per_bar).floor() as i64 + 1;
-    let last = ((start + length) / beats_per_bar - 1e-9).ceil() as i64;
-    let span = if last <= first { format!("bar {first}") } else { format!("bars {first}-{last}") };
-    // A pass that does not hold the whole loop does not play all its notes.
-    let mut partial = Vec::new();
-    if marker > region.start_beats + 1e-9 && marker < region.end_beats {
-        partial.push("the first pass starts mid-loop");
-    }
-    let last_pass_end = first_wrap(start, marker, region).map(|wrap| wrap + (passes - 1) as f64 * period);
-    if last_pass_end.is_some_and(|end| start + length < end - 1e-9) {
-        partial.push("the last pass is cut short");
-    }
-    let partial = if partial.is_empty() { String::new() } else { format!("; {}", partial.join(" and ")) };
     Some(format!("a {size} loop of {count} {notes_word} played {times}, {span}{partial}"))
 }
 
@@ -1788,6 +1854,41 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 }
             }
         }
+        "get_sample" => {
+            let Some((track, target)) = sample_target(args) else {
+                return ToolResult::missing("bad_arguments");
+            };
+            if known_track_is_out_of_range(&ctx.coalescer, track) {
+                return ToolResult::missing("track_out_of_range");
+            }
+            let query = match ctx.query.lock() {
+                Ok(q) => q.clone(),
+                Err(_) => return ToolResult::missing("mirror_unavailable"),
+            };
+            let Some(query) = query else {
+                return ToolResult::missing("not_connected");
+            };
+            let before = track_identity(&ctx.coalescer, track);
+            let outcome = sample::get_sample(&query, track as i32, &target, sample::QUERY_TIMEOUT).await;
+            if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
+                return ToolResult::missing("topology_changed");
+            }
+            match outcome {
+                Ok(read) => {
+                    let (payload, missing) = sample::sample_payload(&read, target.kind(), time_signature(&ctx.coalescer));
+                    ToolResult::live(payload, missing.map(str::to_owned))
+                }
+                Err(sample::SampleError::Refused(reason)) => ToolResult::missing(reason),
+                Err(sample::SampleError::Malformed) => ToolResult::missing("malformed_reply"),
+                Err(sample::SampleError::Query(QueryError::NoReply)) => ToolResult::missing(
+                    "no_reply: the track may not exist, the connector may need updating, or Live did not answer",
+                ),
+                Err(sample::SampleError::Query(QueryError::Busy)) => ToolResult::missing("busy"),
+                Err(sample::SampleError::Query(QueryError::Transport(e))) => {
+                    ToolResult::missing(&format!("transport_error: {e}"))
+                }
+            }
+        }
         _ => ToolResult::missing("unknown_tool"),
     }
 }
@@ -2036,6 +2137,15 @@ mod tests {
         let mut payload = json!({});
         add_loop_passes(&mut payload, &clip, Some((4, 4)), 4.0, 4.0);
         assert_eq!(payload["loop"], json!("a 1-bar loop of 3 notes played once, bar 2"));
+    }
+
+    #[test]
+    fn pass_words_describe_a_loop_without_counting_notes() {
+        let region = clip_notes::LoopRegion { start_beats: 0.0, end_beats: 4.0 };
+        let words = pass_words((4, 4), 152.0, 14.0, 0.0, 4, &region).unwrap();
+        assert_eq!((words.size.as_str(), words.times.as_str(), words.span.as_str(), words.partial.as_str()),
+            ("1-bar", "4 times", "bars 39-42", "; the last pass is cut short"));
+        assert_eq!(bar_span(4.0, 4.0, 4.0), "bar 2");
     }
 
     // From the marker at beat 3, one beat of a four-note loop plays only G2.
@@ -2727,6 +2837,47 @@ mod tests {
         let ctx = disconnected_ctx(one_track_mirror());
         let r = execute(&ctx, "get_arrangement", &json!({})).await;
         assert_eq!(r.missing_reason.as_deref(), Some("not_in_mirror"));
+    }
+
+    #[tokio::test]
+    async fn get_sample_needs_exactly_one_target() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        for args in [
+            json!({ "track": 0 }),
+            json!({ "track": 0, "slot": 0, "index": 0 }),
+            json!({ "track": 0, "index": 0, "path": [0] }),
+            json!({ "track": 0, "slot": -1 }),
+            json!({ "track": -1, "slot": 0 }),
+            json!({ "track": 0, "path": [0, 1] }),
+            json!({ "slot": 0 }),
+        ] {
+            let r = execute(&ctx, "get_sample", &args).await;
+            assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"), "{args}");
+        }
+    }
+
+    #[tokio::test]
+    async fn get_sample_before_the_socket_binds_says_so() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "slot": 0 })).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("not_connected"));
+    }
+
+    #[tokio::test]
+    async fn get_sample_on_a_silent_live_says_no_reply() {
+        // A wire-14 connector knows no such address and answers nothing.
+        let ctx = answering_ctx(one_track_mirror()).await;
+        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "index": 0 })).await;
+        assert!(r.missing_reason.as_deref().unwrap().starts_with("no_reply"), "{:?}", r.missing_reason);
+        assert_eq!(r.value, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn the_sample_description_says_it_is_not_the_mix() {
+        let schema = tool_schema();
+        let d = schema.as_array().unwrap().iter().find(|t| t["function"]["name"] == "get_sample").unwrap()["function"]["description"].as_str().unwrap().to_string();
+        assert!(d.contains("not what the mix sounds like"), "{d}");
+        assert!(d.contains("file name only"), "{d}");
     }
 
     #[tokio::test]

@@ -77,8 +77,8 @@ checked anything you did not fetch with a tool in this turn.
 - Devices, plugins, EQ, compression, a chain: get_device_chains first (the \
 whole set in one round trip), then get_device_params on the few that matter. A \
 [rack] hides its contents: call get_rack_contents and descend nested Racks \
-before claims. A Simpler name is not a sound; use sample_name or a pad name \
-before calling it a hat or kick.
+before claims. A Simpler name is not a sound; use get_sample, sample_name or a \
+pad name before calling it a kick.
 - Notes, melody, harmony, chords, rhythm: get_clips first, then get_clip_notes \
 on the few clips that matter. Slot indices have gaps; use the ones reported. \
 An audio track's clips are listed with no notes, which is not an empty MIDI \

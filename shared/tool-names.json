@@ -9,6 +9,7 @@
     "get_device_chains",
     "get_mixer",
     "get_device_params",
-    "get_rack_contents"
+    "get_rack_contents",
+    "get_sample"
   ]
 }

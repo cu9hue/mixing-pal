@@ -749,6 +749,72 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                     }
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
+                "/live/mixingpal/get/sample" => {
+                    // `(track, kind, target)` echoed, then the record
+                    // `sample_replies.py` builds, from the fixture's
+                    // `sample` objects (values shaped like Task 3's real-Live replies).
+                    let (Some(kind), Some(target)) = (int_at(1), str_at(2)) else { continue };
+                    let holder = match kind {
+                        0 => track["clips"].as_array().and_then(|c| c.iter().find(|c| c["slot"].as_i64().map(|s| s.to_string()) == Some(target.clone()))).cloned(),
+                        1 => target.parse::<usize>().ok().and_then(|i| track["arrangement"].get(i).cloned()),
+                        _ => track["deviceDetail"].get(target.as_str()).cloned(),
+                    };
+                    let mut reply = vec![req.args[0].clone(), req.args[1].clone(), req.args[2].clone()];
+                    let Some(holder) = holder else {
+                        reply.push(OscType::String("no_such_target".into()));
+                        let _ = live.send_to(app_port, &req.addr, reply).await;
+                        continue;
+                    };
+                    let Some(s) = holder.get("sample").cloned() else {
+                        reply.push(OscType::String(if kind == 2 { "not_a_simpler" } else { "not_audio_clip" }.into()));
+                        let _ = live.send_to(app_port, &req.addr, reply).await;
+                        continue;
+                    };
+                    let f = |k: &str| OscType::Float(s[k].as_f64().unwrap_or(0.0) as f32);
+                    reply.extend([
+                        OscType::String("ok".into()),
+                        OscType::String(s["file"].as_str().unwrap().into()),
+                        f("rate"),
+                        OscType::Int(s["frames"].as_i64().unwrap() as i32),
+                        OscType::Bool(s["warping"].as_bool().unwrap()),
+                        OscType::Int(s["warpMode"].as_i64().unwrap() as i32),
+                        OscType::String(s["gain"].as_str().unwrap().into()),
+                        f("transpose"),
+                        f("detune"),
+                    ]);
+                    let intervals = s["intervals"].as_array().cloned().unwrap_or_default();
+                    reply.push(OscType::Int(intervals.len() as i32));
+                    for i in &intervals {
+                        reply.extend([
+                            OscType::Float(i[0].as_f64().unwrap() as f32),
+                            OscType::Float(i[1].as_f64().unwrap() as f32),
+                            OscType::Int(i[2].as_i64().unwrap() as i32),
+                            OscType::Int(i[3].as_i64().unwrap() as i32),
+                        ]);
+                    }
+                    if kind == 2 {
+                        reply.extend([
+                            OscType::Int(s["mode"].as_i64().unwrap() as i32),
+                            OscType::Int(s["slices"].as_i64().unwrap() as i32),
+                            OscType::Nil,
+                            OscType::Nil,
+                        ]);
+                    } else {
+                        let start = holder["start"].as_f64();
+                        let looped = holder["loop"].as_array();
+                        reply.extend([
+                            OscType::Bool(looped.is_some()),
+                            OscType::Bool(false),
+                            f("startMarker"),
+                            OscType::Float(looped.map_or(0.0, |l| l[0].as_f64().unwrap()) as f32),
+                            OscType::Float(looped.map_or(0.0, |l| l[1].as_f64().unwrap()) as f32),
+                            start.map_or(OscType::Nil, |v| OscType::Float(v as f32)),
+                            start.map_or(OscType::Nil, |v| OscType::Float((v + holder["length"].as_f64().unwrap()) as f32)),
+                            f("tempo"),
+                        ]);
+                    }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
                 _ => {} // an address the fixture cannot answer
             }
         }
@@ -821,6 +887,16 @@ pub fn strip_note_blocks(answer: &str) -> String {
         out.push(line);
     }
     out.join("\n").trim().to_string()
+}
+
+// The proxy asks for the fastest host (proxy/src/policy.ts). Without the
+// sort, OpenRouter picks the cheapest, and eval turns time a host no
+// producer gets: a 134 s vocal turn on a 16 tok/s host, 2026-10-21.
+#[test]
+fn eval_requests_ask_for_the_fastest_host_like_the_proxy() {
+    let mut body = json!({});
+    route_like_the_proxy(&mut body);
+    assert_eq!(body["provider"]["sort"], "throughput");
 }
 
 #[test]
@@ -1109,7 +1185,7 @@ pub fn route_like_the_proxy(body: &mut Value) {
         Ok(effort) if effort != "off" => json!({ "effort": effort }),
         _ => json!({ "enabled": false }),
     };
-    body["provider"] = json!({ "require_parameters": true, "data_collection": "deny", "zdr": true });
+    body["provider"] = json!({ "sort": "throughput", "require_parameters": true, "data_collection": "deny", "zdr": true });
     let list = |name: &str| std::env::var(name).ok().map(|v| v.split(',').map(str::trim).map(String::from).collect::<Vec<_>>());
     if let Some(only) = list("MIXINGPAL_EVAL_PROVIDERS") {
         body["provider"]["only"] = json!(only);
@@ -1275,15 +1351,19 @@ pub struct Tally {
     /// Passing answers, kept so a red batch can be compared with its greens.
     passing: Vec<(String, Value)>,
     turn_ms: Vec<u64>,
+    /// Each run's turn and provider round trips, so a slow turn splits into
+    /// model time and tool time.
+    timings: Vec<Value>,
 }
 
 impl Tally {
     pub fn new(scenario: &'static str) -> Self {
-        Tally { scenario, passes: 0, voids: vec![], failures: vec![], passing: vec![], turn_ms: vec![] }
+        Tally { scenario, passes: 0, voids: vec![], failures: vec![], passing: vec![], turn_ms: vec![], timings: vec![] }
     }
 
     pub fn add(&mut self, turn: &Turn, verdict: Verdict) {
         self.turn_ms.push(turn.turn_ms);
+        self.timings.push(json!({ "turn_ms": turn.turn_ms, "round_trip_ms": turn.round_trip_ms }));
         match verdict {
             Verdict::Pass => {
                 self.passes += 1;
@@ -1309,6 +1389,7 @@ impl Tally {
             "experience": format!("{:?}", experience()),
             "passes": self.passes, "valid": valid, "voids": self.voids.len(),
             "median_turn_ms": median_turn_ms,
+            "timings": self.timings,
             "failures": self.failures.iter().map(|(r, a, raw, calls)| json!({"reason": r, "answer": a, "raw_answer": raw, "calls": calls})).collect::<Vec<_>>(),
             "void_reasons": self.voids,
             "passing": self.passing.iter().map(|(a, calls)| json!({"answer": a, "calls": calls})).collect::<Vec<_>>(),

@@ -1,0 +1,8 @@
+SET  124 BPM · A Minor · stopped
+GOAL  melodic house, vocal hook in the drop
+
+TRACKS  (2)
+ 0 «Vox» -6.0 dB — selected
+ 1 «Perc» -10.0 dB
+
+This is everything cached locally. For pan, exact fader values, or a track's full mixer state use get_track_detail; for which clips exist and which tracks are MIDI use get_clips; for the notes in a clip use get_clip_notes; for what devices are on each track use get_device_chains; for what is inside a Rack use get_rack_contents; for the sample behind an audio clip or a Simpler use get_sample; for what plays where on the timeline use get_arrangement; for the notes in a timeline clip use get_arrangement_notes; for one device's parameter values use get_device_params; for sends, routing, returns, the master, and automation use get_mixer.
