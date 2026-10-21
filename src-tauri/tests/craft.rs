@@ -8,7 +8,7 @@
 //! `why_does_the_drop_fall_flat` filter also matches scenario 6):
 //!
 //!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
-//!     MIXINGPAL_JUDGE_MODEL=anthropic/claude-sonnet-4.6 \
+//!     MIXINGPAL_JUDGE_MODEL=anthropic/claude-opus-5.5 \
 //!     cargo test --features evals --test craft -- --test-threads=1 --nocapture \
 //!       why_does_the_drop_fall_flat what_should_i_do_next is_the_pad_too_busy is_the_mix_okay
 //!
@@ -20,7 +20,11 @@
 //! The 2026-09-11 replay agreed on 39/48 labels. Scenario reports flag the five
 //! properties still needing review; their automated majority is provisional.
 //!
-//! The judge in use on 2026-09-11 is anthropic/claude-sonnet-4.6. Set it
+//! The judge in use since 2026-10-21 is anthropic/claude-opus-5.5. Two replays
+//! of the 13-case sample agreed on 48/50 and 44/46 labels, every label on the
+//! five review properties, with no verdict changing between runs. Two replays
+//! of anthropic/claude-sonnet-4.6 agreed on 41/48 and 37/50, and 7 verdicts
+//! changed between runs at temperature 0. Set the judge
 //! explicitly; omitting MIXINGPAL_JUDGE_MODEL uses the answer model. A judge
 //! that reasons by default can spend the 4000-token cap before writing JSON.
 //! The earlier anthropic/claude-sonnet-5 run returned empty content with
