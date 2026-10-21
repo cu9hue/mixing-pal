@@ -41,7 +41,7 @@ const disconnected=location.search.includes('disconnected');
 const initialSet=location.search.includes('fresh')?'fresh-set':'default';
 window.currentSet=initialSet;
 window.switchSet=(id)=>{window.currentSet=id;return emit('live://deltas',[{addr:'/live/mixingpal/get/set_identity',args:[id,'Set '+id,'/fixture/'+id+'.als']}]);};
-const snapshot=[{addr:'/live/mixingpal/get/version',args:[14]},{addr:'/live/mixingpal/get/set_identity',args:[initialSet,'Set '+initialSet,'/fixture/'+initialSet+'.als']},{addr:'/live/song/get/tempo',args:[128]},{addr:'/live/track/get/name',args:[0,'Drums']}];
+const snapshot=[{addr:'/live/mixingpal/get/version',args:[15]},{addr:'/live/mixingpal/get/set_identity',args:[initialSet,'Set '+initialSet,'/fixture/'+initialSet+'.als']},{addr:'/live/song/get/tempo',args:[128]},{addr:'/live/track/get/name',args:[0,'Drums']}];
 mockWindows('main'); mockIPC(async (cmd,args)=>{
 window.requests.push({cmd,args});
 if(cmd==='snapshot')return disconnected?[]:snapshot;
