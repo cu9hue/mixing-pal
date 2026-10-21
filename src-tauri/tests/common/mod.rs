@@ -889,6 +889,16 @@ pub fn strip_note_blocks(answer: &str) -> String {
     out.join("\n").trim().to_string()
 }
 
+// The proxy asks for the fastest host (proxy/src/policy.ts). Without the
+// sort, OpenRouter picks the cheapest, and eval turns time a host no
+// producer gets: a 134 s vocal turn on a 16 tok/s host, 2026-10-21.
+#[test]
+fn eval_requests_ask_for_the_fastest_host_like_the_proxy() {
+    let mut body = json!({});
+    route_like_the_proxy(&mut body);
+    assert_eq!(body["provider"]["sort"], "throughput");
+}
+
 #[test]
 fn stripping_the_note_block_leaves_what_she_reads() {
     let raw = "Try a high-pass.\n\n```note\n+ move low end: high-pass the pad\n```";
@@ -1175,7 +1185,7 @@ pub fn route_like_the_proxy(body: &mut Value) {
         Ok(effort) if effort != "off" => json!({ "effort": effort }),
         _ => json!({ "enabled": false }),
     };
-    body["provider"] = json!({ "require_parameters": true, "data_collection": "deny", "zdr": true });
+    body["provider"] = json!({ "sort": "throughput", "require_parameters": true, "data_collection": "deny", "zdr": true });
     let list = |name: &str| std::env::var(name).ok().map(|v| v.split(',').map(str::trim).map(String::from).collect::<Vec<_>>());
     if let Some(only) = list("MIXINGPAL_EVAL_PROVIDERS") {
         body["provider"]["only"] = json!(only);
@@ -1341,15 +1351,19 @@ pub struct Tally {
     /// Passing answers, kept so a red batch can be compared with its greens.
     passing: Vec<(String, Value)>,
     turn_ms: Vec<u64>,
+    /// Each run's turn and provider round trips, so a slow turn splits into
+    /// model time and tool time.
+    timings: Vec<Value>,
 }
 
 impl Tally {
     pub fn new(scenario: &'static str) -> Self {
-        Tally { scenario, passes: 0, voids: vec![], failures: vec![], passing: vec![], turn_ms: vec![] }
+        Tally { scenario, passes: 0, voids: vec![], failures: vec![], passing: vec![], turn_ms: vec![], timings: vec![] }
     }
 
     pub fn add(&mut self, turn: &Turn, verdict: Verdict) {
         self.turn_ms.push(turn.turn_ms);
+        self.timings.push(json!({ "turn_ms": turn.turn_ms, "round_trip_ms": turn.round_trip_ms }));
         match verdict {
             Verdict::Pass => {
                 self.passes += 1;
@@ -1375,6 +1389,7 @@ impl Tally {
             "experience": format!("{:?}", experience()),
             "passes": self.passes, "valid": valid, "voids": self.voids.len(),
             "median_turn_ms": median_turn_ms,
+            "timings": self.timings,
             "failures": self.failures.iter().map(|(r, a, raw, calls)| json!({"reason": r, "answer": a, "raw_answer": raw, "calls": calls})).collect::<Vec<_>>(),
             "void_reasons": self.voids,
             "passing": self.passing.iter().map(|(a, calls)| json!({"answer": a, "calls": calls})).collect::<Vec<_>>(),
