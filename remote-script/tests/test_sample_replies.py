@@ -65,6 +65,10 @@ class PlayedIntervalTests(unittest.TestCase):
     def test_a_partial_wrap_keeps_playback_order(self):
         self.assertEqual(sr.played_intervals(True, 6.0, 0.0, 8.0, 4.0), [(6.0, 8.0), (0.0, 2.0)])
 
+    def test_a_session_intro_before_the_loop_is_its_own_stretch(self):
+        # Review finding 3: the intro plays once; only [2, 4) repeats.
+        self.assertEqual(sr.played_intervals(True, 0.0, 2.0, 4.0), [(0.0, 2.0), (2.0, 4.0)])
+
     def test_a_session_loop_can_play_the_whole_loop(self):
         self.assertEqual(sr.played_intervals(True, 4.0, 0.0, 8.0), [(0.0, 8.0)])
 
@@ -163,6 +167,14 @@ class SimplerReplyTests(unittest.TestCase):
         reply = sr.simpler_reply(DKEY, simpler(playback_mode=2))
         self.assertEqual(reply[12:17], (1, 0, 1000, 0, 1000))
         self.assertEqual(reply[17:19], (2, 2))
+
+    def test_an_unreadable_start_or_mode_never_widens_the_region(self):
+        # Review finding 2: without S Start, or without the mode, the
+        # narrowed region is unknown; it must not become the whole sample.
+        no_start = simpler()
+        no_start.parameters = [p for p in no_start.parameters if p.name != "S Start"]
+        self.assertEqual(sr.simpler_reply(DKEY, no_start)[12], 0)
+        self.assertEqual(sr.simpler_reply(DKEY, simpler(playback_mode=None))[12], 0)
 
     def test_devices_that_are_not_a_readable_simpler_say_why(self):
         self.assertEqual(sr.simpler_reply(DKEY, simpler(sample=None)), DKEY + ("no_sample",))

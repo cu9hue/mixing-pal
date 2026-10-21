@@ -59,7 +59,10 @@ def played_intervals(looping, start_marker, loop_start, loop_end, length=None):
     if start_marker is None or start_marker >= loop_end:
         return None
     if length is None:
-        return [(min(start_marker, loop_start), loop_end)]
+        # An intro before the loop plays once; only the loop repeats.
+        if start_marker < loop_start:
+            return [(start_marker, loop_start), (loop_start, loop_end)]
+        return [(loop_start, loop_end)]
     first = (start_marker, min(loop_end, start_marker + length))
     remaining = length - (loop_end - start_marker)
     if remaining <= 0:
@@ -171,8 +174,13 @@ def simpler_region(mode, start_marker, end_marker, s_start, s_length, loop_on, l
     lo, hi = start_marker, end_marker + 1
     if hi <= lo:
         return None, None
-    if mode != CLASSIC or s_start is None or s_length is None:
+    if mode is None:
+        return None, None
+    if mode != CLASSIC:
         return (lo, hi), None
+    if s_start is None or s_length is None:
+        # The narrowed region is unknown; never fall back to the whole sample.
+        return None, None
     span = hi - lo
     start = lo + s_start * span
     end = min(hi, start + s_length * span)

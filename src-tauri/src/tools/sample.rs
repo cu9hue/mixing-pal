@@ -96,7 +96,8 @@ pub enum Holder {
 
 #[derive(Debug)]
 pub struct SampleRead {
-    pub path: SourcePath,
+    /// `None` when Live could not read it; the other settings still stand.
+    pub path: Option<SourcePath>,
     pub sample_rate: Option<f64>,
     pub length_frames: Option<f64>,
     pub warping: Option<bool>,
@@ -175,7 +176,7 @@ pub fn decode_reply(reply: &[OscType], track: i32, target: &SampleTarget) -> Res
         return Err(STATUSES.into_iter().find(|s| *s == status).map_or(SampleError::Malformed, SampleError::Refused));
     }
     let at = |i: usize| reply.get(4 + i);
-    let path = string(at(0))?.ok_or(SampleError::Malformed)?;
+    let path = string(at(0))?.map(SourcePath);
     let count = int(at(SETTINGS))?.ok_or(SampleError::Malformed)?;
     let count = usize::try_from(count).map_err(|_| SampleError::Malformed)?;
     let first = 4 + SETTINGS + 1;
@@ -213,7 +214,7 @@ pub fn decode_reply(reply: &[OscType], track: i32, target: &SampleTarget) -> Res
         })
     };
     Ok(SampleRead {
-        path: SourcePath(path),
+        path,
         sample_rate: number(at(1))?,
         length_frames: number(at(2))?,
         warping: boolean(at(3))?,
@@ -276,7 +277,7 @@ pub fn sample_payload(read: &SampleRead, kind: i32, signature: Option<(i64, i64)
     };
     let mut p = json!({
         "source": source,
-        "file": fence(read.path.file_name()),
+        "file": read.path.as_ref().map(|p| fence(p.file_name())),
         "sample_rate": read.sample_rate,
         "warp": match (read.warping, read.warp_mode) {
             (Some(true), Some(m)) => json!(warp_name(m)),
@@ -320,7 +321,7 @@ pub fn sample_payload(read: &SampleRead, kind: i32, signature: Option<(i64, i64)
             if let (Some(rate), None) = (rate, missing) {
                 let what = ranges(&read.intervals, rate);
                 let plays = match (mode, s.loop_frames) {
-                    (Some("Slice"), _) => format!("slices are cut from {what}; each note plays one slice"),
+                    (Some("Slice"), _) => format!("slices are cut from {what}"),
                     (_, Some((a, b))) => format!("a note plays {what}; held, it loops {:.2}-{:.2} s", a / rate, b / rate),
                     _ => format!("a note plays {what}"),
                 };
@@ -338,8 +339,14 @@ pub fn sample_payload(read: &SampleRead, kind: i32, signature: Option<(i64, i64)
 fn clip_words(read: &SampleRead, t: &ClipTiming, rate: f64, signature: Option<(i64, i64)>) -> String {
     let what = ranges(&read.intervals, rate);
     let Some((start, end)) = t.placement else {
-        let verb = if t.looping == Some(true) { "loops" } else { "plays" };
-        return format!("{verb} {what} when launched");
+        return match (t.looping, read.intervals.as_slice()) {
+            (Some(true), [intro, looped]) => format!(
+                "plays {:.2}-{:.2} s of the file once, then loops {:.2}-{:.2} s when launched",
+                intro.frames.0 / rate, intro.frames.1 / rate, looped.frames.0 / rate, looped.frames.1 / rate,
+            ),
+            (Some(true), _) => format!("loops {what} when launched"),
+            _ => format!("plays {what} when launched"),
+        };
     };
     let length = end - start;
     let Some(beats_per_bar) = signature.and_then(super::beats_per_bar) else {
@@ -387,7 +394,7 @@ mod tests {
     #[test]
     fn a_clip_reply_decodes_settings_region_and_timing() {
         let read = decode_reply(&clip_reply(&[(0.0, 4.0, 0, 4000)]), 3, &SampleTarget::Index(0)).ok().unwrap();
-        assert_eq!(read.path.file_name(), "Lead Vox.wav");
+        assert_eq!(read.path.as_ref().unwrap().file_name(), "Lead Vox.wav");
         assert_eq!((read.sample_rate, read.length_frames, read.warping, read.warp_mode), (Some(44100.0), Some(16000.0), Some(true), Some(4)));
         assert_eq!((read.gain.as_deref(), read.transpose, read.detune), (Some("0.00 dB"), Some(9.0), Some(0.0)));
         assert_eq!(read.intervals, vec![Interval { source: (0.0, 4.0), frames: (0.0, 4000.0) }]);
@@ -417,6 +424,17 @@ mod tests {
         let read = decode_reply(&reply, 3, &SampleTarget::Index(0)).ok().unwrap();
         assert_eq!((read.gain, read.detune), (None, None));
         assert!(read.intervals.is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_path_keeps_the_other_settings() {
+        // Review finding 1: a raising file_path arrives as nil.
+        let mut reply = clip_reply(&[(0.0, 4.0, 0, 4000)]);
+        reply[4] = Nil;
+        let read = decode_reply(&reply, 3, &SampleTarget::Index(0)).ok().unwrap();
+        assert!(read.path.is_none());
+        let (p, _) = sample_payload(&read, 1, Some((4, 4)));
+        assert_eq!((&p["file"], &p["transpose_semitones"]), (&serde_json::Value::Null, &json!(9.0)));
     }
 
     #[test]
@@ -458,7 +476,7 @@ mod tests {
 
     fn clip_read(path: &str, intervals: Vec<Interval>, timing: ClipTiming) -> SampleRead {
         SampleRead {
-            path: SourcePath(path.into()), sample_rate: Some(44100.0), length_frames: Some(88200.0),
+            path: Some(SourcePath(path.into())), sample_rate: Some(44100.0), length_frames: Some(88200.0),
             warping: Some(true), warp_mode: Some(4), gain: Some("0.00 dB".into()),
             transpose: Some(9.0), detune: Some(0.0), intervals, holder: Holder::Clip(timing),
         }
@@ -492,6 +510,17 @@ mod tests {
     }
 
     #[test]
+    fn a_session_intro_plays_once_before_the_loop() {
+        // Review finding 3: start marker 0, loop 2-4 beats at 1 s per beat.
+        let read = clip_read("/S/Vox.wav", vec![
+            Interval { source: (0.0, 2.0), frames: (0.0, 44100.0) },
+            Interval { source: (2.0, 4.0), frames: (44100.0, 88200.0) },
+        ], ClipTiming { loop_start: Some(2.0), ..timing(true, None) });
+        let (p, _) = sample_payload(&read, 0, Some((4, 4)));
+        assert_eq!(p["region"]["plays"], "plays 0.00-1.00 s of the file once, then loops 1.00-2.00 s when launched");
+    }
+
+    #[test]
     fn an_unwarped_loop_counts_passes_at_the_current_tempo() {
         // Loop 0-0.5 s at 120 BPM is one beat; an 8-beat placement plays it 8 times.
         let mut read = clip_read("/S/Hit.wav", vec![Interval { source: (0.0, 0.5), frames: (0.0, 22050.0) }],
@@ -505,7 +534,7 @@ mod tests {
     #[test]
     fn a_classic_simpler_names_its_region_loop_and_pitch() {
         let read = SampleRead {
-            path: SourcePath("/S/Perc 2.wav".into()), sample_rate: Some(1000.0), length_frames: Some(1000.0),
+            path: Some(SourcePath("/S/Perc 2.wav".into())), sample_rate: Some(1000.0), length_frames: Some(1000.0),
             warping: Some(false), warp_mode: Some(0), gain: Some("0.00 dB".into()), transpose: Some(-3.0), detune: Some(12.0),
             intervals: vec![Interval { source: (250.0, 750.0), frames: (250.0, 750.0) }],
             holder: Holder::Simpler(SimplerSettings { mode: Some(0), slices: Some(0), loop_frames: Some((650.0, 750.0)) }),
@@ -520,14 +549,16 @@ mod tests {
     #[test]
     fn a_slice_simpler_counts_slices_and_drops_the_pitch_line() {
         let read = SampleRead {
-            path: SourcePath("/S/Break.wav".into()), sample_rate: Some(1000.0), length_frames: Some(2000.0),
+            path: Some(SourcePath("/S/Break.wav".into())), sample_rate: Some(1000.0), length_frames: Some(2000.0),
             warping: Some(false), warp_mode: Some(0), gain: None, transpose: Some(0.0), detune: Some(0.0),
             intervals: vec![Interval { source: (0.0, 2000.0), frames: (0.0, 2000.0) }],
             holder: Holder::Simpler(SimplerSettings { mode: Some(2), slices: Some(8), loop_frames: None }),
         };
         let (p, _) = sample_payload(&read, 2, None);
         assert_eq!((&p["mode"], &p["slices"]), (&json!("Slice"), &json!(8)));
-        assert_eq!(p["region"]["plays"], "slices are cut from 0.00-2.00 s of the file; each note plays one slice");
+        // Review finding 4: in Thru, a note plays on past its slice, so the
+        // words promise nothing about one note per slice.
+        assert_eq!(p["region"]["plays"], "slices are cut from 0.00-2.00 s of the file");
         assert!(p.get("pitch").is_none());
     }
 
@@ -554,7 +585,7 @@ mod tests {
             let text = serde_json::to_string(&p).unwrap();
             assert!(!text.contains("Users"), "{text}");
             assert!(!text.contains("Samples"), "{text}");
-            assert_eq!(p["file"], crate::tools::fence::fence(read.path.file_name()));
+            assert_eq!(p["file"], crate::tools::fence::fence(read.path.as_ref().unwrap().file_name()));
         }
     }
 
