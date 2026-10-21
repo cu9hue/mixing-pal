@@ -179,6 +179,11 @@ pub fn decode_reply(reply: &[OscType], track: i32, target: &SampleTarget) -> Res
     let path = string(at(0))?.map(SourcePath);
     let count = int(at(SETTINGS))?.ok_or(SampleError::Malformed)?;
     let count = usize::try_from(count).map_err(|_| SampleError::Malformed)?;
+    // A clip plays at most two stretches, a Simpler one. Checked before any
+    // allocation, so a bad count cannot ask for gigabytes.
+    if count > if target.kind() == 2 { 1 } else { 2 } {
+        return Err(SampleError::Malformed);
+    }
     let first = 4 + SETTINGS + 1;
     let extra = first + 4 * count;
     let mut intervals = Vec::with_capacity(count);
@@ -315,7 +320,7 @@ pub fn sample_payload(read: &SampleRead, kind: i32, signature: Option<(i64, i64)
             p["mode"] = json!(mode);
             if mode == Some("Slice") {
                 p["slices"] = json!(s.slices);
-            } else {
+            } else if matches!(mode, Some("Classic" | "One-Shot")) {
                 p["pitch"] = json!("pitch follows the MIDI note: C3 plays the sample at its original pitch plus Transpose and Detune");
             }
             if let (Some(rate), None) = (rate, missing) {
@@ -353,16 +358,21 @@ fn clip_words(read: &SampleRead, t: &ClipTiming, rate: f64, signature: Option<(i
         return format!("plays {what}");
     };
     let span = super::bar_span(start, length, beats_per_bar);
-    let (Some(true), Some(marker), Some(loop_start), Some(loop_end)) = (t.looping, t.start_marker, t.loop_start, t.loop_end) else {
-        return format!("plays {what}, {span}");
-    };
-    // Pass counting runs in song beats. An unwarped clip's markers are
-    // seconds, so they convert at the current tempo, and the words say so.
+    // An unwarped clip's markers are seconds, so what it plays follows the
+    // current tempo, looped or not, and the words say so. Pass counting runs
+    // in song beats.
     let (scale, tempo_note) = match (read.warping, t.tempo) {
         (Some(true), _) => (1.0, String::new()),
         (Some(false), Some(tempo)) if tempo > 0.0 => (tempo / 60.0, format!(", at the current tempo, {} BPM", tempo.round())),
         _ => return format!("plays {what}, {span}"),
     };
+    let (Some(true), Some(marker), Some(loop_start), Some(loop_end)) = (t.looping, t.start_marker, t.loop_start, t.loop_end) else {
+        return format!("plays {what}, {span}{tempo_note}");
+    };
+    // A placement that ends before the loop begins never reaches it.
+    if marker < loop_start && length <= (loop_start - marker) * scale + 1e-9 {
+        return format!("plays {what}, {span}, before the loop starts{tempo_note}");
+    }
     let region = LoopRegion { start_beats: loop_start * scale, end_beats: loop_end * scale };
     let marker = marker * scale;
     let passes = super::loop_pass_count(start, length, marker, &region);
@@ -435,6 +445,16 @@ mod tests {
         assert!(read.path.is_none());
         let (p, _) = sample_payload(&read, 1, Some((4, 4)));
         assert_eq!((&p["file"], &p["transpose_semitones"]), (&serde_json::Value::Null, &json!(9.0)));
+    }
+
+    #[test]
+    fn more_intervals_than_a_clip_can_play_is_malformed() {
+        // Panel finding 1: the count is checked before anything is allocated.
+        let reply = clip_reply(&[(0.0, 1.0, 0, 10), (1.0, 2.0, 10, 20), (2.0, 3.0, 20, 30)]);
+        assert!(matches!(decode_reply(&reply, 3, &SampleTarget::Index(0)), Err(SampleError::Malformed)));
+        let mut huge = clip_reply(&[]);
+        huge[12] = Int(i32::MAX);
+        assert!(matches!(decode_reply(&huge, 3, &SampleTarget::Index(0)), Err(SampleError::Malformed)));
     }
 
     #[test]
@@ -518,6 +538,38 @@ mod tests {
         ], ClipTiming { loop_start: Some(2.0), ..timing(true, None) });
         let (p, _) = sample_payload(&read, 0, Some((4, 4)));
         assert_eq!(p["region"]["plays"], "plays 0.00-1.00 s of the file once, then loops 1.00-2.00 s when launched");
+    }
+
+    #[test]
+    fn an_unwarped_placement_names_the_tempo_it_assumes() {
+        // Panel finding 2: no loop, but the seconds still depend on the tempo.
+        let mut read = clip_read("/S/Crash.aif", vec![Interval { source: (0.0, 2.0), frames: (0.0, 88200.0) }],
+            ClipTiming { loop_end: Some(2.0), ..timing(false, Some((0.0, 4.0))) });
+        read.warping = Some(false);
+        let (p, _) = sample_payload(&read, 1, Some((4, 4)));
+        assert_eq!(p["region"]["plays"], "plays 0.00-2.00 s of the file, bar 1, at the current tempo, 120 BPM");
+    }
+
+    #[test]
+    fn a_placement_that_ends_before_the_loop_says_no_loop() {
+        // Panel finding 3: marker 0, loop 4-8 beats, a 2-beat placement plays
+        // only the intro.
+        let read = clip_read("/S/Vox.wav", vec![Interval { source: (0.0, 2.0), frames: (0.0, 44100.0) }],
+            ClipTiming { loop_start: Some(4.0), loop_end: Some(8.0), ..timing(true, Some((0.0, 2.0))) });
+        let (p, _) = sample_payload(&read, 1, Some((4, 4)));
+        assert_eq!(p["region"]["plays"], "plays 0.00-1.00 s of the file, bar 1, before the loop starts");
+    }
+
+    #[test]
+    fn a_simpler_of_unknown_mode_makes_no_pitch_claim() {
+        // Panel finding 4: the mode could be Slice.
+        let read = SampleRead {
+            path: Some(SourcePath("/S/Perc 2.wav".into())), sample_rate: Some(1000.0), length_frames: Some(1000.0),
+            warping: Some(false), warp_mode: Some(0), gain: None, transpose: Some(0.0), detune: Some(0.0),
+            intervals: vec![], holder: Holder::Simpler(SimplerSettings { mode: None, slices: Some(0), loop_frames: None }),
+        };
+        let (p, _) = sample_payload(&read, 2, None);
+        assert!(p.get("pitch").is_none(), "{p}");
     }
 
     #[test]
