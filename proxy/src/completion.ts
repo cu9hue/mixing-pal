@@ -2,7 +2,7 @@ import { account } from "./account";
 import { incomplete, optionalCapture, ownedTurn } from "./capture";
 import { ApiError, Env, FIRST_DATA_TIMEOUT, IDLE_TIMEOUT, MIN_RUNTIME, RESPONSE_BUDGET, SETTLE_TIMEOUT, json } from "./env";
 import { admissionDeadline, enrich, reserve, settle, settleProvisional } from "./ledger";
-import { completionInput, providerBody, routes, usageSchema } from "./policy";
+import { completionInput, policyFor, providerBody, routes, usageSchema } from "./policy";
 import { Assembled, readCompletionStream, releasedToolCalls, StreamEnd } from "./stream";
 
 const ZERO_COST = [400, 401, 402, 403, 404, 413, 422, 429];
@@ -33,10 +33,11 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   if (env.INFERENCE_ENABLED !== "true" || !env.OPENROUTER_KEY) {
     throw new ApiError(503, "service_paused", "Model access is not enabled yet.");
   }
-  const body = providerBody(request, await routes());
+  const policy = policyFor(request.app_version);
+  const body = providerBody(request, policy, await routes(policy));
   const deadline = admissionDeadline(receivedAt);
   const respondBy = receivedAt + RESPONSE_BUDGET;
-  await reserve(env, memberId, request, deadline);
+  await reserve(env, memberId, request, deadline, policy);
   const turn = await ownedTurn(env, request.turn_id, memberId);
   const id = request.request_id;
   const dispatched = (await dispatchStatement(env, id, Date.now()).run()).meta.changes;

@@ -229,6 +229,16 @@ Ordered. Each item says what, why, size, and what it waits on.
     cannot set the reasoning effort or the cap. Next: the craft suite on
     K2.6.
 
+    Superseded 2026-10-22: the proxy serves GPT-6 Luna to app 0.2.11 and
+    later, and K2.6 to older apps. With the Opus 5.5 craft judge, K2.6
+    passed 0 to 2 of 15 craft runs: it states ear-only claims as fact,
+    such as "the low end is empty", even with that exact example forbidden
+    in the prompt. Luna passed 9 of 15 craft runs and 50 of 54 honesty runs,
+    with a median turn near 6 seconds, at about a sixth of K2.6's price.
+    Luna sends every tool argument, so it needs the nullable optional
+    arguments that 0.2.11 brings (#75). Only Azure serves it with zero
+    retention.
+
 13. **What the model can see.** Built 2026-10-03. A pilot answer read an
     automated Overdrive switch as Off and invented the automation. Parameter
     reads now mark an automated value as the value at the playhead. Device

@@ -1,5 +1,5 @@
-import { ApiError, CAPTURE_VERSION, Env, MODEL, MODEL_TIMEOUT, RECONCILE_DELAY, RESPONSE_BUDGET, SETTLE_MARGIN, hash, privateHash } from "./env";
-import { CompletionInput, POLICY_VERSION, RESERVATION } from "./policy";
+import { ApiError, CAPTURE_VERSION, Env, MODEL_TIMEOUT, RECONCILE_DELAY, RESPONSE_BUDGET, SETTLE_MARGIN, hash, privateHash } from "./env";
+import { CompletionInput, ModelPolicy, RESERVATION } from "./policy";
 
 export interface UsageRequest {
   id: string;
@@ -16,7 +16,7 @@ export function admissionDeadline(receivedAt: number, now = Date.now()): number 
   return Math.min(now + MODEL_TIMEOUT, receivedAt + RESPONSE_BUDGET - SETTLE_MARGIN);
 }
 
-export async function reserve(env: Env, memberId: string, input: CompletionInput, deadline: number): Promise<void> {
+export async function reserve(env: Env, memberId: string, input: CompletionInput, deadline: number, policy: ModelPolicy): Promise<void> {
   const now = Date.now();
   const [bodyHash, promptHash, toolHash] = await Promise.all([
     privateHash(env.AUTH_SECRET, JSON.stringify(input)),
@@ -47,7 +47,7 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
         policy_version, reserved, status, created_at, updated_at, model, deadline, lease_until)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?)`)
         .bind(input.request_id, input.turn_id, memberId, input.round, bodyHash, promptHash, toolHash,
-          POLICY_VERSION, RESERVATION, now, now, MODEL, deadline, deadline + SETTLE_MARGIN),
+          policy.version, RESERVATION, now, now, policy.model, deadline, deadline + SETTLE_MARGIN),
       env.DB.prepare("UPDATE turns SET updated_at = ? WHERE id = ? AND member_id = ?").bind(now, input.turn_id, memberId),
     ]);
   } catch (error) {
