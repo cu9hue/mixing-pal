@@ -91,7 +91,25 @@ pub struct ToolContext {
 /// split actually falls". The descriptions are part of the contract: they
 /// are what tells the model that `get_track_detail` is a cached read and
 /// `get_clip_notes` goes to Live.
+/// The tools as sent to a model. Every property left out of `required` also
+/// accepts null: some models (GPT-6 Luna) send every property on every call,
+/// and null is how they say "not this one". `execute` reads a null as absent.
 pub fn tool_schema() -> serde_json::Value {
+    let mut tools = declared_tools();
+    for tool in tools.as_array_mut().into_iter().flatten() {
+        let params = &mut tool["function"]["parameters"];
+        let required = params["required"].clone();
+        for (key, prop) in params["properties"].as_object_mut().into_iter().flatten() {
+            let optional = !required.as_array().is_some_and(|r| r.contains(&json!(key)));
+            if let (true, Some(t)) = (optional, prop["type"].as_str()) {
+                prop["type"] = json!([t, "null"]);
+            }
+        }
+    }
+    tools
+}
+
+fn declared_tools() -> serde_json::Value {
     json!([
         {
             "type": "function",
@@ -1295,7 +1313,16 @@ fn arrangement_reasons(
     (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
+/// A null argument is an omitted one; see `tool_schema`.
+fn without_nulls(args: &serde_json::Value) -> serde_json::Value {
+    match args.as_object() {
+        Some(map) => map.iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k.clone(), v.clone())).collect(),
+        None => args.clone(),
+    }
+}
+
 pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) -> ToolResult {
+    let args = &without_nulls(args);
     match name {
         "get_track_detail" => {
             let Some(track) =
@@ -2854,6 +2881,31 @@ mod tests {
             let r = execute(&ctx, "get_sample", &args).await;
             assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"), "{args}");
         }
+    }
+
+    #[test]
+    fn every_optional_argument_accepts_null() {
+        // GPT-6 Luna sends every property in the schema on every call. With no
+        // null to send, it filled `get_sample`'s three targets at once and
+        // narrowed whole-set reads to track 0.
+        for tool in tool_schema().as_array().unwrap() {
+            let params = &tool["function"]["parameters"];
+            let name = &tool["function"]["name"];
+            let required = params["required"].as_array().unwrap();
+            for (key, prop) in params["properties"].as_object().unwrap() {
+                let types = prop["type"].as_array();
+                let nullable = types.is_some_and(|t| t.contains(&json!("null")));
+                assert_eq!(nullable, !required.contains(&json!(key)), "{name} {key}: {}", prop["type"]);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_null_argument_reads_as_absent() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        let args = json!({ "track": 0, "slot": 0, "index": null, "path": null });
+        let r = execute(&ctx, "get_sample", &args).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("not_connected"));
     }
 
     #[tokio::test]
