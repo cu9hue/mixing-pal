@@ -18,7 +18,6 @@ export const CAPTURE_VERSION = "quality-2026-09-17";
 export const MAX_BODY = 1_048_576;
 // A 4,000-character report can need six bytes per character when JSON-escaped.
 export const MAX_FEEDBACK_BODY = 32 * 1024;
-export const MODEL = "moonshotai/kimi-k2.6";
 // A reply at the output cap must finish: 12,000 tokens at 50 a second is 240 s.
 export const MODEL_TIMEOUT = 270_000;
 // The handler answers within RESPONSE_BUDGET, 15 s under the app's 300 s limit.

@@ -6,7 +6,7 @@ import { admissionDeadline, settle, settleExpired } from "../src/ledger";
 import { canDispatch, complete, dispatchStatement } from "../src/completion";
 import { redeem } from "../src/account";
 import { maintain } from "../src/maintenance";
-import { MAX_OUTPUT, RESERVATION, toolNames } from "../src/policy";
+import { K26, LUNA, MAX_OUTPUT, RESERVATION, policyFor, toolNames, worstCase } from "../src/policy";
 import sharedTools from "../../shared/tool-names.json";
 import { runTurn } from "../../src/agent/loop";
 
@@ -94,6 +94,21 @@ beforeEach(async () => {
         // Not on the approved list: an fp4 host is a further quantization than the model was evaluated on.
         { tag: "deepinfra/fp4", status: 0, context_length: 262144, pricing: { prompt: "0.00000075", completion: "0.0000035" } },
         { tag: "venice/int4", status: -5, context_length: 256000, pricing: { prompt: "0.00000075", completion: "0.0000035" } },
+      ] } });
+    }
+    if (String(url) === `${provider}/api/v1/models/openai/gpt-6-luna/endpoints`) {
+      // Prices as OpenRouter lists them on 2026-10-22: a higher tier past 272k prompt tokens,
+      // cache writes, and a web search price that applies only when a request asks for search.
+      const pricing = { prompt: "0.0000001", completion: "0.0000005", web_search: "0.01", input_cache_read: "0.00000001",
+        input_cache_write: "0.000000125", discount: 0,
+        overrides: [{ min_prompt_tokens: 272000, prompt: "0.0000002", completion: "0.00000075", input_cache_read: "0.00000002", input_cache_write: "0.00000025" }] };
+      return Response.json({ data: { endpoints: [
+        { tag: "azure", status: 0, context_length: 1050000, pricing },
+        { tag: "azure/eu", status: 0, context_length: 1050000, pricing },
+        // OpenAI's own endpoint keeps data, so it is not an approved route.
+        { tag: "openai", status: 0, context_length: 1050000, pricing },
+        { tag: "azure/us", status: 0, context_length: 1050000,
+          pricing: { ...pricing, overrides: [{ ...pricing.overrides[0], completion: "0.000002" }] } },
       ] } });
     }
     if (String(url) === `${provider}/api/v1/chat/completions`) {
@@ -600,6 +615,31 @@ describe("metered requests", () => {
     expect(row).toEqual({ spent: 1000, reserved: 0 });
     expect(await capturedObjects()).toHaveLength(0);
     expect((await env.DB.prepare("SELECT * FROM requests").all()).results[0].usage).not.toContain("secret project");
+  });
+
+  test("serves Luna on zero-retention Azure hosts to an app that sends nullable tool arguments", async () => {
+    const user = await joined();
+    reply();
+    const response = await api("/v1/completions", { ...question(), app_version: "0.2.11" }, user.token);
+    expect(response.status, await response.clone().text()).toBe(200);
+    // azure/us is left out: its long-prompt completion price is over Luna's cap.
+    expect(sent[0]).toMatchObject({ model: "openai/gpt-6-luna", max_tokens: 12000, reasoning: { effort: "low" },
+      provider: { only: ["azure", "azure/eu"], zdr: true, sort: "throughput", max_price: { prompt: 0.25, completion: 1 } } });
+    expect(await env.DB.prepare("SELECT model, policy_version FROM requests").first())
+      .toEqual({ model: "openai/gpt-6-luna", policy_version: LUNA.version });
+  });
+
+  test("keeps an app from before nullable tool arguments on K2.6", () => {
+    // Without null in the schema, Luna fills every optional argument and its sample reads fail.
+    expect(policyFor("0.2.10")).toBe(K26);
+    expect(policyFor("0.2.4")).toBe(K26);
+    expect(policyFor("0.2.11")).toBe(LUNA);
+    expect(policyFor("0.10.0")).toBe(LUNA);
+    expect(policyFor("1.0.0")).toBe(LUNA);
+  });
+
+  test("reserves enough for either model's most expensive request", () => {
+    for (const policy of [K26, LUNA]) expect(worstCase(policy)).toBeLessThanOrEqual(RESERVATION);
   });
 
   // shared/tool-names.json is pinned to the app's tool schema by a Rust test.
