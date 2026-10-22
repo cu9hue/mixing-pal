@@ -1,6 +1,6 @@
 # Roadmap
 
-Date: 2026-09-08
+Date: 2026-10-22
 
 What ships next and why, in one place. This file is the whole of the
 project's planning record; the design documents that used to sit beside it
@@ -20,33 +20,37 @@ pasted OpenRouter key. So: proxy, then signing, then invites. Never the reverse.
 Everything under **Now** ships with no gate. It needs no proxy, no signing, and
 no server.
 
+The launch track opened. The proxy, signing and updates are live, and invited
+producers run the pilot on them.
+
 ## Where we are
 
-App 0.2.4, wire version 12. Shipped:
+App 0.2.11, wire version 15. Shipped:
 
 - The set mirror over OSC, a vendored AbletonOSC fork, and a connector the app
   installs itself.
-- Chat with eight read tools: track detail, clips, clip notes, arrangement,
-  arrangement notes, device chains, device params, rack contents.
+- Chat with ten read tools: track detail, clips, clip notes, arrangement,
+  arrangement notes, device chains, device params, rack contents, mixer, and
+  sample.
 - The product shell: pill and card, first run, the goal in its own labelled
   row, the connection named beside its dot, a card that drags from anywhere,
-  one nudge rule (unnamed tracks), and the thread view.
-- An unsigned `.dmg`, with `docs/opening-an-unsigned-build.md` for getting past
-  Gatekeeper.
-- Prompt guardrails and twelve honesty evals (`src-tauri/tests/evals.rs`), plus
-  the craft layer: the "What a good answer is" prompt section and five
-  judge-scored craft evals (`src-tauri/tests/craft.rs`). The honesty evals
-  and craft scenarios one to four have not yet run against a real model.
-  Scenario five ran five times on 2026-09-03 and 2026-09-04 and is parked
-  red (see item 6).
+  one nudge rule (unnamed tracks), the thread view, starter questions built
+  from the open set, the move check-in, the recap on return, and problem
+  reports.
+- A signed and notarized `.dmg` from tagged release CI, with in-app updates on
+  a pilot and a stable channel.
+- Prompt guardrails, the honesty evals (`src-tauri/tests/evals.rs`), and the
+  craft evals (`src-tauri/tests/craft.rs`), judged by Opus 5.5 against a saved
+  calibration.
 - The arrangement view: section names in the context block, the arrangement
   map with end times, per-placement mute and MIDI type, bar numbers,
   arrangement notes, loop regions and source lengths, and Live's note names.
 - Rack contents with a Drum Rack pad's sample name and nested racks marked.
 
-Model access today: the producer pastes an OpenRouter key in Settings and
-the app calls `minimax/minimax-m3` unless she names another model. That is
-fine for one person and a blocker for everyone else.
+Model access today: invited producers sign in with an email code, and the
+proxy pays for the model from a $5 allowance. Apps from 0.2.11 get GPT-6 Luna;
+older apps get Kimi K2.6. The direct OpenRouter path with a pasted key is a
+development feature only.
 
 ## The rule for advice
 
@@ -194,8 +198,10 @@ Ordered. Each item says what, why, size, and what it waits on.
    it from four versions of the same answer. The font ships with the app,
    and the rest of the card keeps the system font. Craft scenario six asks
    scenario one's question at New to Live. `MIXINGPAL_EVAL_EXPERIENCE` runs
-   the honesty evals at a chosen level. Next: run scenarios one to four and
-   six, and the honesty evals at `new_to_live`.
+   the honesty evals at a chosen level. On Luna on 2026-10-22, the drop
+   question held trust on 1 of 3 runs, and 0 of 3 at New to Live; the
+   other three craft questions passed. Next: find out why the drop answer
+   fails, and run the honesty evals at `new_to_live`.
 
 9. **Read aloud.** A button on each answer reads it out with a macOS
    voice, through the webview's speech API. For a dyslexic producer,
@@ -250,10 +256,11 @@ Ordered. Each item says what, why, size, and what it waits on.
     selected device and the selected Session slot. Wire version 14. Next: a
     Compressor's sidechain source, after a spike on Live 12.
 
-14. **Audio clip settings.** A `get_audio_clip` tool: warp mode, clip gain,
-    transpose, markers, sample rate, and the sample's file name, never its
-    path. Today a vocal is judged from its fader alone. The connector
-    already exposes most of this upstream.
+14. **Audio clip settings.** Done 2026-10-21 (#73) as `get_sample`. It reads
+    the sample behind an audio clip or a Simpler: the file name, never its
+    path, length, sample rate, warp mode, gain, transpose, detune, and the
+    region that plays. A Simpler adds its mode and slice count. Clip markers
+    are not read; the region covers what they were for.
 
 15. **Automation lanes.** A `get_automation` tool that returns breakpoints.
     Clip envelopes come through Live's API. Arrangement automation probably
@@ -301,6 +308,7 @@ All specced or named already. The order is fixed by the gate.
    provider data-policy and credit-cap checks, and a live staging smoke and
    rollback check. Workers Paid is required; hosting charges are separate
    from model allowances. The deployment starts with inference disabled.
+   Live in production; item 12 records the model it serves.
 
    Split telemetry ownership at this boundary. The app records what the
    producer explicitly says she tried, heard, kept or undid. The proxy links
@@ -327,8 +335,8 @@ All specced or named already. The order is fixed by the gate.
    recalled. Rollout requires the additive reports migration and R2 lifecycle rule, then proxy
    deployment before desktop, with an authorized staging mail/deletion check.
 
-2. **Signing.** Apple enrollment, Developer ID signing, notarization, stapling.
-   Distribution stage 2. Size M, mostly waiting on Apple.
+2. **Signing.** Done. Release CI signs with Developer ID, notarizes and
+   staples. Every release from v0.2.4 (2026-09-27) is signed.
 3. **Updates.** Tagged release CI, hosted artifacts, and automatic update
    checks with separate pilot and stable channels. Test releases in the pilot
    before wider rollout, with an operator control to pause rollout. Require
@@ -349,10 +357,13 @@ All specced or named already. The order is fixed by the gate.
    and saved threads, and blocks questions until Wire reports a matching
    version. Local checks include an isolated install through Tauri's updater.
    The website download button is prepared behind a disabled build setting.
-   Developer ID signing, the signed GUI update rehearsal, release hosting
-   activation and the live download path remain release gates. Existing
-   installations need one manual install of the first updater-enabled build.
-4. **Invites.**
+   Existing installations need one manual install of the first
+   updater-enabled build.
+
+   Live since v0.2.4. Releases go to the pilot channel first; stable is
+   paused.
+4. **Invites.** The operator CLI emails single-use invitations, and the
+   pilot runs on them.
 
 ## Deferred, with the trigger
 
