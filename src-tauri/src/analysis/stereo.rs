@@ -8,7 +8,8 @@ const LOW_HZ: f64 = 150.0;
 /// A mean square below -100 dBFS counts as silent.
 const QUIET: f64 = 1e-10;
 
-/// 2nd-order Butterworth low-pass (RBJ cookbook), direct form I.
+/// 2nd-order Butterworth low-pass (RBJ cookbook), direct form I. Two in a
+/// row make a 4th-order Linkwitz-Riley: 24 dB down an octave above 150 Hz.
 #[derive(Clone, Copy)]
 struct LowPass {
     b: [f64; 3],
@@ -82,21 +83,23 @@ pub struct StereoStats {
 pub struct Stereo {
     whole: Sums,
     low: Sums,
-    filters: [LowPass; 2],
+    /// Two stages for each channel.
+    filters: [[LowPass; 2]; 2],
     frames: u64,
 }
 
 impl Stereo {
     pub fn new(rate: u32) -> Self {
         let f = LowPass::new(f64::from(rate));
-        Stereo { whole: Sums::default(), low: Sums::default(), filters: [f, f], frames: 0 }
+        Stereo { whole: Sums::default(), low: Sums::default(), filters: [[f, f], [f, f]], frames: 0 }
     }
 
     pub fn push(&mut self, chunk: &[f32]) {
         for frame in chunk.chunks_exact(2) {
             let (l, r) = (f64::from(frame[0]), f64::from(frame[1]));
             self.whole.add(l, r);
-            let (fl, fr) = (self.filters[0].step(l), self.filters[1].step(r));
+            let [[l1, l2], [r1, r2]] = &mut self.filters;
+            let (fl, fr) = (l2.step(l1.step(l)), r2.step(r1.step(r)));
             self.low.add(fl, fr);
             self.frames += 1;
         }
@@ -155,5 +158,17 @@ mod tests {
         assert!(s.correlation.unwrap().abs() < 0.1, "{:?}", s.correlation);
         assert!(s.low_correlation.unwrap() > 0.99, "{:?}", s.low_correlation);
         assert!(s.low_side_to_mid_db.unwrap() < -40.0, "{:?}", s.low_side_to_mid_db);
+    }
+
+    #[test]
+    fn a_wide_part_an_octave_above_150_hz_stays_out_of_the_low_end() {
+        // A mono sub under a louder anti-phase part at 300 Hz.
+        let low = sine(44_100, 50.0, 1.0, 0.1);
+        let high = sine(44_100, 300.0, 1.0, 0.5);
+        let left: Vec<f32> = low.iter().zip(&high).map(|(a, b)| a + b).collect();
+        let right: Vec<f32> = low.iter().zip(&high).map(|(a, b)| a - b).collect();
+        let s = stereo(&left, &right);
+        assert!(s.low_correlation.unwrap() > 0.7, "{:?}", s.low_correlation);
+        assert!(s.low_side_to_mid_db.unwrap() < -8.0, "{:?}", s.low_side_to_mid_db);
     }
 }
