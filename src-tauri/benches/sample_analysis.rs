@@ -1,5 +1,6 @@
 //! get_sample's analysis of a 3-minute stereo file, pitch included: one cold
-//! call, and two at once (the two analysis slots both busy).
+//! call, and two at once (the two analysis slots both busy). Also the longest
+//! region the cap allows at 192 kHz: five minutes.
 //! `cargo bench --features bench --bench sample_analysis`
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -12,12 +13,12 @@ const RATE: u32 = 44_100;
 const SECONDS: u64 = 180;
 
 /// A bass note under a bright tone and some noise, as 16-bit stereo PCM.
-fn three_minutes() -> PathBuf {
-    let n = (SECONDS * u64::from(RATE)) as usize;
+fn stereo_file(rate: u32, seconds: u64) -> PathBuf {
+    let n = (seconds * u64::from(rate)) as usize;
     let mut seed = 0x2545_f491_4f6c_dd1du64;
     let mut pcm = Vec::with_capacity(n * 4);
     for i in 0..n {
-        let t = i as f64 / f64::from(RATE);
+        let t = i as f64 / f64::from(rate);
         seed ^= seed << 13;
         seed ^= seed >> 7;
         seed ^= seed << 17;
@@ -27,11 +28,11 @@ fn three_minutes() -> PathBuf {
         pcm.extend_from_slice(&s);
         pcm.extend_from_slice(&s);
     }
-    let path = std::env::temp_dir().join("mixingpal-bench-3min.wav");
+    let path = std::env::temp_dir().join(format!("mixingpal-bench-{rate}-{seconds}s.wav"));
     let data = pcm.len() as u32;
     let mut b = Vec::with_capacity(44 + pcm.len());
     for chunk in [&b"RIFF"[..], &(36 + data).to_le_bytes(), b"WAVEfmt ", &16u32.to_le_bytes(), &1u16.to_le_bytes(),
-        &2u16.to_le_bytes(), &RATE.to_le_bytes(), &(RATE * 4).to_le_bytes(), &4u16.to_le_bytes(), &16u16.to_le_bytes(),
+        &2u16.to_le_bytes(), &rate.to_le_bytes(), &(rate * 4).to_le_bytes(), &4u16.to_le_bytes(), &16u16.to_le_bytes(),
         b"data", &data.to_le_bytes()] {
         b.extend_from_slice(chunk);
     }
@@ -41,7 +42,7 @@ fn three_minutes() -> PathBuf {
 }
 
 fn bench(c: &mut Criterion) {
-    let path = three_minutes();
+    let path = stereo_file(RATE, SECONDS);
     let region = [(0, SECONDS * u64::from(RATE))];
     let once = || analyse(&path, &region, None, Instant::now() + Duration::from_secs(600)).unwrap();
     let mut g = c.benchmark_group("sample_analysis");
@@ -56,6 +57,11 @@ fn bench(c: &mut Criterion) {
                 b2.join().unwrap();
             })
         })
+    });
+    let high = stereo_file(192_000, 300);
+    let long = [(0, 300 * 192_000)];
+    g.bench_function("one_cold_call_5_min_192k_stereo", |b| {
+        b.iter(|| analyse(&high, &long, None, Instant::now() + Duration::from_secs(600)).unwrap())
     });
     g.finish();
 }
