@@ -14,5 +14,11 @@ gen -c:a libmp3lame -b:a 64k chirp.mp3
 # ffmpeg's own Vorbis encoder takes stereo only; both channels are the chirp.
 gen -ac 2 -c:a vorbis -strict -2 chirp.ogg
 gen -c:a aac -b:a 64k chirp.m4a
+# Apple's AAC encoder primes 2112 frames, not 1024. afconvert states it in an
+# iTunSMPB tag, ffmpeg's aac_at in an edit list. macOS only (AudioToolbox).
+gen -c:a pcm_s16le apple-source.wav
+afconvert -f m4af -d aac apple-source.wav chirp-apple.m4a
+rm apple-source.wav
+gen -c:a aac_at -b:a 64k chirp-aac-at.m4a
 # HE-AAC: symphonia decodes only its half-rate core. macOS only (AudioToolbox).
 ffmpeg -v error -y -f lavfi -i "aevalsrc=0.5*sin(2*PI*440*t):s=44100:d=0.5" -c:a aac_at -profile:a 4 -b:a 32k he-aac-440.m4a

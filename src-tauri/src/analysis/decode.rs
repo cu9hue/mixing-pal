@@ -83,6 +83,110 @@ fn hint_is_ogg(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("ogg") || e.eq_ignore_ascii_case("oga"))
 }
 
+/// A moov larger than this is not read for its priming. A ten-minute AAC
+/// file's is a few hundred KB.
+const MAX_MOOV_BYTES: u64 = 16 << 20;
+
+/// The AAC priming an MP4 file states, in frames: its first edit's media
+/// time (ffmpeg writes one), else the iTunSMPB tag (Apple's encoder). symphonia
+/// 0.5 reads neither.
+fn mp4_priming(path: &Path, rate: u32) -> Option<u64> {
+    let moov = read_moov(path)?;
+    let trak = child(&moov, b"trak")?;
+    if let Some(elst) = child(trak, b"edts").and_then(|e| child(e, b"elst")) {
+        let mdhd = child(trak, b"mdia").and_then(|m| child(m, b"mdhd"))?;
+        let timescale = u64::from(u32::from_be_bytes(mdhd.get(if mdhd[0] == 1 { 20..24 } else { 12..16 })?.try_into().ok()?));
+        if let Some(time) = first_media_time(elst).filter(|_| timescale > 0) {
+            return Some(time * u64::from(rate) / timescale);
+        }
+    }
+    let meta = child(&moov, b"udta").and_then(|u| child(u, b"meta"))?;
+    // meta is a full box in MP4 and a plain one in QuickTime files.
+    let ilst = child(meta.get(4..)?, b"ilst").or_else(|| child(meta, b"ilst"))?;
+    let priming = boxes(ilst).filter(|(k, _)| *k == b"----").find_map(|(_, tag)| {
+        let name = child(tag, b"name")?;
+        if name.get(4..)? != b"iTunSMPB" {
+            return None;
+        }
+        // " 00000000 00000840 ..." : the second field is the priming, in hex.
+        let text = std::str::from_utf8(child(tag, b"data")?.get(8..)?).ok()?;
+        u64::from_str_radix(text.split_whitespace().nth(1)?, 16).ok()
+    });
+    priming
+}
+
+/// The first edit that is not an empty one: its start in the media's time scale.
+fn first_media_time(elst: &[u8]) -> Option<u64> {
+    let wide = elst.first()? == &1;
+    let count = u32::from_be_bytes(elst.get(4..8)?.try_into().ok()?) as usize;
+    let entry = if wide { 20 } else { 12 };
+    (0..count).find_map(|i| {
+        let at = 8 + i * entry;
+        let time = if wide {
+            i64::from_be_bytes(elst.get(at + 8..at + 16)?.try_into().ok()?)
+        } else {
+            i64::from(i32::from_be_bytes(elst.get(at + 4..at + 8)?.try_into().ok()?))
+        };
+        u64::try_from(time).ok()
+    })
+}
+
+/// The body of the file's top-level moov box.
+fn read_moov(path: &Path) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let mut at = 0u64;
+    while at + 8 <= len {
+        let mut head = [0u8; 16];
+        file.seek(SeekFrom::Start(at)).ok()?;
+        file.read_exact(&mut head[..8]).ok()?;
+        let (mut size, mut header) = (u64::from(u32::from_be_bytes(head[..4].try_into().ok()?)), 8);
+        if size == 1 {
+            file.read_exact(&mut head[8..]).ok()?;
+            (size, header) = (u64::from_be_bytes(head[8..].try_into().ok()?), 16);
+        } else if size == 0 {
+            size = len - at;
+        }
+        if size < header {
+            return None;
+        }
+        if &head[4..8] == b"moov" {
+            if size > MAX_MOOV_BYTES {
+                return None;
+            }
+            let mut body = vec![0; (size - header) as usize];
+            file.read_exact(&mut body).ok()?;
+            return Some(body);
+        }
+        at += size;
+    }
+    None
+}
+
+/// The boxes laid end to end in `b`, as (type, body).
+fn boxes(mut b: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+    std::iter::from_fn(move || {
+        let size = u32::from_be_bytes(b.get(..4)?.try_into().ok()?);
+        let kind = b.get(4..8)?;
+        let (header, size) = match size {
+            1 => (16, usize::try_from(u64::from_be_bytes(b.get(8..16)?.try_into().ok()?)).ok()?),
+            0 => (8, b.len()),
+            s => (8, s as usize),
+        };
+        if size < header || size > b.len() {
+            return None;
+        }
+        let (body, rest) = (&b[header..size], &b[size..]);
+        b = rest;
+        Some((kind, body))
+    })
+}
+
+fn child<'a>(b: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
+    boxes(b).find(|(k, _)| k == kind).map(|(_, body)| body)
+}
+
 /// The channel count of the first decoded packet, for a container that does
 /// not state it (MP4 leaves it to the AAC stream). `stream` seeks before it
 /// reads, so the packet used here is not lost.
@@ -158,10 +262,13 @@ impl Source {
         if !(1..=2).contains(&channels) {
             return Err(AnalysisError::UnsupportedChannels);
         }
-        // symphonia trims no AAC priming. MP4 states it in an edit list that
-        // symphonia does not read; 1024 frames is the AAC-LC encoder delay
-        // ffmpeg and most encoders write (Apple's is 2112).
-        let delay = if params.codec == CODEC_TYPE_AAC { u64::from(params.delay.unwrap_or(1024)) } else { 0 };
+        // symphonia trims no AAC priming. 1024 frames is the AAC-LC encoder
+        // delay most encoders write, for a file that does not state its own.
+        let delay = if params.codec == CODEC_TYPE_AAC {
+            params.delay.map(u64::from).or_else(|| mp4_priming(path, rate)).unwrap_or(1024)
+        } else {
+            0
+        };
         Ok(Source { format, decoder, track: track.id, rate, channels, ts_per_frame, delay })
     }
 
@@ -443,7 +550,7 @@ mod tests {
         // with the source to within one frame.
         let reference = chirp(22_050, 0.2);
         // A region at frame 0 also checks that AAC priming sits before it.
-        for name in ["chirp.mp3", "chirp.ogg", "chirp.m4a"] {
+        for name in ["chirp.mp3", "chirp.ogg", "chirp.m4a", "chirp-apple.m4a", "chirp-aac-at.m4a"] {
             for (start, end) in [(0, 1_000), (1_500, 3_000)] {
                 let got = first_channel(&fixture(name), (start, end));
                 assert_eq!(got.len() as u64, end - start, "{name}");
