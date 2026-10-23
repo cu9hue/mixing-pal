@@ -1,5 +1,6 @@
-//! Spectral stats from a 2048-point Hann STFT, hop 512: band shares, the
-//! centroid, and spectral-flux onsets. Power is summed over channels.
+//! Spectral stats: band shares and the centroid from a Hann STFT of 8192
+//! points at 48 kHz, half overlapped; spectral-flux onsets from one of 2048
+//! points, hop 512. Power is summed over channels.
 
 use super::{Segments, Stat};
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -33,18 +34,88 @@ pub struct SpectrumStats {
     pub segment_centroid_hz: Vec<Stat>,
 }
 
-pub struct Spectrum {
-    channels: usize,
-    rate: f64,
+/// A Hann STFT over each channel, power summed over channels.
+struct Stft {
+    size: usize,
+    hop: usize,
     fft: Arc<dyn Fft<f32>>,
     window: Vec<f32>,
     buffers: Vec<Vec<f32>>,
     scratch: Vec<Complex<f32>>,
     power: Vec<f64>,
+}
+
+impl Stft {
+    fn new(size: usize, hop: usize, channels: usize) -> Self {
+        Stft {
+            size,
+            hop,
+            fft: FftPlanner::new().plan_fft_forward(size),
+            window: (0..size).map(|i| (0.5 - 0.5 * (2.0 * PI * i as f64 / size as f64).cos()) as f32).collect(),
+            // Pre-filled so the first frame comes one hop in: a sound at the
+            // region's start is in the first frame, not lost.
+            buffers: vec![vec![0.0; size - hop]; channels],
+            scratch: vec![Complex::default(); size],
+            power: vec![0.0; size / 2 + 1],
+        }
+    }
+
+    /// True when a frame is ready to measure.
+    fn push(&mut self, frame: &[f32]) -> bool {
+        for (buffer, x) in self.buffers.iter_mut().zip(frame) {
+            buffer.push(*x);
+        }
+        self.buffers[0].len() == self.size
+    }
+
+    /// The last partial hop, padded with silence, so a region shorter than
+    /// a hop still gets a frame. True when there was one.
+    fn pad(&mut self) -> bool {
+        if self.buffers[0].len() <= self.size - self.hop {
+            return false;
+        }
+        let missing = self.size - self.buffers[0].len();
+        for b in &mut self.buffers {
+            b.extend(std::iter::repeat(0.0).take(missing));
+        }
+        true
+    }
+
+    /// Up to `size` interleaved frames as the whole buffer, zero-padded at
+    /// the front.
+    fn fill(&mut self, chunk: &[f32]) {
+        let channels = self.buffers.len();
+        let frames = chunk.len() / channels;
+        for (c, buffer) in self.buffers.iter_mut().enumerate() {
+            let mut b = vec![0.0; self.size.saturating_sub(frames)];
+            b.extend(chunk.chunks_exact(channels).skip(frames.saturating_sub(self.size)).map(|f| f[c]));
+            *buffer = b;
+        }
+    }
+
+    /// The frame's power into `power`, then one hop on.
+    fn measure(&mut self) {
+        self.power.iter_mut().for_each(|p| *p = 0.0);
+        for buffer in &mut self.buffers {
+            for (s, (x, w)) in self.scratch.iter_mut().zip(buffer.iter().zip(&self.window)) {
+                *s = Complex::new(x * w, 0.0);
+            }
+            self.fft.process(&mut self.scratch);
+            for (p, s) in self.power.iter_mut().zip(&self.scratch) {
+                *p += f64::from(s.norm_sqr());
+            }
+            buffer.drain(..self.hop);
+        }
+    }
+}
+
+pub struct Spectrum {
+    rate: f64,
+    /// Bands and centroid: about 170 ms, so 60 Hz splits sub from bass.
+    long: Stft,
+    /// Onsets: about 46 ms, hop about 12 ms.
+    short: Stft,
     previous: Vec<f32>,
-    /// Samples at the front of `buffers` from before the region: they
-    /// count for flux only.
-    before: usize,
     bands: [f64; 7],
     weighted: f64,
     total: f64,
@@ -57,18 +128,13 @@ pub struct Spectrum {
 impl Spectrum {
     pub fn new(rate: u32, channels: usize, segments: Vec<(u64, u64)>) -> Self {
         let n = segments.len();
+        // 8192 points at 48 kHz, scaled with the rate to keep the bins' width.
+        let long = ((u64::from(rate) * 8192 / 48_000) as usize).next_power_of_two().max(FFT);
         Spectrum {
-            channels,
             rate: f64::from(rate),
-            fft: FftPlanner::new().plan_fft_forward(FFT),
-            window: (0..FFT).map(|i| (0.5 - 0.5 * (2.0 * PI * i as f64 / FFT as f64).cos()) as f32).collect(),
-            // Pre-filled so the first frame comes one hop in: a sound at the
-            // region's start is in the first frame, not lost.
-            buffers: vec![vec![0.0; FFT - HOP]; channels],
-            scratch: vec![Complex::default(); FFT],
-            power: vec![0.0; FFT / 2 + 1],
+            long: Stft::new(long, long / 2, channels),
+            short: Stft::new(FFT, HOP, channels),
             previous: vec![0.0; FFT / 2 + 1],
-            before: 0,
             bands: [0.0; 7],
             weighted: 0.0,
             total: 0.0,
@@ -80,93 +146,67 @@ impl Spectrum {
     }
 
     pub fn push(&mut self, chunk: &[f32]) {
-        for frame in chunk.chunks_exact(self.channels) {
-            for (buffer, x) in self.buffers.iter_mut().zip(frame) {
-                buffer.push(*x);
-            }
+        for frame in chunk.chunks_exact(self.short.buffers.len()) {
             self.position += 1;
-            if self.buffers[0].len() == FFT {
-                self.frame(true);
+            if self.long.push(frame) {
+                self.long.measure();
+                self.record();
+            }
+            if self.short.push(frame) {
+                self.short.measure();
+                self.onset(true);
             }
         }
     }
 
     /// The frames just before the region, up to `FFT` of them: the first
-    /// frame then compares against what was already sounding, so a region
-    /// cut mid-note has no onset at its start. Nothing is measured from them.
+    /// onset frame then compares against what was already sounding, so a
+    /// region cut mid-note has no onset at its start. Nothing is measured
+    /// from them.
     pub fn prime(&mut self, chunk: &[f32]) {
-        let frames = chunk.len() / self.channels;
-        for (c, buffer) in self.buffers.iter_mut().enumerate() {
-            let mut b = vec![0.0; FFT.saturating_sub(frames)];
-            b.extend(chunk.chunks_exact(self.channels).skip(frames.saturating_sub(FFT)).map(|f| f[c]));
-            *buffer = b;
-        }
-        self.before = FFT;
-        self.frame(false);
+        self.short.fill(chunk);
+        self.short.measure();
+        self.onset(false);
     }
 
-    /// The frame's power into `power`, its first `silenced` samples read as
-    /// silence.
-    fn measure(&mut self, silenced: usize) {
-        self.power.iter_mut().for_each(|p| *p = 0.0);
-        for c in 0..self.channels {
-            for (i, (s, (x, w))) in self.scratch.iter_mut().zip(self.buffers[c].iter().zip(&self.window)).enumerate() {
-                *s = Complex::new(if i < silenced { 0.0 } else { x * w }, 0.0);
-            }
-            self.fft.process(&mut self.scratch);
-            for (p, s) in self.power.iter_mut().zip(&self.scratch) {
-                *p += f64::from(s.norm_sqr());
+    fn record(&mut self) {
+        let bin_hz = self.rate / self.long.size as f64;
+        let segment = self.segments.at(self.position.saturating_sub(self.long.size as u64 / 2));
+        for (k, &p) in self.long.power.iter().enumerate().skip(1) {
+            let hz = k as f64 * bin_hz;
+            let band = BANDS.iter().position(|(_, top)| hz < *top).unwrap_or(BANDS.len() - 1);
+            self.bands[band] += p;
+            self.weighted += hz * p;
+            self.total += p;
+            if let Some(i) = segment {
+                self.segment_sums[i].0 += hz * p;
+                self.segment_sums[i].1 += p;
             }
         }
     }
 
-    /// `record`: false for a priming frame, which only sets `previous`.
-    fn frame(&mut self, record: bool) {
-        if record {
-            // Only the region's own samples, as if it began the file.
-            self.measure(self.before);
-            let bin_hz = self.rate / FFT as f64;
-            let segment = self.segments.at(self.position.saturating_sub(FFT as u64 / 2));
-            for k in 1..self.power.len() {
-                let (hz, p) = (k as f64 * bin_hz, self.power[k]);
-                let band = BANDS.iter().position(|(_, top)| hz < *top).unwrap_or(BANDS.len() - 1);
-                self.bands[band] += p;
-                self.weighted += hz * p;
-                self.total += p;
-                if let Some(i) = segment {
-                    self.segment_sums[i].0 += hz * p;
-                    self.segment_sums[i].1 += p;
-                }
-            }
-        }
-        if !record || self.before > 0 {
-            self.measure(0);
-        }
+    /// `keep`: false for a priming frame, which only sets `previous`.
+    fn onset(&mut self, keep: bool) {
         let mut flux = 0.0f32;
-        for k in 1..self.power.len() {
+        for (previous, &p) in self.previous.iter_mut().zip(&self.short.power).skip(1) {
             // Log-compressed magnitude, so a quiet onset still counts.
-            let level = (100.0 * self.power[k].sqrt() * 2.0 / FFT as f64).ln_1p() as f32;
-            flux += (level - self.previous[k]).max(0.0);
-            self.previous[k] = level;
+            let level = (100.0 * p.sqrt() * 2.0 / FFT as f64).ln_1p() as f32;
+            flux += (level - *previous).max(0.0);
+            *previous = level;
         }
-        if record {
+        if keep {
             self.flux.push(flux);
         }
-        for b in &mut self.buffers {
-            b.drain(..HOP);
-        }
-        self.before = self.before.saturating_sub(HOP);
     }
 
     pub fn finish(mut self) -> SpectrumStats {
-        // The last partial hop is padded with silence, so a region shorter
-        // than a hop still gets a frame.
-        if self.buffers[0].len() > FFT - HOP {
-            let missing = FFT - self.buffers[0].len();
-            for b in &mut self.buffers {
-                b.extend(std::iter::repeat(0.0).take(missing));
-            }
-            self.frame(true);
+        if self.long.pad() {
+            self.long.measure();
+            self.record();
+        }
+        if self.short.pad() {
+            self.short.measure();
+            self.onset(true);
             // The padding cuts the sound off, which is not an onset.
             if self.flux.len() > 1 {
                 self.flux.pop();
@@ -232,6 +272,17 @@ mod tests {
         let s = spectrum(44_100, &sine(44_100, 1000.0, 1.0, 0.5), vec![]);
         assert!(s.band_shares.unwrap()[3] > 0.95, "{:?}", s.band_shares);
         assert!((s.centroid_hz.unwrap() - 1000.0).abs() < 30.0, "{:?}", s.centroid_hz);
+    }
+
+    #[test]
+    fn a_low_tone_lands_in_its_band_at_every_rate() {
+        // A 55 Hz kick is sub; 70 Hz and 240 Hz are bass.
+        for rate in [44_100, 96_000, 192_000] {
+            for (hz, band) in [(50.0, 0), (55.0, 0), (70.0, 1), (240.0, 1)] {
+                let shares = spectrum(rate, &sine(rate, hz, 1.0, 0.5), vec![]).band_shares.unwrap();
+                assert!(shares[band] > 0.9, "{rate} Hz rate, {hz} Hz: {shares:?}");
+            }
+        }
     }
 
     #[test]
