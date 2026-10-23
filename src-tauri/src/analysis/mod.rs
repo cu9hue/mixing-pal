@@ -62,7 +62,9 @@ pub fn analyse(path: &Path, regions: &[(u64, u64)], segments: Option<&[(u64, u64
         pitch.push(chunk, channels);
     })?;
     if frames == 0 {
-        return Err(AnalysisError::DecodeFailed);
+        // A file that decodes from its start only ends before the region.
+        let decodes = source.stream(&[(0, 1)], deadline, &mut |_| {})? > 0;
+        return Err(if decodes { AnalysisError::FileShorterThanRegion } else { AnalysisError::DecodeFailed });
     }
     let seconds = frames as f64 / f64::from(rate);
     let spectrum = spectrum.finish();
@@ -177,9 +179,16 @@ mod tests {
     }
 
     #[test]
-    fn a_region_with_no_frames_is_a_decode_failure() {
+    fn a_region_past_the_files_end_says_the_file_is_shorter() {
+        // The file was bounced again, shorter, under the same name.
         let path = wav(44_100, 1, &sine(44_100, 440.0, 0.1, 0.5));
-        assert_eq!(analyse(&path, &[(90_000, 91_000)], None, later()).err(), Some(decode::AnalysisError::DecodeFailed));
+        assert_eq!(analyse(&path, &[(90_000, 91_000)], None, later()).err(), Some(decode::AnalysisError::FileShorterThanRegion));
+    }
+
+    #[test]
+    fn a_file_with_no_audio_is_a_decode_failure() {
+        let path = wav(44_100, 1, &[]);
+        assert_eq!(analyse(&path, &[(0, 1_000)], None, later()).err(), Some(decode::AnalysisError::DecodeFailed));
     }
 
     /// 60 Hz at -0.9 dBFS whose crest falls on frame `crest`.

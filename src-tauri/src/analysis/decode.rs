@@ -27,6 +27,8 @@ pub enum AnalysisError {
     DecodeFailed,
     RegionTooLong,
     AnalysisTimeout,
+    /// The region starts after the file ends.
+    FileShorterThanRegion,
 }
 
 impl AnalysisError {
@@ -40,6 +42,7 @@ impl AnalysisError {
             AnalysisError::DecodeFailed => "decode_failed",
             AnalysisError::RegionTooLong => "region_too_long",
             AnalysisError::AnalysisTimeout => "analysis_timeout",
+            AnalysisError::FileShorterThanRegion => "file_shorter_than_region",
         }
     }
 }
