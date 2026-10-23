@@ -3,6 +3,7 @@
 //! mix: the region is read before clip gain, warping, devices and the fader.
 
 pub mod decode;
+pub mod levels;
 #[cfg(test)]
 pub(crate) mod signals;
 
