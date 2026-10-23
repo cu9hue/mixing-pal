@@ -1,3 +1,4 @@
+mod analysis;
 mod updates;
 mod bulk;
 mod connector;
