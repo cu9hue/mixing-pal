@@ -4,6 +4,7 @@
 
 pub mod decode;
 pub mod levels;
+pub mod pitch;
 pub mod spectrum;
 pub mod stereo;
 #[cfg(test)]
