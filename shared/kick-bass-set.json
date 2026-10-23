@@ -1,0 +1,86 @@
+{
+  "goal": "techno, a tight low end in the drop",
+  "song": {
+    "tempo": 120,
+    "isPlaying": false,
+    "rootNote": 9,
+    "scaleName": "Minor",
+    "signatureNumerator": 4,
+    "signatureDenominator": 4,
+    "selectedTrack": 0,
+    "scriptVersion": 16,
+    "cuePoints": [],
+    "cuePointsTotal": 0,
+    "setId": null,
+    "setName": null,
+    "setPath": null
+  },
+  "tracks": [
+    {
+      "name": "Kick",
+      "volumeDb": "-6.0 dB",
+      "mute": false,
+      "solo": false,
+      "midi": false,
+      "silent": false,
+      "clips": [],
+      "devices": ["EQ Eight"],
+      "racks": [false],
+      "arrangement": [
+        {
+          "name": "Kick",
+          "start": 64.0,
+          "length": 1.0,
+          "sample": {
+            "file": "shared/audio/kick-a0.flac",
+            "rate": 22050.0,
+            "frames": 13230,
+            "warping": false,
+            "warpMode": 0,
+            "gain": "0.00 dB",
+            "transpose": 0,
+            "detune": 0.0,
+            "startMarker": 0.0,
+            "tempo": 120.0,
+            "intervals": [[0.0, 0.6, 0, 13230]]
+          }
+        }
+      ],
+      "notes": {}
+    },
+    {
+      "name": "Bass",
+      "volumeDb": "-8.0 dB",
+      "mute": false,
+      "solo": false,
+      "midi": false,
+      "silent": false,
+      "clips": [],
+      "devices": ["EQ Eight"],
+      "racks": [false],
+      "arrangement": [
+        {
+          "name": "Bass",
+          "start": 64.0,
+          "length": 16.0,
+          "loop": [0.0, 4.0],
+          "sample": {
+            "file": "shared/audio/bass-asharp0.flac",
+            "rate": 11025.0,
+            "frames": 22050,
+            "warping": true,
+            "warpMode": 0,
+            "gain": "0.00 dB",
+            "transpose": 0,
+            "detune": 0.0,
+            "startMarker": 0.0,
+            "tempo": 120.0,
+            "framesPerBeat": 5512.5,
+            "intervals": [[0.0, 4.0, 0, 22050]]
+          }
+        }
+      ],
+      "notes": {}
+    }
+  ]
+}
