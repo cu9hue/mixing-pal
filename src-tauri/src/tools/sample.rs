@@ -16,6 +16,11 @@ pub const ADDRESS: &str = "/live/mixingpal/get/sample";
 /// Equal to `rack_contents::QUERY_TIMEOUT`: one round trip, no paging.
 pub const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
+pub const FRAMES_ADDRESS: &str = "/live/mixingpal/get/sample/frames";
+
+/// The frames address's statuses, as fixed strings.
+const FRAME_STATUSES: [&str; 5] = ["not_audio_clip", "empty_slot", "no_such_target", "not_warped", "bad_beats"];
+
 /// Settings fields between the status and the interval count.
 const SETTINGS: usize = 8;
 
@@ -236,6 +241,38 @@ pub async fn get_sample(q: &LiveQuery, track: i32, target: &SampleTarget, timeou
     let args = vec![OscType::Int(track), OscType::Int(target.kind()), OscType::String(target.wire())];
     let reply = q.query(ADDRESS, args, timeout).await.map_err(SampleError::Query)?;
     decode_reply(&reply, track, target)
+}
+
+/// Beat positions on the wire: one string, so the request keys on Args(4)
+/// whatever the count. Rounded to a millionth so the echo stays short.
+pub fn beats_wire(beats: &[f64]) -> String {
+    beats.iter().map(|b| format!("{}", (b * 1e6).round() / 1e6)).collect::<Vec<_>>().join(",")
+}
+
+pub fn decode_frames_reply(reply: &[OscType], track: i32, target: &SampleTarget, beats: &str, count: usize) -> Result<Vec<Option<f64>>, SampleError> {
+    let wire = target.wire();
+    match reply {
+        [OscType::Int(t), OscType::Int(k), OscType::String(w), OscType::String(b), ..]
+            if *t == track && *k == target.kind() && *w == wire && b == beats => {}
+        _ => return Err(SampleError::Malformed),
+    }
+    let status = string(reply.get(4))?.ok_or(SampleError::Malformed)?;
+    if status != "ok" {
+        return Err(FRAME_STATUSES.into_iter().find(|s| *s == status).map_or(SampleError::Malformed, SampleError::Refused));
+    }
+    let n = int(reply.get(5))?.ok_or(SampleError::Malformed)?;
+    if usize::try_from(n).ok() != Some(count) || reply.len() != 6 + count {
+        return Err(SampleError::Malformed);
+    }
+    reply[6..].iter().map(|v| number(Some(v))).collect()
+}
+
+/// Live's frame for each beat of a warped clip: what the profile cuts on.
+pub async fn get_sample_frames(q: &LiveQuery, track: i32, target: &SampleTarget, beats: &[f64], timeout: Duration) -> Result<Vec<Option<f64>>, SampleError> {
+    let wire = beats_wire(beats);
+    let args = vec![OscType::Int(track), OscType::Int(target.kind()), OscType::String(target.wire()), OscType::String(wire.clone())];
+    let reply = q.query(FRAMES_ADDRESS, args, timeout).await.map_err(SampleError::Query)?;
+    decode_frames_reply(&reply, track, target, &wire, beats.len())
 }
 /// Live's `Clip.warp_mode` numbers. 5 is REX; 7 is not used.
 pub fn warp_name(mode: i32) -> &'static str {
@@ -648,5 +685,34 @@ mod tests {
             timing(true, Some((152.0, 166.0))));
         let (p, _) = sample_payload(&read, 1, Some((4, 4)));
         assert!(serde_json::to_string(&p).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn beats_travel_as_one_short_string() {
+        assert_eq!(beats_wire(&[0.0, 1.0, 2.5, 1.0 / 3.0]), "0,1,2.5,0.333333");
+    }
+
+    #[test]
+    fn a_frames_reply_decodes_one_frame_per_beat() {
+        let t = SampleTarget::Index(0);
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1,2.5".into()), S("ok".into()), Int(3), Int(0), Int(1000), Nil];
+        assert_eq!(decode_frames_reply(&reply, 3, &t, "0,1,2.5", 3).ok(), Some(vec![Some(0.0), Some(1000.0), None]));
+    }
+
+    #[test]
+    fn a_frames_reply_for_other_beats_or_a_wrong_count_is_malformed() {
+        let t = SampleTarget::Index(0);
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1".into()), S("ok".into()), Int(2), Int(0), Int(1000)];
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,2", 2), Err(SampleError::Malformed)));
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,1", 3), Err(SampleError::Malformed)));
+    }
+
+    #[test]
+    fn a_frames_status_is_a_fixed_refusal() {
+        let t = SampleTarget::Slot(0);
+        let reply = vec![Int(3), Int(0), S("0".into()), S("0".into()), S("not_warped".into())];
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0", 1), Err(SampleError::Refused("not_warped"))));
+        let odd = vec![Int(3), Int(0), S("0".into()), S("0".into()), S("/Users/x".into())];
+        assert!(matches!(decode_frames_reply(&odd, 3, &t, "0", 1), Err(SampleError::Malformed)));
     }
 }

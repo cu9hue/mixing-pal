@@ -195,6 +195,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/mixingpal/get/return_mixer",
     "/live/mixingpal/get/master_mixer",
     "/live/mixingpal/get/sample",
+    "/live/mixingpal/get/sample/frames",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -389,6 +390,7 @@ fn handle_inbound(
             | "/live/mixingpal/get/return_mixer"
             | "/live/mixingpal/get/master_mixer"
             | "/live/mixingpal/get/sample"
+            | "/live/mixingpal/get/sample/frames"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
@@ -1744,6 +1746,7 @@ mod tests {
         "/live/mixingpal/get/return_mixer",
         "/live/mixingpal/get/master_mixer",
         "/live/mixingpal/get/sample",
+        "/live/mixingpal/get/sample/frames",
     ];
 
     #[test]

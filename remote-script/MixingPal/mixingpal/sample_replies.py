@@ -8,6 +8,8 @@ a Simpler's are frames. Intervals are half-open. Live maps each endpoint to
 frames itself (beat_to_sample_time / seconds_to_sample_time), so no warp
 maths is reproduced here or in the app.
 """
+import math
+
 from .rack_paths import MAX_REPLY_BYTES, osc_string_bytes
 
 SESSION, ARRANGEMENT, DEVICE = 0, 1, 2
@@ -224,3 +226,45 @@ def simpler_reply(key, device):
                 params.get("Transpose", (None,))[0], params.get("Detune", (None,))[0])
     extra = (mode, slice_count) + loop_frames
     return ok_reply(key, settings, mapped, extra)
+
+
+MAX_POSITIONS = 65
+
+
+def parse_beats(text):
+    """A frames request's beat positions, or None when malformed."""
+    try:
+        beats = [float(b) for b in text.split(",")]
+    except ValueError:
+        return None
+    if not 1 <= len(beats) <= MAX_POSITIONS or not all(math.isfinite(b) for b in beats):
+        return None
+    return beats
+
+
+def frames_reply(key, clip, text):
+    """Live's frame for each beat of a warped clip, so the app can cut a
+    profile on beats without reproducing warp maths. A beat Live cannot map
+    is nil; every frame is clamped to the file."""
+    if read(clip, "is_audio_clip") is not True:
+        return status_reply(key, "not_audio_clip")
+    if read(clip, "warping") is not True:
+        return status_reply(key, "not_warped")
+    beats = parse_beats(text)
+    if beats is None:
+        return status_reply(key, "bad_beats")
+    to_frames = read(clip, "beat_to_sample_time")
+    total = read(clip, "sample_length")
+    frames = []
+    for beat in beats:
+        try:
+            frame = int(round(to_frames(beat)))
+        except Exception:
+            frame = None
+        if frame is not None and total is not None:
+            frame = max(0, min(frame, total))
+        frames.append(frame)
+    reply = tuple(key) + ("ok", len(frames)) + tuple(frames)
+    if reply_bytes(reply) > MAX_REPLY_BYTES:
+        return status_reply(key, "bad_beats")
+    return reply

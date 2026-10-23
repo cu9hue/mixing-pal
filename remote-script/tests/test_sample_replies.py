@@ -183,5 +183,31 @@ class SimplerReplyTests(unittest.TestCase):
         self.assertEqual(sr.simpler_reply(DKEY, simpler(class_name="Eq8")), DKEY + ("not_a_simpler",))
 
 
+class FramesReplyTests(unittest.TestCase):
+    FKEY = (3, sr.ARRANGEMENT, "0", "0,1,2.5")
+
+    def test_a_warped_clip_maps_each_beat_through_live(self):
+        self.assertEqual(sr.frames_reply(self.FKEY, clip(), "0,1,2.5"), self.FKEY + ("ok", 3, 0, 1000, 2500))
+
+    def test_frames_are_clamped_to_the_file(self):
+        self.assertEqual(sr.frames_reply(self.FKEY, clip(sample_length=1500), "0,1,2.5")[-3:], (0, 1000, 1500))
+
+    def test_a_beat_live_cannot_map_is_nil(self):
+        def to_frames(beat):
+            if beat > 2:
+                raise RuntimeError("past the last warp marker")
+            return beat * 1000.0
+        reply = sr.frames_reply(self.FKEY, clip(beat_to_sample_time=to_frames), "0,1,2.5")
+        self.assertEqual(reply[-3:], (0, 1000, None))
+
+    def test_an_unwarped_or_midi_clip_is_refused(self):
+        self.assertEqual(sr.frames_reply(self.FKEY, clip(warping=False), "0"), self.FKEY + ("not_warped",))
+        self.assertEqual(sr.frames_reply(self.FKEY, clip(is_audio_clip=False), "0"), self.FKEY + ("not_audio_clip",))
+
+    def test_malformed_beats_are_refused(self):
+        for text in ("", "x", "1,,2", "nan", "inf", ",".join(["1"] * 66)):
+            self.assertEqual(sr.frames_reply(self.FKEY, clip(), text)[-1], "bad_beats", text)
+
+
 if __name__ == "__main__":
     unittest.main()
