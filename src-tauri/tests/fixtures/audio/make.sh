@@ -18,6 +18,7 @@ gen -c:a aac -b:a 64k chirp.m4a
 # iTunSMPB tag, ffmpeg's aac_at in an edit list. macOS only (AudioToolbox).
 gen -c:a pcm_s16le apple-source.wav
 afconvert -f m4af -d aac apple-source.wav chirp-apple.m4a
+afconvert -f m4af -d alac apple-source.wav chirp-alac.m4a
 rm apple-source.wav
 gen -c:a aac_at -b:a 64k chirp-aac-at.m4a
 # HE-AAC: symphonia decodes only its half-rate core. macOS only (AudioToolbox).

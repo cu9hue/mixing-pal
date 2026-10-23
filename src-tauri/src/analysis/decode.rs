@@ -7,7 +7,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::time::{Instant, SystemTime};
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_AAC, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_AAC, CODEC_TYPE_ALAC, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
@@ -187,17 +187,17 @@ fn child<'a>(b: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
     boxes(b).find(|(k, _)| k == kind).map(|(_, body)| body)
 }
 
-/// The channel count of the first decoded packet, for a container that does
-/// not state it (MP4 leaves it to the AAC stream). `stream` seeks before it
-/// reads, so the packet used here is not lost.
-fn decoded_channels(format: &mut dyn FormatReader, decoder: &mut dyn Decoder, track: u32) -> Result<usize, AnalysisError> {
+/// The rate and channel count of the first decoded packet, for what the
+/// container does not state. `stream` seeks before it reads, so the packet
+/// used here is not lost.
+fn decoded_spec(format: &mut dyn FormatReader, decoder: &mut dyn Decoder, track: u32) -> Result<(u32, usize), AnalysisError> {
     loop {
         let packet = format.next_packet().map_err(|_| AnalysisError::DecodeFailed)?;
         if packet.track_id() != track {
             continue;
         }
         match decoder.decode(&packet) {
-            Ok(d) => return Ok(d.spec().channels.count()),
+            Ok(d) => return Ok((d.spec().rate, d.spec().channels.count())),
             Err(Error::DecodeError(_)) => continue,
             Err(_) => return Err(AnalysisError::DecodeFailed),
         }
@@ -247,18 +247,26 @@ impl Source {
             .cloned()
             .ok_or(AnalysisError::UnsupportedFormat)?;
         let params = &track.codec_params;
-        let rate = params.sample_rate.filter(|r| *r > 0).ok_or(AnalysisError::UnsupportedFormat)?;
+        let mut decoder = symphonia::default::get_codecs()
+            .make(params, &DecoderOptions::default())
+            .map_err(|_| AnalysisError::UnsupportedFormat)?;
+        // MP4 leaves AAC's channel count to the stream, and ALAC's rate to
+        // ALAC's own header: the MP4 field cannot hold 96 kHz. AAC keeps its
+        // stated rate, so `stream` can refuse HE-AAC's half-rate decoding.
+        let alac = params.codec == CODEC_TYPE_ALAC;
+        let decoded = if params.channels.is_none() || alac { Some(decoded_spec(&mut *format, &mut *decoder, track.id)?) } else { None };
+        let rate = match decoded {
+            Some((r, _)) if alac => r,
+            _ => params.sample_rate.filter(|r| *r > 0).ok_or(AnalysisError::UnsupportedFormat)?,
+        };
+        let channels = match decoded {
+            Some((_, c)) => c,
+            None => params.channels.map_or(0, |c| c.count()),
+        };
         let ts_per_frame = params
             .time_base
             .filter(|tb| tb.numer > 0)
             .map_or(1.0, |tb| f64::from(tb.denom) / (f64::from(tb.numer) * f64::from(rate)));
-        let mut decoder = symphonia::default::get_codecs()
-            .make(params, &DecoderOptions::default())
-            .map_err(|_| AnalysisError::UnsupportedFormat)?;
-        let channels = match params.channels {
-            Some(c) => c.count(),
-            None => decoded_channels(&mut *format, &mut *decoder, track.id)?,
-        };
         if !(1..=2).contains(&channels) {
             return Err(AnalysisError::UnsupportedChannels);
         }
@@ -523,7 +531,7 @@ mod tests {
     #[test]
     fn lossless_formats_decode_the_same_frames_mid_file() {
         let reference = chirp(22_050, 0.2);
-        for name in ["chirp.flac", "chirp.aiff"] {
+        for name in ["chirp.flac", "chirp.aiff", "chirp-alac.m4a"] {
             let got = first_channel(&fixture(name), (1_500, 3_000));
             assert_eq!(got.len(), 1_500, "{name}");
             for (g, want) in got.iter().zip(&reference[1_500..3_000]) {

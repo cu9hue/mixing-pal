@@ -30,7 +30,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tauri-plugin-updater = "2"
 # File analysis for get_sample. Only the codecs Live loads; no default
 # features, so nothing else is compiled in.
-symphonia = { version = "0.5.5", default-features = false, features = ["wav", "pcm", "aiff", "flac", "mp3", "ogg", "vorbis", "isomp4", "aac"] }
+symphonia = { version = "0.5.5", default-features = false, features = ["wav", "pcm", "aiff", "flac", "mp3", "ogg", "vorbis", "isomp4", "aac", "alac"] }
 rustfft = "6.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
