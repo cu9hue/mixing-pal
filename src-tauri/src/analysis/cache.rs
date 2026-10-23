@@ -5,14 +5,25 @@ use super::decode::{file_state, AnalysisError};
 use super::{analyse, Stats};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{OnceCell, Semaphore};
 
 pub const CAPACITY: usize = 256;
 pub const CONCURRENT: usize = 2;
+/// The most a file's size and date may take to read. A drive that does not
+/// answer within it is reported, not waited on.
+const FILE_WAIT: Duration = Duration::from_secs(2);
+/// File reads given up on while still blocked. At this many, no more start,
+/// so a drive that has gone away does not use up the blocking threads.
+const MAX_STALLED: usize = 16;
+/// A file dated this recently may be saved again, at the same size, within
+/// its date's resolution (2 s on FAT32): its result is answered, not kept.
+const SETTLE: Duration = Duration::from_secs(2);
 
 pub type Run = fn(&Path, &[(u64, u64)], Option<&[(u64, u64)]>, Instant) -> Result<Stats, AnalysisError>;
+type State = fn(&Path) -> Result<(u64, SystemTime), AnalysisError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Job {
@@ -30,19 +41,30 @@ struct Key {
     modified: SystemTime,
 }
 
-type Cell = Arc<OnceCell<Arc<Stats>>>;
+/// A run's outcome, failures included, so every caller waiting on the run
+/// gets it. A failure is dropped once answered: the next call tries again.
+type Cell = Arc<OnceCell<Result<Arc<Stats>, AnalysisError>>>;
 
 pub struct Analyses {
     permits: Semaphore,
     cells: Mutex<(HashMap<Key, Cell>, VecDeque<Key>)>,
     capacity: usize,
+    /// `file_state` outside tests.
+    state: State,
+    stalled: Arc<AtomicUsize>,
 }
 
 pub static ANALYSES: LazyLock<Analyses> = LazyLock::new(|| Analyses::new(CONCURRENT, CAPACITY));
 
 impl Analyses {
     pub fn new(concurrent: usize, capacity: usize) -> Self {
-        Analyses { permits: Semaphore::new(concurrent), cells: Mutex::new((HashMap::new(), VecDeque::new())), capacity }
+        Analyses {
+            permits: Semaphore::new(concurrent),
+            cells: Mutex::new((HashMap::new(), VecDeque::new())),
+            capacity,
+            state: file_state,
+            stalled: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     pub async fn get(&self, job: Job, wait_until: Instant, budget: Duration) -> Result<Arc<Stats>, AnalysisError> {
@@ -50,49 +72,64 @@ impl Analyses {
     }
 
     /// `run` is `analyse` outside tests. A caller that finds the same key
-    /// running waits for that run instead of starting another. A failed
-    /// run leaves nothing behind, so the next caller tries again.
+    /// running waits for that run instead of starting another.
     ///
     /// `wait_until` bounds the wait for a slot; `budget` starts once the
     /// slot is free, so calls queued behind others still get their full
     /// analysis time.
     pub async fn get_with(&self, job: Job, wait_until: Instant, budget: Duration, run: Run) -> Result<Arc<Stats>, AnalysisError> {
         if Instant::now() >= wait_until {
-            return Err(AnalysisError::AnalysisTimeout);
+            return Err(AnalysisError::AnalysisBusy);
         }
-        let path = job.path.clone();
-        let (size, modified) = blocking(wait_until, move || file_state(&path)).await?;
+        let (size, modified) = self.file_state(&job.path).await?;
         let key = Key { job: job.clone(), size, modified };
         let cell = self.cell(&key);
-        let result = cell
+        let outcome = match cell
             .get_or_try_init(|| async move {
+                // Giving up on the slot is this caller's, not the run's: it is
+                // not shared, and a waiter with longer to wait runs instead.
                 let _permit = tokio::time::timeout_at(tokio::time::Instant::from_std(wait_until), self.permits.acquire())
                     .await
-                    .map_err(|_| AnalysisError::AnalysisTimeout)?
-                    .map_err(|_| AnalysisError::DecodeFailed)?;
+                    .map_err(|_| AnalysisError::AnalysisBusy)?
+                    .map_err(|_| AnalysisError::AnalysisFailed)?;
                 let deadline = Instant::now() + budget;
-                let stats = blocking(deadline, move || run(&job.path, &job.regions, job.segments.as_deref(), deadline)).await?;
-                Ok(Arc::new(stats))
+                Ok(self.blocking(deadline, move || run(&job.path, &job.regions, job.segments.as_deref(), deadline)).await.map(Arc::new))
             })
             .await
-            .map(Arc::clone);
-        // A file that changed while it was read is answered, not kept.
-        let path = key.job.path.clone();
-        let unchanged = result.is_ok() && blocking(Instant::now() + budget, move || file_state(&path)).await.ok() == Some((size, modified));
-        match (&result, unchanged) {
+        {
+            Ok(stored) => stored.clone(),
+            Err(e) => Err(e),
+        };
+        // A file that changed while it was read, or was written moments
+        // ago, is answered, not kept.
+        let settled = SystemTime::now().duration_since(modified).is_ok_and(|age| age >= SETTLE);
+        let unchanged = outcome.is_ok() && settled && self.file_state(&key.job.path).await.ok() == Some((size, modified));
+        match (&outcome, unchanged) {
             (Ok(_), true) => self.keep(&key, &cell),
-            // A waiter's own run filled the cell after this one failed.
-            (Err(_), _) if cell.get().is_some() => {}
+            // A waiter's own run filled the cell after this caller gave up.
+            (Err(_), _) if cell.get().is_some_and(Result::is_ok) => {}
             _ => self.forget(&key, &cell),
         }
-        result
+        outcome
     }
 
+    async fn file_state(&self, path: &Path) -> Result<(u64, SystemTime), AnalysisError> {
+        let (state, path) = (self.state, path.to_path_buf());
+        self.blocking(Instant::now() + FILE_WAIT, move || state(&path)).await.map_err(|e| match e {
+            AnalysisError::AnalysisTimeout => AnalysisError::FileUnreachable,
+            e => e,
+        })
+    }
+
+    /// The key's cell, now the most recently used.
     fn cell(&self, key: &Key) -> Cell {
         let mut guard = self.cells.lock().unwrap_or_else(|e| e.into_inner());
         let (map, order) = &mut *guard;
         if let Some(c) = map.get(key) {
-            return c.clone();
+            let c = c.clone();
+            order.retain(|k| k != key);
+            order.push_back(key.clone());
+            return c;
         }
         let c = Cell::default();
         map.insert(key.clone(), c.clone());
@@ -105,8 +142,8 @@ impl Analyses {
         c
     }
 
-    /// A caller whose own run failed may clean up after a waiter has
-    /// started again on the same cell; the waiter's result is put back.
+    /// A caller who gave up may clean up after a waiter has started again
+    /// on the same cell; the waiter's result is put back.
     fn keep(&self, key: &Key, cell: &Cell) {
         let mut guard = self.cells.lock().unwrap_or_else(|e| e.into_inner());
         let (map, order) = &mut *guard;
@@ -136,16 +173,53 @@ impl Analyses {
     fn cached(&self) -> usize {
         self.cells.lock().unwrap().0.len()
     }
+
+    /// Runs file work off the async threads and stops waiting for it at
+    /// `until`: a stalled disk costs the caller a timeout, not a hang. The
+    /// abandoned thread finishes, or stalls, on its own, and is counted
+    /// until it does.
+    async fn blocking<T: Send + 'static>(&self, until: Instant, work: impl FnOnce() -> Result<T, AnalysisError> + Send + 'static) -> Result<T, AnalysisError> {
+        if self.stalled.load(Ordering::SeqCst) >= MAX_STALLED {
+            return Err(AnalysisError::FileUnreachable);
+        }
+        let status = Arc::new(AtomicU8::new(RUNNING));
+        let done = Finished(status.clone(), self.stalled.clone());
+        let task = tokio::task::spawn_blocking(move || {
+            let _done = done;
+            work()
+        });
+        match tokio::time::timeout_at(tokio::time::Instant::from_std(until), task).await {
+            Err(_) => {
+                self.stalled.fetch_add(1, Ordering::SeqCst);
+                if status.compare_exchange(RUNNING, ABANDONED, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                    // It finished just now, so it is not stuck.
+                    self.stalled.fetch_sub(1, Ordering::SeqCst);
+                }
+                Err(AnalysisError::AnalysisTimeout)
+            }
+            Ok(Err(e)) => {
+                // A panic: a bug here, not a bad file. Its message has no path.
+                eprintln!("sample analysis panicked: {e}");
+                Err(AnalysisError::AnalysisFailed)
+            }
+            Ok(Ok(r)) => r,
+        }
+    }
 }
 
-/// Runs file work off the async threads and stops waiting for it at
-/// `until`: a stalled disk costs the caller a timeout, not a hang. The
-/// abandoned thread finishes, or stalls, on its own.
-async fn blocking<T: Send + 'static>(until: Instant, work: impl FnOnce() -> Result<T, AnalysisError> + Send + 'static) -> Result<T, AnalysisError> {
-    match tokio::time::timeout_at(tokio::time::Instant::from_std(until), tokio::task::spawn_blocking(work)).await {
-        Err(_) => Err(AnalysisError::AnalysisTimeout),
-        Ok(Err(_)) => Err(AnalysisError::DecodeFailed),
-        Ok(Ok(r)) => r,
+const RUNNING: u8 = 0;
+const FINISHED: u8 = 1;
+const ABANDONED: u8 = 2;
+
+/// Marks file work finished when it returns or panics, and uncounts it from
+/// the stalled if its caller had given up on it.
+struct Finished(Arc<AtomicU8>, Arc<AtomicUsize>);
+
+impl Drop for Finished {
+    fn drop(&mut self) {
+        if self.0.swap(FINISHED, Ordering::SeqCst) == ABANDONED {
+            self.1.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -153,8 +227,6 @@ async fn blocking<T: Send + 'static>(until: Instant, work: impl FnOnce() -> Resu
 mod tests {
     use super::*;
     use crate::analysis::signals::{sine, wav};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
 
     fn job(path: PathBuf) -> Job {
         Job { path, regions: vec![(0, 4_410)], segments: None }
@@ -166,6 +238,19 @@ mod tests {
         Instant::now() + Duration::from_secs(20)
     }
 
+    /// A test file dated a minute back, as a sample on disk is: one written
+    /// moments ago is not kept.
+    fn aged(path: PathBuf) -> PathBuf {
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(60)).unwrap();
+        path
+    }
+
+    fn hung(_: &Path) -> Result<(u64, SystemTime), AnalysisError> {
+        std::thread::sleep(Duration::from_secs(4));
+        Err(AnalysisError::FileMissing)
+    }
+
     #[tokio::test]
     async fn a_repeat_call_is_answered_from_the_cache() {
         static RUNS: AtomicUsize = AtomicUsize::new(0);
@@ -174,7 +259,7 @@ mod tests {
             analyse(p, r, s, d)
         }
         let a = Analyses::new(2, 256);
-        let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let path = aged(wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5)));
         let first = a.get_with(job(path.clone()), later(), BUDGET, counted).await.unwrap();
         let second = a.get_with(job(path), later(), BUDGET, counted).await.unwrap();
         assert_eq!(RUNS.load(Ordering::SeqCst), 1);
@@ -252,10 +337,34 @@ mod tests {
     async fn the_oldest_entry_goes_past_capacity() {
         let a = Analyses::new(2, 2);
         for _ in 0..3 {
-            let path = wav(44_100, 1, &sine(44_100, 440.0, 0.1, 0.5));
+            let path = aged(wav(44_100, 1, &sine(44_100, 440.0, 0.1, 0.5)));
             a.get(job(path), later(), BUDGET).await.unwrap();
         }
         assert_eq!(a.cached(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_entry_in_use_outlasts_one_that_is_not() {
+        static RUNS: AtomicUsize = AtomicUsize::new(0);
+        fn counted(p: &Path, r: &[(u64, u64)], s: Option<&[(u64, u64)]>, d: Instant) -> Result<Stats, AnalysisError> {
+            RUNS.fetch_add(1, Ordering::SeqCst);
+            analyse(p, r, s, d)
+        }
+        let a = Analyses::new(2, 2);
+        let files: Vec<_> = (0..3).map(|_| aged(wav(44_100, 1, &sine(44_100, 440.0, 0.1, 0.5)))).collect();
+        for i in [0, 1, 0, 2, 0] {
+            a.get_with(job(files[i].clone()), later(), BUDGET, counted).await.unwrap();
+        }
+        assert_eq!(RUNS.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_file_written_moments_ago_is_answered_but_not_kept() {
+        // On FAT32 a second same-size save can keep the date to the second.
+        let a = Analyses::new(2, 256);
+        let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        assert!(a.get(job(path), later(), BUDGET).await.is_ok());
+        assert_eq!(a.cached(), 0);
     }
 
     #[tokio::test]
@@ -267,10 +376,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_passed_deadline_is_a_timeout() {
+    async fn a_passed_wait_is_busy() {
         let a = Analyses::new(2, 256);
         let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
-        assert_eq!(a.get(job(path), Instant::now(), BUDGET).await.err(), Some(AnalysisError::AnalysisTimeout));
+        assert_eq!(a.get(job(path), Instant::now(), BUDGET).await.err(), Some(AnalysisError::AnalysisBusy));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_call_that_waits_too_long_for_a_slot_is_told_busy() {
+        fn slow(p: &Path, r: &[(u64, u64)], s: Option<&[(u64, u64)]>, d: Instant) -> Result<Stats, AnalysisError> {
+            std::thread::sleep(Duration::from_millis(400));
+            analyse(p, r, s, d)
+        }
+        let a = Analyses::new(1, 256);
+        let first = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let second = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let (x, y) = tokio::join!(a.get_with(job(first), later(), BUDGET, slow), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            a.get_with(job(second), Instant::now() + Duration::from_millis(100), BUDGET, analyse).await
+        });
+        assert!(x.is_ok());
+        assert_eq!(y.err(), Some(AnalysisError::AnalysisBusy));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_drive_that_does_not_answer_is_unreachable_within_seconds() {
+        let a = Analyses { state: hung, ..Analyses::new(2, 256) };
+        let start = Instant::now();
+        let r = a.get(job(PathBuf::from("/Volumes/nas/kick.wav")), later(), BUDGET).await;
+        assert_eq!(r.err(), Some(AnalysisError::FileUnreachable));
+        assert!(start.elapsed() < Duration::from_secs(3), "{:?}", start.elapsed());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn stuck_reads_stop_new_ones_from_starting() {
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn counted_hang(p: &Path) -> Result<(u64, SystemTime), AnalysisError> {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            hung(p)
+        }
+        let a = Arc::new(Analyses { state: counted_hang, ..Analyses::new(2, 256) });
+        let mut calls = tokio::task::JoinSet::new();
+        for i in 0..MAX_STALLED {
+            let a = a.clone();
+            calls.spawn(async move { a.get(job(PathBuf::from(format!("/Volumes/nas/{i}.wav"))), later(), BUDGET).await });
+        }
+        while calls.join_next().await.is_some() {}
+        let r = a.get(job(PathBuf::from("/Volumes/nas/one-more.wav")), later(), BUDGET).await;
+        assert_eq!(r.err(), Some(AnalysisError::FileUnreachable));
+        assert_eq!(CALLS.load(Ordering::SeqCst), MAX_STALLED);
+    }
+
+    #[tokio::test]
+    async fn a_run_that_panics_is_an_analysis_failure_not_a_bad_file() {
+        fn panics(_: &Path, _: &[(u64, u64)], _: Option<&[(u64, u64)]>, _: Instant) -> Result<Stats, AnalysisError> {
+            panic!("a bug in the analysis")
+        }
+        let a = Analyses::new(2, 256);
+        let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        assert_eq!(a.get_with(job(path), later(), BUDGET, panics).await.err(), Some(AnalysisError::AnalysisFailed));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -305,22 +469,47 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_failed_caller_does_not_drop_a_waiters_result() {
-        // The first run fails; the waiter on the same key runs again and
-        // succeeds after the failed caller has cleaned up.
+    async fn a_failed_run_answers_every_call_waiting_on_it() {
+        // Copies of one clip along the arrangement: one run, one answer.
         static RUNS: AtomicUsize = AtomicUsize::new(0);
-        fn flaky(p: &Path, r: &[(u64, u64)], s: Option<&[(u64, u64)]>, d: Instant) -> Result<Stats, AnalysisError> {
-            if RUNS.fetch_add(1, Ordering::SeqCst) == 0 {
-                std::thread::sleep(Duration::from_millis(50));
-                return Err(AnalysisError::DecodeFailed);
-            }
+        fn fails(_: &Path, _: &[(u64, u64)], _: Option<&[(u64, u64)]>, _: Instant) -> Result<Stats, AnalysisError> {
+            RUNS.fetch_add(1, Ordering::SeqCst);
             std::thread::sleep(Duration::from_millis(200));
-            analyse(p, r, s, d)
+            Err(AnalysisError::UnsupportedFormat)
         }
         let a = Analyses::new(2, 256);
-        let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
-        let (x, y) = tokio::join!(a.get_with(job(path.clone()), later(), BUDGET, flaky), a.get_with(job(path), later(), BUDGET, flaky));
-        assert!(x.is_err() != y.is_err(), "{x:?} {y:?}");
+        let path = aged(wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5)));
+        let (x, y) = tokio::join!(a.get_with(job(path.clone()), later(), BUDGET, fails), a.get_with(job(path.clone()), later(), BUDGET, fails));
+        assert_eq!((x.err(), y.err()), (Some(AnalysisError::UnsupportedFormat), Some(AnalysisError::UnsupportedFormat)));
+        assert_eq!(RUNS.load(Ordering::SeqCst), 1);
+        // Not kept: the next call tries again.
+        assert_eq!(a.cached(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_call_told_busy_does_not_drop_a_waiters_result() {
+        // One slot, held by another file. Two calls on one key: the first
+        // gives up waiting, the second waits and runs.
+        fn slow(p: &Path, r: &[(u64, u64)], s: Option<&[(u64, u64)]>, d: Instant) -> Result<Stats, AnalysisError> {
+            std::thread::sleep(Duration::from_millis(300));
+            analyse(p, r, s, d)
+        }
+        let a = Analyses::new(1, 256);
+        let other = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let path = aged(wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5)));
+        let (_, x, y) = tokio::join!(
+            a.get_with(job(other), later(), BUDGET, slow),
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                a.get_with(job(path.clone()), Instant::now() + Duration::from_millis(100), BUDGET, analyse).await
+            },
+            async {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                a.get_with(job(path.clone()), later(), BUDGET, analyse).await
+            },
+        );
+        assert_eq!(x.err(), Some(AnalysisError::AnalysisBusy));
+        assert!(y.is_ok(), "{y:?}");
         assert_eq!(a.cached(), 1);
     }
 }

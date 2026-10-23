@@ -29,6 +29,12 @@ pub enum AnalysisError {
     AnalysisTimeout,
     /// The region starts after the file ends.
     FileShorterThanRegion,
+    /// Every analysis slot stayed taken for as long as a call may wait.
+    AnalysisBusy,
+    /// The drive holding the file did not answer.
+    FileUnreachable,
+    /// The analysis itself broke, not the file.
+    AnalysisFailed,
 }
 
 impl AnalysisError {
@@ -43,6 +49,9 @@ impl AnalysisError {
             AnalysisError::RegionTooLong => "region_too_long",
             AnalysisError::AnalysisTimeout => "analysis_timeout",
             AnalysisError::FileShorterThanRegion => "file_shorter_than_region",
+            AnalysisError::AnalysisBusy => "analysis_busy",
+            AnalysisError::FileUnreachable => "file_unreachable",
+            AnalysisError::AnalysisFailed => "analysis_failed",
         }
     }
 }
