@@ -4,8 +4,7 @@
 use super::decode::{file_state, AnalysisError};
 use super::{analyse, Stats};
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{OnceCell, Semaphore};
@@ -15,9 +14,12 @@ pub const CONCURRENT: usize = 2;
 /// The most a file's size and date may take to read. A drive that does not
 /// answer within it is reported, not waited on.
 const FILE_WAIT: Duration = Duration::from_secs(2);
-/// File reads given up on while still blocked. At this many, no more start,
-/// so a drive that has gone away does not use up the blocking threads.
-const MAX_STALLED: usize = 16;
+/// File reads in flight on one volume: started and not yet returned, given
+/// up on or not. At this many, no more start there, so a drive that has gone
+/// away does not use up the blocking threads. A turn makes at most 32 tool
+/// calls, each with one read in flight at a time: a drive that answers never
+/// reaches it.
+const MAX_IN_FLIGHT: usize = 64;
 /// A file dated this recently may be saved again, at the same size, within
 /// its date's resolution (2 s on FAT32): its result is answered, not kept.
 const SETTLE: Duration = Duration::from_secs(2);
@@ -51,7 +53,7 @@ pub struct Analyses {
     capacity: usize,
     /// `file_state` outside tests.
     state: State,
-    stalled: Arc<AtomicUsize>,
+    in_flight: Reads,
 }
 
 pub static ANALYSES: LazyLock<Analyses> = LazyLock::new(|| Analyses::new(CONCURRENT, CAPACITY));
@@ -63,7 +65,7 @@ impl Analyses {
             cells: Mutex::new((HashMap::new(), VecDeque::new())),
             capacity,
             state: file_state,
-            stalled: Arc::new(AtomicUsize::new(0)),
+            in_flight: Reads::default(),
         }
     }
 
@@ -93,7 +95,7 @@ impl Analyses {
                     .map_err(|_| AnalysisError::AnalysisBusy)?
                     .map_err(|_| AnalysisError::AnalysisFailed)?;
                 let deadline = Instant::now() + budget;
-                Ok(self.blocking(deadline, move || run(&job.path, &job.regions, job.segments.as_deref(), deadline)).await.map(Arc::new))
+                Ok(self.blocking(volume(&job.path), deadline, move || run(&job.path, &job.regions, job.segments.as_deref(), deadline)).await.map(Arc::new))
             })
             .await
         {
@@ -118,7 +120,7 @@ impl Analyses {
 
     async fn file_state(&self, path: &Path) -> Result<(u64, SystemTime), AnalysisError> {
         let (state, path) = (self.state, path.to_path_buf());
-        self.blocking(Instant::now() + FILE_WAIT, move || state(&path)).await.map_err(|e| match e {
+        self.blocking(volume(&path), Instant::now() + FILE_WAIT, move || state(&path)).await.map_err(|e| match e {
             AnalysisError::AnalysisTimeout => AnalysisError::FileUnreachable,
             e => e,
         })
@@ -179,27 +181,18 @@ impl Analyses {
 
     /// Runs file work off the async threads and stops waiting for it at
     /// `until`: a stalled disk costs the caller a timeout, not a hang. The
-    /// abandoned thread finishes, or stalls, on its own, and is counted
-    /// until it does.
-    async fn blocking<T: Send + 'static>(&self, until: Instant, work: impl FnOnce() -> Result<T, AnalysisError> + Send + 'static) -> Result<T, AnalysisError> {
-        if self.stalled.load(Ordering::SeqCst) >= MAX_STALLED {
+    /// abandoned thread finishes, or stalls, on its own, and counts as in
+    /// flight on its volume until it does.
+    async fn blocking<T: Send + 'static>(&self, volume: PathBuf, until: Instant, work: impl FnOnce() -> Result<T, AnalysisError> + Send + 'static) -> Result<T, AnalysisError> {
+        let Some(read) = InFlight::start(&self.in_flight, volume) else {
             return Err(AnalysisError::FileUnreachable);
-        }
-        let status = Arc::new(AtomicU8::new(RUNNING));
-        let done = Finished(status.clone(), self.stalled.clone());
+        };
         let task = tokio::task::spawn_blocking(move || {
-            let _done = done;
+            let _read = read;
             work()
         });
         match tokio::time::timeout_at(tokio::time::Instant::from_std(until), task).await {
-            Err(_) => {
-                self.stalled.fetch_add(1, Ordering::SeqCst);
-                if status.compare_exchange(RUNNING, ABANDONED, Ordering::SeqCst, Ordering::SeqCst).is_err() {
-                    // It finished just now, so it is not stuck.
-                    self.stalled.fetch_sub(1, Ordering::SeqCst);
-                }
-                Err(AnalysisError::AnalysisTimeout)
-            }
+            Err(_) => Err(AnalysisError::AnalysisTimeout),
             Ok(Err(e)) => {
                 // A panic: a bug here, not a bad file. Its message has no path.
                 eprintln!("sample analysis panicked: {e}");
@@ -210,18 +203,50 @@ impl Analyses {
     }
 }
 
-const RUNNING: u8 = 0;
-const FINISHED: u8 = 1;
-const ABANDONED: u8 = 2;
+/// The mount a path's reads wait on: a drive or share under /Volumes, a
+/// share under /Network or autofs's /net, else the startup disk.
+fn volume(path: &Path) -> PathBuf {
+    let parts: Vec<Component> = path.components().collect();
+    let depth = match parts.get(1).map(|c| c.as_os_str()) {
+        Some(s) if s == "Volumes" || s == "net" => 3,
+        Some(s) if s == "Network" => 4,
+        _ => 0,
+    };
+    if depth == 0 || parts.len() < depth || parts[0] != Component::RootDir {
+        return PathBuf::from("/");
+    }
+    parts[..depth].iter().collect()
+}
 
-/// Marks file work finished when it returns or panics, and uncounts it from
-/// the stalled if its caller had given up on it.
-struct Finished(Arc<AtomicU8>, Arc<AtomicUsize>);
+/// File reads in flight, by volume.
+type Reads = Arc<Mutex<HashMap<PathBuf, usize>>>;
 
-impl Drop for Finished {
+/// One file read in flight on a volume, uncounted when the work returns or
+/// panics.
+struct InFlight(Reads, PathBuf);
+
+impl InFlight {
+    /// Counts a read on `volume`, unless it has `MAX_IN_FLIGHT` already:
+    /// checked and counted under one lock, so a burst cannot pass it.
+    fn start(reads: &Reads, volume: PathBuf) -> Option<InFlight> {
+        let mut map = reads.lock().unwrap_or_else(|e| e.into_inner());
+        let n = map.entry(volume.clone()).or_insert(0);
+        if *n >= MAX_IN_FLIGHT {
+            return None;
+        }
+        *n += 1;
+        Some(InFlight(reads.clone(), volume))
+    }
+}
+
+impl Drop for InFlight {
     fn drop(&mut self) {
-        if self.0.swap(FINISHED, Ordering::SeqCst) == ABANDONED {
-            self.1.fetch_sub(1, Ordering::SeqCst);
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = map.get_mut(&self.1) {
+            *n -= 1;
+            if *n == 0 {
+                map.remove(&self.1);
+            }
         }
     }
 }
@@ -230,6 +255,7 @@ impl Drop for Finished {
 mod tests {
     use super::*;
     use crate::analysis::signals::{sine, wav};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn job(path: PathBuf) -> Job {
         Job { path, regions: vec![(0, 4_410)], segments: None }
@@ -419,15 +445,47 @@ mod tests {
             hung(p)
         }
         let a = Arc::new(Analyses { state: counted_hang, ..Analyses::new(2, 256) });
+        // All at once: none is counted late.
         let mut calls = tokio::task::JoinSet::new();
-        for i in 0..MAX_STALLED {
+        for i in 0..MAX_IN_FLIGHT + 8 {
+            let a = a.clone();
+            calls.spawn(async move { a.get(job(PathBuf::from(format!("/Volumes/nas/{i}.wav"))), later(), BUDGET).await });
+        }
+        while let Some(r) = calls.join_next().await {
+            assert_eq!(r.unwrap().err(), Some(AnalysisError::FileUnreachable));
+        }
+        let r = a.get(job(PathBuf::from("/Volumes/nas/one-more.wav")), later(), BUDGET).await;
+        assert_eq!(r.err(), Some(AnalysisError::FileUnreachable));
+        assert_eq!(CALLS.load(Ordering::SeqCst), MAX_IN_FLIGHT);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_local_file_analyses_while_a_share_is_stuck() {
+        fn stuck_share(p: &Path) -> Result<(u64, SystemTime), AnalysisError> {
+            if p.starts_with("/Volumes/nas") {
+                hung(p)
+            } else {
+                file_state(p)
+            }
+        }
+        let a = Arc::new(Analyses { state: stuck_share, ..Analyses::new(2, 256) });
+        let mut calls = tokio::task::JoinSet::new();
+        for i in 0..MAX_IN_FLIGHT {
             let a = a.clone();
             calls.spawn(async move { a.get(job(PathBuf::from(format!("/Volumes/nas/{i}.wav"))), later(), BUDGET).await });
         }
         while calls.join_next().await.is_some() {}
-        let r = a.get(job(PathBuf::from("/Volumes/nas/one-more.wav")), later(), BUDGET).await;
-        assert_eq!(r.err(), Some(AnalysisError::FileUnreachable));
-        assert_eq!(CALLS.load(Ordering::SeqCst), MAX_STALLED);
+        let path = aged(wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5)));
+        assert!(a.get(job(path), later(), BUDGET).await.is_ok());
+    }
+
+    #[test]
+    fn a_volume_is_its_mount() {
+        assert_eq!(volume(Path::new("/Volumes/nas/Samples/kick.wav")), Path::new("/Volumes/nas"));
+        assert_eq!(volume(Path::new("/Network/Servers/studio/Samples/kick.wav")), Path::new("/Network/Servers/studio"));
+        assert_eq!(volume(Path::new("/net/studio/Samples/kick.wav")), Path::new("/net/studio"));
+        assert_eq!(volume(Path::new("/Users/someone/Music/kick.wav")), Path::new("/"));
+        assert_eq!(volume(Path::new("/Volumes")), Path::new("/"));
     }
 
     #[tokio::test]
