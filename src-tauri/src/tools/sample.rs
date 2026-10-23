@@ -1196,6 +1196,22 @@ mod tests {
         assert_eq!(beat_segments(&r, &[vec![0.0, 1.0, 2.0]], &[Some(0.0), None, Some(2000.0)], 1000.0), None);
     }
 
+    #[test]
+    fn beat_segments_follow_playback_across_two_intervals() {
+        // A loop over beats 0-4 started at beat 3, placed for 2 beats: it
+        // plays 3-4, then 0-1. Live's frames bend with the warp.
+        let mut r = unwarped((3000.0, 4000.0), 0.0);
+        r.intervals[0].source = (3.0, 4.0);
+        r.intervals.push(Interval { source: (0.0, 1.0), frames: (0.0, 1000.0) });
+        let positions = [vec![3.0, 3.5, 4.0], vec![0.0, 0.5, 1.0]];
+        let frames = [Some(3000.0), Some(3400.0), Some(4000.0), Some(0.0), Some(600.0), Some(1000.0)];
+        let s = beat_segments(&r, &positions, &frames, 1000.0).unwrap();
+        assert_eq!(
+            s.iter().map(|s| (s.beat, s.at_s, s.stream)).collect::<Vec<_>>(),
+            vec![(Some(3.0), 3.0, (0, 400)), (Some(3.5), 3.4, (400, 1000)), (Some(0.0), 0.0, (1000, 1600)), (Some(0.5), 0.6, (1600, 2000))]
+        );
+    }
+
     fn analysed(read: &SampleRead) -> Stats {
         let x = sine(44_100, 440.0, 1.0, 0.5);
         let path = wav(44_100, 2, &interleave(&x, &x));
