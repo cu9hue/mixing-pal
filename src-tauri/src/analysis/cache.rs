@@ -106,9 +106,12 @@ impl Analyses {
         let unchanged = outcome.is_ok() && settled && self.file_state(&key.job.path).await.ok() == Some((size, modified));
         match (&outcome, unchanged) {
             (Ok(_), true) => self.keep(&key, &cell),
-            // A waiter's own run filled the cell after this caller gave up.
-            (Err(_), _) if cell.get().is_some_and(Result::is_ok) => {}
-            _ => self.forget(&key, &cell),
+            (Ok(_), false) => self.forget(&key, &cell),
+            // A stored failure is answered once: the next call tries again.
+            (Err(_), _) if cell.get().is_some_and(Result::is_err) => self.forget(&key, &cell),
+            // This caller gave up on the slot. The cell is left to the waiter
+            // now running it, or that waiter's run has already filled it.
+            (Err(_), _) => {}
         }
         outcome
     }
@@ -511,5 +514,42 @@ mod tests {
         assert_eq!(x.err(), Some(AnalysisError::AnalysisBusy));
         assert!(y.is_ok(), "{y:?}");
         assert_eq!(a.cached(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_call_told_busy_leaves_the_run_to_its_waiters() {
+        // One slot, held by another file. The first call on the key gives up,
+        // the second runs it, and a third arrives during that run.
+        static RUNS: AtomicUsize = AtomicUsize::new(0);
+        fn slow(p: &Path, r: &[(u64, u64)], s: Option<&[(u64, u64)]>, d: Instant) -> Result<Stats, AnalysisError> {
+            std::thread::sleep(Duration::from_millis(400));
+            analyse(p, r, s, d)
+        }
+        fn counted(p: &Path, r: &[(u64, u64)], s: Option<&[(u64, u64)]>, d: Instant) -> Result<Stats, AnalysisError> {
+            RUNS.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(300));
+            analyse(p, r, s, d)
+        }
+        let a = Analyses::new(1, 256);
+        let other = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let path = aged(wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5)));
+        let (_, x, y, z) = tokio::join!(
+            a.get_with(job(other), later(), BUDGET, slow),
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                a.get_with(job(path.clone()), Instant::now() + Duration::from_millis(100), BUDGET, counted).await
+            },
+            async {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                a.get_with(job(path.clone()), later(), BUDGET, counted).await
+            },
+            async {
+                tokio::time::sleep(Duration::from_millis(550)).await;
+                a.get_with(job(path.clone()), later(), BUDGET, counted).await
+            },
+        );
+        assert_eq!(x.err(), Some(AnalysisError::AnalysisBusy));
+        assert!(y.is_ok() && z.is_ok(), "{y:?} {z:?}");
+        assert_eq!(RUNS.load(Ordering::SeqCst), 1);
     }
 }
