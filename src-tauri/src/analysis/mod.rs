@@ -112,6 +112,16 @@ impl Segments {
         }
         (self.cursor < self.ranges.len() && self.ranges[self.cursor].0 <= position).then_some(self.cursor)
     }
+
+    /// The segments that overlap [from, to), as (index, range). `from` only
+    /// grows, so the cursor only moves forward.
+    pub fn overlapping(&mut self, from: u64, to: u64) -> impl Iterator<Item = (usize, (u64, u64))> + '_ {
+        while self.cursor < self.ranges.len() && self.ranges[self.cursor].1 <= from {
+            self.cursor += 1;
+        }
+        let cursor = self.cursor;
+        self.ranges[cursor..].iter().enumerate().map(move |(i, r)| (cursor + i, *r)).take_while(move |(_, r)| r.0 < to)
+    }
 }
 
 #[cfg(test)]

@@ -46,6 +46,8 @@ struct Stft {
     hop: usize,
     fft: Arc<dyn Fft<f32>>,
     window: Vec<f32>,
+    /// The window's running sum: `mass[i]` sums its first `i` values.
+    mass: Vec<f64>,
     buffers: Vec<Vec<f32>>,
     scratch: Vec<Complex<f32>>,
     power: Vec<f64>,
@@ -53,11 +55,17 @@ struct Stft {
 
 impl Stft {
     fn new(size: usize, hop: usize, channels: usize) -> Self {
+        let window: Vec<f32> = (0..size).map(|i| (0.5 - 0.5 * (2.0 * PI * i as f64 / size as f64).cos()) as f32).collect();
+        let mass = std::iter::once(0.0).chain(window.iter().scan(0.0, |sum, w| {
+            *sum += f64::from(*w);
+            Some(*sum)
+        }));
         Stft {
             size,
             hop,
             fft: FftPlanner::new().plan_fft_forward(size),
-            window: (0..size).map(|i| (0.5 - 0.5 * (2.0 * PI * i as f64 / size as f64).cos()) as f32).collect(),
+            mass: mass.collect(),
+            window,
             // Pre-filled so the first frame comes one hop in: a sound at the
             // region's start is in the first frame, not lost.
             buffers: vec![vec![0.0; size - hop]; channels],
@@ -157,7 +165,7 @@ impl Spectrum {
             self.position += 1;
             if self.long.push(frame) {
                 self.long.measure();
-                self.record();
+                self.record(self.position as i64 - self.long.size as i64);
             }
             if self.short.push(frame) {
                 self.short.measure();
@@ -176,19 +184,29 @@ impl Spectrum {
         self.onset(false);
     }
 
-    fn record(&mut self) {
+    /// `start`: the stream position of the frame's first sample, below 0
+    /// for the silence the first frame starts with. Each segment the frame
+    /// overlaps gets the share of the window's mass that falls inside it, so
+    /// one shorter than a hop still gets a centroid.
+    fn record(&mut self, start: i64) {
         let bin_hz = self.rate / self.long.size as f64;
-        let segment = self.segments.at(self.position.saturating_sub(self.long.size as u64 / 2));
+        let (mut weighted, mut total) = (0.0, 0.0);
         for (k, &p) in self.long.power.iter().enumerate().skip(1) {
             let hz = k as f64 * bin_hz;
             let band = BANDS.iter().position(|(_, top)| hz < *top).unwrap_or(BANDS.len() - 1);
             self.bands[band] += p;
-            self.weighted += hz * p;
-            self.total += p;
-            if let Some(i) = segment {
-                self.segment_sums[i].0 += hz * p;
-                self.segment_sums[i].1 += p;
-            }
+            weighted += hz * p;
+            total += p;
+        }
+        self.weighted += weighted;
+        self.total += total;
+        let (size, mass) = (self.long.size as i64, &self.long.mass);
+        for (i, (a, b)) in self.segments.overlapping(start.max(0) as u64, (start + size).max(0) as u64) {
+            let lo = (a as i64 - start).clamp(0, size) as usize;
+            let hi = (b as i64 - start).clamp(0, size) as usize;
+            let share = (mass[hi] - mass[lo]) / mass[size as usize];
+            self.segment_sums[i].0 += share * weighted;
+            self.segment_sums[i].1 += share * total;
         }
     }
 
@@ -207,9 +225,10 @@ impl Spectrum {
     }
 
     pub fn finish(mut self) -> SpectrumStats {
+        let held = self.long.buffers[0].len() as i64;
         if self.long.pad() {
             self.long.measure();
-            self.record();
+            self.record(self.position as i64 - held);
         }
         if self.short.pad() {
             self.short.measure();
@@ -336,6 +355,20 @@ mod tests {
     fn a_region_shorter_than_a_hop_still_gets_a_frame() {
         let s = spectrum(44_100, &sine(44_100, 1000.0, 0.005, 0.5), vec![]);
         assert!(s.centroid_hz.is_ok(), "{:?}", s.centroid_hz);
+    }
+
+    #[test]
+    fn a_segment_shorter_than_a_hop_has_a_centroid() {
+        // 2.01 s in half-second steps ends in a 10 ms segment; one of 950
+        // frames sits mid-stream.
+        let x = noise(44_100, 2.01, 0.5, 9);
+        let n = x.len() as u64;
+        let tail: Vec<_> = (0..5).map(|k| (k * 22_050, ((k + 1) * 22_050).min(n))).collect();
+        let mid = vec![(0, 22_050), (22_050, 23_000), (23_000, n)];
+        for segments in [tail, mid] {
+            let s = spectrum(44_100, &x, segments.clone());
+            assert!(s.segment_centroid_hz.iter().all(Result::is_ok), "{segments:?}: {:?}", s.segment_centroid_hz);
+        }
     }
 
     #[test]
