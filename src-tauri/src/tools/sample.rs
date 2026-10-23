@@ -29,8 +29,11 @@ const FRAME_STATUSES: [&str; 5] = ["not_audio_clip", "empty_slot", "no_such_targ
 
 /// Every analysis block opens with this.
 pub const ABOUT: &str = "These stats describe the file's region before clip gain, warping, devices and the fader.";
-/// From the call, including the wait for one of the two analysis slots.
-pub const ANALYSIS_BUDGET: Duration = Duration::from_secs(8);
+/// One analysis, from when it gets one of the two slots. A debug build runs
+/// it about 80 times slower, so `tauri dev` gets longer.
+pub const ANALYSIS_BUDGET: Duration = Duration::from_secs(if cfg!(debug_assertions) { 120 } else { 8 });
+/// The most a call waits for a slot, behind other calls of the same turn.
+pub const ANALYSIS_WAIT: Duration = Duration::from_secs(30);
 const PROFILE_MIN_SECONDS: f64 = 2.0;
 const SEGMENT_SECONDS: f64 = 0.5;
 const MAX_SEGMENTS: f64 = 64.0;
@@ -437,7 +440,7 @@ pub async fn analysis_block(read: &SampleRead, profile: &Profile) -> Option<(Val
         _ => None,
     };
     let job = Job { path: path.as_path().to_path_buf(), regions, segments };
-    Some(match ANALYSES.get(job, std::time::Instant::now() + ANALYSIS_BUDGET).await {
+    Some(match ANALYSES.get(job, std::time::Instant::now() + ANALYSIS_WAIT, ANALYSIS_BUDGET).await {
         Ok(stats) => (analysis_payload(&stats, read, profile), Some(stats.channels)),
         Err(e) => (failed(e.code()), None),
     })
@@ -562,8 +565,15 @@ pub fn analysis_payload(stats: &Stats, read: &SampleRead, profile: &Profile) -> 
         Some(Tail::AtLeast(ms)) => b.put("tail_ms_at_least", json!(ms)),
         None => {}
     }
+    // Past 50 ms short, the stats cover less than the region, and the
+    // profile's later segments would be shifted or read as silence.
+    let short = stats.missing_frames * 20 > u64::from(stats.rate);
+    if short {
+        b.put("file_short_by_s", json!(r2(stats.missing_frames as f64 / f64::from(stats.rate))));
+    }
     match profile {
         Profile::Off => {}
+        Profile::Segments(_) if short => b.null("profile", "file_shorter_than_region"),
         Profile::Unavailable(reason) => b.null("profile", reason),
         Profile::Segments(segments) => b.put("profile", profile_columns(stats, segments)),
     }
@@ -1133,6 +1143,7 @@ mod tests {
             stereo: Ok(StereoStats { correlation: Ok(0.876), side_to_mid_db: Ok(-12.34), low_correlation: Ok(0.99), low_side_to_mid_db: Ok(-31.2) }),
             pitch: Pitch::Sweep { from_hz: 98.76, tail_hz: 55.12 },
             onsets_per_second: Ok(3.21),
+            missing_frames: 0,
         }
     }
 
@@ -1162,6 +1173,19 @@ mod tests {
         assert_eq!(p["profile"]["centroid_hz"], json!([1830.0, 1830.0]));
         let none = analysis_payload(&stats, &sine_read(0.0), &Profile::Unavailable("region_too_short"));
         assert_eq!((&none["profile"], &none["null_because"]["profile"]), (&Value::Null, &json!("region_too_short")));
+    }
+
+    #[test]
+    fn a_file_shorter_than_its_region_names_the_gap_and_drops_the_profile() {
+        // The missing tail is not silence, and later segments would be shifted.
+        let segments = vec![Segment { beat: None, at_s: 0.0, stream: (0, 1) }, Segment { beat: None, at_s: 0.5, stream: (1, 2) }];
+        let mut stats = worst_case(2);
+        stats.missing_frames = 22_050;
+        let p = analysis_payload(&stats, &sine_read(0.0), &Profile::Segments(segments));
+        assert_eq!((&p["file_short_by_s"], &p["profile"]), (&json!(0.5), &Value::Null));
+        assert_eq!(p["null_because"]["profile"], "file_shorter_than_region");
+        stats.missing_frames = 100;
+        assert!(analysis_payload(&stats, &sine_read(0.0), &Profile::Off).get("file_short_by_s").is_none());
     }
 
     #[tokio::test]

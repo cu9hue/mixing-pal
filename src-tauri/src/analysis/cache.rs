@@ -6,7 +6,7 @@ use super::{analyse, Stats};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{OnceCell, Semaphore};
 
 pub const CAPACITY: usize = 256;
@@ -45,33 +45,45 @@ impl Analyses {
         Analyses { permits: Semaphore::new(concurrent), cells: Mutex::new((HashMap::new(), VecDeque::new())), capacity }
     }
 
-    pub async fn get(&self, job: Job, deadline: Instant) -> Result<Arc<Stats>, AnalysisError> {
-        self.get_with(job, deadline, analyse).await
+    pub async fn get(&self, job: Job, wait_until: Instant, budget: Duration) -> Result<Arc<Stats>, AnalysisError> {
+        self.get_with(job, wait_until, budget, analyse).await
     }
 
     /// `run` is `analyse` outside tests. A caller that finds the same key
     /// running waits for that run instead of starting another. A failed
     /// run leaves nothing behind, so the next caller tries again.
-    pub async fn get_with(&self, job: Job, deadline: Instant, run: Run) -> Result<Arc<Stats>, AnalysisError> {
-        let (size, modified) = file_state(&job.path)?;
+    ///
+    /// `wait_until` bounds the wait for a slot; `budget` starts once the
+    /// slot is free, so calls queued behind others still get their full
+    /// analysis time.
+    pub async fn get_with(&self, job: Job, wait_until: Instant, budget: Duration, run: Run) -> Result<Arc<Stats>, AnalysisError> {
+        if Instant::now() >= wait_until {
+            return Err(AnalysisError::AnalysisTimeout);
+        }
+        let path = job.path.clone();
+        let (size, modified) = blocking(wait_until, move || file_state(&path)).await?;
         let key = Key { job: job.clone(), size, modified };
         let cell = self.cell(&key);
         let result = cell
             .get_or_try_init(|| async move {
-                let _permit = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), self.permits.acquire())
+                let _permit = tokio::time::timeout_at(tokio::time::Instant::from_std(wait_until), self.permits.acquire())
                     .await
                     .map_err(|_| AnalysisError::AnalysisTimeout)?
                     .map_err(|_| AnalysisError::DecodeFailed)?;
-                let stats = tokio::task::spawn_blocking(move || run(&job.path, &job.regions, job.segments.as_deref(), deadline))
-                    .await
-                    .map_err(|_| AnalysisError::DecodeFailed)??;
+                let deadline = Instant::now() + budget;
+                let stats = blocking(deadline, move || run(&job.path, &job.regions, job.segments.as_deref(), deadline)).await?;
                 Ok(Arc::new(stats))
             })
             .await
             .map(Arc::clone);
         // A file that changed while it was read is answered, not kept.
-        if result.is_err() || file_state(&key.job.path).ok() != Some((size, modified)) {
-            self.forget(&key);
+        let path = key.job.path.clone();
+        let unchanged = result.is_ok() && blocking(Instant::now() + budget, move || file_state(&path)).await.ok() == Some((size, modified));
+        match (&result, unchanged) {
+            (Ok(_), true) => self.keep(&key, &cell),
+            // A waiter's own run filled the cell after this one failed.
+            (Err(_), _) if cell.get().is_some() => {}
+            _ => self.forget(&key, &cell),
         }
         result
     }
@@ -93,16 +105,47 @@ impl Analyses {
         c
     }
 
-    fn forget(&self, key: &Key) {
+    /// A caller whose own run failed may clean up after a waiter has
+    /// started again on the same cell; the waiter's result is put back.
+    fn keep(&self, key: &Key, cell: &Cell) {
         let mut guard = self.cells.lock().unwrap_or_else(|e| e.into_inner());
         let (map, order) = &mut *guard;
-        map.remove(key);
-        order.retain(|k| k != key);
+        if !map.contains_key(key) {
+            map.insert(key.clone(), cell.clone());
+            order.push_back(key.clone());
+            while order.len() > self.capacity {
+                if let Some(old) = order.pop_front() {
+                    map.remove(&old);
+                }
+            }
+        }
+    }
+
+    /// Removes this caller's cell, not one another caller has since put
+    /// under the key.
+    fn forget(&self, key: &Key, cell: &Cell) {
+        let mut guard = self.cells.lock().unwrap_or_else(|e| e.into_inner());
+        let (map, order) = &mut *guard;
+        if map.get(key).is_some_and(|c| Arc::ptr_eq(c, cell)) {
+            map.remove(key);
+            order.retain(|k| k != key);
+        }
     }
 
     #[cfg(test)]
     fn cached(&self) -> usize {
         self.cells.lock().unwrap().0.len()
+    }
+}
+
+/// Runs file work off the async threads and stops waiting for it at
+/// `until`: a stalled disk costs the caller a timeout, not a hang. The
+/// abandoned thread finishes, or stalls, on its own.
+async fn blocking<T: Send + 'static>(until: Instant, work: impl FnOnce() -> Result<T, AnalysisError> + Send + 'static) -> Result<T, AnalysisError> {
+    match tokio::time::timeout_at(tokio::time::Instant::from_std(until), tokio::task::spawn_blocking(work)).await {
+        Err(_) => Err(AnalysisError::AnalysisTimeout),
+        Ok(Err(_)) => Err(AnalysisError::DecodeFailed),
+        Ok(Ok(r)) => r,
     }
 }
 
@@ -117,6 +160,8 @@ mod tests {
         Job { path, regions: vec![(0, 4_410)], segments: None }
     }
 
+    const BUDGET: Duration = Duration::from_secs(20);
+
     fn later() -> Instant {
         Instant::now() + Duration::from_secs(20)
     }
@@ -130,8 +175,8 @@ mod tests {
         }
         let a = Analyses::new(2, 256);
         let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
-        let first = a.get_with(job(path.clone()), later(), counted).await.unwrap();
-        let second = a.get_with(job(path), later(), counted).await.unwrap();
+        let first = a.get_with(job(path.clone()), later(), BUDGET, counted).await.unwrap();
+        let second = a.get_with(job(path), later(), BUDGET, counted).await.unwrap();
         assert_eq!(RUNS.load(Ordering::SeqCst), 1);
         assert!(Arc::ptr_eq(&first, &second));
     }
@@ -147,8 +192,8 @@ mod tests {
         let a = Analyses::new(2, 256);
         let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
         let with = |segments| Job { segments: Some(segments), ..job(path.clone()) };
-        a.get_with(with(vec![(0, 2_000), (2_000, 4_410)]), later(), counted).await.unwrap();
-        a.get_with(with(vec![(0, 2_205), (2_205, 4_410)]), later(), counted).await.unwrap();
+        a.get_with(with(vec![(0, 2_000), (2_000, 4_410)]), later(), BUDGET, counted).await.unwrap();
+        a.get_with(with(vec![(0, 2_205), (2_205, 4_410)]), later(), BUDGET, counted).await.unwrap();
         assert_eq!(RUNS.load(Ordering::SeqCst), 2);
     }
 
@@ -162,7 +207,7 @@ mod tests {
         }
         let a = Analyses::new(2, 256);
         let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
-        let (x, y) = tokio::join!(a.get_with(job(path.clone()), later(), slow), a.get_with(job(path), later(), slow));
+        let (x, y) = tokio::join!(a.get_with(job(path.clone()), later(), BUDGET, slow), a.get_with(job(path), later(), BUDGET, slow));
         assert!(x.is_ok() && y.is_ok());
         assert_eq!(RUNS.load(Ordering::SeqCst), 1);
     }
@@ -181,9 +226,9 @@ mod tests {
         let a = Analyses::new(2, 256);
         let files: Vec<_> = (0..3).map(|_| wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5))).collect();
         let (x, y, z) = tokio::join!(
-            a.get_with(job(files[0].clone()), later(), tracked),
-            a.get_with(job(files[1].clone()), later(), tracked),
-            a.get_with(job(files[2].clone()), later(), tracked),
+            a.get_with(job(files[0].clone()), later(), BUDGET, tracked),
+            a.get_with(job(files[1].clone()), later(), BUDGET, tracked),
+            a.get_with(job(files[2].clone()), later(), BUDGET, tracked),
         );
         assert!(x.is_ok() && y.is_ok() && z.is_ok());
         assert_eq!(MOST.load(Ordering::SeqCst), 2);
@@ -199,7 +244,7 @@ mod tests {
         }
         let a = Analyses::new(2, 256);
         let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
-        assert!(a.get_with(job(path), later(), grows).await.is_ok());
+        assert!(a.get_with(job(path), later(), BUDGET, grows).await.is_ok());
         assert_eq!(a.cached(), 0);
     }
 
@@ -208,7 +253,7 @@ mod tests {
         let a = Analyses::new(2, 2);
         for _ in 0..3 {
             let path = wav(44_100, 1, &sine(44_100, 440.0, 0.1, 0.5));
-            a.get(job(path), later()).await.unwrap();
+            a.get(job(path), later(), BUDGET).await.unwrap();
         }
         assert_eq!(a.cached(), 2);
     }
@@ -216,7 +261,7 @@ mod tests {
     #[tokio::test]
     async fn a_missing_file_fails_before_any_slot_is_taken() {
         let a = Analyses::new(2, 256);
-        let r = a.get(job(PathBuf::from("/Users/someone/gone.wav")), later()).await;
+        let r = a.get(job(PathBuf::from("/Users/someone/gone.wav")), later(), BUDGET).await;
         assert_eq!(r.err(), Some(AnalysisError::FileMissing));
         assert_eq!(a.cached(), 0);
     }
@@ -225,6 +270,57 @@ mod tests {
     async fn a_passed_deadline_is_a_timeout() {
         let a = Analyses::new(2, 256);
         let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
-        assert_eq!(a.get(job(path), Instant::now()).await.err(), Some(AnalysisError::AnalysisTimeout));
+        assert_eq!(a.get(job(path), Instant::now(), BUDGET).await.err(), Some(AnalysisError::AnalysisTimeout));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn waiting_for_a_slot_does_not_spend_the_budget() {
+        fn slow(p: &Path, r: &[(u64, u64)], s: Option<&[(u64, u64)]>, d: Instant) -> Result<Stats, AnalysisError> {
+            std::thread::sleep(Duration::from_millis(400));
+            analyse(p, r, s, d)
+        }
+        let a = Analyses::new(1, 256);
+        let first = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let second = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let (x, y) = tokio::join!(a.get_with(job(first), later(), BUDGET, slow), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            a.get_with(job(second), later(), Duration::from_millis(300), analyse).await
+        });
+        assert!(x.is_ok() && y.is_ok(), "{:?}", y.err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_run_that_ignores_its_deadline_is_abandoned_at_it() {
+        // A stalled disk: the read blocks and never checks the deadline.
+        fn stalled(p: &Path, r: &[(u64, u64)], s: Option<&[(u64, u64)]>, d: Instant) -> Result<Stats, AnalysisError> {
+            std::thread::sleep(Duration::from_secs(3));
+            analyse(p, r, s, d)
+        }
+        let a = Analyses::new(2, 256);
+        let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let start = Instant::now();
+        let r = a.get_with(job(path), later(), Duration::from_millis(200), stalled).await;
+        assert_eq!(r.err(), Some(AnalysisError::AnalysisTimeout));
+        assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_failed_caller_does_not_drop_a_waiters_result() {
+        // The first run fails; the waiter on the same key runs again and
+        // succeeds after the failed caller has cleaned up.
+        static RUNS: AtomicUsize = AtomicUsize::new(0);
+        fn flaky(p: &Path, r: &[(u64, u64)], s: Option<&[(u64, u64)]>, d: Instant) -> Result<Stats, AnalysisError> {
+            if RUNS.fetch_add(1, Ordering::SeqCst) == 0 {
+                std::thread::sleep(Duration::from_millis(50));
+                return Err(AnalysisError::DecodeFailed);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            analyse(p, r, s, d)
+        }
+        let a = Analyses::new(2, 256);
+        let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let (x, y) = tokio::join!(a.get_with(job(path.clone()), later(), BUDGET, flaky), a.get_with(job(path), later(), BUDGET, flaky));
+        assert!(x.is_err() != y.is_err(), "{x:?} {y:?}");
+        assert_eq!(a.cached(), 1);
     }
 }

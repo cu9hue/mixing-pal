@@ -29,6 +29,9 @@ pub struct Stats {
     pub stereo: Result<StereoStats, &'static str>,
     pub pitch: Pitch,
     pub onsets_per_second: Stat,
+    /// Region frames the file did not have: Live counted more than the
+    /// decoder found, as for a file cut short.
+    pub missing_frames: u64,
 }
 
 /// Decodes the regions once, in order, feeding every measure. Blocking:
@@ -72,6 +75,7 @@ pub fn analyse(path: &Path, regions: &[(u64, u64)], segments: Option<&[(u64, u64
         spectrum,
         stereo: stereo.map(stereo::Stereo::finish).ok_or("mono_file"),
         pitch: pitch.finish(),
+        missing_frames: regions.iter().map(|(a, b)| b.saturating_sub(*a)).sum::<u64>().saturating_sub(frames),
     })
 }
 #[cfg(test)]
@@ -209,5 +213,12 @@ mod tests {
         let path = wav(44_100, 1, &x);
         let s = analyse(&path, &[(22_050, 44_100)], None, later()).unwrap();
         assert_eq!(s.onsets_per_second, Ok(2.0));
+    }
+
+    #[test]
+    fn a_file_shorter_than_its_region_says_by_how_much() {
+        let path = wav(44_100, 1, &sine(44_100, 440.0, 1.0, 0.5));
+        let s = analyse(&path, &[(0, 88_200)], None, later()).unwrap();
+        assert_eq!((s.missing_frames, s.seconds), (44_100, 1.0));
     }
 }
