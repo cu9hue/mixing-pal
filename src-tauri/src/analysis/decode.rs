@@ -19,7 +19,8 @@ use symphonia::core::probe::Hint;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisError {
     FileMissing,
-    FileInIcloud,
+    /// iCloud Drive, Dropbox, Google Drive or OneDrive has not downloaded it.
+    FileOnlineOnly,
     /// macOS refused access, such as a folder the producer did not allow.
     FileNotPermitted,
     UnsupportedFormat,
@@ -41,7 +42,7 @@ impl AnalysisError {
     pub fn code(self) -> &'static str {
         match self {
             AnalysisError::FileMissing => "file_missing",
-            AnalysisError::FileInIcloud => "file_in_icloud",
+            AnalysisError::FileOnlineOnly => "file_online_only",
             AnalysisError::FileNotPermitted => "file_not_permitted",
             AnalysisError::UnsupportedFormat => "unsupported_format",
             AnalysisError::UnsupportedChannels => "unsupported_channels",
@@ -65,7 +66,8 @@ pub const MAX_REGION_FRAMES: u64 = MAX_REGION_SECONDS * 96_000;
 /// the region begins. Covers one Vorbis long block.
 const PREROLL_FRAMES: u64 = 4096;
 
-/// macOS marks an iCloud file whose bytes are not on this disk as dataless.
+/// macOS marks a cloud file whose bytes are not on this disk as dataless:
+/// iCloud Drive's and every File Provider's (Dropbox, Google Drive, OneDrive).
 /// Reading one starts a download, so it is refused before any read.
 const SF_DATALESS: u32 = 0x4000_0000;
 
@@ -84,7 +86,7 @@ pub fn file_state(path: &Path) -> Result<(u64, SystemTime), AnalysisError> {
     {
         use std::os::macos::fs::MetadataExt;
         if is_dataless(meta.st_flags()) {
-            return Err(AnalysisError::FileInIcloud);
+            return Err(AnalysisError::FileOnlineOnly);
         }
     }
     let modified = meta.modified().map_err(|_| AnalysisError::DecodeFailed)?;
@@ -436,6 +438,12 @@ mod tests {
         let e = Source::open(std::path::Path::new("/Users/someone/Secret/gone.wav")).err().unwrap();
         assert_eq!(e, AnalysisError::FileMissing);
         assert_eq!(e.code(), "file_missing");
+    }
+
+    #[test]
+    fn a_file_not_downloaded_is_named_for_any_cloud_folder() {
+        // Dropbox, Google Drive and OneDrive placeholders are dataless too.
+        assert_eq!(AnalysisError::FileOnlineOnly.code(), "file_online_only");
     }
 
     #[test]
