@@ -299,12 +299,15 @@ impl Source {
             .map_err(|_| AnalysisError::UnsupportedFormat)?;
         // MP4 leaves AAC's channel count to the stream, and ALAC's rate to
         // ALAC's own header: the MP4 field cannot hold 96 kHz. AAC keeps its
-        // stated rate, so `stream` can refuse HE-AAC's half-rate decoding.
-        let alac = params.codec == CODEC_TYPE_ALAC;
-        let decoded = if params.channels.is_none() || alac { Some(decoded_spec(&mut *format, &mut *decoder, track.id)?) } else { None };
+        // stated rate unless it decodes higher (96 kHz AAC-LC states 48 kHz),
+        // so `stream` can still refuse HE-AAC's half-rate decoding.
+        let (alac, aac) = (params.codec == CODEC_TYPE_ALAC, params.codec == CODEC_TYPE_AAC);
+        let decoded = if params.channels.is_none() || alac || aac { Some(decoded_spec(&mut *format, &mut *decoder, track.id)?) } else { None };
+        let stated = params.sample_rate.filter(|r| *r > 0);
         let rate = match decoded {
             Some((r, _)) if alac => r,
-            _ => params.sample_rate.filter(|r| *r > 0).ok_or(AnalysisError::UnsupportedFormat)?,
+            Some((r, _)) if aac && stated.is_some_and(|s| r > s) => r,
+            _ => stated.ok_or(AnalysisError::UnsupportedFormat)?,
         };
         let channels = match decoded {
             Some((_, c)) => c,
@@ -319,7 +322,7 @@ impl Source {
         }
         // symphonia trims no AAC priming. 1024 frames is the AAC-LC encoder
         // delay most encoders write, for a file that does not state its own.
-        let delay = if params.codec == CODEC_TYPE_AAC {
+        let delay = if aac {
             params.delay.map(u64::from).or_else(|| mp4_priming(path, rate)).unwrap_or(1024)
         } else {
             0
@@ -740,6 +743,19 @@ mod tests {
         let mut source = Source::open(&fixture("he-aac-440.m4a")).unwrap();
         let r = source.stream(&[(0, 10_000)], later(), &mut |_| {});
         assert_eq!(r, Err(AnalysisError::UnsupportedFormat));
+    }
+
+    #[test]
+    fn aac_at_96_khz_lands_on_the_same_frames() {
+        let reference = chirp(96_000, 0.2);
+        let path = fixture("chirp-96k.m4a");
+        assert_eq!(Source::open(&path).map(|s| s.rate), Ok(96_000));
+        for (start, end) in [(0, 4_000), (6_000, 12_000)] {
+            let got = first_channel(&path, (start, end));
+            assert_eq!(got.len() as u64, end - start);
+            let (lag, corr) = best_lag(&got, &reference, start as usize);
+            assert!(lag.abs() <= 1 && corr > 0.9, "at {start}: lag {lag}, correlation {corr:.3}");
+        }
     }
 
     #[test]

@@ -24,5 +24,7 @@ gen -c:a aac_at -b:a 64k chirp-aac-at.m4a
 # A video file: its first track is the video's, whose B-frames give it an
 # edit list of its own, in the video's time scale.
 ffmpeg -v error -y -f lavfi -i "testsrc=size=16x16:rate=25:duration=0.2" -f lavfi -i "$SRC" -map 0:v -map 1:a -c:v libx264 -bf 2 -c:a aac -b:a 64k chirp-video.mp4
+# AAC-LC at 96 kHz: the MP4 sample entry states less than the stream holds.
+ffmpeg -v error -y -f lavfi -i "aevalsrc=0.5*sin(2*PI*(200*t+9500*t*t)):s=96000:d=0.2" -c:a aac -b:a 128k chirp-96k.m4a
 # HE-AAC: symphonia decodes only its half-rate core. macOS only (AudioToolbox).
 ffmpeg -v error -y -f lavfi -i "aevalsrc=0.5*sin(2*PI*440*t):s=44100:d=0.5" -c:a aac_at -profile:a 4 -b:a 32k he-aac-440.m4a
