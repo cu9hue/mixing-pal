@@ -12,6 +12,14 @@ const THRESHOLD: f64 = 0.15;
 const QUIET: f64 = 1e-5;
 const FRAMES_PER_SECOND: f64 = 50.0;
 const SEMITONE_CENTS: f64 = 100.0;
+/// Pitch needs at most 4 kHz, so a higher rate is averaged down to 48 kHz
+/// or below first: YIN's cost grows with the square of the rate.
+const MAX_RATE: f64 = 48_000.0;
+/// A found period whose own frequency holds less of the frame's power than
+/// this is the period several notes share, not a note: a major triad's
+/// notes share a 55 Hz period that none of them plays. Chords measure under
+/// 0.5%; a bass whose fundamental is 18 dB under its octave, about 5%.
+const FUNDAMENTAL_SHARE: f64 = 0.02;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pitch {
@@ -25,10 +33,16 @@ enum Frame {
     Voiced(f64),
     /// The lowest normalised difference found, for telling noise from a chord.
     Unvoiced(f64),
+    /// A clear period with nothing at its frequency.
+    Chord,
 }
 
 pub struct PitchTracker {
+    /// After averaging down: the rate YIN runs at.
     rate: f64,
+    step: usize,
+    sum: f64,
+    summed: usize,
     window: usize,
     tau_max: usize,
     tau_min: usize,
@@ -44,13 +58,17 @@ pub struct PitchTracker {
 
 impl PitchTracker {
     pub fn new(rate: u32) -> Self {
-        let r = f64::from(rate);
+        let step = (f64::from(rate) / MAX_RATE).ceil().max(1.0) as usize;
+        let r = f64::from(rate) / step as f64;
         let tau_max = (r / LOWEST_HZ).ceil() as usize;
         let window = tau_max;
         let n = (window + tau_max).next_power_of_two();
         let mut planner = FftPlanner::new();
         PitchTracker {
             rate: r,
+            step,
+            sum: 0.0,
+            summed: 0,
             window,
             tau_max,
             tau_min: ((r / HIGHEST_HZ).floor() as usize).max(2),
@@ -67,7 +85,13 @@ impl PitchTracker {
 
     pub fn push(&mut self, chunk: &[f32], channels: usize) {
         for frame in chunk.chunks_exact(channels) {
-            self.buffer.push(frame.iter().map(|x| f64::from(*x)).sum::<f64>() / channels as f64);
+            self.sum += frame.iter().map(|x| f64::from(*x)).sum::<f64>() / channels as f64;
+            self.summed += 1;
+            if self.summed < self.step {
+                continue;
+            }
+            self.buffer.push(self.sum / self.step as f64);
+            (self.sum, self.summed) = (0.0, 0);
             if self.buffer.len() == self.window + self.tau_max {
                 self.analyse();
                 self.buffer.drain(..self.hop);
@@ -119,7 +143,14 @@ impl PitchTracker {
                 let (s0, s1, s2) = (cmnd[tau - 1], cmnd[tau], cmnd[tau + 1]);
                 let curve = s0 - 2.0 * s1 + s2;
                 let shift = if curve.abs() > 1e-12 { (0.5 * (s0 - s2) / curve).clamp(-1.0, 1.0) } else { 0.0 };
-                self.frames.push(Frame::Voiced(self.rate / (tau as f64 + shift)));
+                let hz = self.rate / (tau as f64 + shift);
+                // `b` still holds the frame's spectrum.
+                let power = |k: usize| self.b[k].norm_sqr();
+                let bin = hz * self.n as f64 / self.rate;
+                let top = self.n / 2 - 1;
+                let near: f64 = (((bin - 1.0).max(1.0) as usize)..=((bin + 1.0) as usize).min(top)).map(power).sum();
+                let total: f64 = (1..=top).map(power).sum();
+                self.frames.push(if near < FUNDAMENTAL_SHARE * total { Frame::Chord } else { Frame::Voiced(hz) });
                 return;
             }
             tau += 1;
@@ -137,14 +168,17 @@ impl PitchTracker {
         }
         let voiced: Vec<f64> = self.frames.iter().filter_map(|f| if let Frame::Voiced(hz) = f { Some(*hz) } else { None }).collect();
         let mut unvoiced: Vec<f64> = self.frames.iter().filter_map(|f| if let Frame::Unvoiced(d) = f { Some(*d) } else { None }).collect();
-        let counted = voiced.len() + unvoiced.len();
+        let chords = self.frames.iter().filter(|f| matches!(f, Frame::Chord)).count();
+        let counted = voiced.len() + unvoiced.len() + chords;
         if counted == 0 {
             return Pitch::Unknown("silent");
         }
         if voiced.len() * 2 <= counted {
             // A chord dips the difference function without reaching the
-            // threshold; noise barely dips it at all.
-            return Pitch::Unknown(if median(&mut unvoiced) < 0.35 { "polyphonic" } else { "noise" });
+            // threshold (seventh chords measure about 0.3-0.36); noise barely
+            // dips it (white about 0.9, brown about 0.7).
+            let polyphonic = chords >= unvoiced.len() || median(&mut unvoiced) < 0.5;
+            return Pitch::Unknown(if polyphonic { "polyphonic" } else { "noise" });
         }
         let cents = |v: &[f64]| v.iter().map(|hz| 1200.0 * (hz / 440.0).log2()).collect::<Vec<_>>();
         if spread(&cents(&voiced)) <= SEMITONE_CENTS {
@@ -209,7 +243,7 @@ mod tests {
 
     #[test]
     fn a_440_sine_reads_a3_within_five_cents_at_every_rate() {
-        for rate in [44_100, 48_000, 96_000] {
+        for rate in [44_100, 48_000, 96_000, 192_000] {
             let hz = steady(track(rate, &sine(rate, 440.0, 1.0, 0.5), 1));
             assert!(cents(hz, 440.0).abs() < 5.0, "{rate}: {hz}");
             assert_eq!(note(hz).0, "A3");
@@ -270,5 +304,41 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    fn chord(hz: &[f64]) -> Vec<f32> {
+        let parts: Vec<Vec<f32>> = hz.iter().map(|h| sine(44_100, *h, 1.0, 0.2)).collect();
+        (0..44_100).map(|i| parts.iter().map(|p| p[i]).sum()).collect()
+    }
+
+    #[test]
+    fn a_chord_is_polyphonic_not_the_period_its_notes_share() {
+        // A major triad's notes share a 55 Hz period; a fifth's too.
+        for notes in [vec![220.0, 277.18, 329.63], vec![110.0, 164.81], vec![130.81, 164.81, 196.0, 246.94]] {
+            assert_eq!(track(44_100, &chord(&notes), 1), Pitch::Unknown("polyphonic"), "{notes:?}");
+        }
+    }
+
+    #[test]
+    fn a_note_with_its_harmonics_is_still_one_note() {
+        // A saw-like 55 Hz bass: the fundamental plus falling harmonics.
+        let x: Vec<f32> = (0..44_100)
+            .map(|i| (1..=8).map(|k| (0.4 / k as f64 * (2.0 * std::f64::consts::PI * 55.0 * k as f64 * i as f64 / 44_100.0).sin()) as f32).sum())
+            .collect();
+        assert!(cents(steady(track(44_100, &x, 1)), 55.0).abs() < 5.0);
+    }
+
+    #[test]
+    fn a_wide_vibrato_is_unstable() {
+        // 220 Hz swinging ±160 cents, three times a second.
+        let mut phase = 0.0f64;
+        let x: Vec<f32> = (0..88_200)
+            .map(|i| {
+                let hz = 220.0 * 2f64.powf(1.6 / 12.0 * (2.0 * std::f64::consts::PI * 3.0 * i as f64 / 44_100.0).sin());
+                phase += 2.0 * std::f64::consts::PI * hz / 44_100.0;
+                (0.5 * phase.sin()) as f32
+            })
+            .collect();
+        assert_eq!(track(44_100, &x, 1), Pitch::Unknown("unstable"));
     }
 }
