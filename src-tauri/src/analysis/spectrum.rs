@@ -20,6 +20,10 @@ pub const BANDS: [(&str, f64); 7] = [
 ];
 /// Two onsets closer than this are one.
 const ONSET_GAP_SECONDS: f64 = 0.05;
+/// Flux below this is no onset at all: a steady tone wobbles near 0.01, a
+/// hit at -60 dBFS reaches about 0.12. Without it the relative tests below
+/// find "onsets" in a held note's wobble.
+const ONSET_FLOOR: f32 = 0.05;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpectrumStats {
@@ -78,12 +82,26 @@ impl Spectrum {
             }
             self.position += 1;
             if self.buffers[0].len() == FFT {
-                self.frame();
+                self.frame(true);
             }
         }
     }
 
-    fn frame(&mut self) {
+    /// The frames just before the region, up to `FFT` of them: the first
+    /// frame then compares against what was already sounding, so a region
+    /// cut mid-note has no onset at its start. Nothing is measured from them.
+    pub fn prime(&mut self, chunk: &[f32]) {
+        let frames = chunk.len() / self.channels;
+        for (c, buffer) in self.buffers.iter_mut().enumerate() {
+            let mut b = vec![0.0; FFT.saturating_sub(frames)];
+            b.extend(chunk.chunks_exact(self.channels).skip(frames.saturating_sub(FFT)).map(|f| f[c]));
+            *buffer = b;
+        }
+        self.frame(false);
+    }
+
+    /// `record`: false for a priming frame, which only sets `previous`.
+    fn frame(&mut self, record: bool) {
         self.power.iter_mut().for_each(|p| *p = 0.0);
         for c in 0..self.channels {
             for (s, (x, w)) in self.scratch.iter_mut().zip(self.buffers[c].iter().zip(&self.window)) {
@@ -100,6 +118,13 @@ impl Spectrum {
         let mut flux = 0.0f32;
         for k in 1..self.power.len() {
             let (hz, p) = (k as f64 * bin_hz, self.power[k]);
+            // Log-compressed magnitude, so a quiet onset still counts.
+            let level = (100.0 * p.sqrt() * 2.0 / FFT as f64).ln_1p() as f32;
+            flux += (level - self.previous[k]).max(0.0);
+            self.previous[k] = level;
+            if !record {
+                continue;
+            }
             let band = BANDS.iter().position(|(_, top)| hz < *top).unwrap_or(BANDS.len() - 1);
             self.bands[band] += p;
             self.weighted += hz * p;
@@ -108,12 +133,10 @@ impl Spectrum {
                 self.segment_sums[i].0 += hz * p;
                 self.segment_sums[i].1 += p;
             }
-            // Log-compressed magnitude, so a quiet onset still counts.
-            let level = (100.0 * p.sqrt() * 2.0 / FFT as f64).ln_1p() as f32;
-            flux += (level - self.previous[k]).max(0.0);
-            self.previous[k] = level;
         }
-        self.flux.push(flux);
+        if record {
+            self.flux.push(flux);
+        }
     }
 
     pub fn finish(mut self) -> SpectrumStats {
@@ -124,7 +147,7 @@ impl Spectrum {
             for b in &mut self.buffers {
                 b.extend(std::iter::repeat(0.0).take(missing));
             }
-            self.frame();
+            self.frame(true);
             // The padding cuts the sound off, which is not an onset.
             if self.flux.len() > 1 {
                 self.flux.pop();
@@ -149,14 +172,14 @@ impl Spectrum {
 /// 50 ms after the last onset.
 fn onsets(flux: &[f32], hop_seconds: f64) -> usize {
     let top = flux.iter().copied().fold(0.0f32, f32::max);
-    if top <= 0.0 {
+    if top <= ONSET_FLOOR {
         return 0;
     }
     let gap = (ONSET_GAP_SECONDS / hop_seconds).ceil() as usize;
     let mut last: Option<usize> = None;
     let mut count = 0;
     for (i, &f) in flux.iter().enumerate() {
-        if f < 0.1 * top || flux[i.saturating_sub(3)..(i + 4).min(flux.len())].iter().any(|g| *g > f) {
+        if f < ONSET_FLOOR.max(0.1 * top) || flux[i.saturating_sub(3)..(i + 4).min(flux.len())].iter().any(|g| *g > f) {
             continue;
         }
         let around = &flux[i.saturating_sub(16)..(i + 17).min(flux.len())];

@@ -42,6 +42,14 @@ pub fn analyse(path: &Path, regions: &[(u64, u64)], segments: Option<&[(u64, u64
     let mut spectrum = spectrum::Spectrum::new(rate, channels, segments);
     let mut stereo = (channels == 2).then(|| stereo::Stereo::new(rate));
     let mut pitch = pitch::PitchTracker::new(rate);
+    // A region inside the file is measured against the audio just before
+    // it. One at the file's start begins from silence, as it plays.
+    if let Some(&(start, _)) = regions.first().filter(|r| r.0 > 0) {
+        let mut before = Vec::new();
+        source.stream(&[(start.saturating_sub(spectrum::FFT as u64), start)], deadline, &mut |c| before.extend_from_slice(c))?;
+        levels.prime(&before);
+        spectrum.prime(&before);
+    }
     let frames = source.stream(regions, deadline, &mut |chunk| {
         levels.push(chunk);
         spectrum.push(chunk);
@@ -168,5 +176,38 @@ mod tests {
     fn a_region_with_no_frames_is_a_decode_failure() {
         let path = wav(44_100, 1, &sine(44_100, 440.0, 0.1, 0.5));
         assert_eq!(analyse(&path, &[(90_000, 91_000)], None, later()).err(), Some(decode::AnalysisError::DecodeFailed));
+    }
+
+    /// 60 Hz at -0.9 dBFS whose crest falls on frame `crest`.
+    fn crest_at(crest: usize) -> Vec<f32> {
+        let a = 10f64.powf(-0.9 / 20.0);
+        (0..88_200).map(|i| (a * (2.0 * std::f64::consts::PI * 60.0 * (i as f64 - crest as f64) / 44_100.0).cos()) as f32).collect()
+    }
+
+    #[test]
+    fn a_region_cut_at_a_crest_has_no_false_true_peak() {
+        // From the file's start, and mid-file where the audio before settles it.
+        for (crest, start) in [(0, 0), (22_050, 22_050)] {
+            let path = wav(44_100, 1, &crest_at(crest));
+            let s = analyse(&path, &[(start, 88_200)], None, later()).unwrap();
+            let (sample, true_peak) = (s.levels.sample_peak_dbfs[0].unwrap(), s.levels.true_peak_dbfs.unwrap());
+            assert!(true_peak < sample + 0.1, "{start}: true {true_peak} sample {sample}");
+        }
+    }
+
+    #[test]
+    fn a_region_cut_mid_note_has_no_onset_at_its_start() {
+        let path = wav(44_100, 1, &sine(44_100, 220.0, 2.0, 0.5));
+        let s = analyse(&path, &[(22_050, 66_150)], None, later()).unwrap();
+        assert_eq!((s.onsets_per_second, s.levels.attack_ms), (Ok(0.0), None));
+    }
+
+    #[test]
+    fn a_hit_on_the_region_start_still_counts() {
+        let mut x = vec![0.0f32; 22_050];
+        x.extend(sine(44_100, 1000.0, 0.5, 0.8).iter().enumerate().map(|(i, v)| v * (-(i as f32) / 4410.0).exp()));
+        let path = wav(44_100, 1, &x);
+        let s = analyse(&path, &[(22_050, 44_100)], None, later()).unwrap();
+        assert_eq!(s.onsets_per_second, Ok(2.0));
     }
 }
