@@ -7,7 +7,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::time::{Instant, SystemTime};
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_AAC, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
@@ -43,6 +43,10 @@ impl AnalysisError {
 
 pub const MAX_REGION_SECONDS: u64 = 600;
 
+/// Frames decoded before a region's start, so the decoder is settled when
+/// the region begins. Covers one Vorbis long block.
+const PREROLL_FRAMES: u64 = 4096;
+
 /// macOS marks an iCloud file whose bytes are not on this disk as dataless.
 /// Reading one starts a download, so it is refused before any read.
 const SF_DATALESS: u32 = 0x4000_0000;
@@ -68,6 +72,27 @@ pub fn file_state(path: &Path) -> Result<(u64, SystemTime), AnalysisError> {
     Ok((meta.len(), modified))
 }
 
+fn hint_is_ogg(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("ogg") || e.eq_ignore_ascii_case("oga"))
+}
+
+/// The channel count of the first decoded packet, for a container that does
+/// not state it (MP4 leaves it to the AAC stream). `stream` seeks before it
+/// reads, so the packet used here is not lost.
+fn decoded_channels(format: &mut dyn FormatReader, decoder: &mut dyn Decoder, track: u32) -> Result<usize, AnalysisError> {
+    loop {
+        let packet = format.next_packet().map_err(|_| AnalysisError::DecodeFailed)?;
+        if packet.track_id() != track {
+            continue;
+        }
+        match decoder.decode(&packet) {
+            Ok(d) => return Ok(d.spec().channels.count()),
+            Err(Error::DecodeError(_)) => continue,
+            Err(_) => return Err(AnalysisError::DecodeFailed),
+        }
+    }
+}
+
 pub struct Source {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn Decoder>,
@@ -77,6 +102,8 @@ pub struct Source {
     /// Container timestamps per audio frame: 1 unless the container counts
     /// in another time base.
     ts_per_frame: f64,
+    /// Encoder delay frames the decoder leaves in, skipped here.
+    delay: u64,
 }
 
 impl Source {
@@ -92,12 +119,15 @@ impl Source {
             hint.with_extension(ext);
         }
         // Gapless: encoder delay and padding are trimmed, so frame numbers
-        // match the PCM Live plays.
-        let options = FormatOptions { enable_gapless: true, ..Default::default() };
+        // match the PCM Live plays. Not for Ogg: symphonia reads a start delay
+        // from the first page that other decoders (ffmpeg, libvorbis) do not
+        // trim, which would shift every frame.
+        let ogg = hint_is_ogg(path);
+        let options = FormatOptions { enable_gapless: !ogg, ..Default::default() };
         let probed = symphonia::default::get_probe()
             .format(&hint, stream, &options, &MetadataOptions::default())
             .map_err(|_| AnalysisError::UnsupportedFormat)?;
-        let format = probed.format;
+        let mut format = probed.format;
         let track = format
             .tracks()
             .iter()
@@ -106,18 +136,25 @@ impl Source {
             .ok_or(AnalysisError::UnsupportedFormat)?;
         let params = &track.codec_params;
         let rate = params.sample_rate.filter(|r| *r > 0).ok_or(AnalysisError::UnsupportedFormat)?;
-        let channels = params.channels.map(|c| c.count()).ok_or(AnalysisError::UnsupportedFormat)?;
-        if !(1..=2).contains(&channels) {
-            return Err(AnalysisError::UnsupportedChannels);
-        }
         let ts_per_frame = params
             .time_base
             .filter(|tb| tb.numer > 0)
             .map_or(1.0, |tb| f64::from(tb.denom) / (f64::from(tb.numer) * f64::from(rate)));
-        let decoder = symphonia::default::get_codecs()
+        let mut decoder = symphonia::default::get_codecs()
             .make(params, &DecoderOptions::default())
             .map_err(|_| AnalysisError::UnsupportedFormat)?;
-        Ok(Source { format, decoder, track: track.id, rate, channels, ts_per_frame })
+        let channels = match params.channels {
+            Some(c) => c.count(),
+            None => decoded_channels(&mut *format, &mut *decoder, track.id)?,
+        };
+        if !(1..=2).contains(&channels) {
+            return Err(AnalysisError::UnsupportedChannels);
+        }
+        // symphonia trims no AAC priming. MP4 states it in an edit list that
+        // symphonia does not read; 1024 frames is the AAC-LC encoder delay
+        // ffmpeg and most encoders write (Apple's is 2112).
+        let delay = if params.codec == CODEC_TYPE_AAC { u64::from(params.delay.unwrap_or(1024)) } else { 0 };
+        Ok(Source { format, decoder, track: track.id, rate, channels, ts_per_frame, delay })
     }
 
     /// Sends each region's frames, in the order given, as interleaved
@@ -134,7 +171,10 @@ impl Source {
             if end <= start {
                 continue;
             }
-            let ts = (start as f64 * self.ts_per_frame).floor() as u64;
+            // Seek early: a decoder's first packet after a reset can give no
+            // frames (Vorbis overlaps each packet with the one before), and
+            // the frames before `start` are dropped below anyway.
+            let ts = ((start + self.delay).saturating_sub(PREROLL_FRAMES) as f64 * self.ts_per_frame).floor() as u64;
             if self.format.seek(SeekMode::Accurate, SeekTo::TimeStamp { ts, track_id: self.track }).is_err() {
                 // Seeking past the end fails in some readers: nothing there.
                 continue;
@@ -152,7 +192,9 @@ impl Source {
                 if packet.track_id() != self.track {
                     continue;
                 }
-                let first = (packet.ts() as f64 / self.ts_per_frame).round() as u64;
+                // Signed: AAC priming frames sit before frame 0.
+                let first = (packet.ts() as f64 / self.ts_per_frame).round() as i64 - self.delay as i64;
+                let (start, end) = (start as i64, end as i64);
                 if first >= end {
                     break;
                 }
@@ -165,7 +207,7 @@ impl Source {
                 if decoded.spec().channels.count() != self.channels {
                     return Err(AnalysisError::DecodeFailed);
                 }
-                let frames = decoded.frames() as u64;
+                let frames = decoded.frames() as i64;
                 if frames == 0 || first + frames <= start {
                     continue;
                 }
@@ -175,7 +217,7 @@ impl Source {
                 }
                 let b = buffer.as_mut().expect("set above");
                 b.copy_interleaved_ref(decoded);
-                let lo = start.saturating_sub(first) as usize;
+                let lo = (start - first).max(0) as usize;
                 let hi = (end.min(first + frames) - first) as usize;
                 sink(&b.samples()[lo * self.channels..hi * self.channels]);
                 sent += (hi - lo) as u64;
@@ -292,5 +334,82 @@ mod tests {
         let mut source = Source::open(&path).unwrap();
         let r = source.stream(&[(0, 20_000)], Instant::now(), &mut |_| {});
         assert_eq!(r, Err(AnalysisError::AnalysisTimeout));
+    }
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio").join(name)
+    }
+
+    /// The decoded region's offset against the reference, by the lag that
+    /// correlates best within ±64 frames, and that correlation.
+    fn best_lag(decoded: &[f32], reference: &[f32], start: usize) -> (i64, f64) {
+        let mut best = (0i64, f64::MIN);
+        for lag in -64i64..=64 {
+            let (mut dot, mut a, mut b) = (0.0f64, 0.0f64, 0.0f64);
+            for (i, d) in decoded.iter().enumerate() {
+                let j = start as i64 + i as i64 + lag;
+                if j < 0 || j as usize >= reference.len() {
+                    continue;
+                }
+                let r = f64::from(reference[j as usize]);
+                dot += f64::from(*d) * r;
+                a += f64::from(*d).powi(2);
+                b += r * r;
+            }
+            if a < 0.0 { continue; }
+            let c = dot / (a * b).sqrt().max(1e-12);
+            if c > best.1 {
+                best = (lag, c);
+            }
+        }
+        best
+    }
+
+    fn first_channel(path: &std::path::Path, region: (u64, u64)) -> Vec<f32> {
+        let mut source = Source::open(path).unwrap();
+        let ch = source.channels;
+        let mut out = Vec::new();
+        source.stream(&[region], later(), &mut |c| out.extend(c.iter().step_by(ch))).unwrap();
+        out
+    }
+
+    #[test]
+    fn lossless_formats_decode_the_same_frames_mid_file() {
+        let reference = chirp(22_050, 0.2);
+        for name in ["chirp.flac", "chirp.aiff"] {
+            let got = first_channel(&fixture(name), (1_500, 3_000));
+            assert_eq!(got.len(), 1_500, "{name}");
+            for (g, want) in got.iter().zip(&reference[1_500..3_000]) {
+                assert!((g - want).abs() < 1e-3, "{name}: {g} vs {want}");
+            }
+        }
+    }
+
+    #[test]
+    fn wav_24_bit_and_float_decode_the_same_frames() {
+        let reference = chirp(22_050, 0.2);
+        for name in ["chirp-s24.wav", "chirp-f32.wav"] {
+            let got = first_channel(&fixture(name), (1_500, 3_000));
+            assert_eq!(got.len(), 1_500, "{name}");
+            for (g, want) in got.iter().zip(&reference[1_500..3_000]) {
+                assert!((g - want).abs() < 1e-4, "{name}: {g} vs {want}");
+            }
+        }
+    }
+
+    #[test]
+    fn lossy_formats_land_on_the_same_frames_mid_file() {
+        // Encoder delay and padding must be honoured: the region lines up
+        // with the source to within one frame.
+        let reference = chirp(22_050, 0.2);
+        // A region at frame 0 also checks that AAC priming sits before it.
+        for name in ["chirp.mp3", "chirp.ogg", "chirp.m4a"] {
+            for (start, end) in [(0, 1_000), (1_500, 3_000)] {
+                let got = first_channel(&fixture(name), (start, end));
+                assert_eq!(got.len() as u64, end - start, "{name}");
+                let (lag, corr) = best_lag(&got, &reference, start as usize);
+                assert!(lag.abs() <= 1 && corr > 0.9, "{name} at {start}: lag {lag}, correlation {corr:.3}");
+            }
+        }
     }
 }
