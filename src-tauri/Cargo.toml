@@ -65,6 +65,11 @@ name = "round_trips"
 harness = false
 required-features = ["bench"]
 
+[[bench]]
+name = "sample_analysis"
+harness = false
+required-features = ["bench"]
+
 [[test]]
 name = "evals"
 required-features = ["evals"]
