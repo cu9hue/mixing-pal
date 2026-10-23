@@ -187,7 +187,7 @@ class FramesReplyTests(unittest.TestCase):
     FKEY = (3, sr.ARRANGEMENT, "0", "0,1,2.5")
 
     def test_a_warped_clip_maps_each_beat_through_live(self):
-        self.assertEqual(sr.frames_reply(self.FKEY, clip(), "0,1,2.5"), self.FKEY + ("ok", 3, 0, 1000, 2500))
+        self.assertEqual(sr.frames_reply(self.FKEY, clip(), "0,1,2.5"), self.FKEY + ("ok", 16000, 3, 0, 1000, 2500))
 
     def test_frames_are_clamped_to_the_file(self):
         self.assertEqual(sr.frames_reply(self.FKEY, clip(sample_length=1500), "0,1,2.5")[-3:], (0, 1000, 1500))

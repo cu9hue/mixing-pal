@@ -832,10 +832,12 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                     let sample = (kind == 1)
                         .then(|| target.parse::<usize>().ok().and_then(|i| track["arrangement"].get(i)?.get("sample").cloned()))
                         .flatten();
-                    let Some(per_beat) = sample.and_then(|s| s["framesPerBeat"].as_f64()) else { continue };
+                    let Some(s) = sample else { continue };
+                    let Some(per_beat) = s["framesPerBeat"].as_f64() else { continue };
                     let frames: Vec<OscType> = beats.split(',').map(|b| OscType::Int((b.parse::<f64>().unwrap() * per_beat).round() as i32)).collect();
                     let mut reply = req.args[..4].to_vec();
                     reply.push(OscType::String("ok".into()));
+                    reply.push(OscType::Int(s["frames"].as_i64().unwrap() as i32));
                     reply.push(OscType::Int(frames.len() as i32));
                     reply.extend(frames);
                     let _ = live.send_to(app_port, &req.addr, reply).await;

@@ -99,8 +99,8 @@ class SampleHandlerTests(unittest.TestCase):
                 self.assertIsNone(self.sample(params))
 
     def test_frames_map_a_session_or_arrangement_clip(self):
-        self.assertEqual(self.frames((0, 0, "0", "0,2")), (0, 0, "0", "0,2", "ok", 2, 0, 2000))
-        self.assertEqual(self.frames((0, 1, "0", "1")), (0, 1, "0", "1", "ok", 1, 1000))
+        self.assertEqual(self.frames((0, 0, "0", "0,2")), (0, 0, "0", "0,2", "ok", 8000, 2, 0, 2000))
+        self.assertEqual(self.frames((0, 1, "0", "1")), (0, 1, "0", "1", "ok", 8000, 1, 1000))
 
     def test_frames_name_a_missing_clip_and_refuse_a_device(self):
         self.assertEqual(self.frames((0, 0, "1", "0"))[-1], "empty_slot")

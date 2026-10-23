@@ -245,7 +245,8 @@ def parse_beats(text):
 def frames_reply(key, clip, text):
     """Live's frame for each beat of a warped clip, so the app can cut a
     profile on beats without reproducing warp maths. A beat Live cannot map
-    is nil; every frame is clamped to the file."""
+    is nil; every frame is clamped to the file. The file's length comes
+    first, so the app can tell the clip was replaced since its last read."""
     if read(clip, "is_audio_clip") is not True:
         return status_reply(key, "not_audio_clip")
     if read(clip, "warping") is not True:
@@ -264,7 +265,7 @@ def frames_reply(key, clip, text):
         if frame is not None and total is not None:
             frame = max(0, min(frame, total))
         frames.append(frame)
-    reply = tuple(key) + ("ok", len(frames)) + tuple(frames)
+    reply = tuple(key) + ("ok", total, len(frames)) + tuple(frames)
     if reply_bytes(reply) > MAX_REPLY_BYTES:
         return status_reply(key, "bad_beats")
     return reply

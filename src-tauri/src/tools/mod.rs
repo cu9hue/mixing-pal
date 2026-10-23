@@ -265,7 +265,7 @@ fn declared_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_sample",
-                "description": "The sample behind one audio clip or one Simpler, read from Live at call time: the file name only (never its folder), the file's length and sample rate, warp (false or the mode, such as Complex), gain, transpose and detune, and region: the part of the file that plays, as seconds of the file, with plays saying it in words. For an arrangement clip, plays includes the bars and, when it loops, how many times, such as \"a 1-bar loop played 4 times\"; an unwarped loop is counted at the current tempo. A session clip says what it plays when launched. A Simpler gives its mode (Classic, One-Shot, Slice): in Classic and One-Shot the pitch follows the MIDI note and C3 plays the sample at its original pitch plus Transpose and Detune; in Slice, slices is the count of slices cut from that region. Pass exactly one of slot (a session clip, from get_clips), index (an arrangement clip, from get_arrangement) or path (a Simpler, as in get_device_params; a Drum Rack pad's Simpler is [rack, chain, device] from get_rack_contents). This describes the file and Live's settings, not what the mix sounds like: devices, the fader and the rest of the set are not in it. missing_reason not_audio_clip is a MIDI clip; empty_slot, no_such_target, not_a_simpler, no_sample (an empty Simpler), multisample_not_readable, sampler_not_readable and path_too_long say why nothing was read; region_unavailable keeps the settings without a region. For the played region it also gives analysis, measured from the file: sample and true peak, RMS, crest factor, full-scale sample count, band shares, spectral centroid, stereo correlation and side-to-mid (whole and below 150 Hz), pitch as a note in Live's naming (raw, and after Transpose and Detune), onsets per second, leading silence, and attack and tail for one hit. These stats describe the file's region before clip gain, warping, devices and the fader: never the mix. A null stat has its reason in null_because; an analysis missing_reason (file_missing, file_in_icloud, file_not_permitted: macOS blocked the folder, which she can allow in System Settings, unsupported_format, unsupported_channels, decode_failed, region_too_long, analysis_timeout) keeps the rest of the result. profile: true adds rms_dbfs and centroid_hz per beat on a warped clip, per half second otherwise; use it only for how the sample changes over time.",
+                "description": "The sample behind one audio clip or one Simpler, read from Live at call time: the file name only (never its folder), the file's length and sample rate, warp (false or the mode, such as Complex), gain, transpose and detune, and region: the part of the file that plays, as seconds of the file, with plays saying it in words. For an arrangement clip, plays includes the bars and, when it loops, how many times, such as \"a 1-bar loop played 4 times\"; an unwarped loop is counted at the current tempo. A session clip says what it plays when launched. A Simpler gives its mode (Classic, One-Shot, Slice): in Classic and One-Shot the pitch follows the MIDI note and C3 plays the sample at its original pitch plus Transpose and Detune; in Slice, slices is the count of slices cut from that region. Pass exactly one of slot (a session clip, from get_clips), index (an arrangement clip, from get_arrangement) or path (a Simpler, as in get_device_params; a Drum Rack pad's Simpler is [rack, chain, device] from get_rack_contents). This describes the file and Live's settings, not what the mix sounds like: devices, the fader and the rest of the set are not in it. missing_reason not_audio_clip is a MIDI clip; empty_slot, no_such_target, not_a_simpler, no_sample (an empty Simpler), multisample_not_readable, sampler_not_readable and path_too_long say why nothing was read; region_unavailable keeps the settings without a region. For the played region it also gives analysis, measured from the file: sample and true peak, RMS (unweighted: a full-scale sine reads -3 dBFS), crest factor, full-scale sample count, band shares, spectral centroid, stereo correlation and side-to-mid (whole and below 150 Hz), pitch as a note in Live's naming (raw, and after Transpose and Detune), onsets per second, leading silence, and attack and tail for one hit. These stats describe the file's region before clip gain, warping, devices and the fader: never the mix. A null stat has its reason in null_because; an analysis missing_reason (file_missing, file_in_icloud, file_not_permitted: macOS blocked the folder, which she can allow in System Settings, unsupported_format, unsupported_channels, decode_failed, region_too_long, analysis_timeout) keeps the rest of the result; file_short_by_s says the file ends before the region Live plays. profile: true adds rms_dbfs and centroid_hz per beat on a warped clip (beat counts the clip's own beats, not song position), per half second otherwise; use it only for how the sample changes over time.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1964,6 +1964,18 @@ mod tests {
     /// the wire behaviour of the fan-out; this one only needs the call to
     /// reach its end so the assembled `missing_reason` can be read.
     async fn answering_ctx(c: Coalescer) -> ToolContext {
+        scripted_ctx(c, Arc::new(|addr, args| {
+            let track = args.first()?.clone();
+            Some(if addr == "/live/mixingpal/get/device_chain" { vec![track, args[1].clone(), rosc::OscType::Int(0)] } else { vec![track] })
+        }))
+        .await
+    }
+
+    type Script = Arc<dyn Fn(&str, &[rosc::OscType]) -> Option<Vec<rosc::OscType>> + Send + Sync>;
+
+    /// A `ToolContext` whose Live answers each request with what `script`
+    /// returns for its address and arguments; None sends nothing.
+    async fn scripted_ctx(c: Coalescer, script: Script) -> ToolContext {
         use crate::osc::requests::RequestTable;
         use crate::osc::socket::OscSocket;
 
@@ -1986,14 +1998,7 @@ mod tests {
         tokio::spawn(async move {
             loop {
                 let Ok(req) = live.recv().await else { continue };
-                let Some(&rosc::OscType::Int(track)) = req.args.first() else {
-                    continue;
-                };
-                let reply = if req.addr == "/live/mixingpal/get/device_chain" {
-                    vec![rosc::OscType::Int(track), req.args[1].clone(), rosc::OscType::Int(0)]
-                } else {
-                    vec![rosc::OscType::Int(track)]
-                };
+                let Some(reply) = script(&req.addr, &req.args) else { continue };
                 let _ = live.send_to(app_port, &req.addr, reply).await;
             }
         });
@@ -3492,5 +3497,58 @@ midi_flag_unavailable_for_tracks: 7 (their clips are listed, but whether the tra
         let d = f["description"].as_str().unwrap();
         assert!(d.contains("before clip gain, warping, devices and the fader"), "{d}");
         assert!(d.len() < 8000);
+    }
+
+    /// get_sample's reply for a 3 s mono file at 44.1 kHz, as the connector
+    /// sends it: a Simpler (kind 2) or a warped arrangement clip (kind 1).
+    fn sample_reply(args: &[rosc::OscType], file: &str) -> Vec<rosc::OscType> {
+        use rosc::OscType::{Bool, Float, Int, Nil, String as S};
+        let kind = if let Some(Int(k)) = args.get(1) { *k } else { 0 };
+        let mut r = args[..3].to_vec();
+        r.extend([S("ok".into()), S(file.into()), Float(44100.0), Int(132_300), Bool(kind == 1), Int(4), S("0.00 dB".into()), Float(0.0), Float(0.0), Int(1)]);
+        if kind == 2 {
+            r.extend([Int(0), Int(132_300), Int(0), Int(132_300), Int(0), Int(0), Nil, Nil]);
+        } else {
+            r.extend([Float(0.0), Float(6.0), Int(0), Int(132_300)]);
+            r.extend([Bool(false), Bool(false), Float(0.0), Float(0.0), Float(6.0), Float(0.0), Float(6.0), Float(120.0)]);
+        }
+        r
+    }
+
+    fn three_seconds() -> String {
+        let x = crate::analysis::signals::sine(44_100, 220.0, 3.0, 0.5);
+        crate::analysis::signals::wav(44_100, 1, &x).to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn a_simpler_profile_is_cut_in_half_seconds() {
+        let file = three_seconds();
+        let ctx = scripted_ctx(one_track_mirror(), Arc::new(move |addr, args| (addr == "/live/mixingpal/get/sample").then(|| sample_reply(args, &file)))).await;
+        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "path": [0], "profile": true })).await;
+        let profile = &r.value["analysis"]["profile"];
+        assert_eq!(profile["at_s"], json!([0.0, 0.5, 1.0, 1.5, 2.0, 2.5]), "{}", r.value);
+        assert!(profile.get("beat").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_clip_replaced_between_the_replies_gets_no_profile_but_its_analysis() {
+        let file = three_seconds();
+        let ctx = scripted_ctx(one_track_mirror(), Arc::new(move |addr, args| match addr {
+            "/live/mixingpal/get/sample" => Some(sample_reply(args, &file)),
+            "/live/mixingpal/get/sample/frames" => {
+                // Another clip's length, and frames for every beat asked.
+                let rosc::OscType::String(beats) = &args[3] else { return None };
+                let n = beats.split(',').count();
+                let mut r = args[..4].to_vec();
+                r.extend([rosc::OscType::String("ok".into()), rosc::OscType::Int(999), rosc::OscType::Int(n as i32)]);
+                r.extend((0..n).map(|i| rosc::OscType::Int(i as i32 * 22_050)));
+                Some(r)
+            }
+            _ => None,
+        }))
+        .await;
+        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "index": 0, "profile": true })).await;
+        assert_eq!(r.value["analysis"]["null_because"]["profile"], "clip_changed", "{}", r.value);
+        assert_eq!(r.value["analysis"]["pitch"]["note"], "A2");
     }
 }

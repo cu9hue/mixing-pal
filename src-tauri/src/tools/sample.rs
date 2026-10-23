@@ -276,7 +276,10 @@ pub fn beats_wire(beats: &[f64]) -> String {
     beats.iter().map(|b| format!("{}", (b * 1e6).round() / 1e6)).collect::<Vec<_>>().join(",")
 }
 
-pub fn decode_frames_reply(reply: &[OscType], track: i32, target: &SampleTarget, beats: &str, count: usize) -> Result<Vec<Option<f64>>, SampleError> {
+/// `length`: the clip's file length from the first reply. The frames reply
+/// names it too, so a clip replaced between the two replies is refused
+/// rather than cut on another clip's warp map.
+pub fn decode_frames_reply(reply: &[OscType], track: i32, target: &SampleTarget, beats: &str, count: usize, length: Option<f64>) -> Result<Vec<Option<f64>>, SampleError> {
     let wire = target.wire();
     match reply {
         [OscType::Int(t), OscType::Int(k), OscType::String(w), OscType::String(b), ..]
@@ -287,19 +290,28 @@ pub fn decode_frames_reply(reply: &[OscType], track: i32, target: &SampleTarget,
     if status != "ok" {
         return Err(FRAME_STATUSES.into_iter().find(|s| *s == status).map_or(SampleError::Malformed, SampleError::Refused));
     }
-    let n = int(reply.get(5))?.ok_or(SampleError::Malformed)?;
-    if usize::try_from(n).ok() != Some(count) || reply.len() != 6 + count {
+    if let (Some(now), Some(then)) = (number(reply.get(5))?, length) {
+        if now != then {
+            return Err(SampleError::Refused("clip_changed"));
+        }
+    }
+    let n = int(reply.get(6))?.ok_or(SampleError::Malformed)?;
+    if usize::try_from(n).ok() != Some(count) || reply.len() != 7 + count {
         return Err(SampleError::Malformed);
     }
-    reply[6..].iter().map(|v| number(Some(v))).collect()
+    let frames: Vec<Option<f64>> = reply[7..].iter().map(|v| number(Some(v))).collect::<Result<_, _>>()?;
+    if frames.iter().flatten().any(|f| !f.is_finite()) {
+        return Err(SampleError::Malformed);
+    }
+    Ok(frames)
 }
 
 /// Live's frame for each beat of a warped clip: what the profile cuts on.
-pub async fn get_sample_frames(q: &LiveQuery, track: i32, target: &SampleTarget, beats: &[f64], timeout: Duration) -> Result<Vec<Option<f64>>, SampleError> {
+pub async fn get_sample_frames(q: &LiveQuery, track: i32, target: &SampleTarget, beats: &[f64], length: Option<f64>, timeout: Duration) -> Result<Vec<Option<f64>>, SampleError> {
     let wire = beats_wire(beats);
     let args = vec![OscType::Int(track), OscType::Int(target.kind()), OscType::String(target.wire()), OscType::String(wire.clone())];
     let reply = q.query(FRAMES_ADDRESS, args, timeout).await.map_err(SampleError::Query)?;
-    decode_frames_reply(&reply, track, target, &wire, beats.len())
+    decode_frames_reply(&reply, track, target, &wire, beats.len(), length)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -401,26 +413,49 @@ pub fn beat_segments(read: &SampleRead, positions: &[Vec<f64>], frames: &[Option
     Some(out)
 }
 
-/// What the profile cuts on: beats for a warped clip, mapped by Live, half
-/// seconds for anything else.
-pub async fn plan_profile(q: &LiveQuery, track: i32, target: &SampleTarget, read: &SampleRead) -> Profile {
+/// The profile, when it needs nothing more from Live: unavailable, or half
+/// seconds for anything but a warped clip. None for a warped clip, whose
+/// beats Live maps.
+pub fn plan_without_live(read: &SampleRead) -> Option<Profile> {
     let Some(rate) = read.sample_rate.filter(|r| *r > 0.0) else {
-        return Profile::Unavailable("region_unavailable");
+        return Some(Profile::Unavailable("region_unavailable"));
     };
     if read.intervals.is_empty() {
-        return Profile::Unavailable("region_unavailable");
+        return Some(Profile::Unavailable("region_unavailable"));
     }
     let total: u64 = region_frames(read).iter().map(|(a, b)| b.saturating_sub(*a)).sum();
     if (total as f64) < PROFILE_MIN_SECONDS * rate {
-        return Profile::Unavailable("region_too_short");
+        return Some(Profile::Unavailable("region_too_short"));
     }
     if !(matches!(read.holder, Holder::Clip(_)) && read.warping == Some(true)) {
-        return Profile::Segments(time_segments(read, rate));
+        return Some(Profile::Segments(time_segments(read, rate)));
     }
+    None
+}
+
+/// Why Live could not map the beats, as a fixed reason. A lost reply is
+/// profile_unavailable.
+pub fn frames_failure(e: &SampleError) -> &'static str {
+    match e {
+        SampleError::Refused(reason) => reason,
+        SampleError::Malformed => "malformed_reply",
+        SampleError::Query(QueryError::Busy) => "busy",
+        SampleError::Query(QueryError::NoReply) => "profile_unavailable",
+        SampleError::Query(QueryError::Transport(_)) => "transport_error",
+    }
+}
+
+/// What the profile cuts on: beats for a warped clip, mapped by Live, half
+/// seconds for anything else.
+pub async fn plan_profile(q: &LiveQuery, track: i32, target: &SampleTarget, read: &SampleRead) -> Profile {
+    if let Some(profile) = plan_without_live(read) {
+        return profile;
+    }
+    let rate = read.sample_rate.unwrap_or(0.0);
     let positions = beat_positions(&read.intervals);
-    match get_sample_frames(q, track, target, &positions.concat(), QUERY_TIMEOUT).await {
-        Ok(frames) => beat_segments(read, &positions, &frames, rate).map_or(Profile::Unavailable("profile_unavailable"), Profile::Segments),
-        Err(_) => Profile::Unavailable("profile_unavailable"),
+    match get_sample_frames(q, track, target, &positions.concat(), read.length_frames, QUERY_TIMEOUT).await {
+        Ok(frames) => beat_segments(read, &positions, &frames, rate).map_or(Profile::Unavailable("beats_unmapped"), Profile::Segments),
+        Err(e) => Profile::Unavailable(frames_failure(&e)),
     }
 }
 
@@ -1029,25 +1064,73 @@ mod tests {
     #[test]
     fn a_frames_reply_decodes_one_frame_per_beat() {
         let t = SampleTarget::Index(0);
-        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1,2.5".into()), S("ok".into()), Int(3), Int(0), Int(1000), Nil];
-        assert_eq!(decode_frames_reply(&reply, 3, &t, "0,1,2.5", 3).ok(), Some(vec![Some(0.0), Some(1000.0), None]));
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1,2.5".into()), S("ok".into()), Int(16000), Int(3), Int(0), Int(1000), Nil];
+        assert_eq!(decode_frames_reply(&reply, 3, &t, "0,1,2.5", 3, Some(16000.0)).ok(), Some(vec![Some(0.0), Some(1000.0), None]));
     }
 
     #[test]
     fn a_frames_reply_for_other_beats_or_a_wrong_count_is_malformed() {
         let t = SampleTarget::Index(0);
-        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1".into()), S("ok".into()), Int(2), Int(0), Int(1000)];
-        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,2", 2), Err(SampleError::Malformed)));
-        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,1", 3), Err(SampleError::Malformed)));
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1".into()), S("ok".into()), Int(16000), Int(2), Int(0), Int(1000)];
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,2", 2, Some(16000.0)), Err(SampleError::Malformed)));
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,1", 3, Some(16000.0)), Err(SampleError::Malformed)));
+    }
+
+    #[test]
+    fn a_clip_that_changed_between_the_two_replies_is_refused() {
+        // The frames reply names the clip's length; another clip has another.
+        let t = SampleTarget::Index(0);
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0".into()), S("ok".into()), Int(9999), Int(1), Int(0)];
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0", 1, Some(16000.0)), Err(SampleError::Refused("clip_changed"))));
+    }
+
+    #[test]
+    fn a_frame_that_is_not_a_number_is_malformed() {
+        let t = SampleTarget::Index(0);
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1".into()), S("ok".into()), Int(16000), Int(2), Int(0), Float(f32::NAN)];
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,1", 2, Some(16000.0)), Err(SampleError::Malformed)));
+    }
+
+    #[test]
+    fn each_frames_failure_keeps_its_reason() {
+        assert_eq!(frames_failure(&SampleError::Refused("not_warped")), "not_warped");
+        assert_eq!(frames_failure(&SampleError::Malformed), "malformed_reply");
+        assert_eq!(frames_failure(&SampleError::Query(QueryError::Busy)), "busy");
+        assert_eq!(frames_failure(&SampleError::Query(QueryError::NoReply)), "profile_unavailable");
+    }
+
+    #[test]
+    fn a_profile_needs_live_only_for_a_warped_clip() {
+        let short = unwarped((0.0, 1500.0), 0.0);
+        assert_eq!(plan_without_live(&short), Some(Profile::Unavailable("region_too_short")));
+        let mut none = unwarped((0.0, 3000.0), 0.0);
+        none.intervals.clear();
+        assert_eq!(plan_without_live(&none), Some(Profile::Unavailable("region_unavailable")));
+        let Some(Profile::Segments(s)) = plan_without_live(&unwarped((0.0, 3000.0), 0.0)) else { panic!("time segments") };
+        assert_eq!((s.len(), s[0].beat), (6, None));
+        let mut simpler = unwarped((0.0, 3000.0), 0.0);
+        (simpler.holder, simpler.warping) = (Holder::Simpler(SimplerSettings { mode: Some(0), slices: None, loop_frames: None }), Some(true));
+        assert!(matches!(plan_without_live(&simpler), Some(Profile::Segments(_))));
+        let mut warped = unwarped((0.0, 3000.0), 0.0);
+        warped.warping = Some(true);
+        assert_eq!(plan_without_live(&warped), None);
+    }
+
+    #[test]
+    fn the_beat_position_ceiling_matches_the_connector() {
+        let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../remote-script/MixingPal/mixingpal/sample_replies.py"))
+            .expect("sample_replies.py is missing");
+        let line = source.lines().find_map(|l| l.strip_prefix("MAX_POSITIONS = ")).expect("MAX_POSITIONS is not declared on its own line");
+        assert_eq!(line.trim().parse::<usize>().unwrap(), MAX_POSITIONS);
     }
 
     #[test]
     fn a_frames_status_is_a_fixed_refusal() {
         let t = SampleTarget::Slot(0);
         let reply = vec![Int(3), Int(0), S("0".into()), S("0".into()), S("not_warped".into())];
-        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0", 1), Err(SampleError::Refused("not_warped"))));
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0", 1, None), Err(SampleError::Refused("not_warped"))));
         let odd = vec![Int(3), Int(0), S("0".into()), S("0".into()), S("/Users/x".into())];
-        assert!(matches!(decode_frames_reply(&odd, 3, &t, "0", 1), Err(SampleError::Malformed)));
+        assert!(matches!(decode_frames_reply(&odd, 3, &t, "0", 1, None), Err(SampleError::Malformed)));
     }
 
     use crate::analysis::levels::{LevelStats, Tail};

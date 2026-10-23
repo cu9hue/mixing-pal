@@ -46,9 +46,9 @@ from ..abletonosc.handler import AbletonOSCHandler
 # file, settings and played region. A stale script knows no such address,
 # so get_sample reports no_reply and every other read keeps working.
 # Version 16 adds /live/mixingpal/get/sample/frames: Live's frame for each
-# beat of a warped clip, which get_sample's profile cuts on. A stale script
-# knows no such address, so the profile reports profile_unavailable and the
-# rest of get_sample keeps working.
+# beat of a warped clip, which get_sample's profile cuts on. The app asks
+# for an exact version match before a question, so a stale script means a
+# reinstall; a lost frames reply still costs only the profile.
 WIRE_VERSION = 16
 
 
