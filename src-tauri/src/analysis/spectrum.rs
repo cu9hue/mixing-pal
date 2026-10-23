@@ -1,14 +1,20 @@
 //! Spectral stats: band shares and the centroid from a Hann STFT of 8192
 //! points at 48 kHz, half overlapped; spectral-flux onsets from one of 2048
-//! points, hop 512. Power is summed over channels.
+//! points at 48 kHz, hop a quarter of it. Both scale with the rate. Power is
+//! summed over channels.
 
 use super::{Segments, Stat};
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::f64::consts::PI;
 use std::sync::Arc;
 
-pub const FFT: usize = 2048;
-pub const HOP: usize = 512;
+/// The onset STFT's size: 2048 points at 44.1 and 48 kHz, about 46 ms,
+/// scaled with the rate so a hit or a cut reads the same at every rate. Its
+/// hop is a quarter of it.
+pub fn onset_fft(rate: u32) -> usize {
+    ((u64::from(rate) * 2048 / 48_000) as usize).next_power_of_two().max(256)
+}
+
 /// Each band's upper edge in Hz; the last runs to Nyquist.
 pub const BANDS: [(&str, f64); 7] = [
     ("sub", 60.0),
@@ -129,12 +135,13 @@ impl Spectrum {
     pub fn new(rate: u32, channels: usize, segments: Vec<(u64, u64)>) -> Self {
         let n = segments.len();
         // 8192 points at 48 kHz, scaled with the rate to keep the bins' width.
-        let long = ((u64::from(rate) * 8192 / 48_000) as usize).next_power_of_two().max(FFT);
+        let long = ((u64::from(rate) * 8192 / 48_000) as usize).next_power_of_two().max(2048);
+        let short = onset_fft(rate);
         Spectrum {
             rate: f64::from(rate),
             long: Stft::new(long, long / 2, channels),
-            short: Stft::new(FFT, HOP, channels),
-            previous: vec![0.0; FFT / 2 + 1],
+            short: Stft::new(short, short / 4, channels),
+            previous: vec![0.0; short / 2 + 1],
             bands: [0.0; 7],
             weighted: 0.0,
             total: 0.0,
@@ -159,7 +166,7 @@ impl Spectrum {
         }
     }
 
-    /// The frames just before the region, up to `FFT` of them: the first
+    /// The frames just before the region, up to `onset_fft` of them: the first
     /// onset frame then compares against what was already sounding, so a
     /// region cut mid-note has no onset at its start. Nothing is measured
     /// from them.
@@ -190,7 +197,7 @@ impl Spectrum {
         let mut flux = 0.0f32;
         for (previous, &p) in self.previous.iter_mut().zip(&self.short.power).skip(1) {
             // Log-compressed magnitude, so a quiet onset still counts.
-            let level = (100.0 * p.sqrt() * 2.0 / FFT as f64).ln_1p() as f32;
+            let level = (100.0 * p.sqrt() * 2.0 / self.short.size as f64).ln_1p() as f32;
             flux += (level - *previous).max(0.0);
             *previous = level;
         }
@@ -216,7 +223,7 @@ impl Spectrum {
         SpectrumStats {
             band_shares: if silent { Err("silent") } else { Ok(self.bands.map(|b| b / self.total)) },
             centroid_hz: if silent { Err("silent") } else { Ok(self.weighted / self.total) },
-            onsets: onsets(&self.flux, HOP as f64 / self.rate),
+            onsets: onsets(&self.flux, self.short.hop as f64 / self.rate),
             segment_centroid_hz: self
                 .segment_sums
                 .iter()
@@ -301,6 +308,17 @@ mod tests {
             x[k * 11_025] = 0.9;
         }
         assert_eq!(spectrum(44_100, &x, vec![]).onsets, 8);
+    }
+
+    #[test]
+    fn eight_clicks_a_second_are_counted_at_every_rate() {
+        for rate in [8_000, 11_025, 22_050, 44_100, 96_000, 192_000] {
+            let mut x = vec![0.0f32; 2 * rate as usize];
+            for k in 0..16 {
+                x[k * rate as usize / 8] = 0.9;
+            }
+            assert_eq!(spectrum(rate, &x, vec![]).onsets, 16, "{rate}");
+        }
     }
 
     #[test]

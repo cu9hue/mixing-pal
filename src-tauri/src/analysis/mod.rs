@@ -50,7 +50,7 @@ pub fn analyse(path: &Path, regions: &[(u64, u64)], segments: Option<&[(u64, u64
     // mid-note is not. One at the file's start begins from silence.
     if let Some(&(start, _)) = regions.first().filter(|r| r.0 > 0) {
         let mut before = Vec::new();
-        source.stream(&[(start.saturating_sub(spectrum::FFT as u64), start)], deadline, &mut |c| before.extend_from_slice(c))?;
+        source.stream(&[(start.saturating_sub(spectrum::onset_fft(rate) as u64), start)], deadline, &mut |c| before.extend_from_slice(c))?;
         spectrum.prime(&before);
     }
     let frames = source.stream(regions, deadline, &mut |chunk| {
