@@ -20,6 +20,11 @@ const MAX_RATE: f64 = 48_000.0;
 /// notes share a 55 Hz period that none of them plays. Chords measure under
 /// 0.5%; a bass whose fundamental is 18 dB under its octave, about 5%.
 const FUNDAMENTAL_SHARE: f64 = 0.02;
+/// A note whose fundamental is weak or filtered out still has its 2nd to
+/// 5th harmonics, each above this share. The period chord notes share
+/// misses some: a fifth's 55 Hz period has no 5th harmonic, a triad's no
+/// 2nd or 3rd.
+const HARMONIC_SHARE: f64 = 0.005;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pitch {
@@ -146,11 +151,17 @@ impl PitchTracker {
                 let hz = self.rate / (tau as f64 + shift);
                 // `b` still holds the frame's spectrum.
                 let power = |k: usize| self.b[k].norm_sqr();
-                let bin = hz * self.n as f64 / self.rate;
                 let top = self.n / 2 - 1;
-                let near: f64 = (((bin - 1.0).max(1.0) as usize)..=((bin + 1.0) as usize).min(top)).map(power).sum();
                 let total: f64 = (1..=top).map(power).sum();
-                self.frames.push(if near < FUNDAMENTAL_SHARE * total { Frame::Chord } else { Frame::Voiced(hz) });
+                let share = |harmonic: f64| {
+                    let bin = harmonic * hz * self.n as f64 / self.rate;
+                    if bin + 1.0 > top as f64 {
+                        return 0.0;
+                    }
+                    (((bin - 1.0).max(1.0) as usize)..=(bin + 1.0) as usize).map(power).sum::<f64>() / total
+                };
+                let note = share(1.0) >= FUNDAMENTAL_SHARE || (2..=5).all(|h| share(f64::from(h)) >= HARMONIC_SHARE);
+                self.frames.push(if note { Frame::Voiced(hz) } else { Frame::Chord });
                 return;
             }
             tau += 1;
@@ -311,11 +322,37 @@ mod tests {
         (0..44_100).map(|i| parts.iter().map(|p| p[i]).sum()).collect()
     }
 
+    /// One second of a saw-like note: 8 harmonics falling as 1/k, the
+    /// fundamental scaled by `fundamental`.
+    fn saw(hz: f64, fundamental: f64) -> Vec<f32> {
+        (0..44_100)
+            .map(|i| {
+                (1..=8)
+                    .map(|k| {
+                        let gain = if k == 1 { fundamental } else { 1.0 };
+                        (gain * 0.2 / k as f64 * (2.0 * std::f64::consts::PI * hz * k as f64 * i as f64 / 44_100.0).sin()) as f32
+                    })
+                    .sum()
+            })
+            .collect()
+    }
+
     #[test]
     fn a_chord_is_polyphonic_not_the_period_its_notes_share() {
         // A major triad's notes share a 55 Hz period; a fifth's too.
         for notes in [vec![220.0, 277.18, 329.63], vec![110.0, 164.81], vec![130.81, 164.81, 196.0, 246.94]] {
             assert_eq!(track(44_100, &chord(&notes), 1), Pitch::Unknown("polyphonic"), "{notes:?}");
+        }
+        let fifth: Vec<f32> = saw(110.0, 1.0).iter().zip(saw(164.81, 1.0)).map(|(a, b)| a + b).collect();
+        assert_eq!(track(44_100, &fifth, 1), Pitch::Unknown("polyphonic"), "a fifth of saws");
+    }
+
+    #[test]
+    fn a_note_with_a_weak_or_missing_fundamental_is_still_one_note() {
+        // A high-passed bass, a telephone-filtered voice.
+        for (hz, fundamental) in [(110.0, 0.1), (110.0, 0.0), (220.0, 0.0), (55.0, 0.1)] {
+            let p = track(44_100, &saw(hz, fundamental), 1);
+            assert!(matches!(p, Pitch::Steady(f) if cents(f, hz).abs() < 10.0), "{hz} Hz, fundamental x{fundamental}: {p:?}");
         }
     }
 
