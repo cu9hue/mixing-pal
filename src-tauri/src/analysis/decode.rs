@@ -115,23 +115,44 @@ fn hint_is_ogg(path: &Path) -> bool {
 /// file's is a few hundred KB.
 const MAX_MOOV_BYTES: u64 = 16 << 20;
 
-/// The AAC priming an MP4 file states, in frames: its first edit's media
-/// time (ffmpeg writes one), else the iTunSMPB tag (Apple's encoder). symphonia
-/// 0.5 reads neither.
+/// The AAC priming an MP4 file states, in frames: its sound track's first
+/// edit's media time when above 0 (ffmpeg writes one), else the iTunSMPB tag
+/// (Apple's encoder). symphonia 0.5 reads neither.
 fn mp4_priming(path: &Path, rate: u32) -> Option<u64> {
-    let moov = read_moov(path)?;
-    let trak = child(&moov, b"trak")?;
-    if let Some(elst) = child(trak, b"edts").and_then(|e| child(e, b"elst")) {
-        let mdhd = child(trak, b"mdia").and_then(|m| child(m, b"mdhd"))?;
-        let timescale = u64::from(u32::from_be_bytes(mdhd.get(if mdhd[0] == 1 { 20..24 } else { 12..16 })?.try_into().ok()?));
-        if let Some(time) = first_media_time(elst).filter(|_| timescale > 0) {
-            return Some(time * u64::from(rate) / timescale);
-        }
+    moov_priming(&read_moov(path)?, rate)
+}
+
+fn moov_priming(moov: &[u8], rate: u32) -> Option<u64> {
+    // A video file's first track is often the video's, with an edit of its own.
+    let trak = boxes(moov).filter(|(k, _)| *k == b"trak").map(|(_, t)| t).find(|t| handler(t) == Some(b"soun"));
+    let edit = trak.and_then(|t| edit_priming(t, rate)).filter(|p| *p > 0);
+    edit.or_else(|| itunsmpb(moov))
+}
+
+/// A track's handler type: "soun" for sound, "vide" for video.
+fn handler(trak: &[u8]) -> Option<&[u8]> {
+    // Version and flags, then pre_defined, then the type.
+    child(trak, b"mdia").and_then(|m| child(m, b"hdlr"))?.get(8..12)
+}
+
+/// The track's first edit's media time, in frames at `rate`.
+fn edit_priming(trak: &[u8], rate: u32) -> Option<u64> {
+    let elst = child(trak, b"edts").and_then(|e| child(e, b"elst"))?;
+    let mdhd = child(trak, b"mdia").and_then(|m| child(m, b"mdhd"))?;
+    let timescale = u32::from_be_bytes(mdhd.get(if *mdhd.first()? == 1 { 20..24 } else { 12..16 })?.try_into().ok()?);
+    if timescale == 0 {
+        return None;
     }
-    let meta = child(&moov, b"udta").and_then(|u| child(u, b"meta"))?;
+    let time = first_media_time(elst)?;
+    u64::try_from(u128::from(time) * u128::from(rate) / u128::from(timescale)).ok()
+}
+
+/// The priming the iTunSMPB tag in moov's metadata states, in frames.
+fn itunsmpb(moov: &[u8]) -> Option<u64> {
+    let meta = child(moov, b"udta").and_then(|u| child(u, b"meta"))?;
     // meta is a full box in MP4 and a plain one in QuickTime files.
     let ilst = child(meta.get(4..)?, b"ilst").or_else(|| child(meta, b"ilst"))?;
-    let priming = boxes(ilst).filter(|(k, _)| *k == b"----").find_map(|(_, tag)| {
+    boxes(ilst).filter(|(k, _)| *k == b"----").find_map(|(_, tag)| {
         let name = child(tag, b"name")?;
         if name.get(4..)? != b"iTunSMPB" {
             return None;
@@ -139,8 +160,7 @@ fn mp4_priming(path: &Path, rate: u32) -> Option<u64> {
         // " 00000000 00000840 ..." : the second field is the priming, in hex.
         let text = std::str::from_utf8(child(tag, b"data")?.get(8..)?).ok()?;
         u64::from_str_radix(text.split_whitespace().nth(1)?, 16).ok()
-    });
-    priming
+    })
 }
 
 /// The first edit that is not an empty one: its start in the media's time scale.
@@ -575,6 +595,144 @@ mod tests {
         out
     }
 
+    /// An MP4 box: 32-bit size, type, body.
+    fn bx(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat()
+    }
+
+    /// A full box body: version, zero flags, the rest.
+    fn full(version: u8, rest: &[u8]) -> Vec<u8> {
+        [&[version, 0, 0, 0][..], rest].concat()
+    }
+
+    fn mdhd(version: u8, timescale: u32) -> Vec<u8> {
+        let times = if version == 1 { 16 } else { 8 };
+        bx(b"mdhd", &full(version, &[&vec![0; times][..], &timescale.to_be_bytes(), &[0; 12]].concat()))
+    }
+
+    /// An edit list of (duration, media time) entries; -1 is an empty edit.
+    fn elst(version: u8, edits: &[(u64, i64)]) -> Vec<u8> {
+        let mut rest = (edits.len() as u32).to_be_bytes().to_vec();
+        for &(duration, time) in edits {
+            if version == 1 {
+                rest.extend(duration.to_be_bytes());
+                rest.extend(time.to_be_bytes());
+            } else {
+                rest.extend((duration as u32).to_be_bytes());
+                rest.extend((time as i32).to_be_bytes());
+            }
+            rest.extend(0x0001_0000u32.to_be_bytes());
+        }
+        bx(b"edts", &bx(b"elst", &full(version, &rest)))
+    }
+
+    fn trak(handler: &[u8; 4], edits: Option<Vec<u8>>, mdhd: Vec<u8>) -> Vec<u8> {
+        let hdlr = bx(b"hdlr", &full(0, &[&[0; 4][..], handler, &[0; 13]].concat()));
+        bx(b"trak", &[edits.unwrap_or_default(), bx(b"mdia", &[mdhd, hdlr].concat())].concat())
+    }
+
+    /// udta with an iTunSMPB tag stating `priming`, under a full-box meta as
+    /// MP4 writes it or a plain one as QuickTime does.
+    fn smpb(priming: u32, full_meta: bool) -> Vec<u8> {
+        let text = format!(" 00000000 {priming:08X} 00000000 0000000000000000");
+        let tag = [
+            bx(b"mean", &full(0, b"com.apple.iTunes")),
+            bx(b"name", &full(0, b"iTunSMPB")),
+            bx(b"data", &[&1u32.to_be_bytes()[..], &[0; 4], text.as_bytes()].concat()),
+        ]
+        .concat();
+        let ilst = bx(b"ilst", &bx(b"----", &tag));
+        let meta = if full_meta { full(0, &ilst) } else { ilst };
+        bx(b"udta", &bx(b"meta", &meta))
+    }
+
+    #[test]
+    fn the_priming_is_the_edit_lists_media_time_in_frames() {
+        for version in [0, 1] {
+            let moov = trak(b"soun", Some(elst(version, &[(4_410, 2_048)])), mdhd(version, 44_100));
+            assert_eq!(moov_priming(&moov, 22_050), Some(1_024), "v{version}");
+        }
+    }
+
+    #[test]
+    fn an_empty_edit_before_the_media_is_passed_over() {
+        for version in [0, 1] {
+            let moov = trak(b"soun", Some(elst(version, &[(100, -1), (4_410, 2_112)])), mdhd(0, 22_050));
+            assert_eq!(moov_priming(&moov, 22_050), Some(2_112), "v{version}");
+        }
+    }
+
+    #[test]
+    fn the_itunsmpb_tag_is_read_under_either_kind_of_meta() {
+        for full_meta in [true, false] {
+            let moov = [trak(b"soun", None, mdhd(0, 22_050)), smpb(2_112, full_meta)].concat();
+            assert_eq!(moov_priming(&moov, 22_050), Some(2_112), "full meta {full_meta}");
+        }
+    }
+
+    #[test]
+    fn the_sound_tracks_edit_is_read_not_the_videos() {
+        let video = trak(b"vide", Some(elst(0, &[(5_000, 1_024)])), mdhd(0, 12_800));
+        let sound = trak(b"soun", Some(elst(0, &[(4_410, 1_024)])), mdhd(0, 22_050));
+        assert_eq!(moov_priming(&[video, sound].concat(), 22_050), Some(1_024));
+    }
+
+    #[test]
+    fn an_edit_at_zero_leaves_the_priming_to_the_tag_then_the_default() {
+        // ffmpeg's aac_at states 2112 in the edit; afconvert's edit starts at 0.
+        let at_zero = trak(b"soun", Some(elst(0, &[(4_410, 0)])), mdhd(0, 22_050));
+        assert_eq!(moov_priming(&[at_zero.clone(), smpb(2_112, true)].concat(), 22_050), Some(2_112));
+        assert_eq!(moov_priming(&at_zero, 22_050), None);
+        let stated = trak(b"soun", Some(elst(0, &[(4_410, 1_024)])), mdhd(0, 22_050));
+        assert_eq!(moov_priming(&[stated, smpb(2_112, true)].concat(), 22_050), Some(1_024));
+    }
+
+    #[test]
+    fn a_broken_header_box_does_not_panic() {
+        let empty_mdhd = bx(b"trak", &[elst(0, &[(4_410, 1_024)]), bx(b"mdia", &bx(b"mdhd", &[]))].concat());
+        assert_eq!(moov_priming(&empty_mdhd, 22_050), None);
+        // A media time the frame count cannot hold.
+        let huge = trak(b"soun", Some(elst(1, &[(1, i64::MAX)])), mdhd(1, 1));
+        assert_eq!(moov_priming(&huge, 192_000), None);
+    }
+
+    /// A file of the given top-level boxes.
+    fn mp4(top: &[Vec<u8>]) -> std::path::PathBuf {
+        let path = wav(44_100, 1, &[0.0]).with_file_name("boxes.m4a");
+        std::fs::write(&path, top.concat()).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_moov_box_is_found_among_the_top_level_boxes() {
+        let ftyp = bx(b"ftyp", b"M4A \0\0\0\0");
+        let mdat = bx(b"mdat", &[0; 64]);
+        assert_eq!(read_moov(&mp4(&[ftyp.clone(), mdat.clone()])), None);
+        assert_eq!(read_moov(&mp4(&[ftyp.clone(), mdat.clone(), bx(b"moov", b"body")])).as_deref(), Some(&b"body"[..]));
+        // A 64-bit size, after the 8-byte header.
+        let wide = [&1u32.to_be_bytes()[..], b"mdat", &24u64.to_be_bytes(), &[0; 8]].concat();
+        assert_eq!(read_moov(&mp4(&[ftyp.clone(), wide, bx(b"moov", b"body")])).as_deref(), Some(&b"body"[..]));
+        // Size 0: the box runs to the end of the file.
+        let to_end = [&0u32.to_be_bytes()[..], b"moov", b"body"].concat();
+        assert_eq!(read_moov(&mp4(&[ftyp.clone(), to_end])).as_deref(), Some(&b"body"[..]));
+        // A moov that says it is longer than the file.
+        let cut = [&100u32.to_be_bytes()[..], b"moov", b"body"].concat();
+        assert_eq!(read_moov(&mp4(&[ftyp.clone(), cut])), None);
+        // A size below its own header.
+        let tiny = [&4u32.to_be_bytes()[..], b"mdat"].concat();
+        assert_eq!(read_moov(&mp4(&[ftyp.clone(), tiny, bx(b"moov", b"body")])), None);
+        // Past the cap: refused before its body is read.
+        let big = [&((MAX_MOOV_BYTES + 9) as u32).to_be_bytes()[..], b"moov", b"body"].concat();
+        assert_eq!(read_moov(&mp4(&[ftyp, big])), None);
+    }
+
+    #[test]
+    fn a_child_box_cut_short_ends_the_list() {
+        let cut = [bx(b"free", b"x"), [&100u32.to_be_bytes()[..], b"trak", b"body"].concat()].concat();
+        assert_eq!(boxes(&cut).map(|(k, _)| k.to_vec()).collect::<Vec<_>>(), vec![b"free".to_vec()]);
+        assert_eq!(child(&cut, b"trak"), None);
+    }
+
     #[test]
     fn he_aac_is_refused_rather_than_read_an_octave_off() {
         // symphonia decodes only HE-AAC's half-rate core, while the file
@@ -614,7 +772,7 @@ mod tests {
         // with the source to within one frame.
         let reference = chirp(22_050, 0.2);
         // A region at frame 0 also checks that AAC priming sits before it.
-        for name in ["chirp.mp3", "chirp.ogg", "chirp.m4a", "chirp-apple.m4a", "chirp-aac-at.m4a"] {
+        for name in ["chirp.mp3", "chirp.ogg", "chirp.m4a", "chirp-apple.m4a", "chirp-aac-at.m4a", "chirp-video.mp4"] {
             for (start, end) in [(0, 1_000), (1_500, 3_000)] {
                 let got = first_channel(&fixture(name), (start, end));
                 assert_eq!(got.len() as u64, end - start, "{name}");
