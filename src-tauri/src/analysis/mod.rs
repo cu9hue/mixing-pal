@@ -2,6 +2,7 @@
 //! transients, measured from the file in the app. Nothing here describes the
 //! mix: the region is read before clip gain, warping, devices and the fader.
 
+pub mod cache;
 pub mod decode;
 pub mod levels;
 pub mod pitch;
