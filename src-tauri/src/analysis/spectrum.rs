@@ -42,6 +42,9 @@ pub struct Spectrum {
     scratch: Vec<Complex<f32>>,
     power: Vec<f64>,
     previous: Vec<f32>,
+    /// Samples at the front of `buffers` from before the region: they
+    /// count for flux only.
+    before: usize,
     bands: [f64; 7],
     weighted: f64,
     total: f64,
@@ -65,6 +68,7 @@ impl Spectrum {
             scratch: vec![Complex::default(); FFT],
             power: vec![0.0; FFT / 2 + 1],
             previous: vec![0.0; FFT / 2 + 1],
+            before: 0,
             bands: [0.0; 7],
             weighted: 0.0,
             total: 0.0,
@@ -97,46 +101,61 @@ impl Spectrum {
             b.extend(chunk.chunks_exact(self.channels).skip(frames.saturating_sub(FFT)).map(|f| f[c]));
             *buffer = b;
         }
+        self.before = FFT;
         self.frame(false);
     }
 
-    /// `record`: false for a priming frame, which only sets `previous`.
-    fn frame(&mut self, record: bool) {
+    /// The frame's power into `power`, its first `silenced` samples read as
+    /// silence.
+    fn measure(&mut self, silenced: usize) {
         self.power.iter_mut().for_each(|p| *p = 0.0);
         for c in 0..self.channels {
-            for (s, (x, w)) in self.scratch.iter_mut().zip(self.buffers[c].iter().zip(&self.window)) {
-                *s = Complex::new(x * w, 0.0);
+            for (i, (s, (x, w))) in self.scratch.iter_mut().zip(self.buffers[c].iter().zip(&self.window)).enumerate() {
+                *s = Complex::new(if i < silenced { 0.0 } else { x * w }, 0.0);
             }
             self.fft.process(&mut self.scratch);
             for (p, s) in self.power.iter_mut().zip(&self.scratch) {
                 *p += f64::from(s.norm_sqr());
             }
-            self.buffers[c].drain(..HOP);
         }
-        let bin_hz = self.rate / FFT as f64;
-        let segment = self.segments.at(self.position.saturating_sub(FFT as u64 / 2));
+    }
+
+    /// `record`: false for a priming frame, which only sets `previous`.
+    fn frame(&mut self, record: bool) {
+        if record {
+            // Only the region's own samples, as if it began the file.
+            self.measure(self.before);
+            let bin_hz = self.rate / FFT as f64;
+            let segment = self.segments.at(self.position.saturating_sub(FFT as u64 / 2));
+            for k in 1..self.power.len() {
+                let (hz, p) = (k as f64 * bin_hz, self.power[k]);
+                let band = BANDS.iter().position(|(_, top)| hz < *top).unwrap_or(BANDS.len() - 1);
+                self.bands[band] += p;
+                self.weighted += hz * p;
+                self.total += p;
+                if let Some(i) = segment {
+                    self.segment_sums[i].0 += hz * p;
+                    self.segment_sums[i].1 += p;
+                }
+            }
+        }
+        if !record || self.before > 0 {
+            self.measure(0);
+        }
         let mut flux = 0.0f32;
         for k in 1..self.power.len() {
-            let (hz, p) = (k as f64 * bin_hz, self.power[k]);
             // Log-compressed magnitude, so a quiet onset still counts.
-            let level = (100.0 * p.sqrt() * 2.0 / FFT as f64).ln_1p() as f32;
+            let level = (100.0 * self.power[k].sqrt() * 2.0 / FFT as f64).ln_1p() as f32;
             flux += (level - self.previous[k]).max(0.0);
             self.previous[k] = level;
-            if !record {
-                continue;
-            }
-            let band = BANDS.iter().position(|(_, top)| hz < *top).unwrap_or(BANDS.len() - 1);
-            self.bands[band] += p;
-            self.weighted += hz * p;
-            self.total += p;
-            if let Some(i) = segment {
-                self.segment_sums[i].0 += hz * p;
-                self.segment_sums[i].1 += p;
-            }
         }
         if record {
             self.flux.push(flux);
         }
+        for b in &mut self.buffers {
+            b.drain(..HOP);
+        }
+        self.before = self.before.saturating_sub(HOP);
     }
 
     pub fn finish(mut self) -> SpectrumStats {

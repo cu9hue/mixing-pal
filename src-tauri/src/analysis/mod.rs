@@ -45,12 +45,12 @@ pub fn analyse(path: &Path, regions: &[(u64, u64)], segments: Option<&[(u64, u64
     let mut spectrum = spectrum::Spectrum::new(rate, channels, segments);
     let mut stereo = (channels == 2).then(|| stereo::Stereo::new(rate));
     let mut pitch = pitch::PitchTracker::new(rate);
-    // A region inside the file is measured against the audio just before
-    // it. One at the file's start begins from silence, as it plays.
+    // Live never plays the audio before a region, so nothing is measured
+    // from it. It only says whether the region's start is an onset: a cut
+    // mid-note is not. One at the file's start begins from silence.
     if let Some(&(start, _)) = regions.first().filter(|r| r.0 > 0) {
         let mut before = Vec::new();
         source.stream(&[(start.saturating_sub(spectrum::FFT as u64), start)], deadline, &mut |c| before.extend_from_slice(c))?;
-        levels.prime(&before);
         spectrum.prime(&before);
     }
     let frames = source.stream(regions, deadline, &mut |chunk| {
@@ -213,6 +213,18 @@ mod tests {
         let path = wav(44_100, 1, &x);
         let s = analyse(&path, &[(22_050, 44_100)], None, later()).unwrap();
         assert_eq!(s.onsets_per_second, Ok(2.0));
+    }
+
+    #[test]
+    fn a_region_after_louder_audio_is_measured_on_its_own_samples() {
+        // Live never plays the audio before the start marker.
+        let mut x = sine(44_100, 5000.0, 1.0, 0.9);
+        x.extend(sine(44_100, 100.0, 1.0, 0.01));
+        let path = wav(44_100, 1, &x);
+        let s = analyse(&path, &[(44_100, 88_200)], None, later()).unwrap();
+        assert!(s.levels.true_peak_dbfs.unwrap() < -39.0, "{:?}", s.levels.true_peak_dbfs);
+        assert!(s.spectrum.centroid_hz.unwrap() < 150.0, "{:?}", s.spectrum.centroid_hz);
+        assert!(s.spectrum.band_shares.unwrap()[1] > 0.99, "{:?}", s.spectrum.band_shares);
     }
 
     #[test]

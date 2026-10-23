@@ -45,9 +45,6 @@ pub struct Levels {
     sum_squares: f64,
     frames: u64,
     history: Vec<[f32; TAPS]>,
-    /// Real samples in `history`. Until it is full the interpolator would
-    /// read a step from silence, so no true peak is taken.
-    filled: usize,
     kernel: [[f32; TAPS]; OVERSAMPLE - 1],
     block_max: f32,
     in_block: usize,
@@ -83,7 +80,6 @@ impl Levels {
             sum_squares: 0.0,
             frames: 0,
             history: vec![[0.0; TAPS]; channels],
-            filled: 0,
             kernel: kernel(),
             block_max: 0.0,
             in_block: 0,
@@ -93,21 +89,11 @@ impl Levels {
         }
     }
 
-    /// The frames just before the region, so its first true peaks have real
-    /// samples on both sides. Nothing else is measured from them.
-    pub fn prime(&mut self, chunk: &[f32]) {
-        for frame in chunk.chunks_exact(self.channels) {
-            for (h, &x) in self.history.iter_mut().zip(frame) {
-                h.copy_within(1.., 0);
-                h[TAPS - 1] = x;
-            }
-            self.filled += 1;
-        }
-    }
-
     pub fn push(&mut self, chunk: &[f32]) {
         for frame in chunk.chunks_exact(self.channels) {
-            let ready = self.filled + 1 >= TAPS;
+            // Until `history` holds only the region's samples, the
+            // interpolator would read a step from silence: no true peak yet.
+            let ready = self.frames + 1 >= TAPS as u64;
             let mut loudest = 0.0f32;
             let mut squares = 0.0f64;
             for (c, &x) in frame.iter().enumerate() {
@@ -126,7 +112,6 @@ impl Levels {
                     self.true_peak = self.true_peak.max(y.abs());
                 }
             }
-            self.filled += 1;
             self.sum_squares += squares;
             if let Some(i) = self.segments.at(self.frames) {
                 self.segment_sums[i].0 += squares;
