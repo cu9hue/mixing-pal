@@ -265,7 +265,7 @@ fn declared_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_sample",
-                "description": "The sample behind one audio clip or one Simpler, read from Live at call time: the file name only (never its folder), the file's length and sample rate, warp (false or the mode, such as Complex), gain, transpose and detune, and region: the part of the file that plays, as seconds of the file, with plays saying it in words. For an arrangement clip, plays includes the bars and, when it loops, how many times, such as \"a 1-bar loop played 4 times\"; an unwarped loop is counted at the current tempo. A session clip says what it plays when launched. A Simpler gives its mode (Classic, One-Shot, Slice): in Classic and One-Shot the pitch follows the MIDI note and C3 plays the sample at its original pitch plus Transpose and Detune; in Slice, slices is the count of slices cut from that region. Pass exactly one of slot (a session clip, from get_clips), index (an arrangement clip, from get_arrangement) or path (a Simpler, as in get_device_params; a Drum Rack pad's Simpler is [rack, chain, device] from get_rack_contents). This describes the file and Live's settings, not what the mix sounds like: devices, the fader and the rest of the set are not in it. missing_reason not_audio_clip is a MIDI clip; empty_slot, no_such_target, not_a_simpler, no_sample (an empty Simpler), multisample_not_readable, sampler_not_readable and path_too_long say why nothing was read; region_unavailable keeps the settings without a region.",
+                "description": "The sample behind one audio clip or one Simpler, read from Live at call time: the file name only (never its folder), the file's length and sample rate, warp (false or the mode, such as Complex), gain, transpose and detune, and region: the part of the file that plays, as seconds of the file, with plays saying it in words. For an arrangement clip, plays includes the bars and, when it loops, how many times, such as \"a 1-bar loop played 4 times\"; an unwarped loop is counted at the current tempo. A session clip says what it plays when launched. A Simpler gives its mode (Classic, One-Shot, Slice): in Classic and One-Shot the pitch follows the MIDI note and C3 plays the sample at its original pitch plus Transpose and Detune; in Slice, slices is the count of slices cut from that region. Pass exactly one of slot (a session clip, from get_clips), index (an arrangement clip, from get_arrangement) or path (a Simpler, as in get_device_params; a Drum Rack pad's Simpler is [rack, chain, device] from get_rack_contents). This describes the file and Live's settings, not what the mix sounds like: devices, the fader and the rest of the set are not in it. missing_reason not_audio_clip is a MIDI clip; empty_slot, no_such_target, not_a_simpler, no_sample (an empty Simpler), multisample_not_readable, sampler_not_readable and path_too_long say why nothing was read; region_unavailable keeps the settings without a region. For the played region it also gives analysis, measured from the file: sample and true peak, RMS, crest factor, full-scale sample count, band shares, spectral centroid, stereo correlation and side-to-mid (whole and below 150 Hz), pitch as a note in Live's naming (raw, and after Transpose and Detune), onsets per second, leading silence, and attack and tail for one hit. These stats describe the file's region before clip gain, warping, devices and the fader: never the mix. A null stat has its reason in null_because; an analysis missing_reason (file_missing, file_in_icloud, unsupported_format, unsupported_channels, decode_failed, region_too_long, analysis_timeout) keeps the rest of the result. profile: true adds rms_dbfs and centroid_hz per beat on a warped clip, per half second otherwise; use it only for how the sample changes over time.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -276,7 +276,8 @@ fn declared_tools() -> serde_json::Value {
                             "type": "array",
                             "items": { "type": "integer" },
                             "description": "Zero-based indices from the track to a Simpler, alternating device and chain, as in get_device_params. Always an odd number of entries, at most 9."
-                        }
+                        },
+                        "profile": { "type": "boolean", "description": "true adds level and brightness across the region, per beat or per half second. Leave it out unless the question is how the sample changes over time." }
                     },
                     "required": ["track"]
                 }
@@ -1885,6 +1886,13 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             let Some((track, target)) = sample_target(args) else {
                 return ToolResult::missing("bad_arguments");
             };
+            let profile = match args.get("profile") {
+                None => false,
+                Some(v) => match v.as_bool() {
+                    Some(b) => b,
+                    None => return ToolResult::missing("bad_arguments"),
+                },
+            };
             if known_track_is_out_of_range(&ctx.coalescer, track) {
                 return ToolResult::missing("track_out_of_range");
             }
@@ -1897,12 +1905,22 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             };
             let before = track_identity(&ctx.coalescer, track);
             let outcome = sample::get_sample(&query, track as i32, &target, sample::QUERY_TIMEOUT).await;
+            let profile = match (&outcome, profile) {
+                (Ok(read), true) => sample::plan_profile(&query, track as i32, &target, read).await,
+                _ => sample::Profile::Off,
+            };
             if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
                 return ToolResult::missing("topology_changed");
             }
             match outcome {
                 Ok(read) => {
-                    let (payload, missing) = sample::sample_payload(&read, target.kind(), time_signature(&ctx.coalescer));
+                    let (mut payload, missing) = sample::sample_payload(&read, target.kind(), time_signature(&ctx.coalescer));
+                    if let Some((analysis, channels)) = sample::analysis_block(&read, &profile).await {
+                        payload["analysis"] = analysis;
+                        if let Some(c) = channels {
+                            payload["channels"] = json!(c);
+                        }
+                    }
                     ToolResult::live(payload, missing.map(str::to_owned))
                 }
                 Err(sample::SampleError::Refused(reason)) => ToolResult::missing(reason),
@@ -3457,5 +3475,22 @@ midi_flag_unavailable_for_tracks: 7 (their clips are listed, but whether the tra
         let ctx = disconnected_ctx(one_track_mirror());
         let r = execute(&ctx, "get_clips", &json!({})).await;
         assert_eq!(r.missing_reason.as_deref(), Some("not_in_mirror"));
+    }
+
+    #[tokio::test]
+    async fn get_sample_refuses_a_profile_that_is_not_a_boolean() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "index": 0, "profile": "yes" })).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"));
+    }
+
+    #[test]
+    fn the_sample_schema_offers_a_profile_and_says_what_the_analysis_is() {
+        let schema = tool_schema();
+        let f = &schema.as_array().unwrap().iter().find(|t| t["function"]["name"] == "get_sample").unwrap()["function"];
+        assert_eq!(f["parameters"]["properties"]["profile"]["type"], json!(["boolean", "null"]));
+        let d = f["description"].as_str().unwrap();
+        assert!(d.contains("before clip gain, warping, devices and the fader"), "{d}");
+        assert!(d.len() < 8000);
     }
 }
