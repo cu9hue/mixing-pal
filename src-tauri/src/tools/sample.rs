@@ -217,6 +217,10 @@ pub fn decode_reply(reply: &[OscType], track: i32, target: &SampleTarget) -> Res
         let (Some(a), Some(b), Some(fa), Some(fb)) = (n(0)?, n(1)?, n(2)?, n(3)?) else {
             return Err(SampleError::Malformed);
         };
+        // Python never sends these; a reply that does is not trusted.
+        if ![a, b, fa, fb].iter().all(|x| x.is_finite()) || fb <= fa {
+            return Err(SampleError::Malformed);
+        }
         intervals.push(Interval { source: (a, b), frames: (fa, fb) });
     }
     let e = |i: usize| reply.get(extra + i);
@@ -997,6 +1001,14 @@ mod tests {
             timing(true, Some((152.0, 166.0))));
         let (p, _) = sample_payload(&read, 1, Some((4, 4)));
         assert!(serde_json::to_string(&p).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn reversed_or_endless_intervals_are_malformed() {
+        // The profile cuts inside each interval; a reversed one would panic it.
+        for bad in [(0.0, 4.0, 4000, 1000), (0.0, f32::INFINITY, 0, 4000), (0.0, 4.0, 0, 0)] {
+            assert!(matches!(decode_reply(&clip_reply(&[bad]), 3, &SampleTarget::Index(0)), Err(SampleError::Malformed)), "{bad:?}");
+        }
     }
 
     #[test]

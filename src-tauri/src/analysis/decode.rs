@@ -207,6 +207,11 @@ impl Source {
                 if decoded.spec().channels.count() != self.channels {
                     return Err(AnalysisError::DecodeFailed);
                 }
+                // HE-AAC decodes to its half-rate core: every frame number and
+                // pitch would be off, so it is refused.
+                if decoded.spec().rate != self.rate {
+                    return Err(AnalysisError::UnsupportedFormat);
+                }
                 let frames = decoded.frames() as i64;
                 if frames == 0 || first + frames <= start {
                     continue;
@@ -371,6 +376,15 @@ mod tests {
         let mut out = Vec::new();
         source.stream(&[region], later(), &mut |c| out.extend(c.iter().step_by(ch))).unwrap();
         out
+    }
+
+    #[test]
+    fn he_aac_is_refused_rather_than_read_an_octave_off() {
+        // symphonia decodes only HE-AAC's half-rate core, while the file
+        // states the full rate.
+        let mut source = Source::open(&fixture("he-aac-440.m4a")).unwrap();
+        let r = source.stream(&[(0, 10_000)], later(), &mut |_| {});
+        assert_eq!(r, Err(AnalysisError::UnsupportedFormat));
     }
 
     #[test]
