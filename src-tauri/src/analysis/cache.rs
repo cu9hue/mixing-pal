@@ -103,8 +103,10 @@ impl Analyses {
             Err(e) => Err(e),
         };
         // A file that changed while it was read, or was written moments
-        // ago, is answered, not kept.
-        let settled = SystemTime::now().duration_since(modified).is_ok_and(|age| age >= SETTLE);
+        // ago, is answered, not kept. A date ahead of this clock (a drive's
+        // clock running fast) would never settle, so it counts as settled.
+        // The state is read again only for a result that may be kept.
+        let settled = SystemTime::now().duration_since(modified).map_or(true, |age| age >= SETTLE);
         let unchanged = outcome.is_ok() && settled && self.file_state(&key.job.path).await.ok() == Some((size, modified));
         match (&outcome, unchanged) {
             (Ok(_), true) => self.keep(&key, &cell),
@@ -394,6 +396,31 @@ mod tests {
         let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
         assert!(a.get(job(path), later(), BUDGET).await.is_ok());
         assert_eq!(a.cached(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_file_dated_in_the_future_is_kept() {
+        // A drive whose clock runs ahead: the date never comes within SETTLE.
+        let a = Analyses::new(2, 256);
+        let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(SystemTime::now() + Duration::from_secs(3_600)).unwrap();
+        assert!(a.get(job(path), later(), BUDGET).await.is_ok());
+        assert_eq!(a.cached(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_result_not_kept_does_not_read_the_file_state_again() {
+        // On a slow share each read of the state can cost up to FILE_WAIT.
+        static STATES: AtomicUsize = AtomicUsize::new(0);
+        fn counted(p: &Path) -> Result<(u64, SystemTime), AnalysisError> {
+            STATES.fetch_add(1, Ordering::SeqCst);
+            file_state(p)
+        }
+        let a = Analyses { state: counted, ..Analyses::new(2, 256) };
+        let path = wav(44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        assert!(a.get(job(path), later(), BUDGET).await.is_ok());
+        assert_eq!(STATES.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
