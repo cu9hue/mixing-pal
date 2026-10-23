@@ -20,6 +20,8 @@ use symphonia::core::probe::Hint;
 pub enum AnalysisError {
     FileMissing,
     FileInIcloud,
+    /// macOS refused access, such as a folder the producer did not allow.
+    FileNotPermitted,
     UnsupportedFormat,
     UnsupportedChannels,
     DecodeFailed,
@@ -32,6 +34,7 @@ impl AnalysisError {
         match self {
             AnalysisError::FileMissing => "file_missing",
             AnalysisError::FileInIcloud => "file_in_icloud",
+            AnalysisError::FileNotPermitted => "file_not_permitted",
             AnalysisError::UnsupportedFormat => "unsupported_format",
             AnalysisError::UnsupportedChannels => "unsupported_channels",
             AnalysisError::DecodeFailed => "decode_failed",
@@ -42,6 +45,9 @@ impl AnalysisError {
 }
 
 pub const MAX_REGION_SECONDS: u64 = 600;
+/// Ten minutes at 96 kHz. Work grows with the rate, so a 192 kHz region is
+/// capped at five minutes to stay inside the analysis budget.
+pub const MAX_REGION_FRAMES: u64 = MAX_REGION_SECONDS * 96_000;
 
 /// Frames decoded before a region's start, so the decoder is settled when
 /// the region begins. Covers one Vorbis long block.
@@ -59,6 +65,7 @@ pub fn is_dataless(flags: u32) -> bool {
 pub fn file_state(path: &Path) -> Result<(u64, SystemTime), AnalysisError> {
     let meta = std::fs::metadata(path).map_err(|e| match e.kind() {
         ErrorKind::NotFound => AnalysisError::FileMissing,
+        ErrorKind::PermissionDenied => AnalysisError::FileNotPermitted,
         _ => AnalysisError::DecodeFailed,
     })?;
     #[cfg(target_os = "macos")]
@@ -111,6 +118,7 @@ impl Source {
         file_state(path)?;
         let file = File::open(path).map_err(|e| match e.kind() {
             ErrorKind::NotFound => AnalysisError::FileMissing,
+            ErrorKind::PermissionDenied => AnalysisError::FileNotPermitted,
             _ => AnalysisError::DecodeFailed,
         })?;
         let stream = MediaSourceStream::new(Box::new(file), Default::default());
@@ -162,7 +170,7 @@ impl Source {
     /// dropped, and decoding stops at its end. Returns the frames sent.
     pub fn stream(&mut self, regions: &[(u64, u64)], deadline: Instant, sink: &mut dyn FnMut(&[f32])) -> Result<u64, AnalysisError> {
         let total: u64 = regions.iter().map(|(a, b)| b.saturating_sub(*a)).sum();
-        if total > MAX_REGION_SECONDS * u64::from(self.rate) {
+        if total > MAX_REGION_SECONDS * u64::from(self.rate) || total > MAX_REGION_FRAMES {
             return Err(AnalysisError::RegionTooLong);
         }
         let mut buffer: Option<SampleBuffer<f32>> = None;
@@ -331,6 +339,24 @@ mod tests {
         let mut source = Source::open(&path).unwrap();
         let r = source.stream(&[(0, 600_001)], later(), &mut |_| {});
         assert_eq!(r, Err(AnalysisError::RegionTooLong));
+    }
+
+    #[test]
+    fn a_high_rate_region_is_capped_by_its_frames() {
+        // Work grows with the rate: 192 kHz gets five minutes, not ten.
+        let path = wav(192_000, 1, &[0.0; 10]);
+        let mut source = Source::open(&path).unwrap();
+        let r = source.stream(&[(0, 301 * 192_000)], later(), &mut |_| {});
+        assert_eq!(r, Err(AnalysisError::RegionTooLong));
+    }
+
+    #[test]
+    fn an_unreadable_file_says_permission_not_decoding() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = wav(44_100, 1, &chirp(44_100, 0.01));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let e = Source::open(&path).err();
+        assert_eq!(e.map(AnalysisError::code), Some("file_not_permitted"));
     }
 
     #[test]
