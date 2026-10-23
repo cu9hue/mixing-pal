@@ -5,6 +5,7 @@
 pub mod decode;
 pub mod levels;
 pub mod spectrum;
+pub mod stereo;
 #[cfg(test)]
 pub(crate) mod signals;
 
