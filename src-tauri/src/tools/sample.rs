@@ -413,6 +413,20 @@ pub fn beat_segments(read: &SampleRead, positions: &[Vec<f64>], frames: &[Option
     Some(out)
 }
 
+/// Whether Live maps each interval's ends to the frames it gave in the first
+/// reply. They differ when a warp marker moved, or the clip was replaced by
+/// another of the same length, between the two replies. Within a frame:
+/// the beats are rounded on the wire.
+fn ends_match(read: &SampleRead, positions: &[Vec<f64>], frames: &[Option<f64>]) -> bool {
+    let mut at = 0;
+    positions.iter().zip(region_frames(read)).all(|(beats, (a, b))| {
+        let (first, last) = (frames.get(at).copied().flatten(), frames.get(at + beats.len() - 1).copied().flatten());
+        at += beats.len();
+        let near = |f: Option<f64>, want: u64| f.is_some_and(|f| (f - want as f64).abs() <= 1.0);
+        near(first, a) && near(last, b)
+    })
+}
+
 /// The profile, when it needs nothing more from Live: unavailable, or half
 /// seconds for anything but a warped clip. None for a warped clip, whose
 /// beats Live maps.
@@ -454,6 +468,7 @@ pub async fn plan_profile(q: &LiveQuery, track: i32, target: &SampleTarget, read
     let rate = read.sample_rate.unwrap_or(0.0);
     let positions = beat_positions(&read.intervals);
     match get_sample_frames(q, track, target, &positions.concat(), read.length_frames, QUERY_TIMEOUT).await {
+        Ok(frames) if !ends_match(read, &positions, &frames) => Profile::Unavailable("clip_changed"),
         Ok(frames) => beat_segments(read, &positions, &frames, rate).map_or(Profile::Unavailable("beats_unmapped"), Profile::Segments),
         Err(e) => Profile::Unavailable(frames_failure(&e)),
     }

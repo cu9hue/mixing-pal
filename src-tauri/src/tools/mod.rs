@@ -3530,25 +3530,61 @@ midi_flag_unavailable_for_tracks: 7 (their clips are listed, but whether the tra
         assert!(profile.get("beat").is_none());
     }
 
-    #[tokio::test]
-    async fn a_clip_replaced_between_the_replies_gets_no_profile_but_its_analysis() {
+    /// Live's frames reply: the file's length, and `per_beat` frames for
+    /// each beat asked. `sample_reply`'s clip is 6 beats over 132,300 frames.
+    fn frames_reply(args: &[rosc::OscType], length: i32, per_beat: f64) -> Option<Vec<rosc::OscType>> {
+        let rosc::OscType::String(beats) = &args[3] else { return None };
+        let beats: Vec<f64> = beats.split(',').map(|b| b.parse().unwrap()).collect();
+        let mut r = args[..4].to_vec();
+        r.extend([rosc::OscType::String("ok".into()), rosc::OscType::Int(length), rosc::OscType::Int(beats.len() as i32)]);
+        r.extend(beats.iter().map(|b| rosc::OscType::Int((b * per_beat).round() as i32)));
+        Some(r)
+    }
+
+    /// An arrangement clip, warped, whose frames reply comes from `frames`.
+    async fn warped_clip(frames: fn(&[rosc::OscType]) -> Option<Vec<rosc::OscType>>) -> serde_json::Value {
         let file = three_seconds();
         let ctx = scripted_ctx(one_track_mirror(), Arc::new(move |addr, args| match addr {
             "/live/mixingpal/get/sample" => Some(sample_reply(args, &file)),
-            "/live/mixingpal/get/sample/frames" => {
-                // Another clip's length, and frames for every beat asked.
-                let rosc::OscType::String(beats) = &args[3] else { return None };
-                let n = beats.split(',').count();
-                let mut r = args[..4].to_vec();
-                r.extend([rosc::OscType::String("ok".into()), rosc::OscType::Int(999), rosc::OscType::Int(n as i32)]);
-                r.extend((0..n).map(|i| rosc::OscType::Int(i as i32 * 22_050)));
-                Some(r)
-            }
+            "/live/mixingpal/get/sample/frames" => frames(args),
             _ => None,
         }))
         .await;
-        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "index": 0, "profile": true })).await;
-        assert_eq!(r.value["analysis"]["null_because"]["profile"], "clip_changed", "{}", r.value);
-        assert_eq!(r.value["analysis"]["pitch"]["note"], "A2");
+        execute(&ctx, "get_sample", &json!({ "track": 0, "index": 0, "profile": true })).await.value
+    }
+
+    #[tokio::test]
+    async fn a_warped_clip_profile_is_cut_on_its_beats() {
+        let r = warped_clip(|args| frames_reply(args, 132_300, 22_050.0)).await;
+        let profile = &r["analysis"]["profile"];
+        assert_eq!(profile["beat"], json!([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]), "{r}");
+        assert_eq!(profile["at_s"], json!([0.0, 0.5, 1.0, 1.5, 2.0, 2.5]));
+        // A steady sine: every beat at the same level and brightness.
+        for column in ["rms_dbfs", "centroid_hz"] {
+            let values = profile[column].as_array().unwrap();
+            assert_eq!(values.len(), 6, "{column}: {r}");
+            assert!(values.iter().all(|v| v.as_f64().is_some_and(|x| (x - values[0].as_f64().unwrap()).abs() < 1.0)), "{column}: {r}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lost_frames_reply_costs_only_the_profile() {
+        let r = warped_clip(|_| None).await;
+        assert_eq!(r["analysis"]["null_because"]["profile"], "profile_unavailable", "{r}");
+        assert_eq!(r["analysis"]["pitch"]["note"], "A2");
+    }
+
+    #[tokio::test]
+    async fn a_clip_replaced_between_the_replies_gets_no_profile_but_its_analysis() {
+        let r = warped_clip(|args| frames_reply(args, 999, 22_050.0)).await;
+        assert_eq!(r["analysis"]["null_because"]["profile"], "clip_changed", "{r}");
+        assert_eq!(r["analysis"]["pitch"]["note"], "A2");
+    }
+
+    #[tokio::test]
+    async fn a_warp_marker_moved_between_the_replies_gets_no_profile() {
+        // The same file, but its 6 beats now span two thirds of it.
+        let r = warped_clip(|args| frames_reply(args, 132_300, 14_700.0)).await;
+        assert_eq!(r["analysis"]["null_because"]["profile"], "clip_changed", "{r}");
     }
 }
