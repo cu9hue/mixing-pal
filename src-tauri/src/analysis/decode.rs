@@ -75,13 +75,27 @@ pub fn is_dataless(flags: u32) -> bool {
     flags & SF_DATALESS != 0
 }
 
-/// The file's size and modification time: the cache key's file state.
-pub fn file_state(path: &Path) -> Result<(u64, SystemTime), AnalysisError> {
-    let meta = std::fs::metadata(path).map_err(|e| match e.kind() {
+/// What a failed read says about the file. A share or drive that stops
+/// answering mid-read is the drive, not a file that fails to decode.
+fn io_error(e: &std::io::Error) -> AnalysisError {
+    match e.kind() {
         ErrorKind::NotFound => AnalysisError::FileMissing,
         ErrorKind::PermissionDenied => AnalysisError::FileNotPermitted,
+        ErrorKind::TimedOut
+        | ErrorKind::NotConnected
+        | ErrorKind::HostUnreachable
+        | ErrorKind::NetworkUnreachable
+        | ErrorKind::NetworkDown
+        | ErrorKind::ConnectionReset
+        | ErrorKind::ConnectionAborted
+        | ErrorKind::StaleNetworkFileHandle => AnalysisError::FileUnreachable,
         _ => AnalysisError::DecodeFailed,
-    })?;
+    }
+}
+
+/// The file's size and modification time: the cache key's file state.
+pub fn file_state(path: &Path) -> Result<(u64, SystemTime), AnalysisError> {
+    let meta = std::fs::metadata(path).map_err(|e| io_error(&e))?;
     #[cfg(target_os = "macos")]
     {
         use std::os::macos::fs::MetadataExt;
@@ -206,7 +220,10 @@ fn child<'a>(b: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
 /// used here is not lost.
 fn decoded_spec(format: &mut dyn FormatReader, decoder: &mut dyn Decoder, track: u32) -> Result<(u32, usize), AnalysisError> {
     loop {
-        let packet = format.next_packet().map_err(|_| AnalysisError::DecodeFailed)?;
+        let packet = format.next_packet().map_err(|e| match e {
+            Error::IoError(e) => io_error(&e),
+            _ => AnalysisError::DecodeFailed,
+        })?;
         if packet.track_id() != track {
             continue;
         }
@@ -234,11 +251,7 @@ pub struct Source {
 impl Source {
     pub fn open(path: &Path) -> Result<Source, AnalysisError> {
         file_state(path)?;
-        let file = File::open(path).map_err(|e| match e.kind() {
-            ErrorKind::NotFound => AnalysisError::FileMissing,
-            ErrorKind::PermissionDenied => AnalysisError::FileNotPermitted,
-            _ => AnalysisError::DecodeFailed,
-        })?;
+        let file = File::open(path).map_err(|e| io_error(&e))?;
         let stream = MediaSourceStream::new(Box::new(file), Default::default());
         let mut hint = Hint::new();
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -324,6 +337,7 @@ impl Source {
                 let packet = match self.format.next_packet() {
                     Ok(p) => p,
                     Err(Error::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    Err(Error::IoError(e)) => return Err(io_error(&e)),
                     Err(_) => return Err(AnalysisError::DecodeFailed),
                 };
                 if packet.track_id() != self.track {
@@ -444,6 +458,28 @@ mod tests {
     fn a_file_not_downloaded_is_named_for_any_cloud_folder() {
         // Dropbox, Google Drive and OneDrive placeholders are dataless too.
         assert_eq!(AnalysisError::FileOnlineOnly.code(), "file_online_only");
+    }
+
+    #[test]
+    fn a_read_error_names_the_file_or_its_drive() {
+        let cases = [
+            (ErrorKind::NotFound, AnalysisError::FileMissing),
+            (ErrorKind::PermissionDenied, AnalysisError::FileNotPermitted),
+            (ErrorKind::TimedOut, AnalysisError::FileUnreachable),
+            (ErrorKind::NotConnected, AnalysisError::FileUnreachable),
+            (ErrorKind::HostUnreachable, AnalysisError::FileUnreachable),
+            (ErrorKind::NetworkUnreachable, AnalysisError::FileUnreachable),
+            (ErrorKind::NetworkDown, AnalysisError::FileUnreachable),
+            (ErrorKind::ConnectionReset, AnalysisError::FileUnreachable),
+            (ErrorKind::ConnectionAborted, AnalysisError::FileUnreachable),
+            (ErrorKind::StaleNetworkFileHandle, AnalysisError::FileUnreachable),
+            (ErrorKind::InvalidData, AnalysisError::DecodeFailed),
+            (ErrorKind::UnexpectedEof, AnalysisError::DecodeFailed),
+            (ErrorKind::Other, AnalysisError::DecodeFailed),
+        ];
+        for (kind, want) in cases {
+            assert_eq!(io_error(&std::io::Error::from(kind)), want, "{kind:?}");
+        }
     }
 
     #[test]
