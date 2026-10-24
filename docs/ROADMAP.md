@@ -405,8 +405,8 @@ sample statistics. Two steps, in order:
    in the app from the file Live names, cached by path, size, save time and
    region. Every result says it describes the raw file, before clip gain,
    warping, devices and the fader. On an M4 Pro, a 3-minute stereo file at
-   44.1 kHz takes 0.83 s cold, two at once 0.87 s, and the longest region
-   allowed (5 minutes at 192 kHz) 3.8 s.
+   44.1 kHz takes 0.95 s cold, two at once 1.0 s, and the longest region
+   allowed (5 minutes at 192 kHz) 4.3 s.
 2. **A bounce she picks.** Loudness and band balance per section, aligned to
    the locators. It is the only honest route to questions such as "is the low
    end too thin?".
