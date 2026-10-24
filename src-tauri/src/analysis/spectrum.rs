@@ -1,7 +1,7 @@
 //! Spectral stats: band shares and the centroid from a Hann STFT of 8192
-//! points at 48 kHz, half overlapped; spectral-flux onsets from one of 2048
-//! points at 48 kHz, hop a quarter of it. Both scale with the rate. Power is
-//! summed over channels.
+//! points at 48 kHz, half overlapped; spectral-flux onsets and each
+//! segment's centroid from one of 2048 points at 48 kHz, hop a quarter of it.
+//! Both scale with the rate. Power is summed over channels.
 
 use super::{Segments, Stat};
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -139,10 +139,7 @@ pub struct Spectrum {
     flux: Vec<f32>,
     position: u64,
     segments: Segments,
-    /// Each segment's frames that fall wholly inside it.
-    segment_sums: Vec<Option<(f64, f64)>>,
-    /// Each segment's share of every frame that overlaps it, by window mass.
-    segment_overlaps: Vec<(f64, f64)>,
+    segment_sums: Vec<(f64, f64)>,
 }
 
 impl Spectrum {
@@ -162,8 +159,7 @@ impl Spectrum {
             flux: Vec::new(),
             position: 0,
             segments: Segments::new(segments),
-            segment_sums: vec![None; n],
-            segment_overlaps: vec![(0.0, 0.0); n],
+            segment_sums: vec![(0.0, 0.0); n],
         }
     }
 
@@ -172,11 +168,12 @@ impl Spectrum {
             self.position += 1;
             if self.long.push(frame) {
                 self.long.measure();
-                self.record(self.position as i64 - self.long.size as i64);
+                self.record();
             }
             if self.short.push(frame) {
                 self.short.measure();
                 self.onset(true);
+                self.credit(self.position as i64 - self.short.size as i64);
             }
         }
     }
@@ -191,13 +188,7 @@ impl Spectrum {
         self.onset(false);
     }
 
-    /// `start`: the stream position of the frame's first sample, below 0
-    /// for the silence the first frame starts with. A segment's centroid
-    /// comes from the frames wholly inside it: a frame that reaches into a
-    /// segment 40 dB louder reads as that one. A segment that holds no whole
-    /// frame gets the share of the window's mass that falls inside it from
-    /// each frame that overlaps it, so it still gets a centroid.
-    fn record(&mut self, start: i64) {
+    fn record(&mut self) {
         let bin_hz = self.rate / self.long.size as f64;
         let (mut weighted, mut total) = (0.0, 0.0);
         for (k, &p) in self.long.power.iter().enumerate().skip(1) {
@@ -209,19 +200,28 @@ impl Spectrum {
         }
         self.weighted += weighted;
         self.total += total;
-        let (size, mass) = (self.long.size as i64, &self.long.mass);
-        let (first, last) = (start.max(0) as u64, self.position);
-        for (i, (a, b)) in self.segments.overlapping(first, last) {
-            if a <= first && last <= b {
-                let sums = self.segment_sums[i].get_or_insert((0.0, 0.0));
-                sums.0 += weighted;
-                sums.1 += total;
-            }
+    }
+
+    /// `start`: the stream position of the onset frame's first sample, below
+    /// 0 for the silence or the priming the first frame starts with. Each
+    /// segment the frame overlaps gets the share of the window's mass that
+    /// falls inside it, so one shorter than a hop still gets a centroid. A
+    /// long frame would reach 186 ms past a beat and carry its hit into the
+    /// beat before; a 40 dB louder neighbour still dominates either one.
+    fn credit(&mut self, start: i64) {
+        let bin_hz = self.rate / self.short.size as f64;
+        let (mut weighted, mut total) = (0.0, 0.0);
+        for (k, &p) in self.short.power.iter().enumerate().skip(1) {
+            weighted += k as f64 * bin_hz * p;
+            total += p;
+        }
+        let (size, mass) = (self.short.size as i64, &self.short.mass);
+        for (i, (a, b)) in self.segments.overlapping(start.max(0) as u64, (start + size).max(0) as u64) {
             let lo = (a as i64 - start).clamp(0, size) as usize;
             let hi = (b as i64 - start).clamp(0, size) as usize;
             let share = (mass[hi] - mass[lo]) / mass[size as usize];
-            self.segment_overlaps[i].0 += share * weighted;
-            self.segment_overlaps[i].1 += share * total;
+            self.segment_sums[i].0 += share * weighted;
+            self.segment_sums[i].1 += share * total;
         }
     }
 
@@ -240,14 +240,15 @@ impl Spectrum {
     }
 
     pub fn finish(mut self) -> SpectrumStats {
-        let held = self.long.buffers[0].len() as i64;
         if self.long.pad() {
             self.long.measure();
-            self.record(self.position as i64 - held);
+            self.record();
         }
+        let held = self.short.buffers[0].len() as i64;
         if self.short.pad() {
             self.short.measure();
             self.onset(true);
+            self.credit(self.position as i64 - held);
             // The padding cuts the sound off, which is not an onset.
             if self.flux.len() > 1 {
                 self.flux.pop();
@@ -261,9 +262,7 @@ impl Spectrum {
             segment_centroid_hz: self
                 .segment_sums
                 .iter()
-                .zip(&self.segment_overlaps)
-                .map(|(sums, overlaps)| sums.unwrap_or(*overlaps))
-                .map(|(w, t)| if t <= 1e-9 { Err("silent") } else { Ok(w / t) })
+                .map(|(w, t)| if *t <= 1e-9 { Err("silent") } else { Ok(w / t) })
                 .collect(),
         }
     }
@@ -413,14 +412,53 @@ mod tests {
         }
     }
 
+    fn beats(rate: u32, n: usize, beat: f64) -> Vec<(u64, u64)> {
+        let r = f64::from(rate);
+        (0..8).map(|k| ((k as f64 * beat * r) as u64, (((k + 1) as f64 * beat * r) as u64).min(n as u64))).collect()
+    }
+
     #[test]
-    fn a_quiet_segment_keeps_its_centroid_beside_a_loud_one() {
-        // 5 kHz at -40 dB for half a second, then 500 Hz at full level.
-        let mut x = sine(44_100, 5000.0, 0.5, 0.005);
-        x.extend(sine(44_100, 500.0, 0.5, 0.5));
-        let s = spectrum(44_100, &x, vec![(0, 22_050), (22_050, 44_100)]);
-        let (a, b) = (s.segment_centroid_hz[0].unwrap(), s.segment_centroid_hz[1].unwrap());
-        assert!((a - 5000.0).abs() < 500.0 && (b - 500.0).abs() < 50.0, "{a} {b}");
+    fn each_beat_of_a_kick_loop_reads_as_that_beat_alone() {
+        // 120 BPM: a 60 Hz kick on every beat, a hat on every off-beat. The
+        // kick straddles each segment's start.
+        for rate in [44_100, 96_000] {
+            let r = f64::from(rate);
+            let n = (4.0 * r) as usize;
+            let hat = noise(rate, 4.0, 0.5, 8);
+            let x: Vec<f32> = (0..n)
+                .map(|i| {
+                    let t = i as f64 / r;
+                    let (kick, off) = (t % 0.5, (t + 0.25) % 0.5);
+                    (0.8 * (2.0 * PI * 60.0 * kick).sin() * (-kick / 0.08).exp()) as f32
+                        + 0.3 * hat[i] * (-off as f32 / 0.015).exp()
+                })
+                .collect();
+            let segments = beats(rate, n, 0.5);
+            let s = spectrum(rate, &x, segments.clone());
+            for ((a, b), got) in segments.iter().zip(&s.segment_centroid_hz) {
+                let alone = spectrum(rate, &x[*a as usize..*b as usize], vec![]).centroid_hz.unwrap();
+                let got = *got.as_ref().unwrap();
+                assert!((got / alone - 1.0).abs() < 0.2, "{rate} Hz rate, beat at {a}: {got} against {alone}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_gated_hit_on_every_beat_is_no_silent_beat() {
+        // 30 ms of decaying noise on each beat at 120 BPM, then digital silence.
+        for rate in [44_100, 48_000, 96_000] {
+            let r = f64::from(rate);
+            let n = (4.0 * r) as usize;
+            let hit = noise(rate, 4.0, 0.5, 3);
+            let x: Vec<f32> = (0..n)
+                .map(|i| {
+                    let t = (i as f64 / r) % 0.5;
+                    if t < 0.03 { hit[i] * (-t as f32 / 0.01).exp() } else { 0.0 }
+                })
+                .collect();
+            let s = spectrum(rate, &x, beats(rate, n, 0.5));
+            assert!(s.segment_centroid_hz.iter().all(Result::is_ok), "{rate}: {:?}", s.segment_centroid_hz);
+        }
     }
 
     #[test]
