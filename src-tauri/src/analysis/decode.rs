@@ -75,9 +75,20 @@ pub fn is_dataless(flags: u32) -> bool {
     flags & SF_DATALESS != 0
 }
 
+/// macOS's errno values for a drive gone mid-read, which Rust files under
+/// no kind: an SMB share's host down, a USB disk pulled, and EIO, which a
+/// dropped drive returns as a bad sector does. Numbers, as libc is not a
+/// dependency.
+const EIO: i32 = 5;
+const ENXIO: i32 = 6;
+const EHOSTDOWN: i32 = 64;
+
 /// What a failed read says about the file. A share or drive that stops
 /// answering mid-read is the drive, not a file that fails to decode.
 fn io_error(e: &std::io::Error) -> AnalysisError {
+    if matches!(e.raw_os_error(), Some(EIO | ENXIO | EHOSTDOWN)) {
+        return AnalysisError::FileUnreachable;
+    }
     match e.kind() {
         ErrorKind::NotFound => AnalysisError::FileMissing,
         ErrorKind::PermissionDenied => AnalysisError::FileNotPermitted,
@@ -502,6 +513,12 @@ mod tests {
         ];
         for (kind, want) in cases {
             assert_eq!(io_error(&std::io::Error::from(kind)), want, "{kind:?}");
+        }
+        // What macOS returns when a share's host goes down (EHOSTDOWN), a USB
+        // disk is pulled (ENXIO) or a drive fails a read (EIO); a raw error
+        // Rust does name still maps by its kind.
+        for (errno, want) in [(64, AnalysisError::FileUnreachable), (6, AnalysisError::FileUnreachable), (5, AnalysisError::FileUnreachable), (2, AnalysisError::FileMissing), (22, AnalysisError::DecodeFailed)] {
+            assert_eq!(io_error(&std::io::Error::from_raw_os_error(errno)), want, "errno {errno}");
         }
     }
 
