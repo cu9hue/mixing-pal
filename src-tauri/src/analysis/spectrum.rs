@@ -8,11 +8,14 @@ use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::f64::consts::PI;
 use std::sync::Arc;
 
-/// The onset STFT's size: 2048 points at 44.1 and 48 kHz, about 46 ms,
-/// scaled with the rate so a hit or a cut reads the same at every rate. Its
-/// hop is a quarter of it.
+/// The onset STFT's size: the power of two nearest 46 ms of samples, so a
+/// hit or a cut reads about the same at every rate: 2048 points at 44.1 and
+/// 48 kHz, 32 ms at 8, 16 and 32 kHz (64 ms there merges clicks 62 ms
+/// apart). Its hop is a quarter of it.
 pub fn onset_fft(rate: u32) -> usize {
-    ((u64::from(rate) * 2048 / 48_000) as usize).next_power_of_two().max(256)
+    let size = (u64::from(rate) * 2048 / 44_100) as usize;
+    let above = size.next_power_of_two();
+    (if above - size > size - above / 2 { above / 2 } else { above }).max(256)
 }
 
 /// Each band's upper edge in Hz; the last runs to Nyquist.
@@ -351,6 +354,18 @@ mod tests {
                 x[k * rate as usize / 8] = 0.9;
             }
             assert_eq!(spectrum(rate, &x, vec![]).onsets, 16, "{rate}");
+        }
+    }
+
+    #[test]
+    fn sixteen_clicks_a_second_are_counted_at_every_rate() {
+        // 62.5 ms apart: a 64 ms window would merge some.
+        for rate in [8_000, 16_000, 32_000, 44_100, 48_000, 96_000] {
+            let mut x = vec![0.0f32; 2 * rate as usize];
+            for k in 0..32 {
+                x[k * rate as usize / 16] = 0.9;
+            }
+            assert_eq!(spectrum(rate, &x, vec![]).onsets, 32, "{rate}");
         }
     }
 
