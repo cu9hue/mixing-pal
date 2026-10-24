@@ -23,6 +23,7 @@ def load_handler():
 
 
 ADDRESS = "/live/mixingpal/get/sample"
+FRAMES = "/live/mixingpal/get/sample/frames"
 
 
 def audio_clip(name):
@@ -68,6 +69,7 @@ class SampleHandlerTests(unittest.TestCase):
         handler.osc_server = SimpleNamespace(add_handler=callbacks.__setitem__)
         handler.init_api()
         self.sample = callbacks[ADDRESS]
+        self.frames = callbacks[FRAMES]
 
     def test_a_session_slot_answers_its_clip(self):
         reply = self.sample((0, 0, "0"))
@@ -95,6 +97,20 @@ class SampleHandlerTests(unittest.TestCase):
         for params in [(), (0, 0), (9, 0, "0"), ("x", 0, "0"), (0, 7, "0")]:
             with self.subTest(params=params):
                 self.assertIsNone(self.sample(params))
+
+    def test_frames_map_a_session_or_arrangement_clip(self):
+        self.assertEqual(self.frames((0, 0, "0", "0,2")), (0, 0, "0", "0,2", "ok", 8000, 2, 0, 2000))
+        self.assertEqual(self.frames((0, 1, "0", "1")), (0, 1, "0", "1", "ok", 8000, 1, 1000))
+
+    def test_frames_name_a_missing_clip_and_refuse_a_device(self):
+        self.assertEqual(self.frames((0, 0, "1", "0"))[-1], "empty_slot")
+        self.assertEqual(self.frames((0, 0, "7", "0"))[-1], "no_such_target")
+        self.assertEqual(self.frames((0, 2, "0.0.0", "0"))[-1], "no_such_target")
+        self.assertEqual(self.frames((1, 1, "0", "0"))[-1], "no_such_target")
+
+    def test_malformed_frames_requests_get_no_reply_and_never_raise(self):
+        for params in ((), (0, 0, "0"), (0, "x", "0", "0"), (9, 0, "0", "0"), (0, 5, "0", "0")):
+            self.assertIsNone(self.frames(params), params)
 
 
 if __name__ == "__main__":

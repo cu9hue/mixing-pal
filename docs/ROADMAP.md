@@ -1,6 +1,6 @@
 # Roadmap
 
-Date: 2026-10-22
+Date: 2026-10-23
 
 What ships next and why, in one place. This file is the whole of the
 project's planning record; the design documents that used to sit beside it
@@ -399,12 +399,14 @@ because it cannot.
 On 2026-10-03 the pilot asked for exactly that: a way to check frequencies and
 sample statistics. Two steps, in order:
 
-1. **Source files.** Analyse the audio file behind a clip: loudness, true
-   peak, crest factor, band energies, spectral centroid and onset density,
-   computed in the app from the file Live names. Every result says it
-   describes the raw file, before clip gain, warping, devices and the fader,
-   so it cannot become a claim about the mix. Cache by path, size and save
-   time.
+1. **Source files.** Done 2026-10-23 as `get_sample`'s analysis: loudness,
+   true peak, crest factor, band shares, spectral centroid, stereo
+   correlation, pitch and onset density of the region Live plays, computed
+   in the app from the file Live names, cached by path, size, save time and
+   region. Every result says it describes the raw file, before clip gain,
+   warping, devices and the fader. On an M4 Pro, a 3-minute stereo file at
+   44.1 kHz takes 0.95 s cold, two at once 1.0 s, and the longest region
+   allowed (5 minutes at 192 kHz) 4.3 s.
 2. **A bounce she picks.** Loudness and band balance per section, aligned to
    the locators. It is the only honest route to questions such as "is the low
    end too thin?".

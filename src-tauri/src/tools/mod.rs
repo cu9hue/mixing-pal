@@ -265,7 +265,7 @@ fn declared_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_sample",
-                "description": "The sample behind one audio clip or one Simpler, read from Live at call time: the file name only (never its folder), the file's length and sample rate, warp (false or the mode, such as Complex), gain, transpose and detune, and region: the part of the file that plays, as seconds of the file, with plays saying it in words. For an arrangement clip, plays includes the bars and, when it loops, how many times, such as \"a 1-bar loop played 4 times\"; an unwarped loop is counted at the current tempo. A session clip says what it plays when launched. A Simpler gives its mode (Classic, One-Shot, Slice): in Classic and One-Shot the pitch follows the MIDI note and C3 plays the sample at its original pitch plus Transpose and Detune; in Slice, slices is the count of slices cut from that region. Pass exactly one of slot (a session clip, from get_clips), index (an arrangement clip, from get_arrangement) or path (a Simpler, as in get_device_params; a Drum Rack pad's Simpler is [rack, chain, device] from get_rack_contents). This describes the file and Live's settings, not what the mix sounds like: devices, the fader and the rest of the set are not in it. missing_reason not_audio_clip is a MIDI clip; empty_slot, no_such_target, not_a_simpler, no_sample (an empty Simpler), multisample_not_readable, sampler_not_readable and path_too_long say why nothing was read; region_unavailable keeps the settings without a region.",
+                "description": "The sample behind one audio clip or one Simpler, read from Live at call time: the file name only (never its folder), the file's length and sample rate, warp (false or the mode, such as Complex), gain, transpose and detune, and region: the part of the file that plays, as seconds of the file, with plays saying it in words. For an arrangement clip, plays includes the bars and, when it loops, how many times, such as \"a 1-bar loop played 4 times\"; an unwarped loop is counted at the current tempo. A session clip says what it plays when launched. A Simpler gives its mode (Classic, One-Shot, Slice): in Classic and One-Shot the pitch follows the MIDI note and C3 plays the sample at its original pitch plus Transpose and Detune; in Slice, slices is the count of slices cut from that region. Pass exactly one of slot (a session clip, from get_clips), index (an arrangement clip, from get_arrangement) or path (a Simpler, as in get_device_params; a Drum Rack pad's Simpler is [rack, chain, device] from get_rack_contents). This describes the file and Live's settings, not what the mix sounds like: devices, the fader and the rest of the set are not in it. missing_reason not_audio_clip is a MIDI clip; empty_slot, no_such_target, not_a_simpler, no_sample (an empty Simpler), multisample_not_readable, sampler_not_readable and path_too_long say why nothing was read; region_unavailable keeps the settings without a region. For the played region it also gives analysis, measured from the file: sample and true peak, RMS (unweighted: a full-scale sine reads -3 dBFS), crest factor, full-scale sample count, band shares, spectral centroid, stereo correlation and side-to-mid (whole and below 150 Hz), pitch as a note in Live's naming (raw, and after Transpose and Detune), onsets per second, leading silence, and attack and tail for one hit. These stats describe the file's region before clip gain, warping, devices and the fader: never the mix. A null stat has its reason in null_because; an analysis missing_reason (file_missing, file_online_only: iCloud Drive, Dropbox or another cloud folder has not downloaded it, file_not_permitted: macOS did not let Mixing Pal read the folder, which she can usually allow in System Settings under Privacy & Security, Files and Folders, unsupported_format, unsupported_channels, decode_failed, region_too_long, analysis_timeout, file_shorter_than_region: the region starts after the file ends, file_unreachable: the drive holding it did not answer, analysis_busy: too many samples were asked for at once, so ask again for fewer, analysis_failed: a fault in Mixing Pal, not the file) keeps the rest of the result; analysis_timeout and file_unreachable often pass (a drive waking, a busy share, a macOS permission prompt still open), so ask once more before telling her; file_short_by_s says the file ends partway through the region Live plays. profile: true adds rms_dbfs and centroid_hz per beat on a warped clip (beat counts the clip's own beats, not song position), per half second otherwise; a long region gets longer steps (every 2, 4 or more beats, or longer than half a second), so read each value against its beat or at_s; use it only for how the sample changes over time.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -276,7 +276,8 @@ fn declared_tools() -> serde_json::Value {
                             "type": "array",
                             "items": { "type": "integer" },
                             "description": "Zero-based indices from the track to a Simpler, alternating device and chain, as in get_device_params. Always an odd number of entries, at most 9."
-                        }
+                        },
+                        "profile": { "type": "boolean", "description": "true adds level and brightness across the region, per beat or per half second, in longer steps on a long region. Leave it out unless the question is how the sample changes over time." }
                     },
                     "required": ["track"]
                 }
@@ -1885,6 +1886,13 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             let Some((track, target)) = sample_target(args) else {
                 return ToolResult::missing("bad_arguments");
             };
+            let profile = match args.get("profile") {
+                None => false,
+                Some(v) => match v.as_bool() {
+                    Some(b) => b,
+                    None => return ToolResult::missing("bad_arguments"),
+                },
+            };
             if known_track_is_out_of_range(&ctx.coalescer, track) {
                 return ToolResult::missing("track_out_of_range");
             }
@@ -1897,12 +1905,22 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
             };
             let before = track_identity(&ctx.coalescer, track);
             let outcome = sample::get_sample(&query, track as i32, &target, sample::QUERY_TIMEOUT).await;
+            let profile = match (&outcome, profile) {
+                (Ok(read), true) => sample::plan_profile(&query, track as i32, &target, read).await,
+                _ => sample::Profile::Off,
+            };
             if topology_moved(&before, &track_identity(&ctx.coalescer, track)) {
                 return ToolResult::missing("topology_changed");
             }
             match outcome {
                 Ok(read) => {
-                    let (payload, missing) = sample::sample_payload(&read, target.kind(), time_signature(&ctx.coalescer));
+                    let (mut payload, missing) = sample::sample_payload(&read, target.kind(), time_signature(&ctx.coalescer));
+                    if let Some((analysis, channels)) = sample::analysis_block(&read, &profile).await {
+                        payload["analysis"] = analysis;
+                        if let Some(c) = channels {
+                            payload["channels"] = json!(c);
+                        }
+                    }
                     ToolResult::live(payload, missing.map(str::to_owned))
                 }
                 Err(sample::SampleError::Refused(reason)) => ToolResult::missing(reason),
@@ -1946,6 +1964,18 @@ mod tests {
     /// the wire behaviour of the fan-out; this one only needs the call to
     /// reach its end so the assembled `missing_reason` can be read.
     async fn answering_ctx(c: Coalescer) -> ToolContext {
+        scripted_ctx(c, Arc::new(|addr, args| {
+            let track = args.first()?.clone();
+            Some(if addr == "/live/mixingpal/get/device_chain" { vec![track, args[1].clone(), rosc::OscType::Int(0)] } else { vec![track] })
+        }))
+        .await
+    }
+
+    type Script = Arc<dyn Fn(&str, &[rosc::OscType]) -> Option<Vec<rosc::OscType>> + Send + Sync>;
+
+    /// A `ToolContext` whose Live answers each request with what `script`
+    /// returns for its address and arguments; None sends nothing.
+    async fn scripted_ctx(c: Coalescer, script: Script) -> ToolContext {
         use crate::osc::requests::RequestTable;
         use crate::osc::socket::OscSocket;
 
@@ -1968,14 +1998,7 @@ mod tests {
         tokio::spawn(async move {
             loop {
                 let Ok(req) = live.recv().await else { continue };
-                let Some(&rosc::OscType::Int(track)) = req.args.first() else {
-                    continue;
-                };
-                let reply = if req.addr == "/live/mixingpal/get/device_chain" {
-                    vec![rosc::OscType::Int(track), req.args[1].clone(), rosc::OscType::Int(0)]
-                } else {
-                    vec![rosc::OscType::Int(track)]
-                };
+                let Some(reply) = script(&req.addr, &req.args) else { continue };
                 let _ = live.send_to(app_port, &req.addr, reply).await;
             }
         });
@@ -2932,6 +2955,14 @@ mod tests {
         assert!(d.contains("file name only"), "{d}");
     }
 
+    #[test]
+    fn the_sample_description_says_a_slow_drive_is_worth_one_more_try() {
+        let schema = tool_schema();
+        let d = schema.as_array().unwrap().iter().find(|t| t["function"]["name"] == "get_sample").unwrap()["function"]["description"].as_str().unwrap().to_string();
+        assert!(d.contains("analysis_timeout and file_unreachable often pass"), "{d}");
+        assert!(d.contains("ask once more before telling her"), "{d}");
+    }
+
     #[tokio::test]
     async fn get_arrangement_notes_refuses_arguments_it_cannot_use() {
         // A negative index is not "the first clip". Python slices from the
@@ -3457,5 +3488,111 @@ midi_flag_unavailable_for_tracks: 7 (their clips are listed, but whether the tra
         let ctx = disconnected_ctx(one_track_mirror());
         let r = execute(&ctx, "get_clips", &json!({})).await;
         assert_eq!(r.missing_reason.as_deref(), Some("not_in_mirror"));
+    }
+
+    #[tokio::test]
+    async fn get_sample_refuses_a_profile_that_is_not_a_boolean() {
+        let ctx = disconnected_ctx(one_track_mirror());
+        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "index": 0, "profile": "yes" })).await;
+        assert_eq!(r.missing_reason.as_deref(), Some("bad_arguments"));
+    }
+
+    #[test]
+    fn the_sample_schema_offers_a_profile_and_says_what_the_analysis_is() {
+        let schema = tool_schema();
+        let f = &schema.as_array().unwrap().iter().find(|t| t["function"]["name"] == "get_sample").unwrap()["function"];
+        assert_eq!(f["parameters"]["properties"]["profile"]["type"], json!(["boolean", "null"]));
+        let d = f["description"].as_str().unwrap();
+        assert!(d.contains("before clip gain, warping, devices and the fader"), "{d}");
+        assert!(d.len() < 8000);
+    }
+
+    /// get_sample's reply for a 3 s mono file at 44.1 kHz, as the connector
+    /// sends it: a Simpler (kind 2) or a warped arrangement clip (kind 1).
+    fn sample_reply(args: &[rosc::OscType], file: &str) -> Vec<rosc::OscType> {
+        use rosc::OscType::{Bool, Float, Int, Nil, String as S};
+        let kind = if let Some(Int(k)) = args.get(1) { *k } else { 0 };
+        let mut r = args[..3].to_vec();
+        r.extend([S("ok".into()), S(file.into()), Float(44100.0), Int(132_300), Bool(kind == 1), Int(4), S("0.00 dB".into()), Float(0.0), Float(0.0), Int(1)]);
+        if kind == 2 {
+            r.extend([Int(0), Int(132_300), Int(0), Int(132_300), Int(0), Int(0), Nil, Nil]);
+        } else {
+            r.extend([Float(0.0), Float(6.0), Int(0), Int(132_300)]);
+            r.extend([Bool(false), Bool(false), Float(0.0), Float(0.0), Float(6.0), Float(0.0), Float(6.0), Float(120.0)]);
+        }
+        r
+    }
+
+    fn three_seconds() -> String {
+        let x = crate::analysis::signals::sine(44_100, 220.0, 3.0, 0.5);
+        crate::analysis::signals::wav(44_100, 1, &x).to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn a_simpler_profile_is_cut_in_half_seconds() {
+        let file = three_seconds();
+        let ctx = scripted_ctx(one_track_mirror(), Arc::new(move |addr, args| (addr == "/live/mixingpal/get/sample").then(|| sample_reply(args, &file)))).await;
+        let r = execute(&ctx, "get_sample", &json!({ "track": 0, "path": [0], "profile": true })).await;
+        let profile = &r.value["analysis"]["profile"];
+        assert_eq!(profile["at_s"], json!([0.0, 0.5, 1.0, 1.5, 2.0, 2.5]), "{}", r.value);
+        assert!(profile.get("beat").is_none());
+    }
+
+    /// Live's frames reply: the file's length, and `per_beat` frames for
+    /// each beat asked. `sample_reply`'s clip is 6 beats over 132,300 frames.
+    fn frames_reply(args: &[rosc::OscType], length: i32, per_beat: f64) -> Option<Vec<rosc::OscType>> {
+        let rosc::OscType::String(beats) = &args[3] else { return None };
+        let beats: Vec<f64> = beats.split(',').map(|b| b.parse().unwrap()).collect();
+        let mut r = args[..4].to_vec();
+        r.extend([rosc::OscType::String("ok".into()), rosc::OscType::Int(length), rosc::OscType::Int(beats.len() as i32)]);
+        r.extend(beats.iter().map(|b| rosc::OscType::Int((b * per_beat).round() as i32)));
+        Some(r)
+    }
+
+    /// An arrangement clip, warped, whose frames reply comes from `frames`.
+    async fn warped_clip(frames: fn(&[rosc::OscType]) -> Option<Vec<rosc::OscType>>) -> serde_json::Value {
+        let file = three_seconds();
+        let ctx = scripted_ctx(one_track_mirror(), Arc::new(move |addr, args| match addr {
+            "/live/mixingpal/get/sample" => Some(sample_reply(args, &file)),
+            "/live/mixingpal/get/sample/frames" => frames(args),
+            _ => None,
+        }))
+        .await;
+        execute(&ctx, "get_sample", &json!({ "track": 0, "index": 0, "profile": true })).await.value
+    }
+
+    #[tokio::test]
+    async fn a_warped_clip_profile_is_cut_on_its_beats() {
+        let r = warped_clip(|args| frames_reply(args, 132_300, 22_050.0)).await;
+        let profile = &r["analysis"]["profile"];
+        assert_eq!(profile["beat"], json!([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]), "{r}");
+        assert_eq!(profile["at_s"], json!([0.0, 0.5, 1.0, 1.5, 2.0, 2.5]));
+        // A steady sine: every beat at the same level and brightness.
+        for column in ["rms_dbfs", "centroid_hz"] {
+            let values = profile[column].as_array().unwrap();
+            assert_eq!(values.len(), 6, "{column}: {r}");
+            assert!(values.iter().all(|v| v.as_f64().is_some_and(|x| (x - values[0].as_f64().unwrap()).abs() < 1.0)), "{column}: {r}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lost_frames_reply_costs_only_the_profile() {
+        let r = warped_clip(|_| None).await;
+        assert_eq!(r["analysis"]["null_because"]["profile"], "profile_unavailable", "{r}");
+        assert_eq!(r["analysis"]["pitch"]["note"], "A2");
+    }
+
+    #[tokio::test]
+    async fn a_clip_replaced_between_the_replies_gets_no_profile_but_its_analysis() {
+        let r = warped_clip(|args| frames_reply(args, 999, 22_050.0)).await;
+        assert_eq!(r["analysis"]["null_because"]["profile"], "clip_changed", "{r}");
+        assert_eq!(r["analysis"]["pitch"]["note"], "A2");
+    }
+
+    #[tokio::test]
+    async fn a_warp_marker_moved_between_the_replies_gets_no_profile() {
+        // The same file, but its 6 beats now span two thirds of it.
+        let r = warped_clip(|args| frames_reply(args, 132_300, 14_700.0)).await;
+        assert_eq!(r["analysis"]["null_because"]["profile"], "clip_changed", "{r}");
     }
 }

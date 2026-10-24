@@ -2,6 +2,12 @@
 //! region Live plays, mapped to frames inside Live. The reply layout is
 //! `mixingpal/sample_replies.py`'s.
 
+use crate::analysis::cache::{Job, ANALYSES};
+use crate::analysis::levels::Tail;
+use crate::analysis::pitch::{self, Pitch};
+use crate::analysis::spectrum::BANDS;
+use crate::analysis::{Stat, Stats};
+use serde_json::{Map, Value};
 use crate::osc::query::{LiveQuery, QueryError};
 use crate::tools::clip_notes::LoopRegion;
 use crate::tools::fence::fence;
@@ -15,6 +21,23 @@ pub const ADDRESS: &str = "/live/mixingpal/get/sample";
 
 /// Equal to `rack_contents::QUERY_TIMEOUT`: one round trip, no paging.
 pub const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+
+pub const FRAMES_ADDRESS: &str = "/live/mixingpal/get/sample/frames";
+
+/// The frames address's statuses, as fixed strings.
+const FRAME_STATUSES: [&str; 5] = ["not_audio_clip", "empty_slot", "no_such_target", "not_warped", "bad_beats"];
+
+/// Every analysis block opens with this.
+pub const ABOUT: &str = "These stats describe the file's region before clip gain, warping, devices and the fader.";
+/// One analysis, from when it gets one of the two slots. A debug build runs
+/// it about 80 times slower, so `tauri dev` gets longer.
+pub const ANALYSIS_BUDGET: Duration = Duration::from_secs(if cfg!(debug_assertions) { 120 } else { 8 });
+/// The most a call waits for a slot, behind other calls of the same turn.
+pub const ANALYSIS_WAIT: Duration = Duration::from_secs(30);
+const PROFILE_MIN_SECONDS: f64 = 2.0;
+const SEGMENT_SECONDS: f64 = 0.5;
+const MAX_SEGMENTS: f64 = 64.0;
+const MAX_POSITIONS: usize = 65;
 
 /// Settings fields between the status and the interval count.
 const SETTINGS: usize = 8;
@@ -45,14 +68,19 @@ impl SampleTarget {
 }
 
 /// The sample file's full path. It is not `Serialize` and its `Debug` hides
-/// it, so it cannot reach a tool result, a trace, or the proxy. PR 2 opens
-/// the file with it.
+/// it, so it cannot reach a tool result, a trace, or the proxy. The analysis
+/// opens the file through as_path.
 pub struct SourcePath(pub(crate) String);
 
 impl SourcePath {
     /// The file name alone, cut on either separator before any fencing.
     pub fn file_name(&self) -> &str {
         self.0.rsplit(['/', '\\']).next().unwrap_or("")
+    }
+
+    /// For opening the file. Never for a result: see the type's doc.
+    pub(crate) fn as_path(&self) -> &std::path::Path {
+        std::path::Path::new(&self.0)
     }
 }
 
@@ -192,6 +220,10 @@ pub fn decode_reply(reply: &[OscType], track: i32, target: &SampleTarget) -> Res
         let (Some(a), Some(b), Some(fa), Some(fb)) = (n(0)?, n(1)?, n(2)?, n(3)?) else {
             return Err(SampleError::Malformed);
         };
+        // Python never sends these; a reply that does is not trusted.
+        if ![a, b, fa, fb].iter().all(|x| x.is_finite()) || fb <= fa {
+            return Err(SampleError::Malformed);
+        }
         intervals.push(Interval { source: (a, b), frames: (fa, fb) });
     }
     let e = |i: usize| reply.get(extra + i);
@@ -236,6 +268,392 @@ pub async fn get_sample(q: &LiveQuery, track: i32, target: &SampleTarget, timeou
     let args = vec![OscType::Int(track), OscType::Int(target.kind()), OscType::String(target.wire())];
     let reply = q.query(ADDRESS, args, timeout).await.map_err(SampleError::Query)?;
     decode_reply(&reply, track, target)
+}
+
+/// Beat positions on the wire: one string, so the request keys on Args(4)
+/// whatever the count. Rounded to a millionth so the echo stays short.
+pub fn beats_wire(beats: &[f64]) -> String {
+    beats.iter().map(|b| format!("{}", (b * 1e6).round() / 1e6)).collect::<Vec<_>>().join(",")
+}
+
+/// `length`: the clip's file length from the first reply. The frames reply
+/// names it too, so a clip replaced between the two replies is refused
+/// rather than cut on another clip's warp map.
+pub fn decode_frames_reply(reply: &[OscType], track: i32, target: &SampleTarget, beats: &str, count: usize, length: Option<f64>) -> Result<Vec<Option<f64>>, SampleError> {
+    let wire = target.wire();
+    match reply {
+        [OscType::Int(t), OscType::Int(k), OscType::String(w), OscType::String(b), ..]
+            if *t == track && *k == target.kind() && *w == wire && b == beats => {}
+        _ => return Err(SampleError::Malformed),
+    }
+    let status = string(reply.get(4))?.ok_or(SampleError::Malformed)?;
+    if status != "ok" {
+        return Err(FRAME_STATUSES.into_iter().find(|s| *s == status).map_or(SampleError::Malformed, SampleError::Refused));
+    }
+    if let (Some(now), Some(then)) = (number(reply.get(5))?, length) {
+        if now != then {
+            return Err(SampleError::Refused("clip_changed"));
+        }
+    }
+    let n = int(reply.get(6))?.ok_or(SampleError::Malformed)?;
+    if usize::try_from(n).ok() != Some(count) || reply.len() != 7 + count {
+        return Err(SampleError::Malformed);
+    }
+    let frames: Vec<Option<f64>> = reply[7..].iter().map(|v| number(Some(v))).collect::<Result<_, _>>()?;
+    if frames.iter().flatten().any(|f| !f.is_finite()) {
+        return Err(SampleError::Malformed);
+    }
+    Ok(frames)
+}
+
+/// Live's frame for each beat of a warped clip: what the profile cuts on.
+pub async fn get_sample_frames(q: &LiveQuery, track: i32, target: &SampleTarget, beats: &[f64], length: Option<f64>, timeout: Duration) -> Result<Vec<Option<f64>>, SampleError> {
+    let wire = beats_wire(beats);
+    let args = vec![OscType::Int(track), OscType::Int(target.kind()), OscType::String(target.wire()), OscType::String(wire.clone())];
+    let reply = q.query(FRAMES_ADDRESS, args, timeout).await.map_err(SampleError::Query)?;
+    decode_frames_reply(&reply, track, target, &wire, beats.len(), length)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Segment {
+    pub beat: Option<f64>,
+    /// Seconds of the file where the segment starts.
+    pub at_s: f64,
+    /// The segment's frames in the decoded stream, which plays the region's
+    /// intervals back to back.
+    pub stream: (u64, u64),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Profile {
+    Off,
+    Unavailable(&'static str),
+    Segments(Vec<Segment>),
+}
+
+/// Each interval's frames as whole numbers, in playback order.
+pub fn region_frames(read: &SampleRead) -> Vec<(u64, u64)> {
+    read.intervals.iter().map(|i| (i.frames.0.max(0.0).round() as u64, i.frames.1.max(0.0).round() as u64)).collect()
+}
+
+/// Where each interval starts in the decoded stream.
+fn stream_offsets(frames: &[(u64, u64)]) -> Vec<u64> {
+    frames
+        .iter()
+        .scan(0u64, |at, (a, b)| {
+            let start = *at;
+            *at += b.saturating_sub(*a);
+            Some(start)
+        })
+        .collect()
+}
+
+/// Half-second segments, lengthened to a whole multiple of 0.5 s when there
+/// would be more than 64, and cut where one interval ends and the next begins.
+pub fn time_segments(read: &SampleRead, rate: f64) -> Vec<Segment> {
+    let frames = region_frames(read);
+    let total: u64 = frames.iter().map(|(a, b)| b.saturating_sub(*a)).sum();
+    let count = (total as f64 / (SEGMENT_SECONDS * rate)).ceil();
+    let length = ((SEGMENT_SECONDS * rate * (count / MAX_SEGMENTS).ceil().max(1.0)).round() as u64).max(1);
+    let mut out = Vec::new();
+    for ((a, b), offset) in frames.iter().zip(stream_offsets(&frames)) {
+        let mut s = *a;
+        while s < *b {
+            let e = (s + length).min(*b);
+            out.push(Segment { beat: None, at_s: s as f64 / rate, stream: (offset + s - a, offset + e - a) });
+            s = e;
+        }
+    }
+    out
+}
+
+/// Each interval's ends and the beats between, every `stride` beats, the
+/// stride doubled until every position fits in one request.
+pub fn beat_positions(intervals: &[Interval]) -> Vec<Vec<f64>> {
+    let mut stride = 1.0f64;
+    loop {
+        let positions: Vec<Vec<f64>> = intervals
+            .iter()
+            .map(|i| {
+                let (a, b) = i.source;
+                let mut p = vec![a];
+                let mut k = (a / stride).floor() + 1.0;
+                while k * stride < b - 1e-9 {
+                    p.push(k * stride);
+                    k += 1.0;
+                }
+                p.push(b);
+                p
+            })
+            .collect();
+        if positions.iter().map(Vec::len).sum::<usize>() <= MAX_POSITIONS {
+            return positions;
+        }
+        stride *= 2.0;
+    }
+}
+
+/// Segments between consecutive beat positions, on the frames Live mapped
+/// them to. None when Live could not map one.
+pub fn beat_segments(read: &SampleRead, positions: &[Vec<f64>], frames: &[Option<f64>], rate: f64) -> Option<Vec<Segment>> {
+    let region = region_frames(read);
+    let mut mapped = frames.iter();
+    let mut out = Vec::new();
+    for ((beats, (a, b)), offset) in positions.iter().zip(&region).zip(stream_offsets(&region)) {
+        let at: Vec<u64> = beats
+            .iter()
+            .map(|_| mapped.next().copied().flatten().map(|f| f.round().clamp(*a as f64, *b as f64) as u64))
+            .collect::<Option<_>>()?;
+        for j in 0..at.len().saturating_sub(1) {
+            if at[j + 1] > at[j] {
+                out.push(Segment { beat: Some(beats[j]), at_s: at[j] as f64 / rate, stream: (offset + at[j] - a, offset + at[j + 1] - a) });
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Whether Live maps each interval's ends to the frames it gave in the first
+/// reply. They differ when a warp marker moved, or the clip was replaced by
+/// another of the same length, between the two replies. An end Live could
+/// not map is left to `beat_segments`, which calls it unmapped.
+fn ends_match(read: &SampleRead, positions: &[Vec<f64>], frames: &[Option<f64>]) -> bool {
+    let mut at = 0;
+    positions.iter().zip(&read.intervals).zip(region_frames(read)).all(|((beats, interval), (a, b))| {
+        let (first, last) = (frames.get(at).copied().flatten(), frames.get(at + beats.len() - 1).copied().flatten());
+        at += beats.len();
+        let per_beat = ((interval.frames.1 - interval.frames.0) / (interval.source.1 - interval.source.0)).abs();
+        let per_beat = if per_beat.is_finite() { per_beat } else { 0.0 };
+        // A frame for rounding, plus what the beat's trip as a 32-bit OSC
+        // float moves it: up to half an f32 step, 2^-24 of the beat, taken
+        // four times over.
+        let near = |f: Option<f64>, want: u64, beat: f64| f.is_none_or(|f| (f - want as f64).abs() <= 1.0 + 4.0 * beat.abs() * 2f64.powi(-24) * per_beat);
+        near(first, a, beats[0]) && near(last, b, beats[beats.len() - 1])
+    })
+}
+
+/// The profile, when it needs nothing more from Live: unavailable, or half
+/// seconds for anything but a warped clip. None for a warped clip, whose
+/// beats Live maps.
+pub fn plan_without_live(read: &SampleRead) -> Option<Profile> {
+    let Some(rate) = read.sample_rate.filter(|r| *r > 0.0) else {
+        return Some(Profile::Unavailable("region_unavailable"));
+    };
+    if read.intervals.is_empty() {
+        return Some(Profile::Unavailable("region_unavailable"));
+    }
+    let total: u64 = region_frames(read).iter().map(|(a, b)| b.saturating_sub(*a)).sum();
+    if (total as f64) < PROFILE_MIN_SECONDS * rate {
+        return Some(Profile::Unavailable("region_too_short"));
+    }
+    if !(matches!(read.holder, Holder::Clip(_)) && read.warping == Some(true)) {
+        return Some(Profile::Segments(time_segments(read, rate)));
+    }
+    None
+}
+
+/// Why Live could not map the beats, as a fixed reason. A lost reply is
+/// profile_unavailable.
+pub fn frames_failure(e: &SampleError) -> &'static str {
+    match e {
+        SampleError::Refused(reason) => reason,
+        SampleError::Malformed => "malformed_reply",
+        SampleError::Query(QueryError::Busy) => "busy",
+        SampleError::Query(QueryError::NoReply) => "profile_unavailable",
+        SampleError::Query(QueryError::Transport(_)) => "transport_error",
+    }
+}
+
+/// What the profile cuts on: beats for a warped clip, mapped by Live, half
+/// seconds for anything else.
+pub async fn plan_profile(q: &LiveQuery, track: i32, target: &SampleTarget, read: &SampleRead) -> Profile {
+    if let Some(profile) = plan_without_live(read) {
+        return profile;
+    }
+    let rate = read.sample_rate.unwrap_or(0.0);
+    let positions = beat_positions(&read.intervals);
+    match get_sample_frames(q, track, target, &positions.concat(), read.length_frames, QUERY_TIMEOUT).await {
+        Ok(frames) if !ends_match(read, &positions, &frames) => Profile::Unavailable("clip_changed"),
+        Ok(frames) => beat_segments(read, &positions, &frames, rate).map_or(Profile::Unavailable("beats_unmapped"), Profile::Segments),
+        Err(e) => Profile::Unavailable(frames_failure(&e)),
+    }
+}
+
+/// Runs, or reuses, the analysis of the played region. None when there is
+/// no region, which the result already names. Also the channel count.
+pub async fn analysis_block(read: &SampleRead, profile: &Profile) -> Option<(Value, Option<usize>)> {
+    let regions = region_frames(read);
+    if regions.is_empty() || read.sample_rate.filter(|r| *r > 0.0).is_none() {
+        return None;
+    }
+    let failed = |code: &str| json!({ "about": ABOUT, "missing_reason": code });
+    let Some(path) = read.path.as_ref() else {
+        return Some((failed("file_missing"), None));
+    };
+    let segments = match profile {
+        Profile::Segments(s) => Some(s.iter().map(|s| s.stream).collect()),
+        _ => None,
+    };
+    let job = Job { path: path.as_path().to_path_buf(), regions, segments };
+    Some(match ANALYSES.get(job, std::time::Instant::now() + ANALYSIS_WAIT, ANALYSIS_BUDGET).await {
+        Ok(stats) => (analysis_payload(&stats, read, profile), Some(stats.channels)),
+        Err(e) => (failed(e.code()), None),
+    })
+}
+
+fn r1(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
+}
+
+fn r2(x: f64) -> f64 {
+    (x * 100.0).round() / 100.0
+}
+
+fn r10(x: f64) -> f64 {
+    (x / 10.0).round() * 10.0
+}
+
+fn whole(x: f64) -> f64 {
+    x.round()
+}
+
+/// An analysis block's fields, each null's reason gathered beside them.
+#[derive(Default)]
+struct Block {
+    fields: Map<String, Value>,
+    why: Map<String, Value>,
+}
+
+impl Block {
+    fn put(&mut self, key: &str, value: Value) {
+        self.fields.insert(key.into(), value);
+    }
+
+    fn null(&mut self, key: &str, reason: &str) {
+        self.fields.insert(key.into(), Value::Null);
+        self.why.insert(key.into(), json!(reason));
+    }
+
+    fn value(&mut self, key: &str, stat: Stat, round: fn(f64) -> f64) -> Value {
+        match stat {
+            Ok(v) => json!(round(v)),
+            Err(reason) => {
+                self.why.insert(key.into(), json!(reason));
+                Value::Null
+            }
+        }
+    }
+
+    fn set(&mut self, key: &str, stat: Stat, round: fn(f64) -> f64) {
+        let v = self.value(key, stat, round);
+        self.put(key, v);
+    }
+}
+
+fn pitch_json(hz: f64) -> Value {
+    let (note, cents) = pitch::note(hz);
+    json!({ "note": note, "hz": r1(hz), "cents": cents })
+}
+
+fn pitch_value(p: &Pitch, shift: impl Fn(f64) -> f64) -> Result<Value, &'static str> {
+    match p {
+        Pitch::Steady(hz) => Ok(pitch_json(shift(*hz))),
+        Pitch::Sweep { from_hz, tail_hz } => Ok(json!({ "sweep_hz": [r1(shift(*from_hz)), r1(shift(*tail_hz))], "tail": pitch_json(shift(*tail_hz)) })),
+        Pitch::Unknown(reason) => Err(reason),
+    }
+}
+
+/// The analysis the model reads. Pitch after transpose is computed here, at
+/// each call, from the cached raw pitch and the clip's current settings.
+pub fn analysis_payload(stats: &Stats, read: &SampleRead, profile: &Profile) -> Value {
+    let mut b = Block::default();
+    let l = &stats.levels;
+    b.put("about", json!(ABOUT));
+    b.put("seconds", json!(r2(stats.seconds)));
+    let peaks: Vec<Value> = l.sample_peak_dbfs.iter().map(|p| b.value("sample_peak_dbfs", *p, r1)).collect();
+    b.put("sample_peak_dbfs", json!(peaks));
+    b.set("true_peak_dbfs", l.true_peak_dbfs, r1);
+    b.put("full_scale_samples", json!(l.full_scale_samples));
+    b.set("rms_dbfs", l.rms_dbfs, r1);
+    b.set("crest_db", l.crest_db, r1);
+    b.put("silent_share", json!(r2(l.silent_share)));
+    match stats.spectrum.band_shares {
+        Ok(shares) => b.put("band_shares", Value::Object(BANDS.iter().zip(shares).map(|((name, _), s)| (name.to_string(), json!(r2(s)))).collect())),
+        Err(reason) => b.null("band_shares", reason),
+    }
+    b.set("centroid_hz", stats.spectrum.centroid_hz, whole);
+    match &stats.stereo {
+        Ok(s) => {
+            let mut inner = Block::default();
+            inner.set("correlation", s.correlation, r2);
+            inner.set("side_to_mid_db", s.side_to_mid_db, r1);
+            inner.set("below_150_hz_correlation", s.low_correlation, r2);
+            inner.set("below_150_hz_side_to_mid_db", s.low_side_to_mid_db, r1);
+            for (k, v) in inner.why {
+                b.why.insert(format!("stereo.{k}"), v);
+            }
+            b.put("stereo", Value::Object(inner.fields));
+        }
+        Err(reason) => b.null("stereo", reason),
+    }
+    match pitch_value(&stats.pitch, |hz| hz) {
+        Ok(v) => b.put("pitch", v),
+        Err(reason) => b.null("pitch", reason),
+    }
+    // Re-Pitch ties the pitch to the tempo, so no transpose names it.
+    let after = match (read.warping == Some(true) && read.warp_mode == Some(3), read.transpose) {
+        (true, _) => Err("re_pitch"),
+        (false, None) => Err("transpose_unreadable"),
+        (false, Some(t)) => pitch_value(&stats.pitch, |hz| pitch::transposed(hz, t, read.detune.unwrap_or(0.0))),
+    };
+    match after {
+        Ok(v) => b.put("pitch_after_transpose", v),
+        Err(reason) => b.null("pitch_after_transpose", reason),
+    }
+    b.set("onsets_per_second", stats.onsets_per_second, r1);
+    b.set("leading_silence_ms", l.leading_silence_ms, whole);
+    if let Some(a) = l.attack_ms {
+        b.put("attack_ms", json!(a));
+    }
+    match l.tail {
+        Some(Tail::Ms(ms)) => b.put("tail_ms", json!(ms)),
+        Some(Tail::AtLeast(ms)) => b.put("tail_ms_at_least", json!(ms)),
+        None => {}
+    }
+    // Past 50 ms short, the stats cover less than the region, and the
+    // profile's later segments would be shifted or read as silence.
+    let short = stats.missing_frames * 20 > u64::from(stats.rate);
+    if short {
+        b.put("file_short_by_s", json!(r2(stats.missing_frames as f64 / f64::from(stats.rate))));
+    }
+    match profile {
+        Profile::Off => {}
+        Profile::Segments(_) if short => b.null("profile", "file_shorter_than_region"),
+        Profile::Unavailable(reason) => b.null("profile", reason),
+        Profile::Segments(segments) => b.put("profile", profile_columns(stats, segments)),
+    }
+    if !b.why.is_empty() {
+        let why = std::mem::take(&mut b.why);
+        b.put("null_because", Value::Object(why));
+    }
+    Value::Object(b.fields)
+}
+
+/// Columns, not one object per segment: 64 objects would cost about 4.5 KB.
+/// A null value is a silent segment.
+fn profile_columns(stats: &Stats, segments: &[Segment]) -> Value {
+    let column = |values: &[Stat], round: fn(f64) -> f64| -> Vec<Value> {
+        values.iter().map(|v| match v { Ok(x) => json!(round(*x)), Err(_) => Value::Null }).collect()
+    };
+    let mut p = json!({
+        "at_s": segments.iter().map(|s| r2(s.at_s)).collect::<Vec<_>>(),
+        "rms_dbfs": column(&stats.levels.segment_rms_dbfs, r1),
+        "centroid_hz": column(&stats.spectrum.segment_centroid_hz, r10),
+    });
+    if !segments.is_empty() && segments.iter().all(|s| s.beat.is_some()) {
+        p["beat"] = json!(segments.iter().map(|s| s.beat).collect::<Vec<_>>());
+    }
+    p
 }
 /// Live's `Clip.warp_mode` numbers. 5 is REX; 7 is not used.
 pub fn warp_name(mode: i32) -> &'static str {
@@ -648,5 +1066,306 @@ mod tests {
             timing(true, Some((152.0, 166.0))));
         let (p, _) = sample_payload(&read, 1, Some((4, 4)));
         assert!(serde_json::to_string(&p).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn reversed_or_endless_intervals_are_malformed() {
+        // The profile cuts inside each interval; a reversed one would panic it.
+        for bad in [(0.0, 4.0, 4000, 1000), (0.0, f32::INFINITY, 0, 4000), (0.0, 4.0, 0, 0)] {
+            assert!(matches!(decode_reply(&clip_reply(&[bad]), 3, &SampleTarget::Index(0)), Err(SampleError::Malformed)), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn beats_travel_as_one_short_string() {
+        assert_eq!(beats_wire(&[0.0, 1.0, 2.5, 1.0 / 3.0]), "0,1,2.5,0.333333");
+    }
+
+    #[test]
+    fn a_frames_reply_decodes_one_frame_per_beat() {
+        let t = SampleTarget::Index(0);
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1,2.5".into()), S("ok".into()), Int(16000), Int(3), Int(0), Int(1000), Nil];
+        assert_eq!(decode_frames_reply(&reply, 3, &t, "0,1,2.5", 3, Some(16000.0)).ok(), Some(vec![Some(0.0), Some(1000.0), None]));
+    }
+
+    #[test]
+    fn a_frames_reply_for_other_beats_or_a_wrong_count_is_malformed() {
+        let t = SampleTarget::Index(0);
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1".into()), S("ok".into()), Int(16000), Int(2), Int(0), Int(1000)];
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,2", 2, Some(16000.0)), Err(SampleError::Malformed)));
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,1", 3, Some(16000.0)), Err(SampleError::Malformed)));
+    }
+
+    #[test]
+    fn a_clip_that_changed_between_the_two_replies_is_refused() {
+        // The frames reply names the clip's length; another clip has another.
+        let t = SampleTarget::Index(0);
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0".into()), S("ok".into()), Int(9999), Int(1), Int(0)];
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0", 1, Some(16000.0)), Err(SampleError::Refused("clip_changed"))));
+    }
+
+    #[test]
+    fn a_frame_that_is_not_a_number_is_malformed() {
+        let t = SampleTarget::Index(0);
+        let reply = vec![Int(3), Int(1), S("0".into()), S("0,1".into()), S("ok".into()), Int(16000), Int(2), Int(0), Float(f32::NAN)];
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0,1", 2, Some(16000.0)), Err(SampleError::Malformed)));
+    }
+
+    #[test]
+    fn each_frames_failure_keeps_its_reason() {
+        assert_eq!(frames_failure(&SampleError::Refused("not_warped")), "not_warped");
+        assert_eq!(frames_failure(&SampleError::Malformed), "malformed_reply");
+        assert_eq!(frames_failure(&SampleError::Query(QueryError::Busy)), "busy");
+        assert_eq!(frames_failure(&SampleError::Query(QueryError::NoReply)), "profile_unavailable");
+    }
+
+    #[test]
+    fn a_profile_needs_live_only_for_a_warped_clip() {
+        let short = unwarped((0.0, 1500.0), 0.0);
+        assert_eq!(plan_without_live(&short), Some(Profile::Unavailable("region_too_short")));
+        let mut none = unwarped((0.0, 3000.0), 0.0);
+        none.intervals.clear();
+        assert_eq!(plan_without_live(&none), Some(Profile::Unavailable("region_unavailable")));
+        let Some(Profile::Segments(s)) = plan_without_live(&unwarped((0.0, 3000.0), 0.0)) else { panic!("time segments") };
+        assert_eq!((s.len(), s[0].beat), (6, None));
+        let mut simpler = unwarped((0.0, 3000.0), 0.0);
+        (simpler.holder, simpler.warping) = (Holder::Simpler(SimplerSettings { mode: Some(0), slices: None, loop_frames: None }), Some(true));
+        assert!(matches!(plan_without_live(&simpler), Some(Profile::Segments(_))));
+        let mut warped = unwarped((0.0, 3000.0), 0.0);
+        warped.warping = Some(true);
+        assert_eq!(plan_without_live(&warped), None);
+    }
+
+    #[test]
+    fn the_beat_position_ceiling_matches_the_connector() {
+        let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../remote-script/MixingPal/mixingpal/sample_replies.py"))
+            .expect("sample_replies.py is missing");
+        let line = source.lines().find_map(|l| l.strip_prefix("MAX_POSITIONS = ")).expect("MAX_POSITIONS is not declared on its own line");
+        assert_eq!(line.trim().parse::<usize>().unwrap(), MAX_POSITIONS);
+    }
+
+    #[test]
+    fn a_frames_status_is_a_fixed_refusal() {
+        let t = SampleTarget::Slot(0);
+        let reply = vec![Int(3), Int(0), S("0".into()), S("0".into()), S("not_warped".into())];
+        assert!(matches!(decode_frames_reply(&reply, 3, &t, "0", 1, None), Err(SampleError::Refused("not_warped"))));
+        let odd = vec![Int(3), Int(0), S("0".into()), S("0".into()), S("/Users/x".into())];
+        assert!(matches!(decode_frames_reply(&odd, 3, &t, "0", 1, None), Err(SampleError::Malformed)));
+    }
+
+    use crate::analysis::levels::{LevelStats, Tail};
+    use crate::analysis::pitch::Pitch;
+    use crate::analysis::signals::{interleave, sine, wav, wav_in};
+    use crate::analysis::spectrum::SpectrumStats;
+    use crate::analysis::stereo::StereoStats;
+    use crate::analysis::Stats;
+
+    fn unwarped(frames: (f64, f64), transpose: f64) -> SampleRead {
+        let mut r = clip_read("/S/Hit.wav", vec![Interval { source: (frames.0 / 1000.0, frames.1 / 1000.0), frames }], timing(false, None));
+        (r.sample_rate, r.warping, r.transpose) = (Some(1000.0), Some(false), Some(transpose));
+        r
+    }
+
+    #[test]
+    fn half_second_segments_lengthen_evenly_past_64() {
+        let s = time_segments(&unwarped((0.0, 3000.0), 0.0), 1000.0);
+        assert_eq!(s.len(), 6);
+        assert_eq!((s[1].at_s, s[1].stream, s[1].beat), (0.5, (500, 1000), None));
+        let long = time_segments(&unwarped((0.0, 40_000.0), 0.0), 1000.0);
+        assert_eq!((long.len(), long[1].stream), (40, (1000, 2000)));
+    }
+
+    #[test]
+    fn segments_follow_playback_across_two_intervals() {
+        let mut r = unwarped((2000.0, 3000.0), 0.0);
+        r.intervals.push(Interval { source: (0.0, 1.0), frames: (0.0, 1000.0) });
+        let s = time_segments(&r, 1000.0);
+        assert_eq!(s.iter().map(|s| (s.at_s, s.stream)).collect::<Vec<_>>(), vec![(2.0, (0, 500)), (2.5, (500, 1000)), (0.0, (1000, 1500)), (0.5, (1500, 2000))]);
+    }
+
+    #[test]
+    fn beat_positions_cover_each_interval_within_65() {
+        let one = |a, b| vec![Interval { source: (a, b), frames: (0.0, 1.0) }];
+        assert_eq!(beat_positions(&one(0.0, 4.0)), vec![vec![0.0, 1.0, 2.0, 3.0, 4.0]]);
+        assert_eq!(beat_positions(&one(0.5, 3.5)), vec![vec![0.5, 1.0, 2.0, 3.0, 3.5]]);
+        let long = beat_positions(&one(0.0, 200.0));
+        assert!(long[0].len() <= 65 && long[0].first() == Some(&0.0) && long[0].last() == Some(&200.0), "{long:?}");
+    }
+
+    #[test]
+    fn beat_segments_use_the_frames_live_gave() {
+        let mut r = unwarped((0.0, 2000.0), 0.0);
+        r.intervals[0].source = (0.0, 2.0);
+        let s = beat_segments(&r, &[vec![0.0, 1.0, 2.0]], &[Some(0.0), Some(900.0), Some(2000.0)], 1000.0).unwrap();
+        assert_eq!(s.iter().map(|s| (s.beat, s.stream)).collect::<Vec<_>>(), vec![(Some(0.0), (0, 900)), (Some(1.0), (900, 2000))]);
+        assert_eq!(beat_segments(&r, &[vec![0.0, 1.0, 2.0]], &[Some(0.0), None, Some(2000.0)], 1000.0), None);
+    }
+
+    #[test]
+    fn beat_segments_follow_playback_across_two_intervals() {
+        // A loop over beats 0-4 started at beat 3, placed for 2 beats: it
+        // plays 3-4, then 0-1. Live's frames bend with the warp.
+        let mut r = unwarped((3000.0, 4000.0), 0.0);
+        r.intervals[0].source = (3.0, 4.0);
+        r.intervals.push(Interval { source: (0.0, 1.0), frames: (0.0, 1000.0) });
+        let positions = [vec![3.0, 3.5, 4.0], vec![0.0, 0.5, 1.0]];
+        let frames = [Some(3000.0), Some(3400.0), Some(4000.0), Some(0.0), Some(600.0), Some(1000.0)];
+        let s = beat_segments(&r, &positions, &frames, 1000.0).unwrap();
+        assert_eq!(
+            s.iter().map(|s| (s.beat, s.at_s, s.stream)).collect::<Vec<_>>(),
+            vec![(Some(3.0), 3.0, (0, 400)), (Some(3.5), 3.4, (400, 1000)), (Some(0.0), 0.0, (1000, 1600)), (Some(0.5), 0.6, (1600, 2000))]
+        );
+    }
+
+    #[test]
+    fn an_end_live_maps_from_its_f32_beat_still_matches() {
+        // OSC carries the beats as 32-bit floats: past beat 2048 at 21,000
+        // frames a beat, the rounding alone moves an end by over two frames.
+        let per_beat = 21_000.0;
+        let mut r = unwarped((0.0, 1.0), 0.0);
+        r.intervals[0] = Interval { source: (2_999.0, 3_000.1234), frames: (2_999.0 * per_beat, 3_000.1234 * per_beat) };
+        let positions = beat_positions(&r.intervals);
+        let frames: Vec<Option<f64>> = positions[0].iter().map(|b| Some(f64::from(*b as f32) * per_beat)).collect();
+        assert!(ends_match(&r, &positions, &frames));
+        let mut moved = frames.clone();
+        *moved.last_mut().unwrap() = Some(3_000.1234 * per_beat + 40.0);
+        assert!(!ends_match(&r, &positions, &moved));
+    }
+
+    #[test]
+    fn ends_are_matched_per_interval() {
+        let mut r = unwarped((3000.0, 4000.0), 0.0);
+        r.intervals[0].source = (3.0, 4.0);
+        r.intervals.push(Interval { source: (0.0, 1.0), frames: (0.0, 1000.0) });
+        let positions = [vec![3.0, 3.5, 4.0], vec![0.0, 0.5, 1.0]];
+        let frames = [Some(3000.0), Some(3400.0), Some(4000.0), Some(0.0), Some(600.0), Some(1000.0)];
+        assert!(ends_match(&r, &positions, &frames));
+        let mut moved = frames;
+        moved[5] = Some(1010.0);
+        assert!(!ends_match(&r, &positions, &moved));
+        moved[5] = Some(1000.0);
+        moved[3] = Some(10.0);
+        assert!(!ends_match(&r, &positions, &moved));
+    }
+
+    #[test]
+    fn an_end_live_could_not_map_is_unmapped_not_a_changed_clip() {
+        let mut r = unwarped((0.0, 2000.0), 0.0);
+        r.intervals[0].source = (0.0, 2.0);
+        let positions = [vec![0.0, 1.0, 2.0]];
+        let frames = [Some(0.0), Some(900.0), None];
+        assert!(ends_match(&r, &positions, &frames));
+        assert_eq!(beat_segments(&r, &positions, &frames, 1000.0), None);
+    }
+
+    fn analysed(read: &SampleRead) -> Stats {
+        let x = sine(44_100, 440.0, 1.0, 0.5);
+        let path = wav(44_100, 2, &interleave(&x, &x));
+        crate::analysis::analyse(&path, &region_frames(read), None, std::time::Instant::now() + Duration::from_secs(20)).unwrap()
+    }
+
+    fn sine_read(transpose: f64) -> SampleRead {
+        let mut r = clip_read("/S/Tone.wav", vec![Interval { source: (0.0, 1.0), frames: (0.0, 44_100.0) }], timing(false, None));
+        (r.warping, r.transpose) = (Some(false), Some(transpose));
+        r
+    }
+
+    #[test]
+    fn the_analysis_names_the_pitch_before_and_after_transpose() {
+        let stats = analysed(&sine_read(0.0));
+        let up = analysis_payload(&stats, &sine_read(3.0), &Profile::Off);
+        let down = analysis_payload(&stats, &sine_read(-3.0), &Profile::Off);
+        assert_eq!(up["about"], ABOUT);
+        assert_eq!((&up["pitch"]["note"], &up["pitch_after_transpose"]["note"]), (&json!("A3"), &json!("C4")));
+        assert_eq!(down["pitch_after_transpose"]["note"], "F#3");
+        assert_eq!(up["stereo"]["correlation"], 1.0);
+        assert_eq!(up["null_because"]["stereo.side_to_mid_db"], "no_side");
+    }
+
+    #[test]
+    fn re_pitch_gives_no_pitch_after_transpose() {
+        let stats = analysed(&sine_read(0.0));
+        let mut read = sine_read(3.0);
+        (read.warping, read.warp_mode) = (Some(true), Some(3));
+        let p = analysis_payload(&stats, &read, &Profile::Off);
+        assert_eq!((&p["pitch_after_transpose"], &p["null_because"]["pitch_after_transpose"]), (&Value::Null, &json!("re_pitch")));
+    }
+
+    fn worst_case(segments: usize) -> Stats {
+        Stats {
+            rate: 44_100, channels: 2, seconds: 599.99,
+            levels: LevelStats {
+                sample_peak_dbfs: vec![Ok(-0.12), Ok(-0.34)], true_peak_dbfs: Ok(0.27), full_scale_samples: 123_456,
+                rms_dbfs: Ok(-14.23), crest_db: Ok(14.11), silent_share: 0.123, leading_silence_ms: Ok(1234.0),
+                attack_ms: Some(12), tail: Some(Tail::AtLeast(4567)), segment_rms_dbfs: vec![Ok(-14.25); segments],
+            },
+            spectrum: SpectrumStats { band_shares: Ok([0.123; 7]), centroid_hz: Ok(1834.6), onsets: 1, segment_centroid_hz: vec![Ok(1834.6); segments] },
+            stereo: Ok(StereoStats { correlation: Ok(0.876), side_to_mid_db: Ok(-12.34), low_correlation: Ok(0.99), low_side_to_mid_db: Ok(-31.2) }),
+            pitch: Pitch::Sweep { from_hz: 98.76, tail_hz: 55.12 },
+            onsets_per_second: Ok(3.21),
+            missing_frames: 0,
+        }
+    }
+
+    #[test]
+    fn the_result_stays_under_two_kilobytes_with_analysis_and_four_with_a_profile() {
+        let read = clip_read("/S/A fairly long sample file name for a vocal take 12.wav",
+            vec![Interval { source: (6.0, 8.0), frames: (0.0, 44100.0) }, Interval { source: (0.0, 2.0), frames: (44100.0, 88200.0) }],
+            timing(true, Some((152.0, 166.0))));
+        let (mut p, _) = sample_payload(&read, 1, Some((4, 4)));
+        p["channels"] = json!(2);
+        p["analysis"] = analysis_payload(&worst_case(0), &read, &Profile::Off);
+        assert!(serde_json::to_string(&p).unwrap().len() < 2048, "{p}");
+        let segments = (0..66).map(|i| Segment { beat: Some(123.25 + i as f64), at_s: 345.67, stream: (0, 1) }).collect();
+        p["analysis"] = analysis_payload(&worst_case(66), &read, &Profile::Segments(segments));
+        let text = serde_json::to_string(&p).unwrap();
+        assert!(text.len() < 4096, "{} bytes", text.len());
+    }
+
+    #[test]
+    fn a_profile_is_columns_and_a_null_says_why() {
+        let segments = vec![Segment { beat: Some(0.0), at_s: 0.0, stream: (0, 1) }, Segment { beat: Some(1.0), at_s: 0.5, stream: (1, 2) }];
+        let mut stats = worst_case(2);
+        stats.levels.segment_rms_dbfs[1] = Err("silent");
+        let p = analysis_payload(&stats, &sine_read(0.0), &Profile::Segments(segments));
+        assert_eq!(p["profile"]["beat"], json!([0.0, 1.0]));
+        assert_eq!(p["profile"]["rms_dbfs"], json!([-14.3, null]));
+        assert_eq!(p["profile"]["centroid_hz"], json!([1830.0, 1830.0]));
+        let none = analysis_payload(&stats, &sine_read(0.0), &Profile::Unavailable("region_too_short"));
+        assert_eq!((&none["profile"], &none["null_because"]["profile"]), (&Value::Null, &json!("region_too_short")));
+    }
+
+    #[test]
+    fn a_file_shorter_than_its_region_names_the_gap_and_drops_the_profile() {
+        // The missing tail is not silence, and later segments would be shifted.
+        let segments = vec![Segment { beat: None, at_s: 0.0, stream: (0, 1) }, Segment { beat: None, at_s: 0.5, stream: (1, 2) }];
+        let mut stats = worst_case(2);
+        stats.missing_frames = 22_050;
+        let p = analysis_payload(&stats, &sine_read(0.0), &Profile::Segments(segments));
+        assert_eq!((&p["file_short_by_s"], &p["profile"]), (&json!(0.5), &Value::Null));
+        assert_eq!(p["null_because"]["profile"], "file_shorter_than_region");
+        stats.missing_frames = 100;
+        assert!(analysis_payload(&stats, &sine_read(0.0), &Profile::Off).get("file_short_by_s").is_none());
+    }
+
+    #[tokio::test]
+    async fn no_folder_reaches_the_analysis_whether_it_reads_or_fails() {
+        let missing = clip_read("/Users/someone/Secret Folder/gone.wav", vec![Interval { source: (0.0, 1.0), frames: (0.0, 100.0) }], timing(false, None));
+        let (block, channels) = analysis_block(&missing, &Profile::Off).await.unwrap();
+        assert_eq!((&block["missing_reason"], &block["about"], channels), (&json!("file_missing"), &json!(ABOUT), None));
+        let path = wav_in("Secret Folder", 44_100, 1, &sine(44_100, 440.0, 0.2, 0.5));
+        let mut read = sine_read(0.0);
+        read.path = Some(SourcePath(path.to_string_lossy().into_owned()));
+        read.intervals = vec![Interval { source: (0.0, 0.2), frames: (0.0, 8820.0) }];
+        let (block, channels) = analysis_block(&read, &Profile::Off).await.unwrap();
+        assert_eq!(channels, Some(1));
+        let text = block.to_string();
+        assert!(!text.contains("Secret") && !text.contains("mixingpal-") && text.contains("A3"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn no_region_means_no_analysis() {
+        let read = clip_read("/S/Vox.wav", vec![], timing(true, Some((0.0, 4.0))));
+        assert!(analysis_block(&read, &Profile::Off).await.is_none());
     }
 }

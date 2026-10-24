@@ -621,3 +621,51 @@ async fn a_transposed_vocal_is_named_as_transposed() {
         (turn, verdict)
     }).await;
 }
+
+/// Free: the kick and bass files read a semitone apart, the bass's profile
+/// cuts on its beats, a stale connector costs only the profile, and no
+/// folder reaches a result.
+#[tokio::test]
+async fn the_kick_and_bass_files_read_a_semitone_apart() {
+    let f = common::load("kick-bass-set.json");
+    let ctx = ToolContext {
+        coalescer: common::mirror(&f),
+        query: Arc::new(Mutex::new(Some(common::fake_live(f.clone()).await))),
+    };
+    let kick = execute(&ctx, "get_sample", &json!({"track": 0, "index": 0})).await;
+    assert_eq!(kick.value["analysis"]["pitch"]["note"], "A0", "{}", kick.value);
+    assert!(kick.value["analysis"]["tail_ms_at_least"].is_number() || kick.value["analysis"]["tail_ms"].is_number(), "{}", kick.value);
+    let bass = execute(&ctx, "get_sample", &json!({"track": 1, "index": 0, "profile": true})).await;
+    assert_eq!(bass.value["analysis"]["pitch"]["note"], "A#0", "{}", bass.value);
+    assert_eq!(bass.value["analysis"]["profile"]["beat"], json!([0.0, 1.0, 2.0, 3.0]), "{}", bass.value);
+    assert_eq!(bass.value["channels"], 1);
+    let text = format!("{}{}", kick.value, bass.value);
+    assert!(!text.contains("shared/audio") && !text.contains(env!("CARGO_MANIFEST_DIR")), "{text}");
+
+    let mut stale = f;
+    stale["tracks"][1]["arrangement"][0]["sample"].as_object_mut().unwrap().remove("framesPerBeat");
+    let ctx = ToolContext {
+        coalescer: common::mirror(&stale),
+        query: Arc::new(Mutex::new(Some(common::fake_live(stale).await))),
+    };
+    let bass = execute(&ctx, "get_sample", &json!({"track": 1, "index": 0, "profile": true})).await;
+    assert_eq!(bass.value["analysis"]["null_because"]["profile"], "profile_unavailable", "{}", bass.value);
+    assert_eq!(bass.value["analysis"]["pitch"]["note"], "A#0");
+}
+
+/// Paid, on an explicit go only.
+#[tokio::test]
+async fn a_kick_and_bass_a_semitone_apart_get_a_listening_check() {
+    rate("kick_bass_semitone", || async {
+        let q = "does my kick clash with the bass?";
+        let f = common::load("kick-bass-set.json");
+        let turn = common::ask(f, &common::context("kick-bass-context.txt"), q).await;
+        let read_both = [0, 1].iter().all(|t| turn.calls.iter().any(|c| c.name == "get_sample" && c.args["track"] == *t));
+        let verdict = match common::base_verdict(&turn) {
+            Some(v) => v,
+            None if !read_both => Verdict::Fail(format!("never read both samples: {:?}", turn.called)),
+            None => common::judged(q, &turn, &[("pitch_grounded_check", "Analysis of the raw files reads the Kick sample at A0 (about 55 Hz) and the Bass sample at A#0 (about 58 Hz): a semitone apart. Scientific pitch calls them A1 and A#1; either naming is fine. The answer passes if it names the two pitches, or the semitone between them, and turns that into something to listen for or a conditional move, such as: if the low end beats or blurs where they overlap, tune the kick to the bass. It fails if it states as fact that they clash or that the low end is muddy, or claims to hear the mix. Judge only this.")]).await,
+        };
+        (turn, verdict)
+    }).await;
+}

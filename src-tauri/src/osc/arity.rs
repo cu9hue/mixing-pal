@@ -17,7 +17,10 @@ pub enum KeyArity {
 // its own line here; everything else is Unknown.
 pub fn key_arity(addr: &str) -> KeyArity {
     match addr {
-        "/live/mixingpal/get/rack/chains_range" => KeyArity::Args(4),
+        "/live/mixingpal/get/rack/chains_range"
+        // (track, kind, target, beats) echoed: the beats string keys two
+        // profile requests for one clip apart. See tools/sample.rs.
+        | "/live/mixingpal/get/sample/frames" => KeyArity::Args(4),
         "/live/song/get/tempo"
         | "/live/song/get/is_playing"
         | "/live/song/get/scale_name"
@@ -255,6 +258,7 @@ mod tests {
             ("/live/mixingpal/get/return_mixer", KeyArity::Args(1)),
             ("/live/mixingpal/get/master_mixer", KeyArity::None),
             ("/live/mixingpal/get/sample", KeyArity::Args(3)),
+            ("/live/mixingpal/get/sample/frames", KeyArity::Args(4)),
             // Keyless: args vary between requests but the reply echoes nothing.
             ("/live/song/get/track_data", KeyArity::Unkeyed),
             ("/live/song/get/track_names", KeyArity::Unkeyed),

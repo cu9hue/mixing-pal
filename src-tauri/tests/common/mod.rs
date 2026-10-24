@@ -25,6 +25,15 @@ pub fn load(name: &str) -> Value {
     serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} parses: {e}"))
 }
 
+/// A fixture's file path. One under `shared/` is a real file in the repo and
+/// resolves to its absolute path, so get_sample's analysis can read it.
+fn fixture_file(file: &str) -> String {
+    match file.strip_prefix("shared/") {
+        Some(rest) => format!("{}/../shared/{rest}", env!("CARGO_MANIFEST_DIR")),
+        None => file.to_string(),
+    }
+}
+
 /// `shared/<name>` as a context block, trailing newline removed.
 pub fn context(name: &str) -> String {
     let path = format!("{}/../shared/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -773,7 +782,7 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                     let f = |k: &str| OscType::Float(s[k].as_f64().unwrap_or(0.0) as f32);
                     reply.extend([
                         OscType::String("ok".into()),
-                        OscType::String(s["file"].as_str().unwrap().into()),
+                        OscType::String(fixture_file(s["file"].as_str().unwrap())),
                         f("rate"),
                         OscType::Int(s["frames"].as_i64().unwrap() as i32),
                         OscType::Bool(s["warping"].as_bool().unwrap()),
@@ -813,6 +822,24 @@ pub async fn fake_live_recording(f: Value, requests: Arc<Mutex<Vec<String>>>) ->
                             f("tempo"),
                         ]);
                     }
+                    let _ = live.send_to(app_port, &req.addr, reply).await;
+                }
+                "/live/mixingpal/get/sample/frames" => {
+                    // A warped arrangement clip's beats at the fixture's
+                    // `framesPerBeat`. A sample without it answers nothing,
+                    // like a wire-15 connector.
+                    let (Some(kind), Some(target), Some(beats)) = (int_at(1), str_at(2), str_at(3)) else { continue };
+                    let sample = (kind == 1)
+                        .then(|| target.parse::<usize>().ok().and_then(|i| track["arrangement"].get(i)?.get("sample").cloned()))
+                        .flatten();
+                    let Some(s) = sample else { continue };
+                    let Some(per_beat) = s["framesPerBeat"].as_f64() else { continue };
+                    let frames: Vec<OscType> = beats.split(',').map(|b| OscType::Int((b.parse::<f64>().unwrap() * per_beat).round() as i32)).collect();
+                    let mut reply = req.args[..4].to_vec();
+                    reply.push(OscType::String("ok".into()));
+                    reply.push(OscType::Int(s["frames"].as_i64().unwrap() as i32));
+                    reply.push(OscType::Int(frames.len() as i32));
+                    reply.extend(frames);
                     let _ = live.send_to(app_port, &req.addr, reply).await;
                 }
                 _ => {} // an address the fixture cannot answer

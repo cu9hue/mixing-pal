@@ -12,6 +12,8 @@ import loopFixture from "../../shared/loop-set.json";
 import loopContext from "../../shared/loop-context.txt?raw";
 import sampleFixture from "../../shared/sample-set.json";
 import sampleContext from "../../shared/sample-context.txt?raw";
+import kickBassFixture from "../../shared/kick-bass-set.json";
+import kickBassContext from "../../shared/kick-bass-context.txt?raw";
 
 // Each fixture is one eval suite's set, and Rust builds its fake Live from
 // the same file. Rust cannot call buildContext, so the rendered digest is
@@ -45,6 +47,7 @@ describe.each([
   ["oneshot-set.json", oneshotFixture, oneshotContext],
   ["loop-set.json", loopFixture, loopContext],
   ["sample-set.json", sampleFixture, sampleContext],
+  ["kick-bass-set.json", kickBassFixture, kickBassContext],
 ])("the fixture %s", (_name, fixture, context) => {
   it("renders to the checked-in context block", () => {
     const expected = context.replace(/\n$/, "");

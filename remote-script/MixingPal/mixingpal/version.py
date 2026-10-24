@@ -45,7 +45,11 @@ from ..abletonosc.handler import AbletonOSCHandler
 # Version 15 adds /live/mixingpal/get/sample: an audio clip's or Simpler's
 # file, settings and played region. A stale script knows no such address,
 # so get_sample reports no_reply and every other read keeps working.
-WIRE_VERSION = 15
+# Version 16 adds /live/mixingpal/get/sample/frames: Live's frame for each
+# beat of a warped clip, which get_sample's profile cuts on. The app asks
+# for an exact version match before a question, so a stale script means a
+# reinstall; a lost frames reply still costs only the profile.
+WIRE_VERSION = 16
 
 
 class VersionHandler(AbletonOSCHandler):

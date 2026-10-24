@@ -1,3 +1,4 @@
+mod analysis;
 mod updates;
 mod bulk;
 mod connector;
@@ -21,6 +22,7 @@ mod window;
 /// bench target reach the same functions.
 #[cfg(feature = "bench")]
 pub mod bench_api {
+    pub use crate::analysis::analyse;
     pub use crate::bulk::{decode_mixer_data, decode_track_data};
     pub use crate::deltas::{Coalescer, Delta};
     pub use crate::osc::arity::key_arity;
@@ -194,6 +196,7 @@ const POLL_LOOP_SENT_ADDRESSES: &[&str] = &[
     "/live/mixingpal/get/return_mixer",
     "/live/mixingpal/get/master_mixer",
     "/live/mixingpal/get/sample",
+    "/live/mixingpal/get/sample/frames",
 ];
 
 /// How often the poll loop unconditionally resends `SINGLETON_SUBSCRIPTIONS`,
@@ -388,6 +391,7 @@ fn handle_inbound(
             | "/live/mixingpal/get/return_mixer"
             | "/live/mixingpal/get/master_mixer"
             | "/live/mixingpal/get/sample"
+            | "/live/mixingpal/get/sample/frames"
     );
     if !is_resolve_only {
         if let Ok(mut c) = coalescer.lock() {
@@ -1743,6 +1747,7 @@ mod tests {
         "/live/mixingpal/get/return_mixer",
         "/live/mixingpal/get/master_mixer",
         "/live/mixingpal/get/sample",
+        "/live/mixingpal/get/sample/frames",
     ];
 
     #[test]

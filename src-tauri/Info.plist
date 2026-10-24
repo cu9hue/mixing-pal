@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Mixing Pal reads the samples in your Live set to measure their level, pitch and tone. It never changes them, and the audio never leaves your Mac.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Mixing Pal reads the samples in your Live set to measure their level, pitch and tone. It never changes them, and the audio never leaves your Mac.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Mixing Pal reads the samples in your Live set to measure their level, pitch and tone. It never changes them, and the audio never leaves your Mac.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Mixing Pal reads the samples in your Live set to measure their level, pitch and tone. It never changes them, and the audio never leaves your Mac.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>Mixing Pal reads the samples in your Live set to measure their level, pitch and tone. It never changes them, and the audio never leaves your Mac.</string>
+</dict>
+</plist>
