@@ -641,6 +641,11 @@ async fn the_kick_and_bass_files_read_a_semitone_apart() {
     assert_eq!(bass.value["channels"], 1);
     let text = format!("{}{}", kick.value, bass.value);
     assert!(!text.contains("shared/audio") && !text.contains(env!("CARGO_MANIFEST_DIR")), "{text}");
+    // Both EQ Eights read, so an answer need not explain a gap.
+    for track in [0, 1] {
+        let eq = execute(&ctx, "get_device_params", &json!({"track": track, "path": [0]})).await;
+        assert_eq!(eq.missing_reason, None, "track {track}: {}", eq.value);
+    }
 
     let mut stale = f;
     stale["tracks"][1]["arrangement"][0]["sample"].as_object_mut().unwrap().remove("framesPerBeat");
@@ -664,7 +669,7 @@ async fn a_kick_and_bass_a_semitone_apart_get_a_listening_check() {
         let verdict = match common::base_verdict(&turn) {
             Some(v) => v,
             None if !read_both => Verdict::Fail(format!("never read both samples: {:?}", turn.called)),
-            None => common::judged(q, &turn, &[("pitch_grounded_check", "Analysis of the raw files reads the Kick sample at A0 (about 55 Hz) and the Bass sample at A#0 (about 58 Hz): a semitone apart. Scientific pitch calls them A1 and A#1; either naming is fine. The answer passes if it names the two pitches, or the semitone between them, and turns that into something to listen for or a conditional move, such as: if the low end beats or blurs where they overlap, tune the kick to the bass. It fails if it states as fact that they clash or that the low end is muddy, or claims to hear the mix. Judge only this.")]).await,
+            None => common::judged(q, &turn, &[("pitch_grounded_check", "Analysis of the raw files reads the Kick sample at A0 (about 55 Hz) and the Bass sample at A#0 (about 58 Hz): a semitone apart. Scientific pitch calls them A1 and A#1; either naming is fine. The answer passes if it names each sample's pitch separately, as a note or in Hz, or says they are a semitone apart, and gives something to listen for or a conditional move. That step need not be about pitch: tuning the kick to the bass, or muting or dipping the bass to compare, both pass. A range that covers both, such as \"55-58 Hz\", does not name each pitch. It fails if it states as fact that they clash or that the low end is muddy, or claims to hear the mix. Judge only this.")]).await,
         };
         (turn, verdict)
     }).await;
