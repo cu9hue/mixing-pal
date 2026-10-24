@@ -506,6 +506,29 @@ mod tests {
         assert!(a.get(job(path), later(), BUDGET).await.is_ok());
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_stuck_run_counts_as_a_read_on_its_volume() {
+        // The share answers its file state, then stalls mid-read.
+        fn answers(_: &Path) -> Result<(u64, SystemTime), AnalysisError> {
+            Ok((1, SystemTime::now() - Duration::from_secs(60)))
+        }
+        fn stalls(_: &Path, _: &[(u64, u64)], _: Option<&[(u64, u64)]>, _: Instant) -> Result<Stats, AnalysisError> {
+            std::thread::sleep(Duration::from_secs(4));
+            Err(AnalysisError::DecodeFailed)
+        }
+        let a = Arc::new(Analyses { state: answers, ..Analyses::new(MAX_IN_FLIGHT, 256) });
+        let mut calls = tokio::task::JoinSet::new();
+        for i in 0..MAX_IN_FLIGHT {
+            let a = a.clone();
+            calls.spawn(async move { a.get_with(job(PathBuf::from(format!("/Volumes/nas/{i}.wav"))), later(), Duration::from_millis(200), stalls).await });
+        }
+        while let Some(r) = calls.join_next().await {
+            assert_eq!(r.unwrap().err(), Some(AnalysisError::AnalysisTimeout));
+        }
+        let r = a.get_with(job(PathBuf::from("/Volumes/nas/one-more.wav")), later(), Duration::from_millis(200), stalls).await;
+        assert_eq!(r.err(), Some(AnalysisError::FileUnreachable));
+    }
+
     #[test]
     fn a_volume_is_its_mount() {
         assert_eq!(volume(Path::new("/Volumes/nas/Samples/kick.wav")), Path::new("/Volumes/nas"));
