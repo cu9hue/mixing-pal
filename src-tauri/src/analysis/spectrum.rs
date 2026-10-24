@@ -136,7 +136,10 @@ pub struct Spectrum {
     flux: Vec<f32>,
     position: u64,
     segments: Segments,
-    segment_sums: Vec<(f64, f64)>,
+    /// Each segment's frames that fall wholly inside it.
+    segment_sums: Vec<Option<(f64, f64)>>,
+    /// Each segment's share of every frame that overlaps it, by window mass.
+    segment_overlaps: Vec<(f64, f64)>,
 }
 
 impl Spectrum {
@@ -156,7 +159,8 @@ impl Spectrum {
             flux: Vec::new(),
             position: 0,
             segments: Segments::new(segments),
-            segment_sums: vec![(0.0, 0.0); n],
+            segment_sums: vec![None; n],
+            segment_overlaps: vec![(0.0, 0.0); n],
         }
     }
 
@@ -185,9 +189,11 @@ impl Spectrum {
     }
 
     /// `start`: the stream position of the frame's first sample, below 0
-    /// for the silence the first frame starts with. Each segment the frame
-    /// overlaps gets the share of the window's mass that falls inside it, so
-    /// one shorter than a hop still gets a centroid.
+    /// for the silence the first frame starts with. A segment's centroid
+    /// comes from the frames wholly inside it: a frame that reaches into a
+    /// segment 40 dB louder reads as that one. A segment that holds no whole
+    /// frame gets the share of the window's mass that falls inside it from
+    /// each frame that overlaps it, so it still gets a centroid.
     fn record(&mut self, start: i64) {
         let bin_hz = self.rate / self.long.size as f64;
         let (mut weighted, mut total) = (0.0, 0.0);
@@ -201,12 +207,18 @@ impl Spectrum {
         self.weighted += weighted;
         self.total += total;
         let (size, mass) = (self.long.size as i64, &self.long.mass);
-        for (i, (a, b)) in self.segments.overlapping(start.max(0) as u64, (start + size).max(0) as u64) {
+        let (first, last) = (start.max(0) as u64, self.position);
+        for (i, (a, b)) in self.segments.overlapping(first, last) {
+            if a <= first && last <= b {
+                let sums = self.segment_sums[i].get_or_insert((0.0, 0.0));
+                sums.0 += weighted;
+                sums.1 += total;
+            }
             let lo = (a as i64 - start).clamp(0, size) as usize;
             let hi = (b as i64 - start).clamp(0, size) as usize;
             let share = (mass[hi] - mass[lo]) / mass[size as usize];
-            self.segment_sums[i].0 += share * weighted;
-            self.segment_sums[i].1 += share * total;
+            self.segment_overlaps[i].0 += share * weighted;
+            self.segment_overlaps[i].1 += share * total;
         }
     }
 
@@ -246,7 +258,9 @@ impl Spectrum {
             segment_centroid_hz: self
                 .segment_sums
                 .iter()
-                .map(|(w, t)| if *t <= 1e-9 { Err("silent") } else { Ok(w / t) })
+                .zip(&self.segment_overlaps)
+                .map(|(sums, overlaps)| sums.unwrap_or(*overlaps))
+                .map(|(w, t)| if t <= 1e-9 { Err("silent") } else { Ok(w / t) })
                 .collect(),
         }
     }
@@ -369,6 +383,16 @@ mod tests {
             let s = spectrum(44_100, &x, segments.clone());
             assert!(s.segment_centroid_hz.iter().all(Result::is_ok), "{segments:?}: {:?}", s.segment_centroid_hz);
         }
+    }
+
+    #[test]
+    fn a_quiet_segment_keeps_its_centroid_beside_a_loud_one() {
+        // 5 kHz at -40 dB for half a second, then 500 Hz at full level.
+        let mut x = sine(44_100, 5000.0, 0.5, 0.005);
+        x.extend(sine(44_100, 500.0, 0.5, 0.5));
+        let s = spectrum(44_100, &x, vec![(0, 22_050), (22_050, 44_100)]);
+        let (a, b) = (s.segment_centroid_hz[0].unwrap(), s.segment_centroid_hz[1].unwrap());
+        assert!((a - 5000.0).abs() < 500.0 && (b - 500.0).abs() < 50.0, "{a} {b}");
     }
 
     #[test]
