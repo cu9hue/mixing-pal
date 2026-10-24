@@ -12,8 +12,18 @@ use std::time::{Duration, Instant};
 const RATE: u32 = 44_100;
 const SECONDS: u64 = 180;
 
+/// A file in the temp folder, removed when the bench is done with it: the
+/// two together take about 260 MB.
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// A bass note under a bright tone and some noise, as 16-bit stereo PCM.
-fn stereo_file(rate: u32, seconds: u64) -> PathBuf {
+fn stereo_file(rate: u32, seconds: u64) -> TempFile {
     let n = (seconds * u64::from(rate)) as usize;
     let mut seed = 0x2545_f491_4f6c_dd1du64;
     let mut pcm = Vec::with_capacity(n * 4);
@@ -38,13 +48,13 @@ fn stereo_file(rate: u32, seconds: u64) -> PathBuf {
     }
     b.extend_from_slice(&pcm);
     std::fs::write(&path, b).unwrap();
-    path
+    TempFile(path)
 }
 
 fn bench(c: &mut Criterion) {
     let path = stereo_file(RATE, SECONDS);
     let region = [(0, SECONDS * u64::from(RATE))];
-    let once = || analyse(&path, &region, None, Instant::now() + Duration::from_secs(600)).unwrap();
+    let once = || analyse(&path.0, &region, None, Instant::now() + Duration::from_secs(600)).unwrap();
     let mut g = c.benchmark_group("sample_analysis");
     g.sample_size(10).measurement_time(Duration::from_secs(60));
     g.bench_function("one_cold_call_3_min_stereo", |b| b.iter(once));
@@ -61,7 +71,7 @@ fn bench(c: &mut Criterion) {
     let high = stereo_file(192_000, 300);
     let long = [(0, 300 * 192_000)];
     g.bench_function("one_cold_call_5_min_192k_stereo", |b| {
-        b.iter(|| analyse(&high, &long, None, Instant::now() + Duration::from_secs(600)).unwrap())
+        b.iter(|| analyse(&high.0, &long, None, Instant::now() + Duration::from_secs(600)).unwrap())
     });
     g.finish();
 }
