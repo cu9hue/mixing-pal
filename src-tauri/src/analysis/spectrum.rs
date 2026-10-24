@@ -370,6 +370,19 @@ mod tests {
     }
 
     #[test]
+    fn a_quiet_click_counts_at_every_rate() {
+        // At -54 dBFS. A level scaled by 2048 points, not the frame's own
+        // size, reads them 8 times quieter at 8 kHz.
+        for rate in [8_000, 11_025, 22_050, 32_000, 44_100, 96_000] {
+            let mut x = vec![0.0f32; 2 * rate as usize];
+            for k in 0..8 {
+                x[k * rate as usize / 4] = 0.002;
+            }
+            assert_eq!(spectrum(rate, &x, vec![]).onsets, 8, "{rate}");
+        }
+    }
+
+    #[test]
     fn a_held_note_is_one_onset() {
         assert_eq!(spectrum(44_100, &sine(44_100, 220.0, 2.0, 0.5), vec![]).onsets, 1);
     }

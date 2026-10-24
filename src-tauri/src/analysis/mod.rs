@@ -220,9 +220,13 @@ mod tests {
 
     #[test]
     fn a_region_cut_mid_note_has_no_onset_at_its_start() {
-        let path = wav(44_100, 1, &sine(44_100, 220.0, 2.0, 0.5));
-        let s = analyse(&path, &[(22_050, 66_150)], None, later()).unwrap();
-        assert_eq!((s.onsets_per_second, s.levels.attack_ms), (Ok(0.0), None));
+        // Above 48 kHz the onset frame is longer than 2048 points, and so is
+        // the audio before the region that primes it.
+        for rate in [44_100, 96_000, 192_000] {
+            let path = wav(rate, 1, &sine(rate, 220.0, 2.0, 0.5));
+            let s = analyse(&path, &[(u64::from(rate) / 2, u64::from(rate) * 3 / 2)], None, later()).unwrap();
+            assert_eq!((s.onsets_per_second, s.levels.attack_ms), (Ok(0.0), None), "{rate}");
+        }
     }
 
     #[test]
