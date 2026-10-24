@@ -25,6 +25,11 @@ pub enum Tail {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LevelStats {
     pub sample_peak_dbfs: Vec<Stat>,
+    /// Interpolated at 4x by a 16-tap filter, which needs eight samples on
+    /// each side of a point. So nothing is interpolated between the region's
+    /// first eight samples (the filter would read a step from silence) or
+    /// between its last eight; there the sample peak stands. A region under
+    /// 16 frames has no point interpolated and reports its sample peak.
     pub true_peak_dbfs: Stat,
     pub full_scale_samples: u64,
     pub rms_dbfs: Stat,
