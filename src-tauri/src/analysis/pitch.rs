@@ -1,5 +1,6 @@
 //! Pitch by YIN on the mono sum, 30 Hz to 4 kHz. The difference function's
-//! cross term comes from an FFT, so a frame costs three FFTs, not W².
+//! cross term comes from an FFT, so a frame costs three FFTs, not W², and a
+//! fourth when it finds a period.
 
 use crate::tools::clip_notes::ableton_note_name;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -21,10 +22,13 @@ const MAX_RATE: f64 = 48_000.0;
 /// 0.5%; a bass whose fundamental is 18 dB under its octave, about 5%.
 const FUNDAMENTAL_SHARE: f64 = 0.02;
 /// A note whose fundamental is weak or filtered out still has its 2nd to
-/// 5th harmonics, each above this share. The period chord notes share
-/// misses some: a fifth's 55 Hz period has no 5th harmonic, a triad's no
-/// 2nd or 3rd.
-const HARMONIC_SHARE: f64 = 0.005;
+/// 7th harmonics, each above this share of the Hann-windowed spectrum. The
+/// period chord notes share misses some: a fifth's 55 Hz period has no 5th
+/// harmonic, a triad's no 2nd or 3rd, an open E major's 41 Hz period no 7th.
+/// Saw notes with their fundamental weak or gone measure 3.1% or more at the
+/// weakest; saw chords on one harmonic series (A2 E3 A3, open E major,
+/// C2 G2 C3 E3, C3 G3 E4) at most 0.45%, too near 0.5%.
+const HARMONIC_SHARE: f64 = 0.01;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pitch {
@@ -58,6 +62,9 @@ pub struct PitchTracker {
     buffer: Vec<f64>,
     a: Vec<Complex<f64>>,
     b: Vec<Complex<f64>>,
+    /// The frame's Hann-windowed spectrum, for the harmonic test.
+    c: Vec<Complex<f64>>,
+    hann: Vec<f64>,
     frames: Vec<Frame>,
 }
 
@@ -84,6 +91,8 @@ impl PitchTracker {
             buffer: Vec::with_capacity(window + tau_max),
             a: vec![Complex::default(); n],
             b: vec![Complex::default(); n],
+            c: vec![Complex::default(); n],
+            hann: (0..window + tau_max).map(|i| 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / (window + tau_max) as f64).cos()).collect(),
             frames: Vec::new(),
         }
     }
@@ -149,8 +158,13 @@ impl PitchTracker {
                 let curve = s0 - 2.0 * s1 + s2;
                 let shift = if curve.abs() > 1e-12 { (0.5 * (s0 - s2) / curve).clamp(-1.0, 1.0) } else { 0.0 };
                 let hz = self.rate / (tau as f64 + shift);
-                // `b` still holds the frame's spectrum.
-                let power = |k: usize| self.b[k].norm_sqr();
+                // `b` holds the frame's spectrum unwindowed, and its leakage
+                // fills the gaps between a chord's harmonics.
+                for (i, s) in self.c.iter_mut().enumerate() {
+                    *s = Complex::new(if i < len { x[i] * self.hann[i] } else { 0.0 }, 0.0);
+                }
+                self.forward.process(&mut self.c);
+                let power = |k: usize| self.c[k].norm_sqr();
                 let top = self.n / 2 - 1;
                 let total: f64 = (1..=top).map(power).sum();
                 let share = |harmonic: f64| {
@@ -160,7 +174,7 @@ impl PitchTracker {
                     }
                     (((bin - 1.0).max(1.0) as usize)..=(bin + 1.0) as usize).map(power).sum::<f64>() / total
                 };
-                let note = share(1.0) >= FUNDAMENTAL_SHARE || (2..=5).all(|h| share(f64::from(h)) >= HARMONIC_SHARE);
+                let note = share(1.0) >= FUNDAMENTAL_SHARE || (2..=7).all(|h| share(f64::from(h)) >= HARMONIC_SHARE);
                 self.frames.push(if note { Frame::Voiced(hz) } else { Frame::Chord });
                 return;
             }
@@ -345,6 +359,24 @@ mod tests {
         }
         let fifth: Vec<f32> = saw(110.0, 1.0).iter().zip(saw(164.81, 1.0)).map(|(a, b)| a + b).collect();
         assert_eq!(track(44_100, &fifth, 1), Pitch::Unknown("polyphonic"), "a fifth of saws");
+    }
+
+    #[test]
+    fn a_chord_on_one_harmonic_series_is_polyphonic() {
+        // Each chord's notes are harmonics of one low period: a power chord's
+        // A2 E3 A3 of 55 Hz, an open E major's of 41.2 Hz, C2 G2 C3 E3 of
+        // 32.7 Hz, C3 G3 E4 of 65.4 Hz.
+        let chords = [
+            vec![110.0, 164.81, 220.0],
+            vec![82.41, 123.47, 164.81, 207.65, 246.94, 329.63],
+            vec![65.41, 98.0, 130.81, 164.81],
+            vec![130.81, 196.0, 329.63],
+        ];
+        for notes in chords {
+            assert_eq!(track(44_100, &chord(&notes), 1), Pitch::Unknown("polyphonic"), "sines {notes:?}");
+            let saws = notes.iter().map(|hz| saw(*hz, 1.0)).reduce(|a, b| a.iter().zip(b).map(|(x, y)| x + y).collect()).unwrap();
+            assert_eq!(track(44_100, &saws, 1), Pitch::Unknown("polyphonic"), "saws {notes:?}");
+        }
     }
 
     #[test]
