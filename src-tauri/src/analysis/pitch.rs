@@ -29,6 +29,10 @@ const FUNDAMENTAL_SHARE: f64 = 0.02;
 /// weakest; saw chords on one harmonic series (A2 E3 A3, open E major,
 /// C2 G2 C3 E3, C3 G3 E4) at most 0.45%, too near 0.5%.
 const HARMONIC_SHARE: f64 = 0.01;
+/// A period shorter than this, in samples, is placed by its fundamental's
+/// spectral peak instead: YIN's interpolation reads 3.6 kHz at 22.05 kHz
+/// (6 samples) 1% sharp, another note's name.
+const SHORT_PERIOD: f64 = 20.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pitch {
@@ -167,14 +171,31 @@ impl PitchTracker {
                 let power = |k: usize| self.c[k].norm_sqr();
                 let top = self.n / 2 - 1;
                 let total: f64 = (1..=top).map(power).sum();
+                // The period is good to about half a sample: at a short one
+                // (3.6 kHz at 22.05 kHz is 6 samples) that moves a harmonic
+                // by several bins. A harmonic past the top bin cannot be
+                // measured, so it is not counted as missing.
+                let period = tau as f64 + shift;
                 let share = |harmonic: f64| {
                     let bin = harmonic * hz * self.n as f64 / self.rate;
-                    if bin + 1.0 > top as f64 {
-                        return 0.0;
+                    let reach = 1.0 + bin * 0.5 / period;
+                    if bin + reach > top as f64 {
+                        return None;
                     }
-                    (((bin - 1.0).max(1.0) as usize)..=(bin + 1.0) as usize).map(power).sum::<f64>() / total
+                    Some((((bin - reach).max(1.0) as usize)..=(bin + reach) as usize).map(power).sum::<f64>() / total)
                 };
-                let note = share(1.0) >= FUNDAMENTAL_SHARE || (2..=7).all(|h| share(f64::from(h)) >= HARMONIC_SHARE);
+                let fundamental = share(1.0).is_some_and(|s| s >= FUNDAMENTAL_SHARE);
+                let note = fundamental || (2..=7).filter_map(|h| share(f64::from(h))).all(|s| s >= HARMONIC_SHARE);
+                let peak = || {
+                    let bin = hz * self.n as f64 / self.rate;
+                    let reach = 1.0 + bin * 0.5 / period;
+                    let k = (((bin - reach).max(2.0) as usize)..=((bin + reach) as usize).min(top - 1)).max_by(|a, b| power(*a).total_cmp(&power(*b)))?;
+                    let (l, c, r) = (power(k - 1).ln(), power(k).ln(), power(k + 1).ln());
+                    let curve = l - 2.0 * c + r;
+                    let shift = if curve.abs() > 1e-12 { (0.5 * (l - r) / curve).clamp(-0.5, 0.5) } else { 0.0 };
+                    Some((k as f64 + shift) * self.rate / self.n as f64)
+                };
+                let hz = if fundamental && period < SHORT_PERIOD { peak().unwrap_or(hz) } else { hz };
                 self.frames.push(if note { Frame::Voiced(hz) } else { Frame::Chord });
                 return;
             }
@@ -273,6 +294,15 @@ mod tests {
             assert!(cents(hz, 440.0).abs() < 5.0, "{rate}: {hz}");
             assert_eq!(note(hz).0, "A3");
         }
+    }
+
+    #[test]
+    fn a_high_note_in_a_low_rate_file_reads_as_its_note() {
+        // At 22.05 kHz a 3.6 kHz period is about 6 samples, near YIN's
+        // shortest, and its harmonics are past Nyquist.
+        let hz = steady(track(22_050, &sine(22_050, 3_600.0, 1.0, 0.3), 1));
+        assert!(cents(hz, 3_600.0).abs() < 20.0, "{hz}");
+        assert_eq!(note(hz).0, "A6");
     }
 
     #[test]
