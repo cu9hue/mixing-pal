@@ -415,15 +415,20 @@ pub fn beat_segments(read: &SampleRead, positions: &[Vec<f64>], frames: &[Option
 
 /// Whether Live maps each interval's ends to the frames it gave in the first
 /// reply. They differ when a warp marker moved, or the clip was replaced by
-/// another of the same length, between the two replies. Within a frame:
-/// the beats are rounded on the wire.
+/// another of the same length, between the two replies. An end Live could
+/// not map is left to `beat_segments`, which calls it unmapped.
 fn ends_match(read: &SampleRead, positions: &[Vec<f64>], frames: &[Option<f64>]) -> bool {
     let mut at = 0;
-    positions.iter().zip(region_frames(read)).all(|(beats, (a, b))| {
+    positions.iter().zip(&read.intervals).zip(region_frames(read)).all(|((beats, interval), (a, b))| {
         let (first, last) = (frames.get(at).copied().flatten(), frames.get(at + beats.len() - 1).copied().flatten());
         at += beats.len();
-        let near = |f: Option<f64>, want: u64| f.is_some_and(|f| (f - want as f64).abs() <= 1.0);
-        near(first, a) && near(last, b)
+        let per_beat = ((interval.frames.1 - interval.frames.0) / (interval.source.1 - interval.source.0)).abs();
+        let per_beat = if per_beat.is_finite() { per_beat } else { 0.0 };
+        // A frame for rounding, plus what the beat's trip as a 32-bit OSC
+        // float moves it: up to half an f32 step, 2^-24 of the beat, taken
+        // four times over.
+        let near = |f: Option<f64>, want: u64, beat: f64| f.is_none_or(|f| (f - want as f64).abs() <= 1.0 + 4.0 * beat.abs() * 2f64.powi(-24) * per_beat);
+        near(first, a, beats[0]) && near(last, b, beats[beats.len() - 1])
     })
 }
 
@@ -1210,6 +1215,47 @@ mod tests {
             s.iter().map(|s| (s.beat, s.at_s, s.stream)).collect::<Vec<_>>(),
             vec![(Some(3.0), 3.0, (0, 400)), (Some(3.5), 3.4, (400, 1000)), (Some(0.0), 0.0, (1000, 1600)), (Some(0.5), 0.6, (1600, 2000))]
         );
+    }
+
+    #[test]
+    fn an_end_live_maps_from_its_f32_beat_still_matches() {
+        // OSC carries the beats as 32-bit floats: past beat 2048 at 21,000
+        // frames a beat, the rounding alone moves an end by over two frames.
+        let per_beat = 21_000.0;
+        let mut r = unwarped((0.0, 1.0), 0.0);
+        r.intervals[0] = Interval { source: (2_999.0, 3_000.1234), frames: (2_999.0 * per_beat, 3_000.1234 * per_beat) };
+        let positions = beat_positions(&r.intervals);
+        let frames: Vec<Option<f64>> = positions[0].iter().map(|b| Some(f64::from(*b as f32) * per_beat)).collect();
+        assert!(ends_match(&r, &positions, &frames));
+        let mut moved = frames.clone();
+        *moved.last_mut().unwrap() = Some(3_000.1234 * per_beat + 40.0);
+        assert!(!ends_match(&r, &positions, &moved));
+    }
+
+    #[test]
+    fn ends_are_matched_per_interval() {
+        let mut r = unwarped((3000.0, 4000.0), 0.0);
+        r.intervals[0].source = (3.0, 4.0);
+        r.intervals.push(Interval { source: (0.0, 1.0), frames: (0.0, 1000.0) });
+        let positions = [vec![3.0, 3.5, 4.0], vec![0.0, 0.5, 1.0]];
+        let frames = [Some(3000.0), Some(3400.0), Some(4000.0), Some(0.0), Some(600.0), Some(1000.0)];
+        assert!(ends_match(&r, &positions, &frames));
+        let mut moved = frames;
+        moved[5] = Some(1010.0);
+        assert!(!ends_match(&r, &positions, &moved));
+        moved[5] = Some(1000.0);
+        moved[3] = Some(10.0);
+        assert!(!ends_match(&r, &positions, &moved));
+    }
+
+    #[test]
+    fn an_end_live_could_not_map_is_unmapped_not_a_changed_clip() {
+        let mut r = unwarped((0.0, 2000.0), 0.0);
+        r.intervals[0].source = (0.0, 2.0);
+        let positions = [vec![0.0, 1.0, 2.0]];
+        let frames = [Some(0.0), Some(900.0), None];
+        assert!(ends_match(&r, &positions, &frames));
+        assert_eq!(beat_segments(&r, &positions, &frames, 1000.0), None);
     }
 
     fn analysed(read: &SampleRead) -> Stats {
