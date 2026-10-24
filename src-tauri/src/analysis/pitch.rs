@@ -1,6 +1,6 @@
 //! Pitch by YIN on the mono sum, 30 Hz to 4 kHz. The difference function's
 //! cross term comes from an FFT, so a frame costs three FFTs, not W², and a
-//! fourth when it finds a period.
+//! fourth when it finds a period, over six of its periods or more.
 
 use crate::tools::clip_notes::ableton_note_name;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -33,6 +33,12 @@ const HARMONIC_SHARE: f64 = 0.01;
 /// spectral peak instead: YIN's interpolation reads 3.6 kHz at 22.05 kHz
 /// (6 samples) 1% sharp, another note's name.
 const SHORT_PERIOD: f64 = 20.0;
+/// The harmonic test windows at least this many of the found periods, from
+/// the frame's end back. A Hann window's main lobe is then a third of the
+/// harmonics' spacing, so a harmonic missing between two present ones reads
+/// as missing. The YIN frame holds six periods only from 90 Hz up; a chord on
+/// one series rooted at B1 to D2 shares a 31-37 Hz period.
+const RESOLVE_PERIODS: f64 = 6.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pitch {
@@ -60,13 +66,19 @@ pub struct PitchTracker {
     tau_max: usize,
     tau_min: usize,
     hop: usize,
+    /// The samples kept: six of the longest periods.
+    history: usize,
+    /// The buffer's length when the next frame ends.
+    due: usize,
+    planner: FftPlanner<f64>,
     forward: Arc<dyn Fft<f64>>,
     inverse: Arc<dyn Fft<f64>>,
     n: usize,
     buffer: Vec<f64>,
     a: Vec<Complex<f64>>,
     b: Vec<Complex<f64>>,
-    /// The frame's Hann-windowed spectrum, for the harmonic test.
+    /// The Hann-windowed spectrum of the frame's last six periods or more,
+    /// for the harmonic test.
     c: Vec<Complex<f64>>,
     hann: Vec<f64>,
     frames: Vec<Frame>,
@@ -79,7 +91,9 @@ impl PitchTracker {
         let tau_max = (r / LOWEST_HZ).ceil() as usize;
         let window = tau_max;
         let n = (window + tau_max).next_power_of_two();
+        let history = ((RESOLVE_PERIODS * tau_max as f64).ceil() as usize).max(window + tau_max);
         let mut planner = FftPlanner::new();
+        let (forward, inverse) = (planner.plan_fft_forward(n), planner.plan_fft_inverse(n));
         PitchTracker {
             rate: r,
             step,
@@ -89,10 +103,13 @@ impl PitchTracker {
             tau_max,
             tau_min: ((r / HIGHEST_HZ).floor() as usize).max(2),
             hop: (r / FRAMES_PER_SECOND).round() as usize,
-            forward: planner.plan_fft_forward(n),
-            inverse: planner.plan_fft_inverse(n),
+            history,
+            due: window + tau_max,
+            planner,
+            forward,
+            inverse,
             n,
-            buffer: Vec::with_capacity(window + tau_max),
+            buffer: Vec::with_capacity(history),
             a: vec![Complex::default(); n],
             b: vec![Complex::default(); n],
             c: vec![Complex::default(); n],
@@ -110,16 +127,18 @@ impl PitchTracker {
             }
             self.buffer.push(self.sum / self.step as f64);
             (self.sum, self.summed) = (0.0, 0);
-            if self.buffer.len() == self.window + self.tau_max {
+            if self.buffer.len() == self.due {
                 self.analyse();
-                self.buffer.drain(..self.hop);
+                let excess = (self.buffer.len() + self.hop).saturating_sub(self.history);
+                self.buffer.drain(..excess);
+                self.due = self.buffer.len() + self.hop;
             }
         }
     }
 
     fn analyse(&mut self) {
         let len = self.window + self.tau_max;
-        let x = &self.buffer[..len];
+        let x = &self.buffer[self.buffer.len() - len..];
         let mut energy = Vec::with_capacity(len + 1);
         energy.push(0.0f64);
         for v in x {
@@ -164,20 +183,28 @@ impl PitchTracker {
                 let hz = self.rate / (tau as f64 + shift);
                 // `b` holds the frame's spectrum unwindowed, and its leakage
                 // fills the gaps between a chord's harmonics.
-                for (i, s) in self.c.iter_mut().enumerate() {
-                    *s = Complex::new(if i < len { x[i] * self.hann[i] } else { 0.0 }, 0.0);
-                }
-                self.forward.process(&mut self.c);
+                let period = tau as f64 + shift;
+                let m = ((RESOLVE_PERIODS * period).ceil() as usize).clamp(len, self.buffer.len());
+                let n = m.next_power_of_two();
+                let long = &self.buffer[self.buffer.len() - m..];
+                self.c.clear();
+                self.c.extend((0..n).map(|i| {
+                    if i >= m {
+                        return Complex::default();
+                    }
+                    let w = if m == len { self.hann[i] } else { 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / m as f64).cos() };
+                    Complex::new(long[i] * w, 0.0)
+                }));
+                self.planner.plan_fft_forward(n).process(&mut self.c);
                 let power = |k: usize| self.c[k].norm_sqr();
-                let top = self.n / 2 - 1;
+                let top = n / 2 - 1;
                 let total: f64 = (1..=top).map(power).sum();
                 // The period is good to about half a sample: at a short one
                 // (3.6 kHz at 22.05 kHz is 6 samples) that moves a harmonic
                 // by several bins. A harmonic past the top bin cannot be
                 // measured, so it is not counted as missing.
-                let period = tau as f64 + shift;
                 let share = |harmonic: f64| {
-                    let bin = harmonic * hz * self.n as f64 / self.rate;
+                    let bin = harmonic * hz * n as f64 / self.rate;
                     let reach = 1.0 + bin * 0.5 / period;
                     if bin + reach > top as f64 {
                         return None;
@@ -187,13 +214,13 @@ impl PitchTracker {
                 let fundamental = share(1.0).is_some_and(|s| s >= FUNDAMENTAL_SHARE);
                 let note = fundamental || (2..=7).filter_map(|h| share(f64::from(h))).all(|s| s >= HARMONIC_SHARE);
                 let peak = || {
-                    let bin = hz * self.n as f64 / self.rate;
+                    let bin = hz * n as f64 / self.rate;
                     let reach = 1.0 + bin * 0.5 / period;
                     let k = (((bin - reach).max(2.0) as usize)..=((bin + reach) as usize).min(top - 1)).max_by(|a, b| power(*a).total_cmp(&power(*b)))?;
                     let (l, c, r) = (power(k - 1).ln(), power(k).ln(), power(k + 1).ln());
                     let curve = l - 2.0 * c + r;
                     let shift = if curve.abs() > 1e-12 { (0.5 * (l - r) / curve).clamp(-0.5, 0.5) } else { 0.0 };
-                    Some((k as f64 + shift) * self.rate / self.n as f64)
+                    Some((k as f64 + shift) * self.rate / n as f64)
                 };
                 let hz = if fundamental && period < SHORT_PERIOD { peak().unwrap_or(hz) } else { hz };
                 self.frames.push(if note { Frame::Voiced(hz) } else { Frame::Chord });
@@ -366,15 +393,19 @@ mod tests {
         (0..44_100).map(|i| parts.iter().map(|p| p[i]).sum()).collect()
     }
 
+    fn saw(hz: f64, fundamental: f64) -> Vec<f32> {
+        saw_at(44_100, hz, fundamental)
+    }
+
     /// One second of a saw-like note: 8 harmonics falling as 1/k, the
     /// fundamental scaled by `fundamental`.
-    fn saw(hz: f64, fundamental: f64) -> Vec<f32> {
-        (0..44_100)
+    fn saw_at(rate: u32, hz: f64, fundamental: f64) -> Vec<f32> {
+        (0..rate)
             .map(|i| {
                 (1..=8)
                     .map(|k| {
                         let gain = if k == 1 { fundamental } else { 1.0 };
-                        (gain * 0.2 / k as f64 * (2.0 * std::f64::consts::PI * hz * k as f64 * i as f64 / 44_100.0).sin()) as f32
+                        (gain * 0.2 / k as f64 * (2.0 * std::f64::consts::PI * hz * k as f64 * f64::from(i) / f64::from(rate)).sin()) as f32
                     })
                     .sum()
             })
@@ -406,6 +437,16 @@ mod tests {
             assert_eq!(track(44_100, &chord(&notes), 1), Pitch::Unknown("polyphonic"), "sines {notes:?}");
             let saws = notes.iter().map(|hz| saw(*hz, 1.0)).reduce(|a, b| a.iter().zip(b).map(|(x, y)| x + y).collect()).unwrap();
             assert_eq!(track(44_100, &saws, 1), Pitch::Unknown("polyphonic"), "saws {notes:?}");
+        }
+        // Rooted on B1 to D2 the shared period is 31-37 Hz: its harmonics are
+        // that close, at every rate. D2 A2 D3, C2 G2 C3, B1 F#2 B2, and an
+        // open E shape on D2.
+        let low = [vec![73.42, 110.0, 146.83], vec![65.41, 98.0, 130.81], vec![61.74, 92.5, 123.47], vec![73.42, 110.0, 146.83, 185.0, 220.0, 293.66]];
+        for rate in [44_100, 48_000, 96_000] {
+            for notes in &low {
+                let saws = notes.iter().map(|hz| saw_at(rate, *hz, 1.0)).reduce(|a, b| a.iter().zip(b).map(|(x, y)| x + y).collect()).unwrap();
+                assert_eq!(track(rate, &saws, 1), Pitch::Unknown("polyphonic"), "{rate}: saws {notes:?}");
+            }
         }
     }
 
