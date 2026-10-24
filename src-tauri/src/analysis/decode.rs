@@ -709,7 +709,7 @@ mod tests {
 
     #[test]
     fn a_broken_header_box_does_not_panic() {
-        let empty_mdhd = bx(b"trak", &[elst(0, &[(4_410, 1_024)]), bx(b"mdia", &bx(b"mdhd", &[]))].concat());
+        let empty_mdhd = trak(b"soun", Some(elst(0, &[(4_410, 1_024)])), bx(b"mdhd", &[]));
         assert_eq!(moov_priming(&empty_mdhd, 22_050), None);
         // A media time the frame count cannot hold.
         let huge = trak(b"soun", Some(elst(1, &[(1, i64::MAX)])), mdhd(1, 1));
