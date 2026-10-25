@@ -319,8 +319,11 @@ All specced or named already. The order is fixed by the gate.
    from training consent, and retention/deletion part of the design. Review
    labels and corrected answers before any training. This evidence should
    decide whether to change the prompt, tools or model, or evaluate
-   post-training. Subscriptions follow measured pilot usage and use the same
-   account access checks; price and paid allowances remain undecided.
+   post-training. Paid plans are built behind `BILLING_ENABLED` (2026-10-25):
+   Starter $8 a month with $2 of model cost, Pro $20 with $8, a 7-day trial
+   capped at $1 with a card up front, and operator comp at Pro's allowance.
+   Stripe Tax calculates tax; Mixing Pal is the seller. Confirm the cost per
+   question from the pilot ledger before turning billing on.
 
    In-app problem reports go to hello@mixingpal.com, with the verified account
    email as Reply-To. Answers, failed questions and Settings each offer a report
