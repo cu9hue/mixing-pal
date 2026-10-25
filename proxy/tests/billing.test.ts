@@ -291,6 +291,14 @@ describe("public sign-up", () => {
     expect(otp).toBe("");
   });
 
+  test("an account that never subscribed cannot sign in again while its deletion is pending", async () => {
+    const user = await signedIn();
+    expect((await api("/v1/account", undefined, user.token, { method: "DELETE" })).status).toBe(202);
+    otp = "";
+    await api("/auth/email-otp/send-verification-otp", { email: "producer@example.com" });
+    expect(otp).toBe("");
+  });
+
   test("invites are retired", async () => {
     const user = await signedIn();
     expect((await api("/v1/invites/redeem", { code: "x".repeat(40) }, user.token)).status).toBe(410);

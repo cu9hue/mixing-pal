@@ -38,10 +38,13 @@ async function authRequest(request: Request, env: Env, path: string): Promise<Re
       const ip = request.headers.get("cf-connecting-ip") ?? "local";
       await rateLimit(env, `send-ip:${await privateHash(env.AUTH_SECRET, ip)}`, 10, 60 * 60_000);
     }
-    // A deletion in progress holds the email until maintain removes the user.
+    // A deletion in progress holds the email until maintain removes the user. An account that
+    // never subscribed has no members row, so its open deletion job holds the email instead.
     const eligible = billing
-      ? !await env.DB.prepare(`SELECT 1 FROM "user" u JOIN members m ON u.id = m.id
-          WHERE lower(u.email) = ? AND m.deleted_at IS NOT NULL LIMIT 1`).bind(input.email).first()
+      ? !await env.DB.prepare(`SELECT 1 FROM "user" u WHERE lower(u.email) = ?
+          AND (EXISTS (SELECT 1 FROM members m WHERE m.id = u.id AND m.deleted_at IS NOT NULL)
+            OR EXISTS (SELECT 1 FROM deletion_jobs d WHERE d.member_id = u.id AND d.completed_at IS NULL)) LIMIT 1`)
+          .bind(input.email).first()
       : await env.DB.prepare(`SELECT 1 FROM invites WHERE email = ? AND expires_at > ? AND redeemed_by IS NULL
           UNION SELECT 1 FROM "user" u JOIN members m ON u.id = m.id
           WHERE lower(u.email) = ? AND m.deleted_at IS NULL LIMIT 1`)
