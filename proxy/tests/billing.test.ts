@@ -314,6 +314,7 @@ describe("billing routes", () => {
     routes["POST /customers"] = () => ({ id: "cus_1" });
     routes["POST /checkout/sessions"] = () => ({ id: "cs_1", url: "https://checkout.stripe.com/c/pay/cs_1" });
     routes["POST /billing_portal/sessions"] = () => ({ url: "https://billing.stripe.com/p/session/1" });
+    routes["GET /subscriptions"] = () => ({ data: [] });
   });
   const posted = (path: string) => calls.filter((c) => c.method === "POST" && c.path === path);
 
@@ -358,6 +359,22 @@ describe("billing routes", () => {
     await applySubscription(on, subscription({ status: "active", member: user.id }));
     expect(await (await api("/v1/billing/checkout", { plan: "pro" }, user.token)).json()).toEqual({ url: "https://billing.stripe.com/p/session/1" });
     expect(posted("/checkout/sessions")).toHaveLength(0);
+  });
+
+  test("a subscription Stripe has but our webhook hasn't delivered still gets the Portal", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: user.id })] });
+    expect(await (await api("/v1/billing/checkout", { plan: "pro" }, user.token)).json()).toEqual({ url: "https://billing.stripe.com/p/session/1" });
+    expect(posted("/checkout/sessions")).toHaveLength(0);
+  });
+
+  test("a refused pilot member gets no Stripe customer", async () => {
+    const pilot = await signedIn();
+    await env.DB.prepare("INSERT INTO members(id, period_end, created_at) VALUES (?, ?, 0)").bind(pilot.id, Date.now() + DAY).run();
+    expect((await api("/v1/billing/checkout", { plan: "starter" }, pilot.token)).status).toBe(409);
+    expect(posted("/customers")).toHaveLength(0);
+    expect(await subRow(pilot.id)).toBeNull();
   });
 
   test("an active pilot member and a comped account cannot check out", async () => {

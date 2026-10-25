@@ -154,10 +154,15 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   const m = await member(env, memberId);
   if (m && (m.revoked || m.deleted_at)) throw new ApiError(403, "access_denied", "This account cannot subscribe.");
   if (m?.comp) throw new ApiError(409, "comp_active", "Your account already has free access.");
-  const row = await customerFor(env, memberId);
-  if (LIVE.has(row.status)) return portalUrl(env, row);
+  const existing = await subscriptionRow(env, memberId);
+  // Our cached status lags Stripe's webhook, so a second click would open a second Checkout. Stripe decides.
+  if (existing && (LIVE.has(existing.status) || (await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
+    { customer: existing.stripe_customer_id, status: "all", limit: 3 })).data.some((s) => LIVE.has(s.status)))) {
+    return portalUrl(env, existing);
+  }
   // A pilot period still running would mix its spending into the plan's allowance.
   if (m && m.period_end > now) throw new ApiError(409, "access_active", "Your current access hasn't ended yet.");
+  const row = existing ?? await customerFor(env, memberId);
   const trial = !m && row.trial_used !== 1;
   const session = await stripe<{ url: string }>(env, "POST", "/checkout/sessions", {
     mode: "subscription", customer: row.stripe_customer_id, client_reference_id: memberId,
