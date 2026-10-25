@@ -30,6 +30,9 @@ come from Wrangler login or CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN.
 
 secrets reads AUTH_SECRET (at least 32 random characters), RESEND_KEY,
 OPENROUTER_KEY and ADMIN_TOKEN. Keep independent values for staging/production.
+secrets also sends STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET when both are set.
+deploy and enable need MIXINGPAL_BILLING=on|off. On needs MIXINGPAL_STRIPE_PRICE_STARTER
+and MIXINGPAL_STRIPE_PRICE_PRO. Off restores invites; existing subscribers keep working.
 Configure the sending domain signin@mixingpal.com in Resend first. The auth
 secret must stay stable across deployments; rotating it revokes sessions and
 changes request fingerprints. Deploy never prints secret values.
@@ -63,15 +66,19 @@ with a debug desktop build. Public release builds always use api.mixingpal.com.
 Internal developer transport: npm run tauri -- dev --features direct-provider.
 `;
 
-export function configuration(base, stage, databaseId, enabled = false, reportRecovery = false) {
+export function configuration(base, stage, databaseId, enabled = false, reportRecovery = false, billing = { on: false, starter: "", pro: "" }) {
   if (!["staging", "production"].includes(stage)) throw new Error("Choose staging or production.");
   if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(databaseId ?? "")) throw new Error("Set MIXINGPAL_D1_ID to this stage's D1 UUID.");
   const host = stage === "production" ? "api.mixingpal.com" : "api-staging.mixingpal.com";
   const captureBucket = `mixing-pal-${stage}-capture`;
   const releaseBucket = `mixing-pal-${stage}-releases`;
   if (captureBucket === releaseBucket) throw new Error("Release and capture buckets must be distinct.");
+  if (billing.on && !(/^price_\w+$/.test(billing.starter) && /^price_\w+$/.test(billing.pro))) {
+    throw new Error("Billing on needs both Stripe price IDs (MIXINGPAL_STRIPE_PRICE_STARTER, MIXINGPAL_STRIPE_PRICE_PRO).");
+  }
   return { ...base, name: `mixing-pal-${stage}`, routes: [{ pattern: host, custom_domain: true }],
     vars: { ...base.vars, API_ORIGIN: `https://${host}`, INFERENCE_ENABLED: String(enabled), REPORT_RECOVERY: String(reportRecovery),
+      BILLING_ENABLED: String(billing.on), STRIPE_PRICE_STARTER: billing.starter, STRIPE_PRICE_PRO: billing.pro,
       DOWNLOADS_ORIGIN: stage === "production" ? "https://downloads.mixingpal.com" : "https://downloads-staging.mixingpal.com" },
     d1_databases: [{ binding: "DB", database_name: `mixing-pal-${stage}`, database_id: databaseId, migrations_dir: "migrations" }],
     r2_buckets: [{ binding: "CAPTURE", bucket_name: captureBucket }, { binding: "RELEASES", bucket_name: releaseBucket }] };
@@ -98,7 +105,13 @@ export async function run(args) {
     if (process.env[check] !== "yes") throw new Error(`Complete the ${stage} checks shown by help and set ${check}=yes before enable.`);
   }
   const base = JSON.parse(await readFile("wrangler.jsonc", "utf8"));
-  const config = configuration(base, stage, process.env.MIXINGPAL_D1_ID, command === "enable", command === "recovery");
+  // Every deploy rebuilds the vars, so billing is always stated, never inherited.
+  if (["deploy", "enable"].includes(command) && !["on", "off"].includes(process.env.MIXINGPAL_BILLING ?? "")) {
+    throw new Error("Set MIXINGPAL_BILLING=on or off for this deploy.");
+  }
+  const billing = { on: process.env.MIXINGPAL_BILLING === "on",
+    starter: process.env.MIXINGPAL_STRIPE_PRICE_STARTER ?? "", pro: process.env.MIXINGPAL_STRIPE_PRICE_PRO ?? "" };
+  const config = configuration(base, stage, process.env.MIXINGPAL_D1_ID, command === "enable", command === "recovery", billing);
   const file = `.deploy-${stage}.json`;
   await writeFile(file, JSON.stringify(config, null, 2), { mode: 0o600 });
   if (command === "configure") { console.log(file); return; }
@@ -107,7 +120,11 @@ export async function run(args) {
   if (command === "secrets") {
     const names = ["AUTH_SECRET", "RESEND_KEY", "OPENROUTER_KEY", "ADMIN_TOKEN"];
     if (names.some((name) => !process.env[name]) || process.env.AUTH_SECRET.length < 32) throw new Error("Set all four service secrets; AUTH_SECRET needs at least 32 characters.");
-    wrangler(["secret", "bulk", "--config", file], JSON.stringify(Object.fromEntries(names.map((name) => [name, process.env[name]]))));
+    const stripeNames = ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"];
+    const stripeSet = stripeNames.filter((name) => process.env[name]);
+    if (stripeSet.length === 1) throw new Error("Set both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET, or neither.");
+    const all = [...names, ...stripeSet];
+    wrangler(["secret", "bulk", "--config", file], JSON.stringify(Object.fromEntries(all.map((name) => [name, process.env[name]]))));
     return;
   }
   if (command === "rollback") {

@@ -117,7 +117,7 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
       await rm(join(dir, "calls.jsonl"), { force: true });
       const result = spawnSync(process.execPath, [script, "enable", stage], { cwd: dir, encoding: "utf8", env: {
         PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
-        MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: preflight, MIXINGPAL_RELEASE_VERIFIED: release,
+        MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: preflight, MIXINGPAL_RELEASE_VERIFIED: release, MIXINGPAL_BILLING: "off",
       } });
       assert.equal(result.status, allowed ? 0 : 1, `${stage}: ${result.stderr}`);
       if (!allowed) { await assert.rejects(access(join(dir, "calls.jsonl"))); continue; }
@@ -151,7 +151,7 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
     git("init", "-q"); git("commit", "-q", "--allow-empty", "-m", "release");
     const head = git("rev-parse", "HEAD").stdout.trim();
     const deployed = spawnSync(process.execPath, [script, "deploy", "staging"], { cwd: dir, encoding: "utf8", env: {
-      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000", MIXINGPAL_BILLING: "off",
     } });
     assert.equal(deployed.status, 0, deployed.stderr);
     assert.match(head, /^[0-9a-f]{40}$/);
@@ -221,4 +221,13 @@ test("comp, uncomp and billing-sync send their operator actions", async () => {
   await run(["billing-sync", "member-1"], connection, () => {});
   assert.deepEqual(sent, [{ action: "comp", email: "partner@example.com" }, { action: "uncomp", member_id: "member-1" },
     { action: "billing_sync", member_id: "member-1" }]);
+});
+
+test("billing vars come from an explicit choice, and on needs both price IDs", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const off = configuration({ vars: {} }, "staging", id);
+  assert.equal(off.vars.BILLING_ENABLED, "false");
+  const live = configuration({ vars: {} }, "production", id, true, false, { on: true, starter: "price_1Starter", pro: "price_1Pro" });
+  assert.deepEqual([live.vars.BILLING_ENABLED, live.vars.STRIPE_PRICE_STARTER, live.vars.STRIPE_PRICE_PRO], ["true", "price_1Starter", "price_1Pro"]);
+  assert.throws(() => configuration({ vars: {} }, "staging", id, false, false, { on: true, starter: "", pro: "price_1Pro" }), /price IDs/);
 });
