@@ -61,6 +61,7 @@ it("warns when a payment failed, and opens the Portal from Manage subscription",
   vi.mocked(invoke).mockResolvedValue({ opened: true });
   render(<AccountPanel account={signedIn({ subscription_status: "past_due", plan: "starter", manage: true, remaining_micro_usd: 1_000_000, period_end: Date.now() + 86_400_000 })} />);
   expect(screen.getByRole("alert").textContent).toContain("Your payment didn't go through.");
+  expect(screen.getByRole("alert").textContent).toContain("Update your card to keep access past ");
   fireEvent.click(screen.getByRole("button", { name: "Manage subscription" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("account_billing", { action: "portal" }));
 });
@@ -71,4 +72,21 @@ it("names the plan, a trial, and free access", () => {
   cleanup();
   render(<AccountPanel account={signedIn({ comp: true, remaining_micro_usd: 8_000_000 })} />);
   expect(screen.getByText(/Free access/)).toBeTruthy();
+});
+
+it("a comped account that ran out shows when it resets, with no button", () => {
+  render(<AccountPanel account={signedIn({ comp: true, can_ask: false, remaining_micro_usd: 100, period_end: Date.UTC(2026, 10, 20) })} />);
+  expect(screen.getByText(/It resets on/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Upgrade to Pro" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Start my plan now" })).toBeNull();
+  expect(document.querySelector(".account__summary")?.textContent).not.toContain("until");
+});
+
+it("the browser note clears once the account changes", async () => {
+  vi.mocked(invoke).mockResolvedValue({ opened: true });
+  const { rerender } = render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} />);
+  fireEvent.click(screen.getAllByRole("button", { name: "Start 7-day free trial" })[0]);
+  expect(await screen.findByText(/Finish in your browser/)).toBeTruthy();
+  rerender(<AccountPanel account={signedIn({ subscription_status: "trialing", plan: "starter", remaining_micro_usd: 1_000_000 })} />);
+  await waitFor(() => expect(screen.queryByText(/Finish in your browser/)).toBeNull());
 });

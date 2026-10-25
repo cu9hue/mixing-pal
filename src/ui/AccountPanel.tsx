@@ -15,6 +15,7 @@ function planLabel(view: AccountView): string {
 }
 
 function dateWord(view: AccountView): string {
+  if (view.comp) return "resets";
   if (!view.plan) return "until";
   if (view.subscription_status === "trialing") return "trial ends";
   return view.cancel_at_period_end ? "ends" : "resets";
@@ -41,6 +42,8 @@ export function AccountPanel({ account }: { account: AccountState }) {
   const [sharedDeleted, setSharedDeleted] = useState(false);
   const [opened, setOpened] = useState(false);
   const view = account.view;
+  // The note is about a trip to the browser; once the account changes, it is stale.
+  useEffect(() => { setOpened(false); }, [view?.access, view?.subscription_status]);
   const problem = error ?? account.error;
   const signingIn = view === null || view.access === "signed_out" || view.access === "invitation_required";
 
@@ -125,7 +128,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
             ? "We’re checking the last request’s usage before you can ask again."
             : <>
               The remaining allowance cannot cover another request.
-              {view.plan && view.subscription_status === "active" && view.period_end && ` It resets on ${new Date(view.period_end).toLocaleDateString()}.`}
+              {(view.comp || (view.plan && view.subscription_status === "active")) && view.period_end && ` It resets on ${new Date(view.period_end).toLocaleDateString()}.`}
               {view.subscription_status === "trialing" && <div className="account__actions">
                 <button className="account__primary" disabled={busy || operations.install} onClick={() => billing("start-now")}>Start my plan now</button>
                 <span>Ends your trial and charges your card today.</span>
@@ -136,7 +139,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
               </div>}
             </>}</div>}
           {view.subscription_status === "past_due" && <p role="alert">Your payment didn't go through. Update your card to keep access
-            {view.period_end && ` after ${new Date(view.period_end).toLocaleDateString()}`}.</p>}
+            {view.period_end && ` past ${new Date(view.period_end).toLocaleDateString()}`}.</p>}
         </div>
       </>}
       {view && ["active", "expired", "revoked"].includes(view.access) && <>
