@@ -164,7 +164,7 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
     ]);
     await rm(join(dir, "calls.jsonl"), { force: true });
     const recovery = spawnSync(process.execPath, [script, "recovery", "staging"], { cwd: dir, encoding: "utf8", env: {
-      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000", MIXINGPAL_BILLING: "off",
     } });
     assert.equal(recovery.status, 0, recovery.stderr);
     assert.deepEqual((await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse),
@@ -230,4 +230,21 @@ test("billing vars come from an explicit choice, and on needs both price IDs", (
   const live = configuration({ vars: {} }, "production", id, true, false, { on: true, starter: "price_1Starter", pro: "price_1Pro" });
   assert.deepEqual([live.vars.BILLING_ENABLED, live.vars.STRIPE_PRICE_STARTER, live.vars.STRIPE_PRICE_PRO], ["true", "price_1Starter", "price_1Pro"]);
   assert.throws(() => configuration({ vars: {} }, "staging", id, false, false, { on: true, starter: "", pro: "price_1Pro" }), /price IDs/);
+});
+
+test("deploy without MIXINGPAL_BILLING stops before any Wrangler call", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  try {
+    await writeFile(join(dir, "wrangler.jsonc"), JSON.stringify({ vars: {} }));
+    await mkdir(join(dir, "node_modules/wrangler/bin"), { recursive: true });
+    await writeFile(join(dir, "node_modules/wrangler/bin/wrangler.js"),
+      `require("node:fs").appendFileSync("calls.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");`);
+    const result = spawnSync(process.execPath, [script, "deploy", "staging"], { cwd: dir, encoding: "utf8", env: {
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+    } });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Set MIXINGPAL_BILLING=on or off/);
+    await assert.rejects(access(join(dir, "calls.jsonl")));
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

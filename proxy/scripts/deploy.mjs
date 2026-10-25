@@ -31,7 +31,7 @@ come from Wrangler login or CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN.
 secrets reads AUTH_SECRET (at least 32 random characters), RESEND_KEY,
 OPENROUTER_KEY and ADMIN_TOKEN. Keep independent values for staging/production.
 secrets also sends STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET when both are set.
-deploy and enable need MIXINGPAL_BILLING=on|off. On needs MIXINGPAL_STRIPE_PRICE_STARTER
+deploy, enable and recovery need MIXINGPAL_BILLING=on|off. On needs MIXINGPAL_STRIPE_PRICE_STARTER
 and MIXINGPAL_STRIPE_PRICE_PRO. Off restores invites; existing subscribers keep working.
 Configure the sending domain signin@mixingpal.com in Resend first. The auth
 secret must stay stable across deployments; rotating it revokes sessions and
@@ -106,7 +106,7 @@ export async function run(args) {
   }
   const base = JSON.parse(await readFile("wrangler.jsonc", "utf8"));
   // Every deploy rebuilds the vars, so billing is always stated, never inherited.
-  if (["deploy", "enable"].includes(command) && !["on", "off"].includes(process.env.MIXINGPAL_BILLING ?? "")) {
+  if (["deploy", "enable", "recovery"].includes(command) && !["on", "off"].includes(process.env.MIXINGPAL_BILLING ?? "")) {
     throw new Error("Set MIXINGPAL_BILLING=on or off for this deploy.");
   }
   const billing = { on: process.env.MIXINGPAL_BILLING === "on",
