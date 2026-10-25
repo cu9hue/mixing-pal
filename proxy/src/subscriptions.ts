@@ -55,7 +55,9 @@ export async function applySubscription(env: Env, sub: StripeSubscription, now =
   }
   if (row.stripe_subscription_id && row.stripe_subscription_id !== sub.id) {
     if (!LIVE.has(sub.status)) return;
-    if (LIVE.has(row.status)) {
+    // Read the stored one fresh: our cached status can lag a deletion webhook that has not arrived.
+    const stored = await stripe<StripeSubscription>(env, "GET", `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`);
+    if (LIVE.has(stored.status)) {
       // Two checkouts completed. Keep the first; refunding the second is the operator's call.
       await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
       console.error(JSON.stringify({ event: "duplicate_subscription", member_id: memberId, subscription: sub.id }));

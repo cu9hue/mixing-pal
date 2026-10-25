@@ -138,11 +138,22 @@ describe("applying Stripe state", () => {
   test("a second live subscription is canceled at Stripe and changes nothing here", async () => {
     await customer();
     await applySubscription(on, subscription({ status: "active", member: "m1" }), now);
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1" });
     routes["DELETE /subscriptions/sub_2"] = () => subscription({ id: "sub_2", status: "canceled", member: "m1" });
     await applySubscription(on, subscription({ id: "sub_2", status: "trialing", member: "m1", price: "price_pro", trial_end: t + 60 }), now);
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /subscriptions/sub_2"]);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /subscriptions/sub_1", "DELETE /subscriptions/sub_2"]);
     expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_1", plan: "starter" });
     expect(await memberRow()).toMatchObject({ allowance: 2_000_000 });
+  });
+
+  test("a new subscription replaces one Stripe already canceled, even before its webhook arrives", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1" }), now);
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+    await applySubscription(on, subscription({ id: "sub_2", status: "active", member: "m1", price: "price_pro" }), now);
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_2", plan: "pro" });
+    expect(await memberRow()).toMatchObject({ allowance: 8_000_000 });
   });
 
   test("an old subscription ending does not touch the current one", async () => {
