@@ -384,6 +384,16 @@ describe("billing routes", () => {
     expect(posted("/checkout/sessions")).toHaveLength(2);
   });
 
+  test("opening Checkout keeps a sign-up older than 90 days through the cleanup", async () => {
+    const user = await signedIn();
+    await env.DB.prepare('UPDATE "user" SET createdAt = ? WHERE id = ?').bind(new Date(Date.now() - 91 * DAY).toISOString(), user.id).run();
+    await customer(user.id);
+    expect((await api("/v1/billing/checkout", { plan: "starter" }, user.token)).status).toBe(200);
+    await maintain(on);
+    expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_1" });
+    expect(await env.DB.prepare('SELECT id FROM "user" WHERE id = ?').bind(user.id).first()).toEqual({ id: user.id });
+  });
+
   test("a used trial and a lapsed pilot member get no trial", async () => {
     const user = await signedIn();
     await customer(user.id);

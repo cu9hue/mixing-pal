@@ -173,6 +173,8 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   // A pilot period still running would mix its spending into the plan's allowance.
   if (m && m.period_end > now) throw new ApiError(409, "access_active", "Your current access hasn't ended yet.");
   const row = existing ?? await customerFor(env, memberId);
+  // The 90-day cleanup removes an untouched sign-up; one in Checkout now must keep its customer.
+  if (existing) await env.DB.prepare("UPDATE subscriptions SET updated_at = ? WHERE member_id = ?").bind(now, memberId).run();
   const trial = !m && row.trial_used !== 1;
   const session = await stripe<{ url: string }>(env, "POST", "/checkout/sessions", {
     mode: "subscription", customer: row.stripe_customer_id, client_reference_id: memberId,
