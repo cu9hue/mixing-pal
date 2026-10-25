@@ -31,8 +31,9 @@ come from Wrangler login or CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN.
 secrets reads AUTH_SECRET (at least 32 random characters), RESEND_KEY,
 OPENROUTER_KEY and ADMIN_TOKEN. Keep independent values for staging/production.
 secrets also sends STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET when both are set.
-deploy, enable and recovery need MIXINGPAL_BILLING=on|off. On needs MIXINGPAL_STRIPE_PRICE_STARTER
-and MIXINGPAL_STRIPE_PRICE_PRO. Off restores invites; existing subscribers keep working.
+deploy, enable and recovery need MIXINGPAL_BILLING=on|off. Every deploy sends the stage's Stripe
+price IDs from billing-prices.json; on needs both. Commit the IDs there before turning billing on.
+Off restores invites; existing subscribers keep working.
 Configure the sending domain signin@mixingpal.com in Resend first. The auth
 secret must stay stable across deployments; rotating it revokes sessions and
 changes request fingerprints. Deploy never prints secret values.
@@ -66,19 +67,20 @@ with a debug desktop build. Public release builds always use api.mixingpal.com.
 Internal developer transport: npm run tauri -- dev --features direct-provider.
 `;
 
-export function configuration(base, stage, databaseId, enabled = false, reportRecovery = false, billing = { on: false, starter: "", pro: "" }) {
+export function configuration(base, stage, databaseId, enabled = false, reportRecovery = false, billingOn = false, prices = {}) {
   if (!["staging", "production"].includes(stage)) throw new Error("Choose staging or production.");
   if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(databaseId ?? "")) throw new Error("Set MIXINGPAL_D1_ID to this stage's D1 UUID.");
   const host = stage === "production" ? "api.mixingpal.com" : "api-staging.mixingpal.com";
   const captureBucket = `mixing-pal-${stage}-capture`;
   const releaseBucket = `mixing-pal-${stage}-releases`;
   if (captureBucket === releaseBucket) throw new Error("Release and capture buckets must be distinct.");
-  if (billing.on && !(/^price_\w+$/.test(billing.starter) && /^price_\w+$/.test(billing.pro))) {
-    throw new Error("Billing on needs both Stripe price IDs (MIXINGPAL_STRIPE_PRICE_STARTER, MIXINGPAL_STRIPE_PRICE_PRO).");
+  const { starter = "", pro = "" } = prices[stage] ?? {};
+  if (billingOn && !(/^price_\w+$/.test(starter) && /^price_\w+$/.test(pro))) {
+    throw new Error(`Billing on needs both Stripe price IDs for ${stage} in billing-prices.json.`);
   }
   return { ...base, name: `mixing-pal-${stage}`, routes: [{ pattern: host, custom_domain: true }],
     vars: { ...base.vars, API_ORIGIN: `https://${host}`, INFERENCE_ENABLED: String(enabled), REPORT_RECOVERY: String(reportRecovery),
-      BILLING_ENABLED: String(billing.on), STRIPE_PRICE_STARTER: billing.starter, STRIPE_PRICE_PRO: billing.pro,
+      BILLING_ENABLED: String(billingOn), STRIPE_PRICE_STARTER: starter, STRIPE_PRICE_PRO: pro,
       DOWNLOADS_ORIGIN: stage === "production" ? "https://downloads.mixingpal.com" : "https://downloads-staging.mixingpal.com" },
     d1_databases: [{ binding: "DB", database_name: `mixing-pal-${stage}`, database_id: databaseId, migrations_dir: "migrations" }],
     r2_buckets: [{ binding: "CAPTURE", bucket_name: captureBucket }, { binding: "RELEASES", bucket_name: releaseBucket }] };
@@ -109,9 +111,10 @@ export async function run(args) {
   if (["deploy", "enable", "recovery"].includes(command) && !["on", "off"].includes(process.env.MIXINGPAL_BILLING ?? "")) {
     throw new Error("Set MIXINGPAL_BILLING=on or off for this deploy.");
   }
-  const billing = { on: process.env.MIXINGPAL_BILLING === "on",
-    starter: process.env.MIXINGPAL_STRIPE_PRICE_STARTER ?? "", pro: process.env.MIXINGPAL_STRIPE_PRICE_PRO ?? "" };
-  const config = configuration(base, stage, process.env.MIXINGPAL_D1_ID, command === "enable", command === "recovery", billing);
+  // Committed, so a deploy can never blank the IDs that live subscriptions are matched by.
+  const prices = JSON.parse(await readFile(new URL("../billing-prices.json", import.meta.url), "utf8"));
+  const config = configuration(base, stage, process.env.MIXINGPAL_D1_ID, command === "enable", command === "recovery",
+    process.env.MIXINGPAL_BILLING === "on", prices);
   const file = `.deploy-${stage}.json`;
   await writeFile(file, JSON.stringify(config, null, 2), { mode: 0o600 });
   if (command === "configure") { console.log(file); return; }

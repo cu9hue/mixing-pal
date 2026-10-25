@@ -152,8 +152,13 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
     const head = git("rev-parse", "HEAD").stdout.trim();
     const deployed = spawnSync(process.execPath, [script, "deploy", "staging"], { cwd: dir, encoding: "utf8", env: {
       PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000", MIXINGPAL_BILLING: "off",
+      MIXINGPAL_STRIPE_PRICE_STARTER: "price_fromEnvironment", MIXINGPAL_STRIPE_PRICE_PRO: "price_fromEnvironment",
     } });
     assert.equal(deployed.status, 0, deployed.stderr);
+    // Price IDs come from the committed file, never from the environment.
+    const committed = JSON.parse(await readFile(fileURLToPath(new URL("../billing-prices.json", import.meta.url)), "utf8")).staging;
+    const shipped = JSON.parse(await readFile(join(dir, ".deploy-staging.json"), "utf8")).vars;
+    assert.deepEqual([shipped.STRIPE_PRICE_STARTER, shipped.STRIPE_PRICE_PRO], [committed.starter, committed.pro]);
     assert.match(head, /^[0-9a-f]{40}$/);
     assert.match(deployed.stdout, new RegExp(`^Deploying commit ${head}$`, "m"));
     assert.deepEqual((await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse), [
@@ -223,13 +228,20 @@ test("comp, uncomp and billing-sync send their operator actions", async () => {
     { action: "billing_sync", member_id: "member-1" }]);
 });
 
-test("billing vars come from an explicit choice, and on needs both price IDs", () => {
+test("billing vars come from an explicit choice and the stage's committed price IDs, and on needs both", () => {
   const id = "11111111-1111-4111-8111-111111111111";
+  const prices = { staging: { starter: "", pro: "price_1Pro" }, production: { starter: "price_1Starter", pro: "price_1Pro" } };
   const off = configuration({ vars: {} }, "staging", id);
   assert.equal(off.vars.BILLING_ENABLED, "false");
-  const live = configuration({ vars: {} }, "production", id, true, false, { on: true, starter: "price_1Starter", pro: "price_1Pro" });
+  const live = configuration({ vars: {} }, "production", id, true, false, true, prices);
   assert.deepEqual([live.vars.BILLING_ENABLED, live.vars.STRIPE_PRICE_STARTER, live.vars.STRIPE_PRICE_PRO], ["true", "price_1Starter", "price_1Pro"]);
-  assert.throws(() => configuration({ vars: {} }, "staging", id, false, false, { on: true, starter: "", pro: "price_1Pro" }), /price IDs/);
+  assert.throws(() => configuration({ vars: {} }, "staging", id, false, false, true, prices), /price IDs.*billing-prices\.json/);
+});
+
+test("an off deploy still carries the file's price IDs, so existing subscribers keep their plan", () => {
+  const prices = { staging: { starter: "", pro: "" }, production: { starter: "price_1Starter", pro: "price_1Pro" } };
+  const off = configuration({ vars: {} }, "production", "11111111-1111-4111-8111-111111111111", true, false, false, prices);
+  assert.deepEqual([off.vars.BILLING_ENABLED, off.vars.STRIPE_PRICE_STARTER, off.vars.STRIPE_PRICE_PRO], ["false", "price_1Starter", "price_1Pro"]);
 });
 
 test("deploy without MIXINGPAL_BILLING stops before any Wrangler call", async () => {

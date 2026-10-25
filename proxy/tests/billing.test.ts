@@ -163,10 +163,12 @@ describe("applying Stripe state", () => {
     expect(await subRow()).toMatchObject({ status: "none" });
   });
 
-  test("an unknown price writes nothing", async () => {
+  test("an unknown price on a live subscription fails so it is retried, and writes nothing", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", price: "price_other" }), now);
+    await expect(applySubscription(on, subscription({ status: "active", member: "m1", price: "price_other" }), now)).rejects.toThrow();
+    await applySubscription(on, subscription({ status: "canceled", member: "m1", price: "price_other" }), now);
     expect(await memberRow()).toBeNull();
+    expect(await subRow()).toMatchObject({ status: "none" });
   });
 
   test("a second live subscription is canceled at Stripe and changes nothing here", async () => {
@@ -246,6 +248,13 @@ describe("the Stripe webhook", () => {
     await customer();
     routes["GET /subscriptions/sub_1"] = () => new Response("down", { status: 500 });
     expect((await deliver({ id: "evt_5", type: "customer.subscription.updated", data: { object: { id: "sub_1" } } })).status).toBe(503);
+    expect(await memberRow()).toBeNull();
+  });
+
+  test("a live subscription with an unknown price fails the webhook so Stripe retries", async () => {
+    await customer();
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1", price: "price_other" });
+    expect((await deliver({ id: "evt_6", type: "customer.subscription.updated", data: { object: { id: "sub_1" } } })).status).not.toBe(200);
     expect(await memberRow()).toBeNull();
   });
 

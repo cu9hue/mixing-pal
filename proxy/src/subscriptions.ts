@@ -72,6 +72,8 @@ export async function applySubscription(env: Env, sub: StripeSubscription, now =
   const plan = item ? planFor(env, item.price.id) : null;
   if (!item || !plan) {
     console.error(JSON.stringify({ event: "subscription_unknown_price", subscription: sub.id }));
+    // A live one is paid for: fail, so the webhook and renewals retry once the price is configured.
+    if (LIVE.has(sub.status)) throw new Error("subscription_unknown_price");
     return;
   }
   const start = item.current_period_start * 1000;
