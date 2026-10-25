@@ -533,6 +533,19 @@ describe("comp and renewals", () => {
     expect((await memberRow("m2"))!.period_end).toBe((t + 86_400) * 1000);
   });
 
+  test("stuck subscriptions do not crowd out a newly late renewal", async () => {
+    const t = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 20; i++) {
+      await env.DB.prepare(`INSERT INTO subscriptions(member_id, stripe_customer_id, stripe_subscription_id, status, current_period_end, updated_at)
+        VALUES (?, ?, ?, 'active', ?, 0)`).bind(`s${i}`, `cus_s${i}`, `sub_s${i}`, (t - 10 * 86_400) * 1000).run();
+    }
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1", end: t - 7200 }));
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 });
+    await maintain(on);
+    expect((await memberRow())!.period_end).toBe((t + 30 * 86_400) * 1000);
+  });
+
   test("billing-sync applies Stripe's state now", async () => {
     await customer();
     await applySubscription(on, subscription({ status: "active", member: "m1" }));

@@ -241,7 +241,8 @@ export async function renewals(env: Env, now = Date.now()): Promise<void> {
     .bind(now + COMP_PERIOD, now).run();
   if (!env.STRIPE_SECRET_KEY) return;
   const due = await env.DB.prepare(`SELECT stripe_subscription_id AS id FROM subscriptions
-    WHERE status IN ('trialing', 'active', 'past_due') AND stripe_subscription_id IS NOT NULL AND current_period_end < ? LIMIT 20`)
+    WHERE status IN ('trialing', 'active', 'past_due') AND stripe_subscription_id IS NOT NULL AND current_period_end < ?
+    ORDER BY current_period_end DESC LIMIT 20`)
     .bind(now - 60 * 60_000).all<{ id: string }>();
   for (const { id } of due.results) {
     try { await syncSubscription(env, id); }
