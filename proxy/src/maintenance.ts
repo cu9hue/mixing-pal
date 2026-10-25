@@ -98,7 +98,7 @@ export async function maintain(env: Env): Promise<void> {
     }
     if (failed || objects.results.length < CAPTURE_DELETE_BATCH) break;
   }
-  const deletions = await env.DB.prepare("SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND requested_at < ? LIMIT 20")
+  const deletions = await env.DB.prepare("SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND requested_at < ? ORDER BY requested_at LIMIT 20")
     .bind(now - 10 * 60_000).all<{ member_id: string }>();
   for (const { member_id: id } of deletions.results) {
     if (!await cancelForDeletion(env, id)) continue;

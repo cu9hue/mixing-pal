@@ -67,7 +67,13 @@ describe("the Stripe client", () => {
   test("a Stripe outage or a refused call reads as billing_unavailable", async () => {
     routes["GET /subscriptions/sub_1"] = () => new Response("down", { status: 500 });
     await expect(stripe(live, "GET", "/subscriptions/sub_1")).rejects.toMatchObject({ status: 503, code: "billing_unavailable" });
-    await expect(stripe(live, "GET", "/subscriptions/missing")).rejects.toMatchObject({ status: 503, code: "billing_unavailable" });
+    routes["GET /subscriptions/sub_2"] = () => Response.json({ error: { type: "invalid_request_error", code: "parameter_unknown" } }, { status: 400 });
+    await expect(stripe(live, "GET", "/subscriptions/sub_2")).rejects.toMatchObject({ status: 503, code: "billing_unavailable" });
+  });
+
+  test("a record Stripe does not have reads as stripe_not_found", async () => {
+    routes["GET /subscriptions/sub_1"] = () => Response.json({ error: { type: "invalid_request_error", code: "resource_missing" } }, { status: 404 });
+    await expect(stripe(live, "GET", "/subscriptions/sub_1")).rejects.toMatchObject({ status: 404, code: "stripe_not_found" });
   });
 
   test("a declined card reads as card_declined", async () => {

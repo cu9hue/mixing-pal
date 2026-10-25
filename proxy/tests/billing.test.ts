@@ -643,6 +643,16 @@ describe("account deletion", () => {
     expect(await subRow()).not.toBeNull();
   });
 
+  test("a customer Stripe no longer has holds nothing to cancel, so the deletion completes", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await deleted("m1");
+    routes["GET /subscriptions"] = () => Response.json({ error: { type: "invalid_request_error", code: "resource_missing" } }, { status: 404 });
+    await maintain(on);
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+    expect(await subRow()).toBeNull();
+  });
+
   test("a subscription Stripe already canceled is not canceled again", async () => {
     await customer();
     await applySubscription(on, subscription({ status: "active", member: "m1" }));

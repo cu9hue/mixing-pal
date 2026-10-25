@@ -38,6 +38,8 @@ export async function stripe<T>(env: Env, method: "GET" | "POST" | "DELETE", pat
     const failure = await response.json<{ error?: { type?: string; code?: string } }>().catch(() => null);
     console.error(JSON.stringify({ event: "stripe_failed", resource, status: response.status, code: failure?.error?.code ?? null }));
     if (failure?.error?.type === "card_error") throw new ApiError(402, "card_declined", "Your card was declined. Update it in Manage subscription.");
+    // Permanent, unlike an outage: callers that can treat it as nothing there must be able to tell.
+    if (failure?.error?.code === "resource_missing") throw new ApiError(404, "stripe_not_found", "Billing record not found.");
     throw new ApiError(503, "billing_unavailable", UNAVAILABLE);
   }
   return response.json<T>();

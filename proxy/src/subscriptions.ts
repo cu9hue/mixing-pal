@@ -267,7 +267,11 @@ export async function cancelForDeletion(env: Env, memberId: string): Promise<boo
   try {
     // Ask Stripe, not the row: a Checkout or resubscribe whose webhook is late leaves the row stale.
     const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
-      { customer: row.stripe_customer_id, status: "all", limit: 10 });
+      { customer: row.stripe_customer_id, status: "all", limit: 10 }).catch((error) => {
+      // A customer Stripe no longer has holds nothing that can renew.
+      if (error instanceof ApiError && error.code === "stripe_not_found") return { data: [] };
+      throw error;
+    });
     for (const sub of listed.data) {
       if (LIVE.has(sub.status)) await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
     }
