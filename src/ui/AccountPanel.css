@@ -184,3 +184,9 @@
   margin-top: var(--space-2);
 }
 
+
+.plans__cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.plans__card { display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--border, rgba(127, 127, 127, 0.35)); border-radius: 8px; }
+.plans__card h3 { margin: 0; font-size: 1em; }
+.plans__price { font-weight: 600; }
+.plans__card button { margin-top: auto; }

@@ -37,9 +37,9 @@ describe("a signed-out card", () => {
 
     expect(html).toContain("<h2 id=");
     expect(html).toContain(">A mentor for the track you&#x27;re writing.</h2>");
-    expect(html).toContain("Sign in with the email your invite came to.");
-    expect(html).toContain('placeholder="Enter the email from your invitation"');
-    expect(html).not.toContain("Use the email on your invitation.");
+    expect(html).toContain("Sign in with your email.");
+    expect(html).toContain('placeholder="Enter your email"');
+    expect(html).not.toContain("Enter the email from your invitation");
     expect(html).toContain(">Continue</button>");
     expect(html).not.toContain("Mixing Pal account");
     expect(html).not.toContain("How your data is handled");

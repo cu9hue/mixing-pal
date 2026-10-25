@@ -51,7 +51,7 @@ describe("setup", () => {
 
   it("uses the new copy on every screen it changed", () => {
     expect(render("account", { access: "signed_out" })).toContain("A mentor for the track you&#x27;re writing.");
-    expect(render("account", { access: "signed_out" })).toContain("Sign in with the email your invite came to.");
+    expect(render("account", { access: "signed_out" })).toContain("Sign in with your email.");
     expect(render("account", { access: "invitation_required" })).toContain("Enter the invite code from your email.");
     expect(render("sharing")).toContain("Help make my advice better?");
     expect(render("install")).toContain("Add Mixing Pal to Live.");
