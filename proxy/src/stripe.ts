@@ -1,4 +1,4 @@
-import { ApiError, Env } from "./env";
+import { ApiError, Env, privateHash } from "./env";
 
 // Field paths in subscriptions.ts are this version's: the period sits on
 // subscription items, and an invoice names its subscription under parent.
@@ -53,9 +53,7 @@ export async function verifySignature(secret: string, header: string | null, bod
   const t = Number(pairs.find(([k]) => k === "t")?.[1]);
   const signatures = pairs.filter(([k]) => k === "v1").map(([, v]) => v);
   if (!Number.isFinite(t) || !signatures.length || Math.abs(now / 1000 - t) > TOLERANCE_S) return false;
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${t}.${body}`)));
-  const expected = [...mac].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const expected = await privateHash(secret, `${t}.${body}`);
   return signatures.some((signature) => {
     if (signature.length !== expected.length) return false;
     let difference = 0;

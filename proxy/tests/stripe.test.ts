@@ -40,9 +40,11 @@ describe("webhook signatures", () => {
   });
 
   test("any one of two v1 signatures passes, as during a secret roll", async () => {
-    const old = (await sign(body, "whsec_old")).split(",")[1];
-    expect(await verifySignature("whsec_test", `${await sign(body)},${old}`, body)).toBe(true);
-    expect(await verifySignature("whsec_old", `${await sign(body)},${old}`, body)).toBe(true);
+    const t = Math.floor(Date.now() / 1000);
+    const old = (await sign(body, "whsec_old", t)).split(",")[1];
+    const current = await sign(body, "whsec_test", t);
+    expect(await verifySignature("whsec_test", `${current},${old}`, body)).toBe(true);
+    expect(await verifySignature("whsec_old", `${current},${old}`, body)).toBe(true);
   });
 
   test("a v0 signature is ignored, and a missing header fails", async () => {
