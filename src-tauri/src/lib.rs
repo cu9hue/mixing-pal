@@ -859,6 +859,30 @@ async fn account_redeem(code: String, state: tauri::State<'_, Arc<proxy::Proxy>>
     state.redeem(code).await
 }
 
+/// Only Stripe's own Checkout and Portal pages open from a billing reply.
+fn billing_url(value: &serde_json::Value) -> Result<String, proxy::ProxyError> {
+    let unreadable = || proxy::ProxyError::new("invalid_response", "The billing link is not a Stripe page.");
+    let url = reqwest::Url::parse(value["url"].as_str().unwrap_or_default()).map_err(|_| unreadable())?;
+    if url.scheme() != "https" || !matches!(url.host_str(), Some("checkout.stripe.com" | "billing.stripe.com")) {
+        return Err(unreadable());
+    }
+    Ok(url.into())
+}
+
+#[tauri::command]
+async fn account_billing(action: String, plan: Option<String>, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<serde_json::Value, proxy::ProxyError> {
+    match action.as_str() {
+        "checkout" | "portal" => {
+            let url = billing_url(&state.billing(&action, plan.as_deref()).await?)?;
+            std::process::Command::new("/usr/bin/open").arg(&url).status()
+                .map_err(|_| proxy::ProxyError::new("open_failed", "The browser could not be opened."))?;
+            Ok(serde_json::json!({ "opened": true }))
+        }
+        "start-now" | "upgrade" => state.billing(&action, None).await,
+        _ => Err(proxy::ProxyError::new("invalid_request", "Unknown billing action.")),
+    }
+}
+
 #[tauri::command]
 async fn account_sign_out(state: tauri::State<'_, Arc<proxy::Proxy>>, trace_state: tauri::State<'_, Arc<Mutex<Trace>>>) -> Result<(), proxy::ProxyError> {
     state.sign_out().await?;
@@ -1019,6 +1043,7 @@ pub fn run() {
             account_send_code,
             account_sign_in,
             account_redeem,
+            account_billing,
             account_sign_out,
             account_consent,
             account_delete,
@@ -2780,5 +2805,16 @@ mod tests {
         let stored = state.settings.lock().unwrap();
         assert_eq!(stored.api_key, "sk-keep", "an empty/whitespace key must keep the stored key");
         assert_eq!(stored.model, "model/two", "the model must still change");
+    }
+
+    #[test]
+    fn only_stripe_pages_open_from_a_billing_reply() {
+        assert!(billing_url(&serde_json::json!({ "url": "https://checkout.stripe.com/c/pay/cs_test_1" })).is_ok());
+        assert!(billing_url(&serde_json::json!({ "url": "https://billing.stripe.com/p/session/test_1" })).is_ok());
+        for bad in ["http://checkout.stripe.com/c/pay/x", "https://checkout.stripe.com.evil.example/x",
+            "https://evil.example/", "file:///etc/passwd", ""] {
+            assert!(billing_url(&serde_json::json!({ "url": bad })).is_err(), "{bad}");
+        }
+        assert!(billing_url(&serde_json::json!({})).is_err());
     }
 }

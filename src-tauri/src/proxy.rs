@@ -167,7 +167,8 @@ impl Proxy {
     }
 
     async fn request(&self, method: Method, path: &str, body: Option<Value>, session: Option<&Session>) -> Result<(Value, Option<String>), ProxyError> {
-        let mut builder = self.client.request(method, format!("{}{path}", self.origin));
+        // The proxy shows plan choices only to apps that name a version; older ones read "expired".
+        let mut builder = self.client.request(method, format!("{}{path}", self.origin)).header("Mixing-Pal-Version", env!("CARGO_PKG_VERSION"));
         if !path.ends_with("/completions") { builder = builder.timeout(Duration::from_secs(15)); }
         if let Some(s) = session { builder = builder.bearer_auth(&s.token); }
         if let Some(value) = body { builder = builder.json(&value); }
@@ -248,6 +249,12 @@ impl Proxy {
     pub async fn redeem(&self, code: String) -> Result<Value, ProxyError> {
         let session = self.required_session()?;
         Ok(self.request(Method::POST, "/v1/invites/redeem", Some(json!({ "code": code })), Some(&session)).await?.0)
+    }
+
+    pub async fn billing(&self, action: &str, plan: Option<&str>) -> Result<Value, ProxyError> {
+        let session = self.required_session()?;
+        let body = plan.map_or_else(|| json!({}), |plan| json!({ "plan": plan }));
+        Ok(self.request(Method::POST, &format!("/v1/billing/{action}"), Some(body), Some(&session)).await?.0)
     }
 
     pub async fn sign_out(&self) -> Result<(), ProxyError> {
@@ -946,5 +953,27 @@ mod tests {
         assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
         proxy.flush().await.unwrap();
         assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn every_request_names_the_app_version() {
+        let fixture = Fixture::new().await;
+        Mock::given(method("GET")).and(path("/v1/account"))
+            .and(wiremock::matchers::header("mixing-pal-version", env!("CARGO_PKG_VERSION")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "access": "plan_required", "capture": false })))
+            .mount(&fixture.server).await;
+        assert_eq!(fixture.proxy().account().await.unwrap()["access"], "plan_required");
+    }
+
+    #[tokio::test]
+    async fn billing_posts_the_plan_with_the_session() {
+        let fixture = Fixture::new().await;
+        Mock::given(method("POST")).and(path("/v1/billing/checkout"))
+            .and(wiremock::matchers::header("authorization", "Bearer private-session"))
+            .and(wiremock::matchers::body_json(json!({ "plan": "pro" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "url": "https://checkout.stripe.com/c/pay/cs_1" })))
+            .mount(&fixture.server).await;
+        let reply = fixture.proxy().billing("checkout", Some("pro")).await.unwrap();
+        assert_eq!(reply["url"], "https://checkout.stripe.com/c/pay/cs_1");
     }
 }
