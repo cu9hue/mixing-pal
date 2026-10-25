@@ -38,6 +38,7 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
   ]).parse(input);
   const now = Date.now();
   if (data.action === "invite") {
+    if (env.BILLING_ENABLED === "true") throw new ApiError(409, "invites_retired", "Invitations have ended. Use comp for free access.");
     const code = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
     const codeHash = await hash(code);
     await env.DB.prepare("INSERT INTO invites(code_hash, email, expires_at) VALUES (?, ?, ?)")

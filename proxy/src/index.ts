@@ -32,10 +32,20 @@ async function authRequest(request: Request, env: Env, path: string): Promise<Re
     const raw = await readJson(request, 4096);
     const input = z.object({ email: z.email().transform((s) => s.toLowerCase()), otp: z.string().regex(/^\d{6}$/).optional() }).parse(raw);
     await rateLimit(env, `email:${await privateHash(env.AUTH_SECRET, input.email)}`, path.includes("send-verification") ? 3 : 10, 60_000);
-    const eligible = await env.DB.prepare(`SELECT 1 FROM invites WHERE email = ? AND expires_at > ? AND redeemed_by IS NULL
-      UNION SELECT 1 FROM "user" u JOIN members m ON u.id = m.id
-      WHERE lower(u.email) = ? AND m.deleted_at IS NULL LIMIT 1`)
-      .bind(input.email, Date.now(), input.email).first();
+    const billing = env.BILLING_ENABLED === "true";
+    if (billing && path.includes("send-verification")) {
+      // Anyone may sign up, so cap how many addresses one network can send codes to.
+      const ip = request.headers.get("cf-connecting-ip") ?? "local";
+      await rateLimit(env, `send-ip:${await privateHash(env.AUTH_SECRET, ip)}`, 10, 60 * 60_000);
+    }
+    // A deletion in progress holds the email until maintain removes the user.
+    const eligible = billing
+      ? !await env.DB.prepare(`SELECT 1 FROM "user" u JOIN members m ON u.id = m.id
+          WHERE lower(u.email) = ? AND m.deleted_at IS NOT NULL LIMIT 1`).bind(input.email).first()
+      : await env.DB.prepare(`SELECT 1 FROM invites WHERE email = ? AND expires_at > ? AND redeemed_by IS NULL
+          UNION SELECT 1 FROM "user" u JOIN members m ON u.id = m.id
+          WHERE lower(u.email) = ? AND m.deleted_at IS NULL LIMIT 1`)
+        .bind(input.email, Date.now(), input.email).first();
     if (!eligible) {
       if (path.includes("send-verification")) return json({ success: true });
       throw new ApiError(401, "sign_in_failed", "The code is invalid or expired. Check your invitation email.");
@@ -94,6 +104,7 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   const memberId = await authenticate(request, env);
   await rateLimit(env, `member:${memberId}`, 120, 60_000);
   const route = `${request.method} ${url.pathname}`;
+  const modern = request.headers.has("Mixing-Pal-Version");
   if (route === "POST /v1/reports") {
     const saved = await submitReport(env, memberId, await readJson(request, MAX_REPORT_BODY));
     ctx.waitUntil(notifyReport(env, saved.id).catch(() => console.error(JSON.stringify({ event: "report_notification_failed", report_id: saved.id }))));
@@ -106,9 +117,9 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
     if (request.method === "GET") return json(await reportReceipt(env, memberId, id));
     if (request.method === "DELETE") { await deleteReport(env, memberId, id); return json({ deletion: "pending" }, 202); }
   }
-  if (route === "GET /v1/account") return account(env, memberId);
-  if (route === "POST /v1/invites/redeem") return redeem(env, memberId, await readJson(request, 4096));
-  if (route === "PUT /v1/consent") return consent(env, memberId, await readJson(request, 4096));
+  if (route === "GET /v1/account") return account(env, memberId, modern);
+  if (route === "POST /v1/invites/redeem") return redeem(env, memberId, await readJson(request, 4096), modern);
+  if (route === "PUT /v1/consent") return consent(env, memberId, await readJson(request, 4096), modern);
   if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx, receivedAt);
   if (route === "DELETE /v1/account") {
     await deleteAccount(env, memberId);

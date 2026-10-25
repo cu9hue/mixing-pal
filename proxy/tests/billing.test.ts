@@ -234,3 +234,69 @@ test("the return page tells her to go back to the app", async () => {
   expect(await done.text()).toContain("Go back to Mixing Pal.");
   expect(await (await api("/billing/done?state=canceled")).text()).toContain("Nothing was charged.");
 });
+
+describe("public sign-up", () => {
+  test("with billing on, an email with no invite signs in and is asked to pick a plan", async () => {
+    const user = await signedIn();
+    expect(await (await api("/v1/account", undefined, user.token)).json())
+      .toMatchObject({ access: "plan_required", trial_available: true, can_ask: false, plan: null, manage: false, comp: false });
+  });
+
+  test("an app without the version header sees expired, which it already shows", async () => {
+    const user = await signedIn();
+    expect((await (await api("/v1/account", undefined, user.token, { modern: false })).json()).access).toBe("expired");
+  });
+
+  test("with billing off, nothing changes for invites", async () => {
+    const off = { ...on, BILLING_ENABLED: "false" } as Env;
+    expect((await api("/auth/email-otp/send-verification-otp", { email: "stranger@example.com" }, undefined, { env: off })).status).toBe(200);
+    expect(otp).toBe("");
+  });
+
+  test("an ended pilot period asks for a plan, with no trial", async () => {
+    const user = await signedIn();
+    await env.DB.prepare("INSERT INTO members(id, period_end, created_at) VALUES (?, ?, 0)").bind(user.id, Date.now() - 1000).run();
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ access: "plan_required", trial_available: false });
+  });
+
+  test("a trial canceled in the Portal runs to its end and is not offered again", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    const t = Math.floor(Date.now() / 1000);
+    await applySubscription(on, subscription({ status: "trialing", member: user.id, trial_end: t + 86_400, cancel_at_period_end: true }));
+    expect(await (await api("/v1/account", undefined, user.token)).json())
+      .toMatchObject({ access: "active", subscription_status: "trialing", cancel_at_period_end: true, manage: true });
+    await applySubscription(on, subscription({ status: "canceled", member: user.id }));
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ access: "plan_required", trial_available: false });
+  });
+
+  test("an active subscription shows its plan", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro" }));
+    expect(await (await api("/v1/account", undefined, user.token)).json())
+      .toMatchObject({ access: "active", plan: "pro", subscription_status: "active", can_ask: true, remaining_micro_usd: 8_000_000 });
+  });
+
+  test("one IP gets ten code sends an hour", async () => {
+    for (let i = 0; i < 10; i++) expect((await api("/auth/email-otp/send-verification-otp", { email: `p${i}@example.com` })).status).toBe(200);
+    expect((await api("/auth/email-otp/send-verification-otp", { email: "p10@example.com" })).status).toBe(429);
+  });
+
+  test("a deleted account's email cannot sign in again until the deletion finishes", async () => {
+    const user = await signedIn();
+    await env.DB.prepare("INSERT INTO members(id, period_end, created_at, deleted_at) VALUES (?, 0, 0, 1)").bind(user.id).run();
+    otp = "";
+    await api("/auth/email-otp/send-verification-otp", { email: "producer@example.com" });
+    expect(otp).toBe("");
+  });
+
+  test("invites are retired", async () => {
+    const user = await signedIn();
+    expect((await api("/v1/invites/redeem", { code: "x".repeat(40) }, user.token)).status).toBe(410);
+    const invite = await worker.fetch(new Request("http://localhost:8787/operator", { method: "POST",
+      headers: { Authorization: "Bearer test-operator-key", "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "invite", email: "new@example.com" }) }), on as never, createExecutionContext());
+    expect(invite.status).toBe(409);
+  });
+});

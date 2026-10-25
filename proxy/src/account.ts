@@ -21,23 +21,28 @@ export async function member(env: Env, id: string): Promise<Member | null> {
   return env.DB.prepare("SELECT * FROM members WHERE id = ?").bind(id).first<Member>();
 }
 
-export async function account(env: Env, id: string): Promise<Response> {
+export async function account(env: Env, id: string, modern = false): Promise<Response> {
   // The app polls this; settling expired calls here unblocks her without waiting for cron.
   try { await settleExpired(env, Date.now()); }
   catch { console.error(JSON.stringify({ event: "account_cleanup_failed", member_id: id })); }
-  const [m, user, budget, latestConsent] = await Promise.all([
+  const [m, user, budget, latestConsent, sub] = await Promise.all([
     member(env, id),
     env.DB.prepare('SELECT email FROM "user" WHERE id = ?').bind(id).first<{ email: string }>(),
     env.DB.prepare("SELECT paused, recovery_required, allowance, spent, reserved FROM budget")
       .first<{ paused: number; recovery_required: number; allowance: number; spent: number; reserved: number }>(),
     env.DB.prepare("SELECT version, enabled FROM consents WHERE member_id = ? ORDER BY id DESC LIMIT 1")
       .bind(id).first<{ version: string; enabled: number }>(),
+    env.DB.prepare("SELECT plan, status, cancel_at_period_end, trial_used FROM subscriptions WHERE member_id = ?")
+      .bind(id).first<{ plan: string | null; status: string; cancel_at_period_end: number; trial_used: number }>(),
   ]);
   const budgetShort = !budget || budget.allowance - budget.spent - budget.reserved < RESERVATION;
   const servicePaused = env.INFERENCE_ENABLED !== "true" || !env.OPENROUTER_KEY || !budget || budgetShort
     || Boolean(budget.paused || budget.recovery_required || m?.recovery_required);
-  return json({ id, email: user?.email ?? "", access: !m ? "invitation_required"
-    : m.revoked || m.deleted_at ? "revoked" : m.period_end <= Date.now() ? "expired" : "active",
+  const billing = env.BILLING_ENABLED === "true";
+  // Older apps know only expired; they cannot show plans.
+  const ended = billing && modern ? "plan_required" : "expired";
+  return json({ id, email: user?.email ?? "", access: !m ? (billing ? ended : "invitation_required")
+    : m.revoked || m.deleted_at ? "revoked" : m.period_end <= Date.now() ? ended : "active",
     remaining_micro_usd: m ? Math.max(0, m.allowance - m.spent - m.reserved) : 0,
     can_ask: Boolean(!servicePaused && m && !m.revoked && !m.deleted_at && m.period_end > Date.now()
       && m.allowance - m.spent - m.reserved >= RESERVATION),
@@ -46,10 +51,14 @@ export async function account(env: Env, id: string): Promise<Response> {
     capture: m?.capture === 1 && latestConsent?.version === CAPTURE_VERSION && latestConsent.enabled === 1,
     sharing_chosen: latestConsent?.version === CAPTURE_VERSION,
     consent_epoch: m?.consent_epoch ?? 0,
+    plan: sub?.plan ?? null, subscription_status: sub && sub.status !== "none" ? sub.status : null,
+    cancel_at_period_end: sub?.cancel_at_period_end === 1, comp: m?.comp === 1,
+    trial_available: !m && sub?.trial_used !== 1, manage: Boolean(sub && sub.status !== "none"),
     consent_version: CAPTURE_VERSION, training: false });
 }
 
-export async function redeem(env: Env, id: string, input: unknown): Promise<Response> {
+export async function redeem(env: Env, id: string, input: unknown, modern = false): Promise<Response> {
+  if (env.BILLING_ENABLED === "true") throw new ApiError(410, "invites_retired", "Invitations have ended. Choose a plan to continue.");
   const { code } = z.object({ code: z.string().trim().min(20).max(128) }).parse(input);
   const codeHash = await hash(code);
   const now = Date.now();
@@ -72,10 +81,10 @@ export async function redeem(env: Env, id: string, input: unknown): Promise<Resp
       .bind(codeHash).first<{ redeemed_by: string | null }>();
     if (prior?.redeemed_by !== id) throw new ApiError(403, "invalid_invite", "This invitation is invalid, expired, or belongs to another email.");
   }
-  return account(env, id);
+  return account(env, id, modern);
 }
 
-export async function consent(env: Env, id: string, input: unknown): Promise<Response> {
+export async function consent(env: Env, id: string, input: unknown, modern = false): Promise<Response> {
   const { enabled, version } = z.object({ enabled: z.boolean(), version: z.literal(CAPTURE_VERSION) }).parse(input);
   const now = Date.now();
   const result = await env.DB.batch([
@@ -86,7 +95,7 @@ export async function consent(env: Env, id: string, input: unknown): Promise<Res
       .bind(version, Number(enabled), now, id, Number(enabled)),
   ]);
   if (!result[0].meta.changes) throw new ApiError(403, "access_denied", "An active pilot account is required.");
-  return account(env, id);
+  return account(env, id, modern);
 }
 
 export async function rateLimit(env: Env, key: string, limit: number, windowMs: number): Promise<void> {
