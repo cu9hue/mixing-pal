@@ -3,7 +3,7 @@ import { maintainReports } from "./reports";
 import { deleteTurn } from "./capture";
 import { DAY, Env, readJson } from "./env";
 import { settle, settleExpired } from "./ledger";
-import { renewals } from "./subscriptions";
+import { cancelForDeletion, renewals } from "./subscriptions";
 
 const CAPTURE_DELETE_BATCH = 100;
 const CAPTURE_DELETE_BATCHES = 3;
@@ -104,11 +104,13 @@ export async function maintain(env: Env): Promise<void> {
     const unfinished = await env.DB.prepare(`SELECT id FROM captures WHERE turn_id IN (SELECT id FROM turns WHERE member_id = ?)
       AND state != 'deleted' LIMIT 1`).bind(id).first();
     if (unfinished || await env.DB.prepare("SELECT 1 FROM support_reports WHERE user_id = ? AND state != 'deleted' LIMIT 1").bind(id).first()) continue;
+    if (!await cancelForDeletion(env, id)) continue;
     await env.DB.batch([
       env.DB.prepare(`DELETE FROM verification WHERE identifier IN (
         SELECT 'sign-in-otp-' || lower(email) FROM "user" WHERE id = ?
         UNION SELECT 'sign-in-otp-' || email FROM "user" WHERE id = ?)` ).bind(id, id),
       env.DB.prepare('DELETE FROM invites WHERE email = (SELECT lower(email) FROM "user" WHERE id = ?)').bind(id),
+      env.DB.prepare("DELETE FROM subscriptions WHERE member_id = ?").bind(id),
       env.DB.prepare('DELETE FROM "user" WHERE id = ?').bind(id),
       env.DB.prepare("DELETE FROM consents WHERE member_id = ?").bind(id),
       env.DB.prepare("UPDATE deletion_jobs SET completed_at = ? WHERE member_id = ?").bind(now, id),

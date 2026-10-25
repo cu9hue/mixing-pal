@@ -249,3 +249,19 @@ export async function renewals(env: Env, now = Date.now()): Promise<void> {
     catch { console.error(JSON.stringify({ event: "renewal_sync_failed", subscription: id })); }
   }
 }
+
+/** Cancels at once with no refund. False means Stripe was unreachable and the deletion should wait. */
+export async function cancelForDeletion(env: Env, memberId: string): Promise<boolean> {
+  const row = await subscriptionRow(env, memberId);
+  if (!row?.stripe_subscription_id || !LIVE.has(row.status)) return true;
+  const path = `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`;
+  try {
+    // Read first: the stored status can lag, and canceling a canceled subscription is an error.
+    const current = await stripe<StripeSubscription>(env, "GET", path);
+    if (LIVE.has(current.status)) await stripe(env, "DELETE", path);
+    return true;
+  } catch {
+    console.error(JSON.stringify({ event: "deletion_cancel_failed", member_id: memberId }));
+    return false;
+  }
+}

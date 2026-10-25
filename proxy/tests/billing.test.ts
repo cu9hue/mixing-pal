@@ -566,3 +566,54 @@ describe("comp and renewals", () => {
     expect(await subRow("u1")).toBeNull();
   });
 });
+
+describe("account deletion", () => {
+  async function deleted(memberId: string) {
+    await env.DB.prepare("INSERT INTO deletion_jobs(member_id, requested_at) VALUES (?, ?)").bind(memberId, Date.now() - 11 * 60_000).run();
+    await env.DB.prepare("UPDATE members SET revoked = 1, deleted_at = ? WHERE id = ?").bind(Date.now(), memberId).run();
+  }
+  const job = (id: string) => env.DB.prepare("SELECT completed_at FROM deletion_jobs WHERE member_id = ?").bind(id).first<{ completed_at: number | null }>();
+
+  test("the next sweep cancels a live subscription at Stripe, with no refund, and removes the row", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await deleted("m1");
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1" });
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+    await maintain(on);
+    const cancel = calls.find((c) => c.method === "DELETE")!;
+    expect(cancel.path).toBe("/subscriptions/sub_1");
+    expect(cancel.params.has("prorate")).toBe(false);
+    expect(await subRow()).toBeNull();
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+  });
+
+  test("when Stripe is down, the deletion waits and retries", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await deleted("m1");
+    routes["GET /subscriptions/sub_1"] = () => new Response("down", { status: 500 });
+    await maintain(on);
+    expect((await job("m1"))!.completed_at).toBeNull();
+    expect(await subRow()).not.toBeNull();
+  });
+
+  test("a subscription Stripe already canceled is not canceled again", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await deleted("m1");
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+    await maintain(on);
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+  });
+
+  test("events after deletion are acknowledged and change nothing", async () => {
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+    const body = JSON.stringify({ id: "evt_9", type: "customer.subscription.deleted", data: { object: { id: "sub_1" } } });
+    const response = await worker.fetch(new Request("http://localhost:8787/webhooks/stripe", { method: "POST",
+      headers: { "Stripe-Signature": await sign(body) }, body }), on as never, createExecutionContext());
+    expect(response.status).toBe(200);
+    expect(await memberRow()).toBeNull();
+  });
+});
