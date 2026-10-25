@@ -308,3 +308,135 @@ describe("public sign-up", () => {
     expect(invite.status).toBe(409);
   });
 });
+
+describe("billing routes", () => {
+  beforeEach(() => {
+    routes["POST /customers"] = () => ({ id: "cus_1" });
+    routes["POST /checkout/sessions"] = () => ({ id: "cs_1", url: "https://checkout.stripe.com/c/pay/cs_1" });
+    routes["POST /billing_portal/sessions"] = () => ({ url: "https://billing.stripe.com/p/session/1" });
+  });
+  const posted = (path: string) => calls.filter((c) => c.method === "POST" && c.path === path);
+
+  test("a new account's checkout creates one customer and a session with a 7-day trial", async () => {
+    const user = await signedIn();
+    const response = await api("/v1/billing/checkout", { plan: "pro" }, user.token);
+    expect(await response.json()).toEqual({ url: "https://checkout.stripe.com/c/pay/cs_1" });
+    expect(posted("/customers")[0].params.get("metadata[member_id]")).toBe(user.id);
+    expect(posted("/customers")[0].headers.get("Idempotency-Key")).toBe(`customer-${user.id}`);
+    const session = posted("/checkout/sessions")[0].params;
+    expect(Object.fromEntries(session)).toMatchObject({ mode: "subscription", customer: "cus_1", "line_items[0][price]": "price_pro",
+      "line_items[0][quantity]": "1", "subscription_data[metadata][member_id]": user.id, "subscription_data[trial_period_days]": "7",
+      "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel", payment_method_collection: "always",
+      "automatic_tax[enabled]": "true", "customer_update[address]": "auto", success_url: "http://localhost:8787/billing/done",
+      cancel_url: "http://localhost:8787/billing/done?state=canceled" });
+  });
+
+  test("a second checkout reuses the customer", async () => {
+    const user = await signedIn();
+    await api("/v1/billing/checkout", { plan: "starter" }, user.token);
+    await api("/v1/billing/checkout", { plan: "pro" }, user.token);
+    expect(posted("/customers")).toHaveLength(1);
+    expect(posted("/checkout/sessions")).toHaveLength(2);
+  });
+
+  test("a used trial and a lapsed pilot member get no trial", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    await env.DB.prepare("UPDATE subscriptions SET trial_used = 1 WHERE member_id = ?").bind(user.id).run();
+    await api("/v1/billing/checkout", { plan: "starter" }, user.token);
+    expect(posted("/checkout/sessions")[0].params.has("subscription_data[trial_period_days]")).toBe(false);
+    const pilot = await signedIn("pilot@example.com");
+    await env.DB.prepare("INSERT INTO members(id, period_end, created_at) VALUES (?, ?, 0)").bind(pilot.id, Date.now() - 1000).run();
+    routes["POST /customers"] = () => ({ id: "cus_2" });
+    await api("/v1/billing/checkout", { plan: "starter" }, pilot.token);
+    expect(posted("/checkout/sessions")[1].params.has("subscription_data[trial_period_days]")).toBe(false);
+  });
+
+  test("a live subscription gets the Portal instead of a second checkout", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    await applySubscription(on, subscription({ status: "active", member: user.id }));
+    expect(await (await api("/v1/billing/checkout", { plan: "pro" }, user.token)).json()).toEqual({ url: "https://billing.stripe.com/p/session/1" });
+    expect(posted("/checkout/sessions")).toHaveLength(0);
+  });
+
+  test("an active pilot member and a comped account cannot check out", async () => {
+    const pilot = await signedIn();
+    await env.DB.prepare("INSERT INTO members(id, period_end, created_at) VALUES (?, ?, 0)").bind(pilot.id, Date.now() + DAY).run();
+    expect((await api("/v1/billing/checkout", { plan: "starter" }, pilot.token)).status).toBe(409);
+    await env.DB.prepare("UPDATE members SET comp = 1 WHERE id = ?").bind(pilot.id).run();
+    expect(await (await api("/v1/billing/checkout", { plan: "starter" }, pilot.token)).json()).toMatchObject({ error: { code: "comp_active" } });
+  });
+
+  test("checkout is not found with billing off", async () => {
+    const user = await signedIn();
+    expect((await api("/v1/billing/checkout", { plan: "pro" }, user.token, { env: { ...on, BILLING_ENABLED: "false" } as Env })).status).toBe(404);
+  });
+
+  test("when Stripe is down, checkout says so and stores nothing", async () => {
+    const user = await signedIn();
+    routes["POST /customers"] = () => new Response("down", { status: 500 });
+    const response = await api("/v1/billing/checkout", { plan: "pro" }, user.token);
+    expect(response.status).toBe(503);
+    expect(await subRow(user.id)).toBeNull();
+  });
+
+  test("the Portal needs a subscription, and returns to the done page", async () => {
+    const user = await signedIn();
+    expect((await api("/v1/billing/portal", {}, user.token)).status).toBe(404);
+    await customer(user.id);
+    await applySubscription(on, subscription({ status: "active", member: user.id }));
+    expect((await api("/v1/billing/portal", {}, user.token)).status).toBe(200);
+    expect(posted("/billing_portal/sessions")[0].params.get("return_url")).toBe("http://localhost:8787/billing/done?state=portal");
+  });
+
+  test("start-now ends the trial at Stripe and gives the tier's allowance at once", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    const t = Math.floor(Date.now() / 1000);
+    await applySubscription(on, subscription({ status: "trialing", member: user.id, price: "price_pro", trial_end: t + 86_400 }));
+    routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, price: "price_pro", start: t, end: t + 30 * 86_400 });
+    const view = await (await api("/v1/billing/start-now", {}, user.token)).json();
+    expect(posted("/subscriptions/sub_1")[0].params.get("trial_end")).toBe("now");
+    expect(view).toMatchObject({ access: "active", subscription_status: "active", remaining_micro_usd: 8_000_000 });
+  });
+
+  test("start-now needs a trial", async () => {
+    const user = await signedIn();
+    expect((await api("/v1/billing/start-now", {}, user.token)).status).toBe(409);
+  });
+
+  test("an upgrade swaps the price with an immediate prorated charge and keeps what she spent", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    // One fixed period end: a different end would read as a renewal and reset spending.
+    const end = Math.floor(Date.now() / 1000) + 86_400;
+    await applySubscription(on, subscription({ status: "active", member: user.id, end }));
+    await env.DB.prepare("UPDATE members SET spent = 1800000 WHERE id = ?").bind(user.id).run();
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, end });
+    routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, price: "price_pro", end });
+    const view = await (await api("/v1/billing/upgrade", {}, user.token)).json();
+    expect(Object.fromEntries(posted("/subscriptions/sub_1")[0].params)).toMatchObject({ "items[0][id]": "si_1",
+      "items[0][price]": "price_pro", proration_behavior: "always_invoice", payment_behavior: "pending_if_incomplete" });
+    expect(view).toMatchObject({ plan: "pro", remaining_micro_usd: 6_200_000 });
+  });
+
+  test("a declined upgrade leaves Starter in place and says the card was declined", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    const end = Math.floor(Date.now() / 1000) + 86_400;
+    await applySubscription(on, subscription({ status: "active", member: user.id, end }));
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, end });
+    routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, end, pending_update: { expires_at: 1 } });
+    const response = await api("/v1/billing/upgrade", {}, user.token);
+    expect(response.status).toBe(402);
+    expect(await memberRow(user.id)).toMatchObject({ allowance: 2_000_000 });
+  });
+
+  test("only an active Starter plan can upgrade", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro" }));
+    expect((await api("/v1/billing/upgrade", {}, user.token)).status).toBe(409);
+  });
+});

@@ -9,7 +9,7 @@ import { maintain } from "./maintenance";
 import { notifyReport } from "./report-email";
 import { submitReport, reportReceipt, deleteReport, requireReportAccess, MAX_REPORT_BODY } from "./reports";
 import { releaseRequest } from "./releases";
-import { billingDone, stripeWebhook } from "./subscriptions";
+import { billingDone, checkout, portal, startNow, stripeWebhook, upgrade } from "./subscriptions";
 
 // Better Auth's code-check failures, told apart so the producer knows what to do next.
 const SIGN_IN_FAILURES: Record<string, [string, string]> = {
@@ -123,6 +123,10 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   if (route === "GET /v1/account") return account(env, memberId, modern);
   if (route === "POST /v1/invites/redeem") return redeem(env, memberId, await readJson(request, 4096), modern);
   if (route === "PUT /v1/consent") return consent(env, memberId, await readJson(request, 4096), modern);
+  if (route === "POST /v1/billing/checkout") return checkout(env, memberId, await readJson(request, 4096));
+  if (route === "POST /v1/billing/portal") return portal(env, memberId);
+  if (route === "POST /v1/billing/start-now") return startNow(env, memberId, modern);
+  if (route === "POST /v1/billing/upgrade") return upgrade(env, memberId, modern);
   if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx, receivedAt);
   if (route === "DELETE /v1/account") {
     await deleteAccount(env, memberId);
