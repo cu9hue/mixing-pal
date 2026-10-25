@@ -578,7 +578,7 @@ describe("account deletion", () => {
     await customer();
     await applySubscription(on, subscription({ status: "active", member: "m1" }));
     await deleted("m1");
-    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1" });
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1" })] });
     routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
     await maintain(on);
     const cancel = calls.find((c) => c.method === "DELETE")!;
@@ -592,7 +592,7 @@ describe("account deletion", () => {
     await customer();
     await applySubscription(on, subscription({ status: "active", member: "m1" }));
     await deleted("m1");
-    routes["GET /subscriptions/sub_1"] = () => new Response("down", { status: 500 });
+    routes["GET /subscriptions"] = () => new Response("down", { status: 500 });
     await maintain(on);
     expect((await job("m1"))!.completed_at).toBeNull();
     expect(await subRow()).not.toBeNull();
@@ -602,10 +602,36 @@ describe("account deletion", () => {
     await customer();
     await applySubscription(on, subscription({ status: "active", member: "m1" }));
     await deleted("m1");
-    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "canceled", member: "m1" })] });
     await maintain(on);
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
     expect((await job("m1"))!.completed_at).not.toBeNull();
+  });
+
+  test("a live subscription whose webhook never arrived is still canceled", async () => {
+    await customer();
+    await env.DB.prepare("INSERT INTO members(id, period_end, created_at) VALUES ('m1', 0, 0)").run();
+    await deleted("m1");
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ id: "sub_9", status: "active", member: "m1" })] });
+    routes["DELETE /subscriptions/sub_9"] = () => subscription({ id: "sub_9", status: "canceled", member: "m1" });
+    await maintain(on);
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_9"]);
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+  });
+
+  test("the subscription is canceled even while shared-content cleanup is unfinished", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await deleted("m1");
+    await env.DB.prepare(`INSERT INTO support_reports(id, user_id, object_key, state, created_at, updated_at)
+      VALUES ('r1', 'm1', 'reports/r1', 'deleting', 0, 0)`).run();
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1" })] });
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+    // The report's object cannot be deleted, so its cleanup stays unfinished.
+    const stuck = { delete: async () => { throw new Error("r2 down"); }, list: (o: R2ListOptions) => env.CAPTURE.list(o) };
+    await maintain({ ...on, CAPTURE: stuck } as unknown as Env);
+    expect(calls.some((c) => c.method === "DELETE" && c.path === "/subscriptions/sub_1")).toBe(true);
+    expect((await job("m1"))!.completed_at).toBeNull();
   });
 
   test("events after deletion are acknowledged and change nothing", async () => {

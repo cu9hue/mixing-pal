@@ -250,15 +250,17 @@ export async function renewals(env: Env, now = Date.now()): Promise<void> {
   }
 }
 
-/** Cancels at once with no refund. False means Stripe was unreachable and the deletion should wait. */
+/** Cancels every live subscription at once with no refund. False means Stripe was unreachable and the deletion should wait. */
 export async function cancelForDeletion(env: Env, memberId: string): Promise<boolean> {
   const row = await subscriptionRow(env, memberId);
-  if (!row?.stripe_subscription_id || !LIVE.has(row.status)) return true;
-  const path = `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`;
+  if (!row) return true;
   try {
-    // Read first: the stored status can lag, and canceling a canceled subscription is an error.
-    const current = await stripe<StripeSubscription>(env, "GET", path);
-    if (LIVE.has(current.status)) await stripe(env, "DELETE", path);
+    // Ask Stripe, not the row: a Checkout or resubscribe whose webhook is late leaves the row stale.
+    const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
+      { customer: row.stripe_customer_id, status: "all", limit: 10 });
+    for (const sub of listed.data) {
+      if (LIVE.has(sub.status)) await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
+    }
     return true;
   } catch {
     console.error(JSON.stringify({ event: "deletion_cancel_failed", member_id: memberId }));

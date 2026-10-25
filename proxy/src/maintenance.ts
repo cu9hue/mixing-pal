@@ -101,10 +101,10 @@ export async function maintain(env: Env): Promise<void> {
   const deletions = await env.DB.prepare("SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND requested_at < ? LIMIT 20")
     .bind(now - 10 * 60_000).all<{ member_id: string }>();
   for (const { member_id: id } of deletions.results) {
+    if (!await cancelForDeletion(env, id)) continue;
     const unfinished = await env.DB.prepare(`SELECT id FROM captures WHERE turn_id IN (SELECT id FROM turns WHERE member_id = ?)
       AND state != 'deleted' LIMIT 1`).bind(id).first();
     if (unfinished || await env.DB.prepare("SELECT 1 FROM support_reports WHERE user_id = ? AND state != 'deleted' LIMIT 1").bind(id).first()) continue;
-    if (!await cancelForDeletion(env, id)) continue;
     await env.DB.batch([
       env.DB.prepare(`DELETE FROM verification WHERE identifier IN (
         SELECT 'sign-in-otp-' || lower(email) FROM "user" WHERE id = ?
