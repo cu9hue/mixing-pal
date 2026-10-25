@@ -1426,6 +1426,21 @@ describe("capture and deletion", () => {
 });
 
 describe("admission", () => {
+  test("a new app whose period ends mid-turn gets plan_required in the reply's account view", async () => {
+    const user = await joined();
+    let release!: () => void;
+    replies.push({ hold: new Promise<void>((r) => { release = r; }) } as never);
+    const pending = worker.fetch(new Request("http://localhost:8787/v1/completions", { method: "POST",
+      headers: { "Content-Type": "application/json", "cf-connecting-ip": "127.0.0.1", Authorization: `Bearer ${user.token}`,
+        "Mixing-Pal-Version": "0.3.0" }, body: JSON.stringify(question()) }), { ...env, BILLING_ENABLED: "true" }, createExecutionContext());
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await env.DB.prepare("UPDATE members SET period_end = ? WHERE id = ?").bind(Date.now() - 1000, user.id).run();
+    release();
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { account: { access: string } }).account.access).toBe("plan_required");
+  });
+
   test("a new turn supersedes the member's running turn and is admitted while the old call is live", async () => {
     const user = await joined();
     const first = question();

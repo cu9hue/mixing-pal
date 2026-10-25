@@ -127,7 +127,7 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   if (route === "POST /v1/billing/portal") return portal(env, memberId);
   if (route === "POST /v1/billing/start-now") return startNow(env, memberId, modern);
   if (route === "POST /v1/billing/upgrade") return upgrade(env, memberId, modern);
-  if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx, receivedAt);
+  if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx, receivedAt, modern);
   if (route === "DELETE /v1/account") {
     await deleteAccount(env, memberId);
     return json({ deletion: "pending" }, 202);

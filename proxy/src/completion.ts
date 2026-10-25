@@ -28,7 +28,8 @@ async function bounded<T>(work: Promise<T>, respondBy: number, ctx: ExecutionCon
   finally { clearTimeout(timer); }
 }
 
-export async function complete(env: Env, memberId: string, input: unknown, ctx: ExecutionContext, receivedAt: number): Promise<Response> {
+export async function complete(env: Env, memberId: string, input: unknown, ctx: ExecutionContext, receivedAt: number,
+  modern = false): Promise<Response> {
   const request = completionInput.parse(input);
   if (env.INFERENCE_ENABLED !== "true" || !env.OPENROUTER_KEY) {
     throw new ApiError(503, "service_paused", "Model access is not enabled yet.");
@@ -115,7 +116,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   const toolCalls = releasedToolCalls(end);
   if (!text.trim() && toolCalls.length === 0) throw new ApiError(502, "empty_completion", "The model returned an empty reply. Please try again.");
   // Past the budget she gets the answer without the account view; the app reads it on its next poll.
-  const view = await bounded(account(env, memberId).then((r) => r.json()), respondBy, ctx, "account_view_skipped");
+  const view = await bounded(account(env, memberId, modern).then((r) => r.json()), respondBy, ctx, "account_view_skipped");
   const reply = JSON.stringify({ text, tool_calls: toolCalls, turn_id: request.turn_id, request_id: id,
     capture: Boolean(turn.capture), consent_epoch: turn.consent_epoch, account: view }).split(env.OPENROUTER_KEY).join("[redacted]");
   if (new TextEncoder().encode(reply).length > MAX_REPLY) throw failed();
