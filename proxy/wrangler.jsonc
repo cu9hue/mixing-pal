@@ -10,6 +10,7 @@
     "API_ORIGIN": "http://localhost:8787",
     "MAIL_FROM": "Mixing Pal <signin@mixingpal.com>",
     "INFERENCE_ENABLED": "false",
+    "BILLING_ENABLED": "false",
     "DOWNLOADS_ORIGIN": "http://localhost:8787"
   },
   "d1_databases": [{ "binding": "DB", "database_name": "mixing-pal-local", "database_id": "local", "migrations_dir": "migrations" }],
