@@ -27,11 +27,13 @@ export function stubNetwork(routes: StripeRoutes, calls: StripeCall[], onEmail?:
 
 /** A subscription shaped as API version 2026-09-30.endive returns it. Times are seconds. */
 export function subscription(o: { id?: string; status?: string; price?: string; member?: string; customer?: string;
-  start?: number; end?: number; trial_end?: number | null; cancel_at_period_end?: boolean; pending_update?: unknown } = {}) {
+  start?: number; end?: number; trial_end?: number | null; cancel_at_period_end?: boolean; pending_update?: unknown;
+  latest_invoice?: string | { status?: string } | null } = {}) {
   const now = Math.floor(Date.now() / 1000);
   return { id: o.id ?? "sub_1", object: "subscription", customer: o.customer ?? "cus_1", status: o.status ?? "active",
     cancel_at_period_end: o.cancel_at_period_end ?? false, trial_end: o.trial_end ?? null,
     metadata: o.member === undefined ? {} : { member_id: o.member }, pending_update: o.pending_update ?? null,
+    latest_invoice: o.latest_invoice === undefined ? { status: "paid" } : o.latest_invoice,
     items: { data: [{ id: "si_1", price: { id: o.price ?? "price_starter" },
       current_period_start: o.start ?? now, current_period_end: o.end ?? now + 30 * 86_400 }] } };
 }

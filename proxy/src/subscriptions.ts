@@ -13,6 +13,8 @@ export interface StripeSubscription {
   trial_end: number | null;
   metadata: Record<string, string>;
   pending_update?: unknown;
+  // Expanded by every read that is applied; a bare id means it was not.
+  latest_invoice?: string | { status?: string } | null;
   items: { data: { id: string; price: { id: string }; current_period_start: number; current_period_end: number }[] };
 }
 
@@ -78,17 +80,23 @@ export async function applySubscription(env: Env, sub: StripeSubscription, now =
     cancel_at_period_end = ?, trial_used = MAX(trial_used, ?), updated_at = ? WHERE member_id = ?`)
     .bind(sub.id, plan, sub.status, end, Number(sub.cancel_at_period_end), Number(sub.trial_end !== null), now, memberId)];
   if (sub.status === "trialing") writes.push(grant(env, memberId, TRIAL_ALLOWANCE, (sub.trial_end ?? item.current_period_end) * 1000, now));
-  else if (sub.status === "active") writes.push(grant(env, memberId, ALLOWANCE[plan], end, now));
-  else if (sub.status === "past_due") {
-    writes.push(env.DB.prepare("UPDATE members SET period_end = ? WHERE id = ? AND comp = 0").bind(start + PAST_DUE_GRACE, memberId));
+  else if (sub.status === "active" && typeof sub.latest_invoice === "object" && sub.latest_invoice?.status === "paid") {
+    writes.push(grant(env, memberId, ALLOWANCE[plan], end, now));
+  } else if (sub.status === "active" || sub.status === "past_due") {
+    // Stripe moves the period about an hour before it charges, and ends a trial before the first charge:
+    // until the invoice is paid, keep the old allowance and spending, as for a failed payment.
+    writes.push(env.DB.prepare("UPDATE members SET period_end = MAX(period_end, ?) WHERE id = ? AND comp = 0")
+      .bind(start + PAST_DUE_GRACE, memberId));
   } else if (sub.status !== "incomplete") {
     writes.push(env.DB.prepare("UPDATE members SET period_end = MIN(period_end, ?) WHERE id = ? AND comp = 0").bind(now, memberId));
   }
   await env.DB.batch(writes);
 }
 
+const EXPAND = { expand: ["latest_invoice"] };
+
 export async function syncSubscription(env: Env, id: string): Promise<void> {
-  await applySubscription(env, await stripe<StripeSubscription>(env, "GET", `/subscriptions/${encodeURIComponent(id)}`));
+  await applySubscription(env, await stripe<StripeSubscription>(env, "GET", `/subscriptions/${encodeURIComponent(id)}`, EXPAND));
 }
 
 const event = z.object({ id: z.string(), type: z.string(), data: z.object({ object: z.record(z.string(), z.unknown()) }) });
@@ -187,7 +195,7 @@ export async function startNow(env: Env, memberId: string, modern: boolean): Pro
   const row = await subscriptionRow(env, memberId);
   if (row?.status !== "trialing" || !row.stripe_subscription_id) throw new ApiError(409, "not_trialing", "Only a trial can start early.");
   await applySubscription(env, await stripe<StripeSubscription>(env, "POST",
-    `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`, { trial_end: "now", proration_behavior: "none" }));
+    `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`, { trial_end: "now", proration_behavior: "none", ...EXPAND }));
   return account(env, memberId, modern);
 }
 
@@ -202,7 +210,7 @@ export async function upgrade(env: Env, memberId: string, modern: boolean): Prom
   // pending_if_incomplete: a declined card leaves Starter in place, with the change pending.
   const updated = await stripe<StripeSubscription>(env, "POST", path, {
     items: [{ id: current.items.data[0].id, price: priceFor(env, "pro") }],
-    proration_behavior: "always_invoice", payment_behavior: "pending_if_incomplete" });
+    proration_behavior: "always_invoice", payment_behavior: "pending_if_incomplete", ...EXPAND });
   await applySubscription(env, updated);
   if (updated.pending_update) throw new ApiError(402, "card_declined", "Your card was declined. Update it in Manage subscription.");
   return account(env, memberId, modern);

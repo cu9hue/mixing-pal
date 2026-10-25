@@ -98,6 +98,39 @@ describe("applying Stripe state", () => {
     expect(await memberRow()).toMatchObject({ spent: 0, reserved: 310_000 });
   });
 
+  test("a renewal whose invoice is not paid yet keeps spending and the allowance, with seven days of access", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
+    await env.DB.prepare("UPDATE members SET spent = 1500000 WHERE id = 'm1'").run();
+    const renewal = { status: "active", member: "m1", start: t + 86_400, end: t + 31 * 86_400 };
+    await applySubscription(on, subscription({ ...renewal, latest_invoice: { status: "draft" } }), now);
+    expect(await memberRow()).toMatchObject({ allowance: 2_000_000, spent: 1_500_000, period_end: (t + 86_400) * S + 7 * DAY });
+    await applySubscription(on, subscription(renewal), now);
+    expect(await memberRow()).toMatchObject({ allowance: 2_000_000, spent: 0, period_end: (t + 31 * 86_400) * S });
+  });
+
+  test("a trial that ends before its first charge keeps the trial's allowance and spending", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "trialing", member: "m1", price: "price_pro", trial_end: t + 60 }), now);
+    await env.DB.prepare("UPDATE members SET spent = 900000 WHERE id = 'm1'").run();
+    await applySubscription(on, subscription({ status: "active", member: "m1", price: "price_pro", start: t + 60, end: t + 60 + 30 * 86_400,
+      latest_invoice: { status: "open" } }), now);
+    expect(await memberRow()).toMatchObject({ allowance: 1_000_000, spent: 900_000, period_end: (t + 60) * S + 7 * DAY });
+  });
+
+  test("an unpaid invoice creates no member", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1", latest_invoice: "in_1" }), now);
+    expect(await memberRow()).toBeNull();
+  });
+
+  test("a failed payment never shortens access", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1", start: t, end: t + 30 * 86_400 }), now);
+    await applySubscription(on, subscription({ status: "past_due", member: "m1", start: t, end: t + 30 * 86_400 }), now);
+    expect((await memberRow())!.period_end).toBe((t + 30 * 86_400) * S);
+  });
+
   test("a failed payment keeps access for seven days past the paid period", async () => {
     await customer();
     await applySubscription(on, subscription({ status: "active", member: "m1", end: t }), now);
@@ -185,6 +218,7 @@ describe("the Stripe webhook", () => {
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1", price: "price_pro" });
     const response = await deliver({ id: "evt_1", type: "customer.subscription.updated", data: { object: { id: "sub_1", status: "trialing" } } });
     expect(response.status).toBe(200);
+    expect(calls[0].params.get("expand[0]")).toBe("latest_invoice");
     expect(await memberRow()).toMatchObject({ allowance: 8_000_000 });
   });
 
@@ -416,6 +450,7 @@ describe("billing routes", () => {
     routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, price: "price_pro", start: t, end: t + 30 * 86_400 });
     const view = await (await api("/v1/billing/start-now", {}, user.token)).json();
     expect(posted("/subscriptions/sub_1")[0].params.get("trial_end")).toBe("now");
+    expect(posted("/subscriptions/sub_1")[0].params.get("expand[0]")).toBe("latest_invoice");
     expect(view).toMatchObject({ access: "active", subscription_status: "active", remaining_micro_usd: 8_000_000 });
   });
 
@@ -435,7 +470,8 @@ describe("billing routes", () => {
     routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, price: "price_pro", end });
     const view = await (await api("/v1/billing/upgrade", {}, user.token)).json();
     expect(Object.fromEntries(posted("/subscriptions/sub_1")[0].params)).toMatchObject({ "items[0][id]": "si_1",
-      "items[0][price]": "price_pro", proration_behavior: "always_invoice", payment_behavior: "pending_if_incomplete" });
+      "items[0][price]": "price_pro", proration_behavior: "always_invoice", payment_behavior: "pending_if_incomplete",
+      "expand[0]": "latest_invoice" });
     expect(view).toMatchObject({ plan: "pro", remaining_micro_usd: 6_200_000 });
   });
 
