@@ -43,7 +43,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
   const [opened, setOpened] = useState(false);
   const view = account.view;
   // The note is about a trip to the browser; once the account changes, it is stale.
-  useEffect(() => { setOpened(false); }, [view?.access, view?.subscription_status]);
+  useEffect(() => { setOpened(false); }, [view?.access, view?.plan, view?.subscription_status, view?.cancel_at_period_end, view?.comp, view?.period_end]);
   const problem = error ?? account.error;
   const signingIn = view === null || view.access === "signed_out" || view.access === "invitation_required";
 

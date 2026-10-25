@@ -90,3 +90,15 @@ it("the browser note clears once the account changes", async () => {
   rerender(<AccountPanel account={signedIn({ subscription_status: "trialing", plan: "starter", remaining_micro_usd: 1_000_000 })} />);
   await waitFor(() => expect(screen.queryByText(/Finish in your browser/)).toBeNull());
 });
+
+it("the browser note clears when only the plan's cancellation changes", async () => {
+  vi.mocked(invoke).mockResolvedValue({ opened: true });
+  const active = { subscription_status: "active", plan: "starter", manage: true, remaining_micro_usd: 1_000_000, period_end: Date.UTC(2026, 10, 20) } as const;
+  const { rerender } = render(<AccountPanel account={signedIn(active)} />);
+  fireEvent.click(screen.getByRole("button", { name: "Manage subscription" }));
+  expect(await screen.findByText(/Finish in your browser/)).toBeTruthy();
+  rerender(<AccountPanel account={signedIn({ ...active })} />);
+  expect(screen.getByText(/Finish in your browser/)).toBeTruthy();
+  rerender(<AccountPanel account={signedIn({ ...active, cancel_at_period_end: true })} />);
+  await waitFor(() => expect(screen.queryByText(/Finish in your browser/)).toBeNull());
+});
