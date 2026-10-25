@@ -18,6 +18,7 @@ function dateWord(view: AccountView): string {
   if (view.comp) return "resets";
   if (!view.plan) return "until";
   if (view.subscription_status === "trialing") return "trial ends";
+  if (view.subscription_status === "past_due") return "access until";
   return view.cancel_at_period_end ? "ends" : "resets";
 }
 

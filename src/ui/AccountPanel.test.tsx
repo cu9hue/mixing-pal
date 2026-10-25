@@ -66,6 +66,14 @@ it("warns when a payment failed, and opens the Portal from Manage subscription",
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("account_billing", { action: "portal" }));
 });
 
+it("a failed payment says how long access lasts, not when the plan resets", () => {
+  const end = Date.UTC(2026, 10, 20);
+  render(<AccountPanel account={signedIn({ subscription_status: "past_due", plan: "starter", manage: true, remaining_micro_usd: 1_000_000, period_end: end })} />);
+  const summary = document.querySelector(".account__summary")?.textContent;
+  expect(summary).toContain(`access until ${new Date(end).toLocaleDateString()}`);
+  expect(summary).not.toContain("resets");
+});
+
 it("names the plan, a trial, and free access", () => {
   render(<AccountPanel account={signedIn({ subscription_status: "trialing", plan: "pro", remaining_micro_usd: 1_000_000 })} />);
   expect(screen.getByText(/Pro · free trial/)).toBeTruthy();
