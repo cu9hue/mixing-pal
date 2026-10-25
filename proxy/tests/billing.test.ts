@@ -171,3 +171,66 @@ describe("applying Stripe state", () => {
     expect(await memberRow()).toMatchObject({ allowance: 8_000_000, period_end: now + DAY, comp: 1 });
   });
 });
+
+describe("the Stripe webhook", () => {
+  async function deliver(event: Record<string, unknown>, signature?: string) {
+    const body = JSON.stringify(event);
+    return worker.fetch(new Request("http://localhost:8787/webhooks/stripe", { method: "POST",
+      headers: { "Stripe-Signature": signature ?? await sign(body), "cf-connecting-ip": "3.18.12.63" }, body }), on as never, createExecutionContext());
+  }
+
+  test("a subscription event reads the subscription from Stripe and applies it", async () => {
+    await customer();
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1", price: "price_pro" });
+    const response = await deliver({ id: "evt_1", type: "customer.subscription.updated", data: { object: { id: "sub_1", status: "trialing" } } });
+    expect(response.status).toBe(200);
+    expect(await memberRow()).toMatchObject({ allowance: 8_000_000 });
+  });
+
+  test("a paid invoice finds its subscription under parent", async () => {
+    await customer();
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1" });
+    const response = await deliver({ id: "evt_2", type: "invoice.paid",
+      data: { object: { id: "in_1", parent: { type: "subscription_details", subscription_details: { subscription: "sub_1" } } } } });
+    expect(response.status).toBe(200);
+    expect(await memberRow()).toMatchObject({ allowance: 2_000_000 });
+  });
+
+  test("a bad signature is refused before any Stripe call", async () => {
+    const response = await deliver({ id: "evt_3", type: "customer.subscription.updated", data: { object: { id: "sub_1" } } }, "t=1,v1=00");
+    expect(response.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("an event type the proxy does not use is acknowledged and ignored", async () => {
+    expect((await deliver({ id: "evt_4", type: "charge.succeeded", data: { object: { id: "ch_1" } } })).status).toBe(200);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("when Stripe cannot be read, the webhook fails so Stripe retries, and nothing is written", async () => {
+    await customer();
+    routes["GET /subscriptions/sub_1"] = () => new Response("down", { status: 500 });
+    expect((await deliver({ id: "evt_5", type: "customer.subscription.updated", data: { object: { id: "sub_1" } } })).status).toBe(503);
+    expect(await memberRow()).toBeNull();
+  });
+
+  test("a body that is not JSON is refused", async () => {
+    const body = "not json";
+    const response = await worker.fetch(new Request("http://localhost:8787/webhooks/stripe", { method: "POST",
+      headers: { "Stripe-Signature": await sign(body) }, body }), on as never, createExecutionContext());
+    expect(response.status).toBe(400);
+  });
+
+  test("webhooks skip the per-IP limit", async () => {
+    for (let i = 0; i < 125; i++) {
+      expect((await deliver({ id: `evt_${i}`, type: "charge.succeeded", data: { object: { id: "ch_1" } } })).status).toBe(200);
+    }
+  });
+});
+
+test("the return page tells her to go back to the app", async () => {
+  const done = await api("/billing/done");
+  expect(done.headers.get("Content-Type")).toContain("text/html");
+  expect(await done.text()).toContain("Go back to Mixing Pal.");
+  expect(await (await api("/billing/done?state=canceled")).text()).toContain("Nothing was charged.");
+});

@@ -9,6 +9,7 @@ import { maintain } from "./maintenance";
 import { notifyReport } from "./report-email";
 import { submitReport, reportReceipt, deleteReport, requireReportAccess, MAX_REPORT_BODY } from "./reports";
 import { releaseRequest } from "./releases";
+import { billingDone, stripeWebhook } from "./subscriptions";
 
 // Better Auth's code-check failures, told apart so the producer knows what to do next.
 const SIGN_IN_FAILURES: Record<string, [string, string]> = {
@@ -81,10 +82,13 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   const receivedAt = Date.now();
   const url = new URL(request.url);
   if (url.pathname === "/health" && request.method === "GET") return json({ ok: true });
+  // Before the per-IP limit: Stripe delivers renewals in bursts from a few addresses.
+  if (url.pathname === "/webhooks/stripe" && request.method === "POST") return stripeWebhook(request, env);
   const release = await releaseRequest(request, env);
   if (release) return release;
   const ip = request.headers.get("cf-connecting-ip") ?? "local";
   await rateLimit(env, `ip:${await privateHash(env.AUTH_SECRET, ip)}`, 120, 60_000);
+  if (url.pathname === "/billing/done" && request.method === "GET") return billingDone(url);
   if (url.pathname.startsWith("/auth/")) return authRequest(request, env, url.pathname);
   if (url.pathname === "/operator" && request.method === "POST") return admin(request, env, await readJson(request, 8192));
   const memberId = await authenticate(request, env);

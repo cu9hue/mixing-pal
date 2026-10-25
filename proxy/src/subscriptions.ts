@@ -1,6 +1,7 @@
-import { Env } from "./env";
+import { z } from "zod";
+import { ApiError, Env, json, readText } from "./env";
 import { ALLOWANCE, LIVE, PAST_DUE_GRACE, Plan, TRIAL_ALLOWANCE, planFor } from "./plans";
-import { stripe } from "./stripe";
+import { stripe, verifySignature } from "./stripe";
 
 /** The fields read from a subscription, as API version 2026-09-30.endive returns it. Times are seconds. */
 export interface StripeSubscription {
@@ -87,4 +88,38 @@ export async function applySubscription(env: Env, sub: StripeSubscription, now =
 
 export async function syncSubscription(env: Env, id: string): Promise<void> {
   await applySubscription(env, await stripe<StripeSubscription>(env, "GET", `/subscriptions/${encodeURIComponent(id)}`));
+}
+
+const event = z.object({ id: z.string(), type: z.string(), data: z.object({ object: z.record(z.string(), z.unknown()) }) });
+
+export async function stripeWebhook(request: Request, env: Env): Promise<Response> {
+  if (!env.STRIPE_WEBHOOK_SECRET) throw new ApiError(404, "not_found", "Not found.");
+  const body = await readText(request, 256 * 1024);
+  if (!await verifySignature(env.STRIPE_WEBHOOK_SECRET, request.headers.get("Stripe-Signature"), body)) {
+    throw new ApiError(400, "invalid_signature", "The signature does not match.");
+  }
+  let parsed: z.infer<typeof event>;
+  try { parsed = event.parse(JSON.parse(body)); }
+  catch { throw new ApiError(400, "invalid_request", "The event is unreadable."); }
+  const object = parsed.data.object as { id?: unknown; parent?: { subscription_details?: { subscription?: unknown } } };
+  const id = parsed.type.startsWith("customer.subscription.") ? object.id
+    : parsed.type === "invoice.paid" ? object.parent?.subscription_details?.subscription : undefined;
+  if (typeof id === "string") {
+    try { await syncSubscription(env, id); }
+    catch (error) {
+      console.error(JSON.stringify({ event: "stripe_event_failed", id: parsed.id, type: parsed.type }));
+      throw error;
+    }
+  }
+  return json({ received: true });
+}
+
+const DONE: Record<string, string> = { canceled: "Checkout was canceled. Nothing was charged.", portal: "All set." };
+
+export function billingDone(url: URL): Response {
+  const heading = DONE[url.searchParams.get("state") ?? ""] ?? "You're in.";
+  return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Mixing Pal</title>
+<body style="font:16px system-ui;margin:20vh auto;max-width:28rem;padding:0 1rem;text-align:center">
+<h1 style="font-size:1.4rem">${heading}</h1><p>Go back to Mixing Pal.</p></body>`,
+    { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 }
