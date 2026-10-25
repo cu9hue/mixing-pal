@@ -14,6 +14,7 @@ export interface Member {
   consent_epoch: number;
   deleted_at: number | null;
   recovery_required: number;
+  comp: number;
 }
 
 export async function member(env: Env, id: string): Promise<Member | null> {
