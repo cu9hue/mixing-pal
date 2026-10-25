@@ -7,6 +7,7 @@ import { maintain } from "./maintenance";
 import { exportTurn } from "./export";
 import { sendInvitation } from "./invitation-email";
 import { pilotStats } from "./stats";
+import { billingSync, comp, uncomp } from "./subscriptions";
 
 export async function admin(request: Request, env: Env, input: unknown): Promise<Response> {
   if (!env.ADMIN_TOKEN) throw new ApiError(503, "admin_disabled", "Operator access is not configured.");
@@ -33,6 +34,9 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     z.object({ action: z.literal("recover"), member_id: z.string().min(1).max(100).optional(),
       spent_micro_usd: z.number().int().min(0).max(50_000_000), reason: z.string().min(5).max(500) }),
     z.object({ action: z.literal("export"), member_id: z.string().max(100), turn_id: z.uuid() }),
+    z.object({ action: z.literal("comp"), email: z.email().transform((s) => s.toLowerCase()) }),
+    z.object({ action: z.literal("uncomp"), member_id: z.string().max(100) }),
+    z.object({ action: z.literal("billing_sync"), member_id: z.string().max(100) }),
     z.object({ action: z.literal("sweep") }),
     z.object({ action: z.literal("replay_deletions"), cursor: z.string().max(2000).optional() }),
   ]).parse(input);
@@ -60,6 +64,13 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     return json({ budget, members: members.results, pending: pending.results, conflicts: conflicts.results });
   }
   if (data.action === "stats") return json(await pilotStats(env, data.days ?? 28));
+  if (data.action === "billing_sync") return json(await billingSync(env, data.member_id));
+  if (data.action === "comp") {
+    const granted = await comp(env, data.email, now);
+    await env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) VALUES ('comp', ?, ?, '')")
+      .bind(granted.member_id, now).run();
+    return json(granted);
+  }
   if (data.action === "report") return json(await inspectReport(env, data.report_id));
   if (data.action === "report_notifications") return json((await env.DB.prepare(`SELECT id, created_at, mail_state, mail_error
     FROM support_reports WHERE state = 'ready' AND mail_state IN ('pending', 'sending', 'attention') ORDER BY created_at LIMIT 100`).all()).results);
@@ -71,6 +82,7 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
   }
   const target = "member_id" in data ? data.member_id : "request_id" in data ? data.request_id : "service";
   if (data.action === "revoke") await revokeAccess(env, data.member_id);
+  if (data.action === "uncomp") await uncomp(env, data.member_id, now);
   if (data.action === "delete_account") await deleteAccount(env, data.member_id);
   if (data.action === "delete_turn") await deleteTurn(env, data.member_id, data.turn_id);
   if (data.action === "resolve") {

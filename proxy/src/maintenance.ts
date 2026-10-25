@@ -3,6 +3,7 @@ import { maintainReports } from "./reports";
 import { deleteTurn } from "./capture";
 import { DAY, Env, readJson } from "./env";
 import { settle, settleExpired } from "./ledger";
+import { renewals } from "./subscriptions";
 
 const CAPTURE_DELETE_BATCH = 100;
 const CAPTURE_DELETE_BATCHES = 3;
@@ -46,6 +47,8 @@ export async function maintain(env: Env): Promise<void> {
   // Billing first and on its own: a report or cleanup failure must never hold a member's money.
   try { await billing(env, now); }
   catch (error) { console.error(JSON.stringify({ event: "billing_maintenance_failed", error: String(error) })); }
+  try { await renewals(env, now); }
+  catch (error) { console.error(JSON.stringify({ event: "renewal_maintenance_failed", error: String(error) })); }
   try { await maintainReports(env); await retryReportMail(env); }
   catch (error) { console.error(JSON.stringify({ event: "report_maintenance_failed", error: String(error) })); }
   await env.DB.batch([
@@ -56,7 +59,11 @@ export async function maintain(env: Env): Promise<void> {
     env.DB.prepare("DELETE FROM api_limits WHERE expires_at < ?").bind(now - DAY),
     env.DB.prepare("DELETE FROM invites WHERE expires_at < ?").bind(now - 83 * DAY),
     env.DB.prepare("DELETE FROM operator_actions WHERE created_at < ?").bind(now - 90 * DAY),
-    env.DB.prepare(`DELETE FROM "user" WHERE createdAt < ? AND NOT EXISTS (SELECT 1 FROM members WHERE members.id = "user".id)`)
+    // A sign-up that never subscribed goes after 90 days, with its unused Stripe customer row.
+    env.DB.prepare(`DELETE FROM subscriptions WHERE status IN ('none', 'incomplete', 'incomplete_expired') AND updated_at < ?
+      AND NOT EXISTS (SELECT 1 FROM members WHERE members.id = subscriptions.member_id)`).bind(now - 90 * DAY),
+    env.DB.prepare(`DELETE FROM "user" WHERE createdAt < ? AND NOT EXISTS (SELECT 1 FROM members WHERE members.id = "user".id)
+      AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE subscriptions.member_id = "user".id)`)
       .bind(new Date(now - 90 * DAY).toISOString()),
   ]);
   const expired = await env.DB.prepare("SELECT id, member_id FROM turns WHERE created_at <= ? AND deleted_at IS NULL LIMIT 100")

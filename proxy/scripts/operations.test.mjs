@@ -209,3 +209,16 @@ test("stats sends an optional day count and rejects anything else", async () => 
   await assert.rejects(run(["stats", "7", "8"], connection), /Unknown command or arguments/);
   assert.equal(sent.length, 2);
 });
+
+test("comp, uncomp and billing-sync send their operator actions", async () => {
+  const sent = [];
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "t", fetch: async (_url, options) => {
+    sent.push(JSON.parse(options.body));
+    return Response.json({ ok: true });
+  } };
+  await run(["comp", "partner@example.com"], connection, () => {});
+  await run(["uncomp", "member-1"], connection, () => {});
+  await run(["billing-sync", "member-1"], connection, () => {});
+  assert.deepEqual(sent, [{ action: "comp", email: "partner@example.com" }, { action: "uncomp", member_id: "member-1" },
+    { action: "billing_sync", member_id: "member-1" }]);
+});

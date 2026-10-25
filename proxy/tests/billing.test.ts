@@ -2,6 +2,7 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
 import { DAY, Env } from "../src/env";
+import { maintain } from "../src/maintenance";
 import { applySubscription } from "../src/subscriptions";
 import { StripeCall, StripeRoutes, sign, stubNetwork, subscription } from "./stripe-fixtures";
 
@@ -455,5 +456,100 @@ describe("billing routes", () => {
     await customer(user.id);
     await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro" }));
     expect((await api("/v1/billing/upgrade", {}, user.token)).status).toBe(409);
+  });
+});
+
+describe("comp and renewals", () => {
+  async function operate(body: unknown) {
+    return worker.fetch(new Request("http://localhost:8787/operator", { method: "POST",
+      headers: { Authorization: "Bearer test-operator-key", "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+      on as never, createExecutionContext());
+  }
+
+  test("comp gives Pro's allowance for 30 days and is recorded", async () => {
+    const user = await signedIn();
+    const response = await operate({ action: "comp", email: "Producer@example.com" });
+    expect(await response.json()).toEqual({ member_id: user.id });
+    const row = await memberRow(user.id);
+    expect(row).toMatchObject({ allowance: 8_000_000, comp: 1 });
+    expect(row!.period_end).toBeGreaterThan(Date.now() + 29 * DAY);
+    expect(await env.DB.prepare("SELECT target FROM operator_actions WHERE action = 'comp'").first()).toEqual({ target: user.id });
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ access: "active", comp: true });
+  });
+
+  test("comp needs a signed-in account and refuses one with a live subscription", async () => {
+    expect((await operate({ action: "comp", email: "nobody@example.com" })).status).toBe(404);
+    const user = await signedIn();
+    await customer(user.id);
+    await applySubscription(on, subscription({ status: "active", member: user.id }));
+    expect((await operate({ action: "comp", email: "producer@example.com" })).status).toBe(409);
+  });
+
+  test("uncomp ends access now, and refuses an account that is not comped", async () => {
+    const user = await signedIn();
+    await operate({ action: "comp", email: "producer@example.com" });
+    expect((await operate({ action: "uncomp", member_id: user.id })).status).toBe(200);
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ access: "plan_required", comp: false });
+    expect((await operate({ action: "uncomp", member_id: user.id })).status).toBe(404);
+  });
+
+  test("maintenance renews an ended comp period and starts spending again", async () => {
+    await env.DB.prepare("INSERT INTO members(id, allowance, spent, period_end, created_at, comp) VALUES ('c1', 8000000, 7000000, ?, 0, 1)")
+      .bind(Date.now() - 1000).run();
+    await env.DB.prepare("INSERT INTO members(id, allowance, spent, period_end, created_at) VALUES ('p1', 5000000, 4000000, ?, 0)")
+      .bind(Date.now() - 1000).run();
+    await maintain(on);
+    expect(await memberRow("c1")).toMatchObject({ spent: 0 });
+    expect((await memberRow("c1"))!.period_end).toBeGreaterThan(Date.now() + 29 * DAY);
+    expect(await memberRow("p1")).toMatchObject({ spent: 4_000_000 });
+  });
+
+  test("maintenance renews a subscription whose webhook never came", async () => {
+    await customer();
+    const t = Math.floor(Date.now() / 1000);
+    await applySubscription(on, subscription({ status: "active", member: "m1", end: t - 7200 }));
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 });
+    await maintain(on);
+    expect((await memberRow())!.period_end).toBe((t + 30 * 86_400) * 1000);
+  });
+
+  test("a subscription that ended under an hour ago waits for its webhook", async () => {
+    await customer();
+    const t = Math.floor(Date.now() / 1000);
+    await applySubscription(on, subscription({ status: "active", member: "m1", end: t - 60 }));
+    await maintain(on);
+    expect(calls.filter((c) => c.method === "GET")).toHaveLength(0);
+  });
+
+  test("one failing renewal does not stop the next", async () => {
+    await customer("m1", "cus_1");
+    await customer("m2", "cus_2");
+    const t = Math.floor(Date.now() / 1000);
+    await applySubscription(on, subscription({ status: "active", member: "m1", end: t - 7200 }));
+    await applySubscription(on, subscription({ id: "sub_2", customer: "cus_2", status: "active", member: "m2", end: t - 7200 }));
+    routes["GET /subscriptions/sub_1"] = () => new Response("down", { status: 500 });
+    routes["GET /subscriptions/sub_2"] = () => subscription({ id: "sub_2", customer: "cus_2", status: "active", member: "m2", end: t + 86_400 });
+    await maintain(on);
+    expect((await memberRow("m2"))!.period_end).toBe((t + 86_400) * 1000);
+  });
+
+  test("billing-sync applies Stripe's state now", async () => {
+    await customer();
+    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "past_due", member: "m1" });
+    expect(await (await operate({ action: "billing_sync", member_id: "m1" })).json()).toEqual({ status: "past_due" });
+  });
+
+  test("an abandoned sign-up is removed after 90 days, but one with a subscription is kept", async () => {
+    const old = new Date(Date.now() - 91 * DAY).toISOString();
+    for (const [id, status] of [["u1", "none"], ["u2", "canceled"]]) {
+      await env.DB.prepare(`INSERT INTO "user"(id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, '', ?, 1, ?, ?)`)
+        .bind(id, `${id}@example.com`, old, old).run();
+      await env.DB.prepare("INSERT INTO subscriptions(member_id, stripe_customer_id, status, updated_at) VALUES (?, ?, ?, 0)")
+        .bind(id, `cus_${id}`, status).run();
+    }
+    await maintain(on);
+    expect(await env.DB.prepare('SELECT id FROM "user" ORDER BY id').all()).toMatchObject({ results: [{ id: "u2" }] });
+    expect(await subRow("u1")).toBeNull();
   });
 });

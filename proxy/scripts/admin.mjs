@@ -14,6 +14,9 @@ The token is never an argument. Only localhost may use HTTP.
   npm run admin -- usage                        Balances and provisional costs
   npm run admin -- stats [days]                 Retention, answer times, failures and hosts (default 28 days, counts only)
   npm run admin -- revoke member-id              End access and revoke sessions
+  npm run admin -- comp email                   Free access for life at Pro's allowance (they sign in once first)
+  npm run admin -- uncomp member-id             End free access now
+  npm run admin -- billing-sync member-id       Re-read a member's subscription from Stripe
   npm run admin -- delete-account member-id      Delete identity and shared content
   npm run admin -- delete-turn member-id turn-id Delete a shared turn
   npm run admin -- resolve request-id micro-usd reason
@@ -133,11 +136,12 @@ export async function run(args, connection, print = console.log) {
     print(JSON.stringify(await operator({ action: "stats", ...(values[0] ? { days: Number(values[0]) } : {}) }, connection), null, 2));
     return;
   }
-  const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, "delete-account": 1, "delete-turn": 2, resolve: 3, "resolve-without-id": 2, conflict: 3,
+  const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, comp: 1, uncomp: 1, "billing-sync": 1, "delete-account": 1, "delete-turn": 2, resolve: 3, "resolve-without-id": 2, conflict: 3,
     "recover-member": 3, "recover-budget": 2, pause: 0, resume: 0, sweep: 0, export: 3 };
   if (!(command in arity) || values.length !== arity[command]) throw new Error("Unknown command or arguments. Run npm run admin -- help.");
   const payload = command === "report" ? { action: "report", report_id: values[0] }
     : command === "invite" ? { action: "invite", email: values[0] }
+    : command === "comp" ? { action: "comp", email: values[0] }
     : command === "pause" || command === "resume" ? { action: "pause", paused: command === "pause" }
     : command === "resolve" ? { action: "resolve", request_id: values[0], cost_micro_usd: Number(values[1]), reason: values[2] }
     : command === "resolve-without-id" ? { action: "resolve_without_id", cost_micro_usd: Number(values[0]), reason: values[1] }

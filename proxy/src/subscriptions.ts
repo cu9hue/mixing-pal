@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ApiError, Env, json, readText } from "./env";
 import { account, member } from "./account";
-import { ALLOWANCE, LIVE, PAST_DUE_GRACE, Plan, TRIAL_ALLOWANCE, TRIAL_DAYS, planFor, priceFor } from "./plans";
+import { ALLOWANCE, COMP_ALLOWANCE, COMP_PERIOD, LIVE, PAST_DUE_GRACE, Plan, TRIAL_ALLOWANCE, TRIAL_DAYS, planFor, priceFor } from "./plans";
 import { stripe, verifySignature } from "./stripe";
 
 /** The fields read from a subscription, as API version 2026-09-30.endive returns it. Times are seconds. */
@@ -206,4 +206,45 @@ export async function upgrade(env: Env, memberId: string, modern: boolean): Prom
   await applySubscription(env, updated);
   if (updated.pending_update) throw new ApiError(402, "card_declined", "Your card was declined. Update it in Manage subscription.");
   return account(env, memberId, modern);
+}
+
+export async function comp(env: Env, email: string, now = Date.now()): Promise<{ member_id: string }> {
+  const user = await env.DB.prepare('SELECT id FROM "user" WHERE lower(email) = ?').bind(email).first<{ id: string }>();
+  if (!user) throw new ApiError(404, "user_not_found", "No account uses that email. Ask them to sign in once first.");
+  const row = await subscriptionRow(env, user.id);
+  if (row && LIVE.has(row.status)) throw new ApiError(409, "subscription_live", "This account has a live subscription. Cancel it in Stripe first.");
+  const m = await member(env, user.id);
+  if (m?.revoked || m?.deleted_at) throw new ApiError(409, "access_denied", "This account is revoked or deleted.");
+  await env.DB.prepare(`INSERT INTO members(id, allowance, period_end, created_at, comp) VALUES (?, ?, ?, ?, 1)
+    ON CONFLICT(id) DO UPDATE SET comp = 1, allowance = excluded.allowance,
+      spent = CASE WHEN members.period_end <= ? THEN 0 ELSE members.spent END,
+      period_end = MAX(members.period_end, excluded.period_end)`)
+    .bind(user.id, COMP_ALLOWANCE, now + COMP_PERIOD, now, now).run();
+  return { member_id: user.id };
+}
+
+export async function uncomp(env: Env, memberId: string, now = Date.now()): Promise<void> {
+  const result = await env.DB.prepare("UPDATE members SET comp = 0, period_end = MIN(period_end, ?) WHERE id = ? AND comp = 1")
+    .bind(now, memberId).run();
+  if (!result.meta.changes) throw new ApiError(404, "not_comped", "That account is not comped.");
+}
+
+export async function billingSync(env: Env, memberId: string): Promise<{ status: string }> {
+  const row = await subscriptionRow(env, memberId);
+  if (row?.stripe_subscription_id) await syncSubscription(env, row.stripe_subscription_id);
+  return { status: (await subscriptionRow(env, memberId))?.status ?? "none" };
+}
+
+/** Comped periods roll every 30 days; subscriptions whose renewal webhook is an hour late are re-read. */
+export async function renewals(env: Env, now = Date.now()): Promise<void> {
+  await env.DB.prepare("UPDATE members SET spent = 0, period_end = ? WHERE comp = 1 AND period_end <= ? AND revoked = 0 AND deleted_at IS NULL")
+    .bind(now + COMP_PERIOD, now).run();
+  if (!env.STRIPE_SECRET_KEY) return;
+  const due = await env.DB.prepare(`SELECT stripe_subscription_id AS id FROM subscriptions
+    WHERE status IN ('trialing', 'active', 'past_due') AND stripe_subscription_id IS NOT NULL AND current_period_end < ? LIMIT 20`)
+    .bind(now - 60 * 60_000).all<{ id: string }>();
+  for (const { id } of due.results) {
+    try { await syncSubscription(env, id); }
+    catch { console.error(JSON.stringify({ event: "renewal_sync_failed", subscription: id })); }
+  }
 }
