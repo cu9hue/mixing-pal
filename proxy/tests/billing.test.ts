@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
 import { DAY, Env } from "../src/env";
 import { maintain } from "../src/maintenance";
-import { StripeSubscription, applySubscription, cancelAndRefund, readStamp, syncSubscription } from "../src/subscriptions";
+import { StripeSubscription, applySubscription, cancelAndRefund, readStamp, renewals, syncSubscription } from "../src/subscriptions";
 import { StripeCall, StripeRoutes, missing, paramsOf, sign, stubNetwork, subscription } from "./stripe-fixtures";
 
 const on = { ...env, BILLING_ENABLED: "true" } as unknown as Env;
@@ -1156,13 +1156,17 @@ describe("comp and renewals", () => {
     expect(await memberRow("p1")).toMatchObject({ spent: 4_000_000 });
   });
 
+  const listed = (data: unknown[]) => () => ({ data });
+  const HOUR = 60 * 60_000;
+
   test("maintenance renews a subscription whose webhook never came", async () => {
     await customer();
     const t = Math.floor(Date.now() / 1000);
     await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
-    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 });
+    routes["GET /subscriptions"] = listed([subscription({ status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 })]);
     await maintain(on);
     expect((await memberRow())!.period_end).toBe((t + 30 * 86_400) * 1000);
+    expect(paramsOf(calls, "GET /subscriptions")).toEqual([{ customer: "cus_1", status: "all", limit: "10", "expand[0]": "data.latest_invoice" }]);
   });
 
   test("a renewal whose invoice.paid was lost is granted by renewals once Stripe shows it paid", async () => {
@@ -1171,14 +1175,38 @@ describe("comp and renewals", () => {
     await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
     await env.DB.prepare("UPDATE members SET spent = 1500000 WHERE id = 'm1'").run();
     const renewal = { status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 };
-    routes["GET /subscriptions/sub_1"] = () => subscription({ ...renewal, latest_invoice: { status: "open" } });
+    routes["GET /subscriptions"] = listed([subscription({ ...renewal, latest_invoice: { status: "open" } })]);
     await maintain(on);
     expect(await subRow()).toMatchObject({ current_period_end: (t - 7200) * S });
     expect(await memberRow()).toMatchObject({ spent: 1_500_000 });
-    routes["GET /subscriptions/sub_1"] = () => subscription(renewal);
-    await maintain(on);
+    routes["GET /subscriptions"] = listed([subscription(renewal)]);
+    await renewals(on, Date.now() + HOUR);
     expect(await memberRow()).toMatchObject({ allowance: 2_000_000, spent: 0, period_end: (t + 30 * 86_400) * S });
     expect(await subRow()).toMatchObject({ current_period_end: (t + 30 * 86_400) * S });
+  });
+
+  test("an unpaid subscription past its period is re-read, so a cancel whose webhook was lost is applied", async () => {
+    await customer();
+    const t = Math.floor(Date.now() / 1000);
+    await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
+    await apply(subscription({ status: "unpaid", member: "m1", start: t - 7200, end: t + 30 * 86_400, latest_invoice: { status: "open" } }));
+    expect(await subRow()).toMatchObject({ status: "unpaid", current_period_end: (t - 7200) * S });
+    routes["GET /subscriptions"] = listed([subscription({ status: "canceled", member: "m1", end: t - 7200 })]);
+    await maintain(on);
+    expect(await subRow()).toMatchObject({ status: "canceled" });
+  });
+
+  test("a Checkout whose first webhook was lost is applied within the session's life, and an older sign-up is not read", async () => {
+    const t = Math.floor(Date.now() / 1000);
+    await customer("m1", "cus_1");
+    await customer("m2", "cus_2");
+    await env.DB.prepare("UPDATE subscriptions SET updated_at = ? WHERE member_id = 'm1'").bind(Date.now() - 25 * HOUR).run();
+    await env.DB.prepare("UPDATE subscriptions SET updated_at = ? WHERE member_id = 'm2'").bind(Date.now() - 27 * HOUR).run();
+    routes["GET /subscriptions"] = listed([subscription({ status: "trialing", member: "m1", trial_end: t + 7 * 86_400 })]);
+    await maintain(on);
+    expect(paramsOf(calls, "GET /subscriptions").map((p) => p.customer)).toEqual(["cus_1"]);
+    expect(await subRow()).toMatchObject({ status: "trialing", stripe_subscription_id: "sub_1" });
+    expect(await memberRow()).toMatchObject({ allowance: 1_000_000 });
   });
 
   test("a subscription that ended under an hour ago waits for its webhook", async () => {
@@ -1189,30 +1217,49 @@ describe("comp and renewals", () => {
     expect(calls.filter((c) => c.method === "GET")).toHaveLength(0);
   });
 
+  test("renewals read each row from Stripe at most once an hour, even when the read fails", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await customer();
+    const t = Math.floor(Date.now() / 1000);
+    await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
+    routes["GET /subscriptions"] = () => new Response("down", { status: 500 });
+    await maintain(on);
+    await maintain(on);
+    await renewals(on, Date.now() + 59 * 60_000);
+    expect(calls.filter((c) => c.path === "/subscriptions")).toHaveLength(1);
+    await renewals(on, Date.now() + HOUR + 1000);
+    expect(calls.filter((c) => c.path === "/subscriptions")).toHaveLength(2);
+    expect(events(logged).filter((e) => e.event === "renewal_sync_failed")).toEqual([
+      { event: "renewal_sync_failed", member_id: "m1", subscription: "sub_1" },
+      { event: "renewal_sync_failed", member_id: "m1", subscription: "sub_1" }]);
+  });
+
   test("one failing renewal does not stop the next", async () => {
     await customer("m1", "cus_1");
     await customer("m2", "cus_2");
     const t = Math.floor(Date.now() / 1000);
     await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
     await apply(subscription({ id: "sub_2", customer: "cus_2", status: "active", member: "m2", end: t - 7200 }));
-    routes["GET /subscriptions/sub_1"] = () => new Response("down", { status: 500 });
-    routes["GET /subscriptions/sub_2"] = () => subscription({ id: "sub_2", customer: "cus_2", status: "active", member: "m2", end: t + 86_400 });
+    routes["GET /subscriptions"] = (params) => params.get("customer") === "cus_1" ? new Response("down", { status: 500 })
+      : { data: [subscription({ id: "sub_2", customer: "cus_2", status: "active", member: "m2", end: t + 86_400 })] };
     await maintain(on);
     expect((await memberRow("m2"))!.period_end).toBe((t + 86_400) * 1000);
   });
 
-  test("stuck subscriptions do not crowd out a newly late renewal", async () => {
+  test("stuck subscriptions do not crowd out a newly late renewal: each waits an hour after its read", async () => {
     const t = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 20; i++) {
       await env.DB.prepare(`INSERT INTO subscriptions(member_id, stripe_customer_id, stripe_subscription_id, status, current_period_end, updated_at)
         VALUES (?, ?, ?, 'active', ?, 0)`).bind(`s${i}`, `cus_s${i}`, `sub_s${i}`, (t - 10 * 86_400) * 1000).run();
-      routes[`GET /subscriptions/sub_s${i}`] = missing;
     }
     await customer();
     await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
-    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 });
+    routes["GET /subscriptions"] = (params) => params.get("customer") === "cus_1"
+      ? { data: [subscription({ status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 })] } : missing();
+    await maintain(on);
     await maintain(on);
     expect((await memberRow())!.period_end).toBe((t + 30 * 86_400) * 1000);
+    expect(calls.filter((c) => c.path === "/subscriptions")).toHaveLength(21);
   });
 
   test("billing-sync applies Stripe's state now", async () => {
@@ -1347,6 +1394,25 @@ describe("account deletion", () => {
     await maintain({ ...on, CAPTURE: stuck } as unknown as Env);
     expect(calls.some((c) => c.method === "DELETE" && c.path === "/subscriptions/sub_1")).toBe(true);
     expect((await job("m1"))!.completed_at).toBeNull();
+  });
+
+  test("deletions whose Stripe cancel keeps failing do not hold up a newer one", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 25; i++) {
+      await customer(`s${i}`, `cus_s${i}`);
+      await env.DB.prepare("INSERT INTO deletion_jobs(member_id, requested_at) VALUES (?, ?)").bind(`s${i}`, Date.now() - DAY).run();
+    }
+    await customer();
+    // Not yet due for the 90-day sign-up cleanup, nor for the renewals read of a recent Checkout.
+    await env.DB.prepare("UPDATE subscriptions SET updated_at = ?").bind(Date.now() - 27 * 60 * 60_000).run();
+    await deleted("m1");
+    routes["GET /checkout/sessions"] = (params) => params.get("customer") === "cus_1" ? { data: [] } : new Response("down", { status: 500 });
+    routes["GET /subscriptions"] = () => ({ data: [] });
+    await maintain(on);
+    await maintain(on);
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM deletion_jobs WHERE completed_at IS NULL AND billing_cleared_at IS NULL").first())
+      .toEqual({ n: 25 });
   });
 
   test("events after deletion are acknowledged and change nothing", async () => {

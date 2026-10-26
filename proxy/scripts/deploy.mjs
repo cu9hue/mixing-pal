@@ -38,6 +38,25 @@ Configure the sending domain signin@mixingpal.com in Resend first. The auth
 secret must stay stable across deployments; rotating it revokes sessions and
 changes request fingerprints. Deploy never prints secret values.
 
+Stripe setup (before billing on), in the mode of the stage's key: test for
+staging, live for production.
+Webhook endpoint: <API_ORIGIN>/webhooks/stripe, with Snapshot payloads, not
+Thin, and API version 2026-09-30.endive. Events: customer.subscription.created,
+customer.subscription.updated, customer.subscription.deleted, invoice.paid.
+Its signing secret is STRIPE_WEBHOOK_SECRET.
+Customer Portal: a default configuration in each mode. Plan upgrades off; the
+app's Upgrade button does that. If downgrades are on, they take effect at
+period end. Quantity changes off. Cancellations take effect at period end.
+Tax and prices: Stripe Tax active, with an origin address. Both prices monthly,
+with tax_behavior=exclusive. Each stage's prices come from the same mode as
+that stage's key.
+Payments: the proxy restricts Checkout to cards in code. In test mode, confirm
+that Checkout still shows Apple Pay and Google Pay. After all payment retries
+fail, cancel the subscription.
+Recovery: after a D1 restore, billing-sync every member with a subscription;
+see the restore sequence in npm run admin -- help. During a rollback that
+pauses inference for more than a day, pause payment collection in Stripe.
+
 Before enabling staging: verify sign-in delivery, provider prices and strict
 ZDR routing, disable OpenRouter input/output logging and content use, and set
 its API key credit cap. In Cloudflare, create account-wide budget alerts at

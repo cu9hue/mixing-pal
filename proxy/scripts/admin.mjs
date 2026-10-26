@@ -51,7 +51,13 @@ billing_maintenance_failed, report_maintenance_failed, reconciliation_failed,
 settlement_deferred, turn_mark_deferred, capture_deferred, account_view_skipped,
 account_cleanup_failed, prune_skipped, generation_id_mismatch, deletion_failed,
 capture_cleanup_backlog, capture_failed, report_deletion_failed,
-release_read_failed, request_failed, upstream_failed. Alert on any of these in
+release_read_failed, request_failed, upstream_failed. Billing adds
+stripe_unreachable, stripe_failed, stripe_event_failed, stripe_event_unmatched,
+stripe_webhook_rejected, subscription_unknown, subscription_unknown_price,
+subscription_customer_mismatch, duplicate_subscription, subscription_refunded,
+subscription_canceled_unrefunded, refund_failed,
+subscription_canceled_for_deletion, renewal_sync_failed,
+renewal_maintenance_failed, deletion_cancel_failed. Alert on any of these in
 Cloudflare Logs.
 For provisional costs without a generation ID, check the provider billing record
 before resolve. A provisional cost is already charged to the service at its bound; resolve it only from provider evidence.
@@ -67,7 +73,9 @@ minute for requests from the previous deployment to finish; preserve available
 ledger records. Report submission, private reads and notification sends stay
 paused even if restoring D1 revives pending mail. After restoring, apply current
 migrations with Wrangler using .deploy-STAGE.json; keep REPORT_RECOVERY=true.
-Run every replay-deletions page, then sweep. Do not run deploy or enable until
+Run every replay-deletions page, then sweep. Then run
+npm run admin -- billing-sync member-id for every member with a subscription in
+Stripe (its metadata holds member_id). Do not run deploy or enable until
 all deletion pages and spending recovery are complete. Replay blocks ordinary
 resume until spending is recovered too.
 Deletion and revocation metadata is journaled separately in private R2 for 90 days.

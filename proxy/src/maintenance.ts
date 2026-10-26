@@ -98,10 +98,16 @@ export async function maintain(env: Env): Promise<void> {
     }
     if (failed || objects.results.length < CAPTURE_DELETE_BATCH) break;
   }
-  const deletions = await env.DB.prepare("SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND requested_at < ? ORDER BY requested_at LIMIT 20")
-    .bind(now - 10 * 60_000).all<{ member_id: string }>();
+  // Billing first, apart from cleanup. The job tried longest ago goes first, so jobs Stripe keeps failing on cannot hold up the others.
+  const unbilled = await env.DB.prepare(`SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND billing_cleared_at IS NULL
+    AND requested_at < ? ORDER BY billing_checked_at LIMIT 20`).bind(now - 10 * 60_000).all<{ member_id: string }>();
+  for (const { member_id: id } of unbilled.results) {
+    await env.DB.prepare("UPDATE deletion_jobs SET billing_checked_at = ? WHERE member_id = ?").bind(now, id).run();
+    if (await cancelForDeletion(env, id)) await env.DB.prepare("UPDATE deletion_jobs SET billing_cleared_at = ? WHERE member_id = ?").bind(now, id).run();
+  }
+  const deletions = await env.DB.prepare(`SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND billing_cleared_at IS NOT NULL
+    AND requested_at < ? ORDER BY requested_at LIMIT 20`).bind(now - 10 * 60_000).all<{ member_id: string }>();
   for (const { member_id: id } of deletions.results) {
-    if (!await cancelForDeletion(env, id)) continue;
     const unfinished = await env.DB.prepare(`SELECT id FROM captures WHERE turn_id IN (SELECT id FROM turns WHERE member_id = ?)
       AND state != 'deleted' LIMIT 1`).bind(id).first();
     if (unfinished || await env.DB.prepare("SELECT 1 FROM support_reports WHERE user_id = ? AND state != 'deleted' LIMIT 1").bind(id).first()) continue;

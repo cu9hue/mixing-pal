@@ -30,6 +30,7 @@ export interface SubscriptionRow {
   trial_used: number;
   updated_at: number;
   synced_at: number;
+  checked_at: number;
 }
 
 export async function subscriptionRow(env: Env, memberId: string): Promise<SubscriptionRow | null> {
@@ -470,18 +471,26 @@ export async function billingSync(env: Env, memberId: string): Promise<{ status:
   return { status: (await subscriptionRow(env, memberId))?.status ?? "none" };
 }
 
-/** Comped periods roll every 30 days; subscriptions whose renewal webhook is an hour late are re-read. */
+/**
+ * Comped periods roll every 30 days. Rows whose webhook may have been lost are read from Stripe,
+ * each at most once an hour: a period an hour past its end, since the stored end moves only on payment,
+ * and a sign-up whose Checkout may have completed, since a session lasts 24 hours.
+ */
 export async function renewals(env: Env, now = Date.now()): Promise<void> {
   await env.DB.prepare("UPDATE members SET spent = 0, period_end = ? WHERE comp = 1 AND period_end <= ? AND revoked = 0 AND deleted_at IS NULL")
     .bind(now + COMP_PERIOD, now).run();
   if (!env.STRIPE_SECRET_KEY) return;
-  const due = await env.DB.prepare(`SELECT stripe_subscription_id AS id FROM subscriptions
-    WHERE status IN ('trialing', 'active', 'past_due') AND stripe_subscription_id IS NOT NULL AND current_period_end < ?
-    ORDER BY current_period_end DESC LIMIT 20`)
-    .bind(now - 60 * 60_000).all<{ id: string }>();
-  for (const { id } of due.results) {
-    try { await syncSubscription(env, id); }
-    catch { console.error(JSON.stringify({ event: "renewal_sync_failed", subscription: id })); }
+  const hour = 60 * 60_000;
+  const due = await env.DB.prepare(`SELECT * FROM subscriptions WHERE checked_at < ? AND (
+      (status IN (${[...BILLABLE].map(() => "?").join(", ")}) AND stripe_subscription_id IS NOT NULL AND current_period_end < ?)
+      OR (status = 'none' AND updated_at > ?))
+    ORDER BY checked_at LIMIT 20`)
+    .bind(now - hour, ...BILLABLE, now - hour, now - 26 * hour).all<SubscriptionRow>();
+  for (const row of due.results) {
+    // Before the read, whatever its outcome, so a row Stripe keeps failing on waits its turn.
+    await env.DB.prepare("UPDATE subscriptions SET checked_at = ? WHERE member_id = ?").bind(now, row.member_id).run();
+    try { await syncCustomer(env, row); }
+    catch { console.error(JSON.stringify({ event: "renewal_sync_failed", member_id: row.member_id, subscription: row.stripe_subscription_id })); }
   }
 }
 

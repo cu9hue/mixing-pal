@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, access, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, access, mkdir, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -259,4 +259,26 @@ test("deploy without MIXINGPAL_BILLING stops before any Wrangler call", async ()
     assert.match(result.stderr, /Set MIXINGPAL_BILLING=on or off/);
     await assert.rejects(access(join(dir, "calls.jsonl")));
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("the operator help names every event the proxy logs, so each can be alerted on", async () => {
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  const src = fileURLToPath(new URL("../src/", import.meta.url));
+  const names = new Set();
+  for (const file of await readdir(src)) {
+    for (const [, logged] of (await readFile(join(src, file), "utf8")).matchAll(/JSON\.stringify\(\{ event: ([^,}]+)/g)) {
+      for (const [, name] of logged.matchAll(/"(\w+)"/g)) names.add(name);
+    }
+  }
+  assert.ok(names.has("subscription_canceled_unrefunded"));
+  assert.deepEqual([...names].filter((name) => !new RegExp(`\\b${name}\\b`).test(output[0])), []);
+});
+
+test("the Stripe runbook in the deploy help uses the API version the proxy sends", async () => {
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  const help = spawnSync(process.execPath, [script, "help"], { encoding: "utf8" }).stdout;
+  const version = (await readFile(fileURLToPath(new URL("../src/stripe.ts", import.meta.url)), "utf8")).match(/STRIPE_VERSION = "([^"]+)"/)[1];
+  assert.match(help, new RegExp(`API version ${version.replaceAll(".", "\\.")}`));
+  assert.match(help, /\/webhooks\/stripe/);
 });
