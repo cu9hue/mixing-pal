@@ -349,3 +349,71 @@ describe("reporting a problem", () => {
     expect(onReport).toHaveBeenCalledWith({ origin: "error", exchange: expect.objectContaining({ question: "How is the pad?" }) });
   });
 });
+
+describe("terms she can tap", () => {
+  const reply = "**Lower the Threshold.** Watch the gain reduction and the make-up gain.\n\n"
+    + "```terms\nGain reduction: How far the Compressor turns the signal down.\nMake-up gain: Volume added back after the Compressor.\nSidechain: Not in the prose.\n```";
+  async function ask(text: string) {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "load_thread") return { exchanges: [], goal: "finish this track", saved_at: 1, next_bullet: 1, note: [] };
+      if (command === "model_complete") return { text };
+    });
+    render(<Conversation state={{ ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version }}
+      connected account={account} onTurnRunningChange={() => {}} onAnswer={() => {}} />);
+    await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+    const input = screen.getByLabelText("Ask about the set");
+    fireEvent.change(input, { target: { value: "What is the compressor doing?" } });
+    await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  it("marks each listed term in the prose and hides the block", async () => {
+    await ask(reply);
+    const gain = screen.getByRole("button", { name: "gain reduction" });
+    expect(gain.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("button", { name: "make-up gain" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /sidechain/i })).toBeNull();
+    expect(screen.queryByText(/```terms/)).toBeNull();
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("save_thread", expect.objectContaining({
+      exchanges: [expect.objectContaining({
+        answer: "**Lower the Threshold.** Watch the gain reduction and the make-up gain.",
+        terms: expect.arrayContaining([{ term: "Gain reduction", meaning: "How far the Compressor turns the signal down." }]),
+      })],
+    }));
+  });
+
+  it("opens one plain line under the paragraph, one at a time, and closes it on Esc or a second tap", async () => {
+    await ask(reply);
+    const gain = screen.getByRole("button", { name: "gain reduction" });
+    const makeUp = screen.getByRole("button", { name: "make-up gain" });
+    fireEvent.click(gain);
+    const line = screen.getByRole("note");
+    expect(line.textContent).toBe("Gain reduction: How far the Compressor turns the signal down.");
+    expect(line.querySelector("strong")?.textContent).toBe("Gain reduction");
+    expect(gain.getAttribute("aria-expanded")).toBe("true");
+    expect(gain.getAttribute("aria-controls")).toBe(line.id);
+    expect(gain.closest("p")?.nextElementSibling).toBe(line);
+
+    fireEvent.click(makeUp);
+    expect(screen.getAllByRole("note")).toHaveLength(1);
+    expect(screen.getByRole("note").textContent).toBe("Make-up gain: Volume added back after the Compressor.");
+    expect(gain.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.keyDown(makeUp, { key: "Escape" });
+    expect(screen.queryByRole("note")).toBeNull();
+
+    fireEvent.click(gain);
+    fireEvent.click(gain);
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("renders an answer without terms as before", async () => {
+    await ask("Leave the gain reduction alone.");
+    expect(screen.getByText("Leave the gain reduction alone.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "gain reduction" })).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("save_thread", expect.objectContaining({
+      exchanges: [expect.not.objectContaining({ terms: expect.anything() })],
+    }));
+  });
+});

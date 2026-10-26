@@ -1,3 +1,5 @@
+import type { Term } from "../notes/terms";
+
 /**
  * One question and what came back for it. The card shows every exchange of
  * the session, newest last; the thread is what she reads, and is separate
@@ -15,6 +17,8 @@ export interface Exchange {
   move?: string;
   /** Tracks the model read for this answer, by name at the time. */
   tracksRead?: string[];
+  /** Terms she can tap in the answer; see src/notes/terms.ts. */
+  terms?: Term[];
 }
 
 export interface Feedback {
@@ -27,7 +31,7 @@ export function begin(thread: Exchange[], question: string, turnId?: string, acc
   return [...thread, { question, answer: null, error: null, ...(turnId ? { turnId } : {}), ...(accountId ? { accountId } : {}) }];
 }
 
-export function complete(thread: Exchange[], answer: string, details: Pick<Exchange, "move" | "tracksRead"> = {}): Exchange[] {
+export function complete(thread: Exchange[], answer: string, details: Pick<Exchange, "move" | "tracksRead" | "terms"> = {}): Exchange[] {
   return settle(thread, { answer, error: null, ...details });
 }
 
@@ -35,7 +39,7 @@ export function fail(thread: Exchange[], error: string): Exchange[] {
   return settle(thread, { answer: null, error });
 }
 
-function settle(thread: Exchange[], outcome: Pick<Exchange, "answer" | "error" | "move" | "tracksRead">): Exchange[] {
+function settle(thread: Exchange[], outcome: Pick<Exchange, "answer" | "error" | "move" | "tracksRead" | "terms">): Exchange[] {
   const last = thread[thread.length - 1];
   return [...thread.slice(0, -1), { ...last, ...outcome }];
 }

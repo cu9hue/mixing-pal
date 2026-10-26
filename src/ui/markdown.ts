@@ -23,7 +23,10 @@ export type InlineNode =
   // The producer-controlled name a set-derived string was fenced with
   // (guillemets stripped). Rendered as a chip so the producer can tell it
   // apart from the model's own words.
-  | { type: "fence"; name: string };
+  | { type: "fence"; name: string }
+  // A word she can tap for one plain line; `index` is its place in the
+  // answer's terms. Added by `markTerms`, never by the parser.
+  | { type: "term"; text: string; index: number };
 
 export type BlockNode =
   | { type: "paragraph"; children: InlineNode[] }
@@ -315,4 +318,59 @@ function parseInline(text: string): InlineNode[] {
 
   flush();
   return nodes;
+}
+
+// Letters and digits in any script. A term matches only where neither
+// neighbour is one, so "knee" is not marked inside "knees".
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+/**
+ * Marks the first occurrence of each term in the answer, matched
+ * case-insensitively on word boundaries, longest term first so a short term
+ * cannot take the words of a longer one. Walks text inside bold and italic,
+ * because the move is bold and often holds a term. Never code or a «name»:
+ * those belong to her set. A term with no match stays unmarked.
+ */
+export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[]): BlockNode[] {
+  const order = terms.map((t, index) => ({ term: t.term, index })).sort((a, b) => b.term.length - a.term.length);
+  let out = blocks;
+  for (const { term, index } of order) {
+    if (term.trim() === "") continue;
+    let done = false;
+    const pattern = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+    const inline = (nodes: InlineNode[]): InlineNode[] =>
+      nodes.flatMap((n): InlineNode[] => {
+        if (done) return [n];
+        if (n.type === "bold" || n.type === "italic") return [{ ...n, children: inline(n.children) }];
+        if (n.type !== "text") return [n];
+        for (const m of n.text.matchAll(pattern)) {
+          const start = m.index ?? 0;
+          const end = start + m[0].length;
+          if (WORD_CHAR.test(n.text[start - 1] ?? "") || WORD_CHAR.test(n.text[end] ?? "")) continue;
+          done = true;
+          const before = n.text.slice(0, start);
+          const after = n.text.slice(end);
+          return [
+            ...(before === "" ? [] : [{ type: "text" as const, text: before }]),
+            { type: "term" as const, text: m[0], index },
+            ...(after === "" ? [] : [{ type: "text" as const, text: after }]),
+          ];
+        }
+        return [n];
+      });
+    out = out.map((b): BlockNode => {
+      switch (b.type) {
+        case "paragraph":
+        case "heading":
+          return { ...b, children: inline(b.children) };
+        case "list":
+          return { ...b, items: b.items.map(inline) };
+        case "table":
+          return { ...b, header: b.header.map(inline), rows: b.rows.map((r) => r.map(inline)) };
+        case "code_block":
+          return b;
+      }
+    });
+  }
+  return out;
 }
