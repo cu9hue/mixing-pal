@@ -101,6 +101,14 @@ export async function routes(p: ModelPolicy): Promise<string[]> {
   return allowed;
 }
 
+/** The policy that answers this app now, with its eligible hosts. */
+export async function serving(appVersion: string): Promise<[ModelPolicy, string[]]> {
+  const preferred = policyFor(appVersion);
+  // Every app can use K2.6, so any failure to route Luna falls back to it rather than refusing the request.
+  if (preferred !== K26) try { return [preferred, await routes(preferred)]; } catch {}
+  return [K26, await routes(K26)];
+}
+
 export function providerBody(input: CompletionInput, p: ModelPolicy, only: string[]) {
   return { model: p.model, messages: input.body.messages, tools: input.body.tools,
     tool_choice: "auto", max_tokens: MAX_OUTPUT, stream: true, reasoning: { effort: "low" },
