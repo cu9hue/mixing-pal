@@ -887,6 +887,21 @@ describe("billing routes", () => {
     expect(posted("/checkout/sessions")).toHaveLength(0);
   });
 
+  test("a row whose customer Stripe no longer has gets a new customer and a Checkout", async () => {
+    const user = await signedIn();
+    await customer(user.id, "cus_dead");
+    await env.DB.prepare("UPDATE subscriptions SET status = 'canceled', trial_used = 1 WHERE member_id = ?").bind(user.id).run();
+    routes["GET /subscriptions"] = missing;
+    routes["POST /customers"] = () => ({ id: "cus_new" });
+    expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
+    expect(paramsOf(calls, "GET /customers/search")).toEqual([{ query: `metadata['member_id']:'${user.id}'` }]);
+    // Not the first customer's key: Stripe would replay the deleted customer for a day.
+    expect(posted("/customers")[0].headers.get("Idempotency-Key")).toBe(`customer-${user.id}-cus_dead`);
+    expect(posted("/checkout/sessions")[0].params.get("customer")).toBe("cus_new");
+    expect(posted("/checkout/sessions")[0].params.has("subscription_data[trial_period_days]")).toBe(false);
+    expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_new", status: "canceled" });
+  });
+
   test("checkout offers cards only; Apple Pay and Google Pay are card payments", async () => {
     const user = await signedIn();
     await api("/v1/billing/checkout", { plan: "starter" }, user.token);
@@ -1494,6 +1509,24 @@ describe("account deletion", () => {
     routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1" })] });
     routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
     await Promise.all([maintain(on), maintain(on)]);
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+    expect(events(logged).filter((e) => e.event === "deletion_cancel_failed")).toEqual([]);
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+  });
+
+  test("a sweep that starts while another is inside its Stripe calls skips the job", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await customer();
+    await apply(subscription({ status: "active", member: "m1" }));
+    await deleted("m1");
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1" })] });
+    let late = false;
+    routes["DELETE /subscriptions/sub_1"] = async () => {
+      // The second sweep runs entirely after the first one's claim, while its DELETE is pending.
+      if (!late) { late = true; await maintain(on); }
+      return subscription({ status: "canceled", member: "m1" });
+    };
+    await maintain(on);
     expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
     expect(events(logged).filter((e) => e.event === "deletion_cancel_failed")).toEqual([]);
     expect((await job("m1"))!.completed_at).not.toBeNull();

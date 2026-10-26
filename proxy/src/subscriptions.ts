@@ -241,9 +241,10 @@ export async function syncSubscription(env: Env, id: string): Promise<void> {
 
 /**
  * Asks Stripe for the customer's subscriptions, not the row, and applies each one that can still charge,
- * plus the row's own whatever its state. True when one can still charge.
+ * plus the row's own when its state differs from the row's. billable: one can still charge.
+ * gone: Stripe no longer has the customer.
  */
-async function syncCustomer(env: Env, row: SubscriptionRow): Promise<boolean> {
+async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable: boolean; gone: boolean }> {
   const stamp = readStamp();
   const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
     { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] }).catch(async (error) => {
@@ -251,8 +252,9 @@ async function syncCustomer(env: Env, row: SubscriptionRow): Promise<boolean> {
     // A customer Stripe no longer has holds nothing that can charge, so the row stops showing a plan.
     await env.DB.prepare(`UPDATE subscriptions SET status = 'canceled' WHERE member_id = ? AND stripe_customer_id = ?
       AND status IN (${[...BILLABLE].map(() => "?").join(", ")})`).bind(row.member_id, row.stripe_customer_id, ...BILLABLE).run();
-    return { data: [] };
+    return null;
   });
+  if (!listed) return { billable: false, gone: true };
   let billable = false;
   for (const sub of listed.data) {
     if (BILLABLE.has(sub.status)) billable = true;
@@ -261,7 +263,7 @@ async function syncCustomer(env: Env, row: SubscriptionRow): Promise<boolean> {
     // Applies after the first share the read's stamp and lose; the retry reads that one subscription again.
     if (!await applySubscription(env, sub, stamp)) await syncSubscription(env, sub.id);
   }
-  return billable;
+  return { billable, gone: false };
 }
 
 /** Expires the customer's open Checkout sessions, so none can start a subscription later. */
@@ -342,15 +344,24 @@ async function storeCustomer(env: Env, memberId: string, customer: string): Prom
   return subscriptionRow(env, memberId);
 }
 
-/** The member's customer row, made now. found: the customer was already at Stripe, as after a database restore. */
-async function customerFor(env: Env, memberId: string): Promise<{ row: SubscriptionRow; found: boolean }> {
+/**
+ * The member's customer row, made now. found: the customer was already at Stripe, as after a database restore.
+ * gone: the row's customer, which Stripe no longer has; the row then takes the new one.
+ */
+async function customerFor(env: Env, memberId: string, gone?: string): Promise<{ row: SubscriptionRow; found: boolean }> {
   const user = await env.DB.prepare('SELECT email FROM "user" WHERE id = ?').bind(memberId).first<{ email: string }>();
   if (!user) throw new ApiError(401, "sign_in_required", "Sign in again.");
-  const found = await searchCustomer(env, memberId);
-  // The key makes two quick clicks create one customer.
+  // Search can lag a deletion by about a minute.
+  const searched = await searchCustomer(env, memberId);
+  const found = searched === gone ? undefined : searched;
+  // The key makes two quick clicks create one customer. A replacement has its own: Stripe replays a key's
+  // result for a day, which would be the deleted customer.
   const customer = found ?? (await stripe<{ id: string }>(env, "POST", "/customers",
-    { email: user.email, metadata: { member_id: memberId } }, `customer-${memberId}`)).id;
-  const row = await storeCustomer(env, memberId, customer);
+    { email: user.email, metadata: { member_id: memberId } }, gone ? `customer-${memberId}-${gone}` : `customer-${memberId}`)).id;
+  // Only the row that still holds the gone customer: if another checkout replaced it first, the row keeps that one.
+  if (gone) await env.DB.prepare("UPDATE subscriptions SET stripe_customer_id = ? WHERE member_id = ? AND stripe_customer_id = ?")
+    .bind(customer, memberId, gone).run();
+  const row = gone ? await subscriptionRow(env, memberId) : await storeCustomer(env, memberId, customer);
   if (!row) throw new ApiError(401, "sign_in_required", "Sign in again.");
   return { row, found: found !== undefined };
 }
@@ -374,15 +385,17 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   // Our cached status lags Stripe's webhook, so a second click would open a second Checkout. Stripe decides,
   // and what it has is applied now, so a member whose webhooks were lost gets access too.
   // An unpaid or paused one is asked about too: if Stripe has since ended it, the member can subscribe again.
-  if (existing && (LIVE.has(existing.status) || await syncCustomer(env, existing))) return portalUrl(env, existing);
+  const synced = existing && !LIVE.has(existing.status) ? await syncCustomer(env, existing) : null;
+  if (existing && (!synced || synced.billable)) return portalUrl(env, existing);
   // A pilot period still running would mix its spending into the plan's allowance.
   if (m && m.period_end > now) throw new ApiError(409, "access_active", "Your current access hasn't ended yet.");
   let row = existing;
   // A customer found at Stripe belongs to a member restored from a backup, who has had the trial.
   let found = false;
-  if (!row) {
-    const made = await customerFor(env, memberId);
-    if (made.found && await syncCustomer(env, made.row)) return portalUrl(env, made.row);
+  if (!row || synced?.gone) {
+    // A customer Stripe no longer has cannot take a Checkout; Stripe canceled its subscriptions when it was deleted.
+    const made = await customerFor(env, memberId, row?.stripe_customer_id);
+    if (made.found && (await syncCustomer(env, made.row)).billable) return portalUrl(env, made.row);
     row = made.row;
     found = made.found;
   }
@@ -456,7 +469,7 @@ export async function comp(env: Env, email: string, now = Date.now()): Promise<{
   const user = await env.DB.prepare('SELECT id FROM "user" WHERE lower(email) = ?').bind(email).first<{ id: string }>();
   if (!user) throw new ApiError(404, "user_not_found", "No account uses that email. Ask them to sign in once first.");
   const row = await subscriptionRow(env, user.id);
-  if (row && await syncCustomer(env, row)) {
+  if (row && (await syncCustomer(env, row)).billable) {
     throw new ApiError(409, "subscription_live", "This account has a live subscription. Cancel it in Stripe first.");
   }
   const m = await member(env, user.id);
