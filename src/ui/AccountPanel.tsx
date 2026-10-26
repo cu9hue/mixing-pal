@@ -45,6 +45,13 @@ export function AccountPanel({ account }: { account: AccountState }) {
   const view = account.view;
   // The note is about a trip to the browser; once the account changes, it is stale.
   useEffect(() => { setOpened(false); }, [view?.access, view?.plan, view?.subscription_status, view?.cancel_at_period_end, view?.comp, view?.period_end]);
+  // Checkout and invoice pages finish in the browser. Look again every 5 seconds for 2 minutes, then drop the note.
+  useEffect(() => {
+    if (!opened) return;
+    const poll = setInterval(() => { void account.refresh(); }, 5_000);
+    const stop = setTimeout(() => setOpened(false), 120_000);
+    return () => { clearInterval(poll); clearTimeout(stop); };
+  }, [opened, account.refresh]);
   const problem = error ?? account.error;
   const signingIn = view === null || view.access === "signed_out" || view.access === "invitation_required";
 
@@ -129,7 +136,8 @@ export function AccountPanel({ account }: { account: AccountState }) {
             ? "We’re checking the last request’s usage before you can ask again."
             : <>
               The remaining allowance cannot cover another request.
-              {(view.comp || (view.plan && view.subscription_status === "active")) && view.period_end && ` It resets on ${new Date(view.period_end).toLocaleDateString()}.`}
+              {(view.comp || (view.plan && view.subscription_status === "active")) && view.period_end
+                && (view.cancel_at_period_end ? ` Your plan ends on ${new Date(view.period_end).toLocaleDateString()}.` : ` It resets on ${new Date(view.period_end).toLocaleDateString()}.`)}
               {view.subscription_status === "trialing" && <div className="account__actions">
                 <button className="account__primary" disabled={busy || operations.install} onClick={() => billing("start-now")}>Start my plan now</button>
                 <span>Ends your trial and charges your card today.</span>

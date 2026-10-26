@@ -18,6 +18,14 @@ const MAX_OUTBOX: usize = 20 * MAX_EVENT;
 const OUTBOX_AGE: u64 = 24 * 60 * 60 * 1000;
 /// At least the proxy's `RESPONSE_BUDGET` plus 15 s for the network, so the proxy's own error arrives first.
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(300);
+const BILLING_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Checkout makes up to four Stripe calls of 10 s each, so billing routes wait longer than other short requests.
+fn request_timeout(path: &str) -> Option<Duration> {
+    if path.ends_with("/completions") { None }
+    else if path.starts_with("/v1/billing/") { Some(BILLING_TIMEOUT) }
+    else { Some(Duration::from_secs(15)) }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxyError {
@@ -169,7 +177,7 @@ impl Proxy {
     async fn request(&self, method: Method, path: &str, body: Option<Value>, session: Option<&Session>) -> Result<(Value, Option<String>), ProxyError> {
         // The proxy shows plan choices only to apps that name a version; older ones read "expired".
         let mut builder = self.client.request(method, format!("{}{path}", self.origin)).header("Mixing-Pal-Version", env!("CARGO_PKG_VERSION"));
-        if !path.ends_with("/completions") { builder = builder.timeout(Duration::from_secs(15)); }
+        if let Some(timeout) = request_timeout(path) { builder = builder.timeout(timeout); }
         if let Some(s) = session { builder = builder.bearer_auth(&s.token); }
         if let Some(value) = body { builder = builder.json(&value); }
         let mut response = builder.send().await.map_err(|_| ProxyError::new("connection_failed", "Could not reach Mixing Pal. Check your connection and try again."))?;
@@ -963,6 +971,14 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "access": "plan_required", "capture": false })))
             .mount(&fixture.server).await;
         assert_eq!(fixture.proxy().account().await.unwrap()["access"], "plan_required");
+    }
+
+    #[test]
+    fn billing_routes_wait_45_seconds_and_other_short_requests_15() {
+        assert_eq!(request_timeout("/v1/billing/checkout"), Some(Duration::from_secs(45)));
+        assert_eq!(request_timeout("/v1/billing/upgrade"), Some(Duration::from_secs(45)));
+        assert_eq!(request_timeout("/v1/account"), Some(Duration::from_secs(15)));
+        assert_eq!(request_timeout("/v1/completions"), None);
     }
 
     #[tokio::test]

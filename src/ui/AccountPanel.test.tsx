@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AccountPanel } from "./AccountPanel";
 import { invoke } from "@tauri-apps/api/core";
 import { AccountState, AccountView } from "../model/account";
@@ -109,4 +109,44 @@ it("the browser note clears when only the plan's cancellation changes", async ()
   expect(screen.getByText(/Finish in your browser/)).toBeTruthy();
   rerender(<AccountPanel account={signedIn({ ...active, cancel_at_period_end: true })} />);
   await waitFor(() => expect(screen.queryByText(/Finish in your browser/)).toBeNull());
+});
+
+it("while the browser note shows, the account is read every 5 seconds for 2 minutes, then the note clears", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.mocked(invoke).mockResolvedValue({ opened: true });
+    const refresh = vi.fn(async () => {});
+    render(<AccountPanel account={{ ...signedIn({ access: "plan_required", trial_available: true }), refresh }} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "Start 7-day free trial" })[0]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText(/Finish in your browser/)).toBeTruthy();
+    expect(refresh).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(110_000); });
+    expect(refresh).toHaveBeenCalledTimes(23);
+    expect(screen.getByText(/Finish in your browser/)).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(refresh).toHaveBeenCalledTimes(24);
+    expect(screen.queryByText(/Finish in your browser/)).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(refresh).toHaveBeenCalledTimes(24);
+  } finally { vi.useRealTimers(); }
+});
+
+it("opens the invoice page for an upgrade and shows the browser note instead of changing the account", async () => {
+  const change = vi.fn();
+  vi.mocked(invoke).mockResolvedValue({ opened: true });
+  render(<AccountPanel account={{ ...signedIn({ subscription_status: "active", plan: "starter", can_ask: false, remaining_micro_usd: 100 }), change }} />);
+  fireEvent.click(screen.getByRole("button", { name: "Upgrade to Pro" }));
+  expect(await screen.findByText(/Finish in your browser/)).toBeTruthy();
+  expect(change).not.toHaveBeenCalled();
+});
+
+it("a plan set to end says it ends, not that it resets", () => {
+  const end = Date.UTC(2026, 10, 20);
+  const view = { subscription_status: "active", plan: "pro", can_ask: false, remaining_micro_usd: 100, period_end: end } as const;
+  render(<AccountPanel account={signedIn({ ...view, cancel_at_period_end: true })} />);
+  expect(screen.getByText(`Your plan ends on ${new Date(end).toLocaleDateString()}.`, { exact: false })).toBeTruthy();
+  expect(screen.queryByText(/It resets on/)).toBeNull();
 });

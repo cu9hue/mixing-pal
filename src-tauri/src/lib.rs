@@ -859,26 +859,34 @@ async fn account_redeem(code: String, state: tauri::State<'_, Arc<proxy::Proxy>>
     state.redeem(code).await
 }
 
-/// Only Stripe's own Checkout and Portal pages open from a billing reply.
+/// Only Stripe's own Checkout, Portal and hosted invoice pages open from a billing reply.
 fn billing_url(value: &serde_json::Value) -> Result<String, proxy::ProxyError> {
     let unreadable = || proxy::ProxyError::new("invalid_response", "The billing link is not a Stripe page.");
     let url = reqwest::Url::parse(value["url"].as_str().unwrap_or_default()).map_err(|_| unreadable())?;
-    if url.scheme() != "https" || !matches!(url.host_str(), Some("checkout.stripe.com" | "billing.stripe.com")) {
+    if url.scheme() != "https" || !matches!(url.host_str(), Some("checkout.stripe.com" | "billing.stripe.com" | "invoice.stripe.com")) {
         return Err(unreadable());
     }
     Ok(url.into())
 }
 
+/// Validates the reply's URL and opens it with `program`. A failed launch is a failure.
+fn open_billing_page(reply: &serde_json::Value, program: &str) -> Result<serde_json::Value, proxy::ProxyError> {
+    let url = billing_url(reply)?;
+    let opened = std::process::Command::new(program).arg(&url).status().map(|status| status.success()).unwrap_or(false);
+    if !opened { return Err(proxy::ProxyError::new("open_failed", "The browser could not be opened.")); }
+    Ok(serde_json::json!({ "opened": true }))
+}
+
+/// A `url` with no `access` is a Stripe invoice page to open. Anything else is the account view.
+fn billing_reply(reply: serde_json::Value, program: &str) -> Result<serde_json::Value, proxy::ProxyError> {
+    if reply.get("url").is_some() && reply.get("access").is_none() { open_billing_page(&reply, program) } else { Ok(reply) }
+}
+
 #[tauri::command]
 async fn account_billing(action: String, plan: Option<String>, state: tauri::State<'_, Arc<proxy::Proxy>>) -> Result<serde_json::Value, proxy::ProxyError> {
     match action.as_str() {
-        "checkout" | "portal" => {
-            let url = billing_url(&state.billing(&action, plan.as_deref()).await?)?;
-            std::process::Command::new("/usr/bin/open").arg(&url).status()
-                .map_err(|_| proxy::ProxyError::new("open_failed", "The browser could not be opened."))?;
-            Ok(serde_json::json!({ "opened": true }))
-        }
-        "start-now" | "upgrade" => state.billing(&action, None).await,
+        "checkout" | "portal" => open_billing_page(&state.billing(&action, plan.as_deref()).await?, "/usr/bin/open"),
+        "start-now" | "upgrade" => billing_reply(state.billing(&action, None).await?, "/usr/bin/open"),
         _ => Err(proxy::ProxyError::new("invalid_request", "Unknown billing action.")),
     }
 }
@@ -2811,10 +2819,38 @@ mod tests {
     fn only_stripe_pages_open_from_a_billing_reply() {
         assert!(billing_url(&serde_json::json!({ "url": "https://checkout.stripe.com/c/pay/cs_test_1" })).is_ok());
         assert!(billing_url(&serde_json::json!({ "url": "https://billing.stripe.com/p/session/test_1" })).is_ok());
-        for bad in ["http://checkout.stripe.com/c/pay/x", "https://checkout.stripe.com.evil.example/x",
+        assert!(billing_url(&serde_json::json!({ "url": "https://invoice.stripe.com/i/acct_1/test_1" })).is_ok());
+        for bad in ["https://invoice.stripe.com.evil.example/i/x", "https://evilinvoice.stripe.com/i/x", "https://invoice.stripe.com@evil.example/i/x",
+            "http://invoice.stripe.com/i/x", "http://checkout.stripe.com/c/pay/x", "https://checkout.stripe.com.evil.example/x",
             "https://evil.example/", "file:///etc/passwd", ""] {
             assert!(billing_url(&serde_json::json!({ "url": bad })).is_err(), "{bad}");
         }
         assert!(billing_url(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn a_reply_with_a_url_and_no_access_opens_the_invoice_page() {
+        let invoice = serde_json::json!({ "url": "https://invoice.stripe.com/i/acct_1/test_1" });
+        assert_eq!(billing_reply(invoice, "/usr/bin/true").unwrap(), serde_json::json!({ "opened": true }));
+    }
+
+    #[test]
+    fn an_account_view_passes_through_without_opening_anything() {
+        let view = serde_json::json!({ "access": "active", "capture": false });
+        assert_eq!(billing_reply(view.clone(), "/nonexistent/open").unwrap(), view);
+    }
+
+    #[test]
+    fn an_invoice_url_outside_stripe_is_refused_and_never_opened() {
+        let error = billing_reply(serde_json::json!({ "url": "https://evil.example/i/x" }), "/nonexistent/open").unwrap_err();
+        assert_eq!(error.code, "invalid_response");
+    }
+
+    #[test]
+    fn a_failed_open_is_a_failure() {
+        let page = serde_json::json!({ "url": "https://checkout.stripe.com/c/pay/cs_test_1" });
+        assert_eq!(open_billing_page(&page, "/usr/bin/false").unwrap_err().code, "open_failed");
+        assert_eq!(open_billing_page(&page, "/nonexistent/open").unwrap_err().code, "open_failed");
+        assert!(open_billing_page(&page, "/usr/bin/true").is_ok());
     }
 }
