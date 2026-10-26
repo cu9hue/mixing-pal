@@ -49,6 +49,8 @@ export async function stripe<T>(env: Env, method: "GET" | "POST" | "DELETE", pat
     // Permanent, unlike an outage: callers that can treat it as nothing there must be able to tell.
     if (code === "resource_missing") throw new ApiError(404, "stripe_not_found", "Billing record not found.");
     if (code === "charge_already_refunded") throw new ApiError(409, "stripe_already_refunded", "Already refunded.");
+    // A refusal, unlike an outage, a conflict or a rate limit: the same call fails again. Routes show the same copy.
+    if (response.status < 500 && response.status !== 409 && response.status !== 429) throw new ApiError(503, "stripe_rejected", UNAVAILABLE);
     throw new ApiError(503, "billing_unavailable", UNAVAILABLE);
   }
 }

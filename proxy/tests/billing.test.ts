@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
 import { DAY, Env } from "../src/env";
 import { maintain } from "../src/maintenance";
-import { StripeSubscription, applySubscription, cancelAndRefund, syncSubscription } from "../src/subscriptions";
+import { StripeSubscription, applySubscription, cancelAndRefund, readStamp, syncSubscription } from "../src/subscriptions";
 import { StripeCall, StripeRoutes, missing, paramsOf, sign, stubNetwork, subscription } from "./stripe-fixtures";
 
 const on = { ...env, BILLING_ENABLED: "true" } as unknown as Env;
@@ -29,9 +29,9 @@ async function signedIn(email = "producer@example.com") {
   return { token: signed.headers.get("set-auth-token")!, id: ((await signed.json()) as { user: { id: string } }).user.id };
 }
 
-// Each test-side read is newer than the one before it, and older than any read the code under test takes.
+// Each test-side read stamp is newer than the one before it, and older than any stamp the code under test takes.
 let reads = 0;
-const read = () => Date.now() - 60_000 + ++reads;
+const read = () => (Date.now() - 60_000) * 1000 + ++reads;
 const apply = (sub: StripeSubscription, now?: number) => applySubscription(on, sub, read(), now);
 
 async function customer(memberId = "m1", customerId = "cus_1") {
@@ -221,15 +221,60 @@ describe("applying Stripe state", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("a subscription on another customer of a known account is logged and writes nothing", async () => {
+  test("a billable subscription on another customer of a known account is logged, refunded and canceled; the row is kept", async () => {
     await user("m1");
     await customer();
+    paidInvoices();
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", customer: "cus_other" });
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     await apply(subscription({ status: "active", member: "m1", customer: "cus_other" }), now);
     expect(events(logged)).toContainEqual({ event: "subscription_customer_mismatch", member_id: "m1", subscription: "sub_1" });
+    expect(events(logged)).toContainEqual({ event: "subscription_refunded", reason: "customer_mismatch", subscription: "sub_1" });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /invoice_payments", "POST /refunds", "DELETE /subscriptions/sub_1"]);
     expect(await subRow()).toMatchObject({ stripe_customer_id: "cus_1", status: "none", stripe_subscription_id: null });
     expect(await memberRow()).toBeNull();
+  });
+
+  test("an ended subscription on another customer of a known account is only logged", async () => {
+    await user("m1");
+    await customer();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await apply(subscription({ status: "canceled", member: "m1", customer: "cus_other" }), now);
+    expect(events(logged)).toContainEqual({ event: "subscription_customer_mismatch", member_id: "m1", subscription: "sub_1" });
     expect(calls).toHaveLength(0);
+    expect(await subRow()).toMatchObject({ stripe_customer_id: "cus_1", status: "none" });
+  });
+
+  test("a billable subscription whose customer belongs to another account is logged as a mismatch, refunded and canceled", async () => {
+    await user("m1");
+    await customer("m2", "cus_1");
+    paidInvoices();
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled" });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await apply(subscription({ status: "active", member: "m1" }), now);
+    expect(events(logged)).toContainEqual({ event: "subscription_customer_mismatch", member_id: "m1", subscription: "sub_1" });
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_1"]);
+    expect(await subRow("m1")).toBeNull();
+    expect(await subRow("m2")).toMatchObject({ stripe_subscription_id: null, status: "none" });
+  });
+
+  test("a deletion that completes while the row is recreated leaves no row, and the subscription is refunded and canceled", async () => {
+    await user("m1");
+    paidInvoices();
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled" });
+    // The deletion's batch lands between this apply's checks and its insert.
+    const racing = { ...on, DB: { batch: (statements: D1PreparedStatement[]) => env.DB.batch(statements),
+      prepare: (sql: string) => {
+        const statement = env.DB.prepare(sql);
+        if (!sql.startsWith("INSERT INTO subscriptions")) return statement;
+        return { bind: (...values: unknown[]) => ({ run: async () => {
+          await env.DB.prepare('DELETE FROM "user" WHERE id = ?').bind("m1").run();
+          return statement.bind(...values).run();
+        } }) };
+      } } } as unknown as Env;
+    await applySubscription(racing, subscription({ status: "active", member: "m1" }) as StripeSubscription, read(), now);
+    expect(await subRow()).toBeNull();
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_1"]);
   });
 
   test("an unknown price on a live subscription fails so it is retried, and writes nothing", async () => {
@@ -312,10 +357,65 @@ describe("applying Stripe state", () => {
 
   test("a subscription Stripe already canceled is refunded but not canceled again, and a $0 trial invoice is not refunded", async () => {
     paidInvoices();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     await cancelAndRefund(on, subscription({ status: "canceled" }) as StripeSubscription, "orphan");
     routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled" });
     await cancelAndRefund(on, subscription({ status: "trialing", trial_end: t + 60 }) as StripeSubscription, "orphan");
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /invoice_payments", "POST /refunds", "DELETE /subscriptions/sub_1"]);
+    expect(events(logged)).toEqual([{ event: "subscription_refunded", reason: "orphan", subscription: "sub_1" },
+      { event: "subscription_canceled_unrefunded", reason: "orphan", subscription: "sub_1" }]);
+  });
+
+  test("an invoice read as a bare id is still refunded through its paid payments", async () => {
+    paidInvoices();
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled" });
+    await cancelAndRefund(on, subscription({ status: "active", latest_invoice: "in_9" }) as StripeSubscription, "duplicate");
+    expect(paramsOf(calls, "GET /invoice_payments")).toEqual([{ invoice: "in_9", status: "paid" }]);
+    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_9" }]);
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+  });
+
+  test("a refund Stripe refuses for good is logged, and the subscription is still canceled", async () => {
+    paidInvoices();
+    routes["POST /refunds"] = () => Response.json({ error: { type: "invalid_request_error", code: "charge_disputed" } }, { status: 400 });
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled" });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await cancelAndRefund(on, subscription({ status: "active" }) as StripeSubscription, "duplicate");
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+    expect(events(logged)).toContainEqual({ event: "refund_failed", subscription: "sub_1", reason: "duplicate", code: "stripe_rejected" });
+    expect(events(logged)).toContainEqual({ event: "subscription_canceled_unrefunded", reason: "duplicate", subscription: "sub_1" });
+    expect(events(logged).some((e) => e.event === "subscription_refunded")).toBe(false);
+  });
+
+  test("a rate-limited refund fails like an outage, so the webhook retries before any cancel", async () => {
+    paidInvoices();
+    routes["POST /refunds"] = () => Response.json({ error: { type: "invalid_request_error", code: "rate_limit" } }, { status: 429 });
+    await expect(cancelAndRefund(on, subscription({ status: "active" }) as StripeSubscription, "duplicate"))
+      .rejects.toMatchObject({ code: "billing_unavailable" });
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+  });
+
+  test("two reads stamped in the same millisecond: only the apply that won changes the member", async () => {
+    await customer();
+    const tt = t - 3 * 86_400;
+    await apply(subscription({ status: "active", member: "m1", start: tt - 30 * 86_400, end: tt }), now);
+    await env.DB.prepare("UPDATE members SET spent = 1500000 WHERE id = 'm1'").run();
+    const frozen = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(frozen);
+    vi.spyOn(Math, "random").mockReturnValueOnce(0.1).mockReturnValueOnce(0.9);
+    // The first read sees a paid renewal; the second, taken in the same ms, sees the cancel. The first apply loses.
+    const reads = [subscription({ status: "active", member: "m1", start: tt, end: tt + 30 * 86_400 }),
+      subscription({ status: "canceled", member: "m1", start: tt, end: tt + 30 * 86_400 })];
+    routes["GET /subscriptions/sub_1"] = () => reads.shift() ?? new Response("down", { status: 500 });
+    const held = gated();
+    const renewal = syncSubscription(held.env, "sub_1");
+    await held.atBatch;
+    await syncSubscription(on, "sub_1");
+    held.open();
+    // Its retry finds Stripe down, so what stands is the two first applies.
+    await expect(renewal).rejects.toMatchObject({ code: "billing_unavailable" });
+    expect(await memberRow()).toMatchObject({ spent: 1_500_000, period_end: tt * S });
+    expect(await subRow()).toMatchObject({ status: "canceled" });
   });
 
   test("a stale read written after a newer one loses, so a paying member keeps the paid allowance", async () => {
@@ -351,7 +451,7 @@ describe("applying Stripe state", () => {
     await apply(subscription({ id: "sub_A", status: "active", member: "m1", end: t + 60 }), now);
     routes["GET /subscriptions/sub_A"] = () => subscription({ id: "sub_A", status: "canceled", member: "m1" });
     const held = gated();
-    const stale = applySubscription(held.env, subscription({ id: "sub_A", status: "canceled", member: "m1" }), Date.now() + 60_000, now);
+    const stale = applySubscription(held.env, subscription({ id: "sub_A", status: "canceled", member: "m1" }), (Date.now() + 60_000) * 1000, now);
     await held.atBatch;
     await apply(subscription({ id: "sub_B", status: "active", member: "m1", end: t + 30 * 86_400 }), now);
     held.open();
@@ -382,7 +482,7 @@ describe("applying Stripe state", () => {
   test("a sync that keeps losing to newer reads fails, so its caller retries", async () => {
     await customer();
     await apply(subscription({ status: "active", member: "m1" }), now);
-    await env.DB.prepare("UPDATE subscriptions SET synced_at = ? WHERE member_id = 'm1'").bind(Date.now() + DAY).run();
+    await env.DB.prepare("UPDATE subscriptions SET synced_at = ? WHERE member_id = 'm1'").bind((Date.now() + DAY) * 1000).run();
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "past_due", member: "m1" });
     await expect(syncSubscription(on, "sub_1")).rejects.toThrow("subscription_apply_contended");
     expect(paramsOf(calls, "GET /subscriptions/sub_1")).toHaveLength(3);
@@ -694,7 +794,7 @@ describe("billing routes", () => {
       // A webhook's read, taken after this call started, lands first: its invoice was still open.
       await pause();
       await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro", start: t, end: t + 30 * 86_400,
-        latest_invoice: { status: "open" } }), Date.now());
+        latest_invoice: { status: "open" } }), readStamp());
       await pause();
       return paid;
     };
@@ -702,6 +802,28 @@ describe("billing routes", () => {
     const view = await (await api("/v1/billing/start-now", {}, user.token)).json();
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["POST /subscriptions/sub_1", "GET /subscriptions/sub_1"]);
     expect(view).toMatchObject({ access: "active", subscription_status: "active", remaining_micro_usd: 8_000_000 });
+  });
+
+  test("an upgrade whose result loses to a newer read applies Stripe's state again", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    const end = Math.floor(Date.now() / 1000) + 86_400;
+    await apply(subscription({ status: "active", member: user.id, end }));
+    await env.DB.prepare("UPDATE members SET spent = 1800000 WHERE id = ?").bind(user.id).run();
+    const upgraded = subscription({ status: "active", member: user.id, price: "price_pro", end });
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
+    routes["GET /subscriptions/sub_1"] = () => upgraded;
+    routes["POST /subscriptions/sub_1"] = async () => {
+      // A webhook's read, taken after this call started, lands first: the proration invoice was still open.
+      await pause();
+      await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro", end,
+        latest_invoice: { status: "open" } }), readStamp());
+      await pause();
+      return upgraded;
+    };
+    const view = await (await api("/v1/billing/upgrade", {}, user.token)).json();
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /subscriptions/sub_1", "POST /subscriptions/sub_1", "GET /subscriptions/sub_1"]);
+    expect(view).toMatchObject({ plan: "pro", remaining_micro_usd: 6_200_000 });
   });
 
   test("start-now needs a trial", async () => {

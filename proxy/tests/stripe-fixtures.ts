@@ -3,6 +3,9 @@ import { vi } from "vitest";
 export interface StripeCall { method: string; path: string; params: URLSearchParams; headers: Headers }
 export type StripeRoutes = Record<string, (params: URLSearchParams) => unknown>;
 
+/** Stripe calls with no route. setup.ts fails the test when any is left: stripe() reads the stub's throw as an outage. */
+export const unrouted: string[] = [];
+
 /** Stubs Resend and Stripe. Stripe routes are keyed "METHOD /path" without the /v1 prefix. */
 export function stubNetwork(routes: StripeRoutes, calls: StripeCall[], onEmail?: (text: string) => void) {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -18,7 +21,10 @@ export function stubNetwork(routes: StripeRoutes, calls: StripeCall[], onEmail?:
       calls.push({ method, path, params, headers: new Headers(init?.headers) });
       const route = routes[`${method} ${path}`];
       // Never a default answer: a 404 would read as "nothing there" to the deletion code.
-      if (!route) throw new Error(`Unexpected Stripe call: ${method} ${path}`);
+      if (!route) {
+        unrouted.push(`${method} ${path}`);
+        throw new Error(`Unexpected Stripe call: ${method} ${path}`);
+      }
       const result = await route(params);
       return result instanceof Response ? result : Response.json(result);
     }

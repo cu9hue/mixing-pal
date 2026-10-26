@@ -35,8 +35,16 @@ export async function subscriptionRow(env: Env, memberId: string): Promise<Subsc
   return env.DB.prepare("SELECT * FROM subscriptions WHERE member_id = ?").bind(memberId).first<SubscriptionRow>();
 }
 
+/**
+ * Stamps a Stripe read when it starts: ms time in microseconds, plus a random part,
+ * so two reads in the same ms never share a stamp. Stored in subscriptions.synced_at only.
+ */
+export function readStamp(): number {
+  return Date.now() * 1000 + Math.floor(Math.random() * 1000);
+}
+
 // A members write in an apply's batch lands only when that apply's subscriptions write won.
-// Binds: member id, readAt, subscription id.
+// Binds: member id, read stamp, subscription id.
 const WON = "EXISTS (SELECT 1 FROM subscriptions WHERE member_id = ? AND synced_at = ? AND stripe_subscription_id = ?)";
 
 // A later period end is a new paid period, so spending starts again; the same
@@ -51,77 +59,87 @@ function grant(env: Env, memberId: string, allowance: number, periodEnd: number,
 
 interface InvoicePayment { payment: { type: string; payment_intent?: string | null; charge?: string | null } }
 
+// Refund errors that come back the same on every retry. Waiting on them would only keep the subscription charging.
+const REFUSED = new Set(["stripe_rejected", "stripe_not_found", "card_declined"]);
+
 /**
  * Refunds what a subscription that cannot be kept has charged, then cancels it.
- * Refund first: if the refund fails, the subscription is still there when the webhook retries.
+ * Refund first: if the refund fails for now, the subscription is still there when the webhook retries.
  */
-export async function cancelAndRefund(env: Env, sub: StripeSubscription, reason: "duplicate" | "orphan" | "comp"): Promise<void> {
+export async function cancelAndRefund(env: Env, sub: StripeSubscription,
+  reason: "duplicate" | "orphan" | "comp" | "customer_mismatch"): Promise<void> {
   const invoice = sub.latest_invoice;
-  if (typeof invoice === "object" && invoice?.status === "paid" && invoice.amount_paid > 0) {
+  const invoiceId = typeof invoice === "string" ? invoice : invoice?.id;
+  // An expanded invoice that shows nothing paid saves the call; for a bare id, the list's status filter decides.
+  const charged = typeof invoice === "string" || (invoice?.status === "paid" && invoice.amount_paid > 0);
+  let refunded = false;
+  if (invoiceId && charged) {
     // Since basil an invoice lists its payments as invoice_payments; it has no payment_intent of its own.
-    const paid = await stripe<{ data: InvoicePayment[] }>(env, "GET", "/invoice_payments", { invoice: invoice.id, status: "paid" });
+    const paid = await stripe<{ data: InvoicePayment[] }>(env, "GET", "/invoice_payments", { invoice: invoiceId, status: "paid" });
     for (const [i, { payment }] of paid.data.entries()) {
       const target = payment.type === "payment_intent" ? { payment_intent: payment.payment_intent }
         : payment.type === "charge" ? { charge: payment.charge } : null;
       if (!target) continue;
-      await stripe(env, "POST", "/refunds", target, `refund-${invoice.id}${i ? `-${i}` : ""}`).catch((error) => {
-        if (!(error instanceof ApiError && error.code === "stripe_already_refunded")) throw error;
-      });
+      try {
+        await stripe(env, "POST", "/refunds", target, `refund-${invoiceId}${i ? `-${i}` : ""}`);
+        refunded = true;
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        if (error.code === "stripe_already_refunded") refunded = true;
+        else if (REFUSED.has(error.code)) {
+          console.error(JSON.stringify({ event: "refund_failed", subscription: sub.id, reason, code: error.code }));
+        } else throw error;
+      }
     }
   }
   if (sub.status !== "canceled") await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
-  console.error(JSON.stringify({ event: "subscription_refunded", reason, subscription: sub.id }));
+  console.error(JSON.stringify({ event: refunded ? "subscription_refunded" : "subscription_canceled_unrefunded", reason, subscription: sub.id }));
 }
 
-/**
- * For a subscription whose member has no row with its customer. True means the
- * row was recreated, after a restore or the 90-day cleanup lost it, and the apply goes on.
- */
-async function recoverRow(env: Env, sub: StripeSubscription, memberId: string, now: number): Promise<boolean> {
+/** A subscription with no row for its member and customer, after recreating the row was refused. */
+async function unmatched(env: Env, sub: StripeSubscription, memberId: string): Promise<void> {
   const found = (await env.DB.prepare(`SELECT EXISTS (SELECT 1 FROM "user" WHERE id = ?) AS user,
       EXISTS (SELECT 1 FROM members WHERE id = ? AND deleted_at IS NOT NULL)
-        OR EXISTS (SELECT 1 FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL) AS deleting,
-      EXISTS (SELECT 1 FROM subscriptions WHERE member_id = ?) AS has_row`)
-    .bind(memberId, memberId, memberId, memberId).first<{ user: number; deleting: number; has_row: number }>())!;
+        OR EXISTS (SELECT 1 FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL) AS deleting`)
+    .bind(memberId, memberId, memberId).first<{ user: number; deleting: number }>())!;
   if (!found.user || found.deleting) {
     // No account will ever use it, so it must not charge.
     if (BILLABLE.has(sub.status)) await cancelAndRefund(env, sub, "orphan");
     else console.error(JSON.stringify({ event: "subscription_unknown", subscription: sub.id }));
-    return false;
+    return;
   }
-  if (found.has_row) {
-    console.error(JSON.stringify({ event: "subscription_customer_mismatch", member_id: memberId, subscription: sub.id }));
-    return false;
-  }
-  await env.DB.prepare("INSERT INTO subscriptions(member_id, stripe_customer_id, updated_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING")
-    .bind(memberId, sub.customer, now).run();
-  return true;
+  // The member's row holds another customer, or this customer is another member's. The member keeps the row's customer.
+  console.error(JSON.stringify({ event: "subscription_customer_mismatch", member_id: memberId, subscription: sub.id }));
+  if (BILLABLE.has(sub.status)) await cancelAndRefund(env, sub, "customer_mismatch");
 }
 
 /**
  * Applies Stripe's current state. Callers pass a subscription just read from
  * Stripe, never an event payload: Stripe does not order events, and the same
- * state applied twice changes nothing. readAt is when that read started. The
- * apply loses to a newer read already applied, and to a change of the row's
- * subscription since this call read it. It returns false when it lost, so the
- * caller reads Stripe again.
+ * state applied twice changes nothing. stamp is readStamp() taken when that
+ * read started. The apply loses to a newer read already applied, and to a
+ * change of the row's subscription since this call read it. It returns false
+ * when it lost, so the caller reads Stripe again.
  */
-export async function applySubscription(env: Env, sub: StripeSubscription, readAt: number, now = Date.now()): Promise<boolean> {
+export async function applySubscription(env: Env, sub: StripeSubscription, stamp: number, now = Date.now()): Promise<boolean> {
   const memberId = sub.metadata?.member_id;
-  const unknown = () => console.error(JSON.stringify({ event: "subscription_unknown", subscription: sub.id }));
   if (!memberId) {
-    unknown();
+    console.error(JSON.stringify({ event: "subscription_unknown", subscription: sub.id }));
     return true;
   }
   const find = () => env.DB.prepare("SELECT * FROM subscriptions WHERE member_id = ? AND stripe_customer_id = ?")
     .bind(memberId, sub.customer).first<SubscriptionRow>();
   let row = await find();
   if (!row) {
-    if (!await recoverRow(env, sub, memberId, now)) return true;
+    // Recreate a row lost to a restore or to the 90-day cleanup. One statement, so a deletion cannot land between check and insert.
+    await env.DB.prepare(`INSERT INTO subscriptions(member_id, stripe_customer_id, updated_at) SELECT ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM "user" WHERE id = ?)
+        AND NOT EXISTS (SELECT 1 FROM members WHERE id = ? AND deleted_at IS NOT NULL)
+        AND NOT EXISTS (SELECT 1 FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL)
+      ON CONFLICT DO NOTHING`).bind(memberId, sub.customer, now, memberId, memberId, memberId).run();
     row = await find();
-    // The insert met another member's row for this customer.
     if (!row) {
-      unknown();
+      await unmatched(env, sub, memberId);
       return true;
     }
   }
@@ -154,15 +172,15 @@ export async function applySubscription(env: Env, sub: StripeSubscription, readA
   const paid = sub.status === "active" && typeof sub.latest_invoice === "object" && sub.latest_invoice?.status === "paid";
   // The stored period moves only with a grant, so renewals() keeps re-reading a renewal that is not paid yet.
   const grants = sub.status === "trialing" || paid;
-  const won = [memberId, readAt, sub.id];
-  // A compare-and-swap on the read's start time and on the subscription this call read from the row.
-  // readAt comes from this Worker's clock. Clocks on different Worker machines differ slightly; that is accepted.
+  const won = [memberId, stamp, sub.id];
+  // A compare-and-swap on the read's stamp and on the subscription this call read from the row.
+  // The stamp comes from this Worker's clock. Clocks on different Worker machines differ slightly; that is accepted.
   const writes = [env.DB.prepare(`UPDATE subscriptions SET stripe_subscription_id = ?, plan = ?, status = ?,
     current_period_end = COALESCE(?, current_period_end), cancel_at_period_end = ?, trial_used = MAX(trial_used, ?),
     updated_at = ?, synced_at = ?
     WHERE member_id = ? AND synced_at < ? AND (stripe_subscription_id IS ? OR stripe_subscription_id = ?)`)
-    .bind(sub.id, plan, sub.status, grants ? end : null, Number(sub.cancel_at_period_end), Number(sub.trial_end !== null), now, readAt,
-      memberId, readAt, row.stripe_subscription_id, sub.id)];
+    .bind(sub.id, plan, sub.status, grants ? end : null, Number(sub.cancel_at_period_end), Number(sub.trial_end !== null), now, stamp,
+      memberId, stamp, row.stripe_subscription_id, sub.id)];
   if (sub.status === "trialing") writes.push(grant(env, memberId, TRIAL_ALLOWANCE, (sub.trial_end ?? item.current_period_end) * 1000, now, won));
   else if (paid) writes.push(grant(env, memberId, ALLOWANCE[plan], end, now, won));
   else if (sub.status === "active" || sub.status === "past_due") {
@@ -183,8 +201,8 @@ const EXPAND = { expand: ["latest_invoice"] };
 /** Reads the subscription and applies it, again with a fresh read while a newer one keeps winning. */
 export async function syncSubscription(env: Env, id: string): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    const readAt = Date.now();
-    if (await applySubscription(env, await stripe<StripeSubscription>(env, "GET", `/subscriptions/${encodeURIComponent(id)}`, EXPAND), readAt)) return;
+    const stamp = readStamp();
+    if (await applySubscription(env, await stripe<StripeSubscription>(env, "GET", `/subscriptions/${encodeURIComponent(id)}`, EXPAND), stamp)) return;
   }
   throw new Error("subscription_apply_contended");
 }
@@ -300,10 +318,10 @@ export async function startNow(env: Env, memberId: string, modern: boolean): Pro
   requireBilling(env);
   const row = await subscriptionRow(env, memberId);
   if (row?.status !== "trialing" || !row.stripe_subscription_id) throw new ApiError(409, "not_trialing", "Only a trial can start early.");
-  const readAt = Date.now();
+  const stamp = readStamp();
   const started = await stripe<StripeSubscription>(env, "POST",
     `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`, { trial_end: "now", proration_behavior: "none", ...EXPAND });
-  if (!await applySubscription(env, started, readAt)) await syncSubscription(env, started.id);
+  if (!await applySubscription(env, started, stamp)) await syncSubscription(env, started.id);
   return account(env, memberId, modern);
 }
 
@@ -315,12 +333,12 @@ export async function upgrade(env: Env, memberId: string, modern: boolean): Prom
   }
   const path = `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`;
   const current = await stripe<StripeSubscription>(env, "GET", path);
-  const readAt = Date.now();
+  const stamp = readStamp();
   // pending_if_incomplete: a declined card leaves Starter in place, with the change pending.
   const updated = await stripe<StripeSubscription>(env, "POST", path, {
     items: [{ id: current.items.data[0].id, price: priceFor(env, "pro") }],
     proration_behavior: "always_invoice", payment_behavior: "pending_if_incomplete", ...EXPAND });
-  if (!await applySubscription(env, updated, readAt)) await syncSubscription(env, updated.id);
+  if (!await applySubscription(env, updated, stamp)) await syncSubscription(env, updated.id);
   if (updated.pending_update) throw new ApiError(402, "card_declined", "Your card was declined. Update it in Manage subscription.");
   return account(env, memberId, modern);
 }

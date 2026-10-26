@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError, Env, readText } from "../src/env";
 import { STRIPE_VERSION, encode, stripe, verifySignature } from "../src/stripe";
-import { StripeCall, StripeRoutes, sign, stubNetwork } from "./stripe-fixtures";
+import { StripeCall, StripeRoutes, sign, stubNetwork, unrouted } from "./stripe-fixtures";
 
 const live = env as unknown as Env;
 let routes: StripeRoutes;
@@ -64,11 +64,14 @@ describe("the Stripe client", () => {
     expect(calls[0].params.get("metadata[member_id]")).toBe("m1");
   });
 
-  test("a Stripe outage or a refused call reads as billing_unavailable", async () => {
+  test("an outage or a rate limit reads as billing_unavailable; a refusal as stripe_rejected, with the same copy", async () => {
     routes["GET /subscriptions/sub_1"] = () => new Response("down", { status: 500 });
     await expect(stripe(live, "GET", "/subscriptions/sub_1")).rejects.toMatchObject({ status: 503, code: "billing_unavailable" });
+    routes["GET /subscriptions/sub_3"] = () => Response.json({ error: { type: "invalid_request_error", code: "rate_limit" } }, { status: 429 });
+    await expect(stripe(live, "GET", "/subscriptions/sub_3")).rejects.toMatchObject({ status: 503, code: "billing_unavailable" });
     routes["GET /subscriptions/sub_2"] = () => Response.json({ error: { type: "invalid_request_error", code: "parameter_unknown" } }, { status: 400 });
-    await expect(stripe(live, "GET", "/subscriptions/sub_2")).rejects.toMatchObject({ status: 503, code: "billing_unavailable" });
+    await expect(stripe(live, "GET", "/subscriptions/sub_2")).rejects.toMatchObject({ status: 503, code: "stripe_rejected",
+      message: "Billing is unavailable. Try again in a minute." });
   });
 
   test("a record Stripe does not have reads as stripe_not_found", async () => {
@@ -90,7 +93,7 @@ describe("the Stripe client", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     routes["POST /checkout/sessions"] = () => Response.json({ error: { type: "invalid_request_error", code: "parameter_unknown",
       param: "automatic_tax[enabled]", message: "Received unknown parameter for jane@example.com" } }, { status: 400 });
-    await expect(stripe(live, "POST", "/checkout/sessions", {})).rejects.toMatchObject({ code: "billing_unavailable" });
+    await expect(stripe(live, "POST", "/checkout/sessions", {})).rejects.toMatchObject({ code: "stripe_rejected" });
     expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([{ event: "stripe_failed", resource: "checkout",
       status: 400, code: "parameter_unknown", type: "invalid_request_error", param: "automatic_tax[enabled]" }]);
   });
@@ -108,6 +111,11 @@ describe("the Stripe client", () => {
     await expect(stripe(live, "POST", "/customers", {}, "customer-m1")).rejects.toMatchObject({ code: "billing_unavailable" });
     await expect(stripe(live, "POST", "/customers", {})).rejects.toMatchObject({ code: "billing_unavailable" });
     expect(calls).toHaveLength(5);
+  });
+
+  test("the stub records a call it has no route for, so the test fails even when the code reads it as an outage", async () => {
+    await expect(stripe(live, "GET", "/subscriptions/sub_9")).rejects.toMatchObject({ code: "billing_unavailable" });
+    expect(unrouted.splice(0)).toEqual(["GET /subscriptions/sub_9"]);
   });
 
   test("no secret key means billing is unavailable, with no network call", async () => {
