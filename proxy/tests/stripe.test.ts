@@ -81,6 +81,35 @@ describe("the Stripe client", () => {
     await expect(stripe(live, "POST", "/subscriptions/sub_1", {})).rejects.toMatchObject({ status: 402, code: "card_declined" });
   });
 
+  test("a refund Stripe already made reads as stripe_already_refunded", async () => {
+    routes["POST /refunds"] = () => Response.json({ error: { type: "invalid_request_error", code: "charge_already_refunded" } }, { status: 400 });
+    await expect(stripe(live, "POST", "/refunds", { payment_intent: "pi_1" })).rejects.toMatchObject({ code: "stripe_already_refunded" });
+  });
+
+  test("a refusal logs Stripe's type and param, and never its message", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    routes["POST /checkout/sessions"] = () => Response.json({ error: { type: "invalid_request_error", code: "parameter_unknown",
+      param: "automatic_tax[enabled]", message: "Received unknown parameter for jane@example.com" } }, { status: 400 });
+    await expect(stripe(live, "POST", "/checkout/sessions", {})).rejects.toMatchObject({ code: "billing_unavailable" });
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([{ event: "stripe_failed", resource: "checkout",
+      status: 400, code: "parameter_unknown", type: "invalid_request_error", param: "automatic_tax[enabled]" }]);
+  });
+
+  test("a key still in use by a call in flight is retried once, a second later", async () => {
+    const inUse = () => Response.json({ error: { type: "idempotency_error", code: "idempotency_key_in_use" } }, { status: 409 });
+    let attempts = 0;
+    routes["POST /customers"] = () => ++attempts === 1 ? inUse() : { id: "cus_1" };
+    const started = Date.now();
+    expect(await stripe(live, "POST", "/customers", {}, "customer-m1")).toEqual({ id: "cus_1" });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+    expect(calls).toHaveLength(2);
+    // Twice in use fails; without a key there is nothing to wait for.
+    routes["POST /customers"] = inUse;
+    await expect(stripe(live, "POST", "/customers", {}, "customer-m1")).rejects.toMatchObject({ code: "billing_unavailable" });
+    await expect(stripe(live, "POST", "/customers", {})).rejects.toMatchObject({ code: "billing_unavailable" });
+    expect(calls).toHaveLength(5);
+  });
+
   test("no secret key means billing is unavailable, with no network call", async () => {
     await expect(stripe({ ...live, STRIPE_SECRET_KEY: undefined }, "GET", "/subscriptions/sub_1")).rejects.toBeInstanceOf(ApiError);
     expect(calls).toHaveLength(0);

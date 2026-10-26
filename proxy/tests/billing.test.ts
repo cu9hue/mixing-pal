@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
 import { DAY, Env } from "../src/env";
 import { maintain } from "../src/maintenance";
-import { applySubscription } from "../src/subscriptions";
-import { StripeCall, StripeRoutes, sign, stubNetwork, subscription } from "./stripe-fixtures";
+import { StripeSubscription, applySubscription, cancelAndRefund, syncSubscription } from "../src/subscriptions";
+import { StripeCall, StripeRoutes, missing, paramsOf, sign, stubNetwork, subscription } from "./stripe-fixtures";
 
 const on = { ...env, BILLING_ENABLED: "true" } as unknown as Env;
 const S = 1000;
@@ -29,6 +29,11 @@ async function signedIn(email = "producer@example.com") {
   return { token: signed.headers.get("set-auth-token")!, id: ((await signed.json()) as { user: { id: string } }).user.id };
 }
 
+// Each test-side read is newer than the one before it, and older than any read the code under test takes.
+let reads = 0;
+const read = () => Date.now() - 60_000 + ++reads;
+const apply = (sub: StripeSubscription, now?: number) => applySubscription(on, sub, read(), now);
+
 async function customer(memberId = "m1", customerId = "cus_1") {
   await env.DB.prepare("INSERT INTO subscriptions(member_id, stripe_customer_id, updated_at) VALUES (?, ?, 0)").bind(memberId, customerId).run();
 }
@@ -40,6 +45,31 @@ async function memberRow(id = "m1") {
 
 async function subRow(id = "m1") {
   return env.DB.prepare("SELECT * FROM subscriptions WHERE member_id = ?").bind(id).first<Record<string, unknown>>();
+}
+
+async function user(id: string) {
+  await env.DB.prepare(`INSERT INTO "user"(id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, '', ?, 1, '2026-01-01', '2026-01-01')`)
+    .bind(id, `${id}@example.com`).run();
+}
+
+/** Each paid invoice has one card payment, pi_<invoice id>, and refunds succeed. */
+function paidInvoices() {
+  routes["GET /invoice_payments"] = (params) => ({ data: [{ id: `inpay_${params.get("invoice")}`, status: "paid",
+    payment: { type: "payment_intent", payment_intent: `pi_${params.get("invoice")}` } }] });
+  routes["POST /refunds"] = (params) => ({ id: `re_${params.get("payment_intent")}`, status: "succeeded" });
+}
+
+const events = (logged: { mock: { calls: unknown[][] } }) => logged.mock.calls.map(([line]) => JSON.parse(String(line)));
+
+/** An env whose D1 batch waits at a gate: it holds one apply between its reads and its write, as a slow Worker would. */
+function gated() {
+  let reached!: () => void;
+  let open!: () => void;
+  const atBatch = new Promise<void>((resolve) => { reached = resolve; });
+  const gate = new Promise<void>((resolve) => { open = resolve; });
+  const DB = { prepare: (sql: string) => env.DB.prepare(sql),
+    batch: async (statements: D1PreparedStatement[]) => { reached(); await gate; return env.DB.batch(statements); } };
+  return { env: { ...on, DB } as unknown as Env, atBatch, open };
 }
 
 beforeEach(async () => {
@@ -58,125 +88,164 @@ describe("applying Stripe state", () => {
 
   test("a trial grants $1 until the trial ends and marks the trial used", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "trialing", member: "m1", trial_end: t + 7 * 86_400 }), now);
+    await apply(subscription({ status: "trialing", member: "m1", trial_end: t + 7 * 86_400 }), now);
     expect(await memberRow()).toMatchObject({ allowance: 1_000_000, spent: 0, period_end: (t + 7 * 86_400) * S });
     expect(await subRow()).toMatchObject({ status: "trialing", plan: "starter", trial_used: 1, stripe_subscription_id: "sub_1" });
   });
 
   test("the first paid period after a trial gives the tier's allowance and starts spending again", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "trialing", member: "m1", price: "price_pro", trial_end: t + 60 }), now);
+    await apply(subscription({ status: "trialing", member: "m1", price: "price_pro", trial_end: t + 60 }), now);
     await env.DB.prepare("UPDATE members SET spent = 900000 WHERE id = 'm1'").run();
-    await applySubscription(on, subscription({ status: "active", member: "m1", price: "price_pro", start: t, end: t + 30 * 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", price: "price_pro", start: t, end: t + 30 * 86_400 }), now);
     expect(await memberRow()).toMatchObject({ allowance: 8_000_000, spent: 0, period_end: (t + 30 * 86_400) * S });
   });
 
   test("an upgrade in the same period raises the allowance and keeps what she spent", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
     await env.DB.prepare("UPDATE members SET spent = 1500000 WHERE id = 'm1'").run();
-    await applySubscription(on, subscription({ status: "active", member: "m1", price: "price_pro", end: t + 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", price: "price_pro", end: t + 86_400 }), now);
     expect(await memberRow()).toMatchObject({ allowance: 8_000_000, spent: 1_500_000 });
   });
 
   test("a renewal starts spending again, and the same state applied twice changes nothing more", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
     await env.DB.prepare("UPDATE members SET spent = 1500000 WHERE id = 'm1'").run();
     const renewed = subscription({ status: "active", member: "m1", start: t + 86_400, end: t + 31 * 86_400 });
-    await applySubscription(on, renewed, now);
+    await apply(renewed, now);
     await env.DB.prepare("UPDATE members SET spent = 400000 WHERE id = 'm1'").run();
-    await applySubscription(on, renewed, now);
+    await apply(renewed, now);
     expect(await memberRow()).toMatchObject({ spent: 400_000, period_end: (t + 31 * 86_400) * S });
   });
 
   test("a renewal keeps money held for requests in flight", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
     await env.DB.prepare("UPDATE members SET spent = 1500000, reserved = 310000 WHERE id = 'm1'").run();
-    await applySubscription(on, subscription({ status: "active", member: "m1", start: t + 86_400, end: t + 31 * 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", start: t + 86_400, end: t + 31 * 86_400 }), now);
     expect(await memberRow()).toMatchObject({ spent: 0, reserved: 310_000 });
   });
 
   test("a renewal whose invoice is not paid yet keeps spending and the allowance, with seven days of access", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
     await env.DB.prepare("UPDATE members SET spent = 1500000 WHERE id = 'm1'").run();
     const renewal = { status: "active", member: "m1", start: t + 86_400, end: t + 31 * 86_400 };
-    await applySubscription(on, subscription({ ...renewal, latest_invoice: { status: "draft" } }), now);
+    await apply(subscription({ ...renewal, latest_invoice: { status: "draft" } }), now);
     expect(await memberRow()).toMatchObject({ allowance: 2_000_000, spent: 1_500_000, period_end: (t + 86_400) * S + 7 * DAY });
-    await applySubscription(on, subscription(renewal), now);
+    await apply(subscription(renewal), now);
     expect(await memberRow()).toMatchObject({ allowance: 2_000_000, spent: 0, period_end: (t + 31 * 86_400) * S });
   });
 
   test("a trial that ends before its first charge keeps the trial's allowance and spending", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "trialing", member: "m1", price: "price_pro", trial_end: t + 60 }), now);
+    await apply(subscription({ status: "trialing", member: "m1", price: "price_pro", trial_end: t + 60 }), now);
     await env.DB.prepare("UPDATE members SET spent = 900000 WHERE id = 'm1'").run();
-    await applySubscription(on, subscription({ status: "active", member: "m1", price: "price_pro", start: t + 60, end: t + 60 + 30 * 86_400,
+    await apply(subscription({ status: "active", member: "m1", price: "price_pro", start: t + 60, end: t + 60 + 30 * 86_400,
       latest_invoice: { status: "open" } }), now);
     expect(await memberRow()).toMatchObject({ allowance: 1_000_000, spent: 900_000, period_end: (t + 60) * S + 7 * DAY });
   });
 
   test("an unpaid invoice creates no member", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", latest_invoice: "in_1" }), now);
+    await apply(subscription({ status: "active", member: "m1", latest_invoice: "in_1" }), now);
     expect(await memberRow()).toBeNull();
   });
 
   test("a failed payment never shortens access", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", start: t, end: t + 30 * 86_400 }), now);
-    await applySubscription(on, subscription({ status: "past_due", member: "m1", start: t, end: t + 30 * 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", start: t, end: t + 30 * 86_400 }), now);
+    await apply(subscription({ status: "past_due", member: "m1", start: t, end: t + 30 * 86_400 }), now);
     expect((await memberRow())!.period_end).toBe((t + 30 * 86_400) * S);
   });
 
   test("a failed payment keeps access for seven days past the paid period", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t }), now);
-    await applySubscription(on, subscription({ status: "past_due", member: "m1", start: t, end: t + 30 * 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", end: t }), now);
+    await apply(subscription({ status: "past_due", member: "m1", start: t, end: t + 30 * 86_400 }), now);
     expect(await memberRow()).toMatchObject({ allowance: 2_000_000, period_end: t * S + 7 * DAY });
   });
 
   test("a canceled subscription ends access now and never extends an earlier end", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
-    await applySubscription(on, subscription({ status: "canceled", member: "m1" }), now);
+    await apply(subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
+    await apply(subscription({ status: "canceled", member: "m1" }), now);
     expect((await memberRow())!.period_end).toBe(now);
-    await applySubscription(on, subscription({ status: "canceled", member: "m1" }), now + 5000);
+    await apply(subscription({ status: "canceled", member: "m1" }), now + 5000);
     expect((await memberRow())!.period_end).toBe(now);
   });
 
   test("an incomplete first payment grants nothing", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "incomplete", member: "m1" }), now);
+    await apply(subscription({ status: "incomplete", member: "m1" }), now);
     expect(await memberRow()).toBeNull();
     expect(await subRow()).toMatchObject({ status: "incomplete" });
   });
 
-  test("a subscription for an unknown account or customer writes nothing", async () => {
+  test("a subscription with no member id, or an ended one for an unknown account, writes nothing", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "nobody" }), now);
-    await applySubscription(on, subscription({ status: "active", member: "m1", customer: "cus_other" }), now);
-    await applySubscription(on, subscription({ status: "active" }), now);
+    await apply(subscription({ status: "canceled", member: "nobody" }), now);
+    await apply(subscription({ status: "active" }), now);
     expect(await memberRow()).toBeNull();
     expect(await subRow()).toMatchObject({ status: "none" });
+    expect(await subRow("nobody")).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a billable subscription for a deleted or deleting account is refunded and canceled", async () => {
+    // m1 has no user row at all. m2 still has one, with an open deletion job.
+    await user("m2");
+    await env.DB.prepare("INSERT INTO deletion_jobs(member_id, requested_at) VALUES ('m2', ?)").bind(now).run();
+    paidInvoices();
+    routes["DELETE /subscriptions/sub_gone"] = () => subscription({ id: "sub_gone", status: "canceled" });
+    routes["DELETE /subscriptions/sub_deleting"] = () => subscription({ id: "sub_deleting", status: "canceled" });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await apply(subscription({ id: "sub_gone", status: "active", member: "m1", latest_invoice: { id: "in_gone" } }), now);
+    await apply(subscription({ id: "sub_deleting", status: "past_due", member: "m2", customer: "cus_2",
+      latest_invoice: { id: "in_deleting" } }), now);
+    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_gone" }, { payment_intent: "pi_in_deleting" }]);
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_gone", "/subscriptions/sub_deleting"]);
+    expect(events(logged)).toContainEqual({ event: "subscription_refunded", reason: "orphan", subscription: "sub_deleting" });
+    expect(await subRow("m1")).toBeNull();
+    expect(await subRow("m2")).toBeNull();
+    expect(await memberRow("m1")).toBeNull();
+  });
+
+  test("a subscription for an account whose row is gone recreates the row and grants access", async () => {
+    await user("m1");
+    await apply(subscription({ status: "active", member: "m1", price: "price_pro" }), now);
+    expect(await subRow()).toMatchObject({ stripe_customer_id: "cus_1", stripe_subscription_id: "sub_1", plan: "pro", status: "active" });
+    expect(await memberRow()).toMatchObject({ allowance: 8_000_000 });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a subscription on another customer of a known account is logged and writes nothing", async () => {
+    await user("m1");
+    await customer();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await apply(subscription({ status: "active", member: "m1", customer: "cus_other" }), now);
+    expect(events(logged)).toContainEqual({ event: "subscription_customer_mismatch", member_id: "m1", subscription: "sub_1" });
+    expect(await subRow()).toMatchObject({ stripe_customer_id: "cus_1", status: "none", stripe_subscription_id: null });
+    expect(await memberRow()).toBeNull();
+    expect(calls).toHaveLength(0);
   });
 
   test("an unknown price on a live subscription fails so it is retried, and writes nothing", async () => {
     await customer();
-    await expect(applySubscription(on, subscription({ status: "active", member: "m1", price: "price_other" }), now)).rejects.toThrow();
-    await applySubscription(on, subscription({ status: "canceled", member: "m1", price: "price_other" }), now);
+    await expect(apply(subscription({ status: "active", member: "m1", price: "price_other" }), now)).rejects.toThrow();
+    await apply(subscription({ status: "canceled", member: "m1", price: "price_other" }), now);
     expect(await memberRow()).toBeNull();
     expect(await subRow()).toMatchObject({ status: "none" });
   });
 
   test("a second live subscription is canceled at Stripe and changes nothing here", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1" }), now);
+    await apply(subscription({ status: "active", member: "m1" }), now);
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1" });
     routes["DELETE /subscriptions/sub_2"] = () => subscription({ id: "sub_2", status: "canceled", member: "m1" });
-    await applySubscription(on, subscription({ id: "sub_2", status: "trialing", member: "m1", price: "price_pro", trial_end: t + 60 }), now);
+    await apply(subscription({ id: "sub_2", status: "trialing", member: "m1", price: "price_pro", trial_end: t + 60 }), now);
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /subscriptions/sub_1", "DELETE /subscriptions/sub_2"]);
     expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_1", plan: "starter" });
     expect(await memberRow()).toMatchObject({ allowance: 2_000_000 });
@@ -184,9 +253,9 @@ describe("applying Stripe state", () => {
 
   test("a new subscription replaces one Stripe already canceled, even before its webhook arrives", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1" }), now);
+    await apply(subscription({ status: "active", member: "m1" }), now);
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
-    await applySubscription(on, subscription({ id: "sub_2", status: "active", member: "m1", price: "price_pro" }), now);
+    await apply(subscription({ id: "sub_2", status: "active", member: "m1", price: "price_pro" }), now);
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
     expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_2", plan: "pro" });
     expect(await memberRow()).toMatchObject({ allowance: 8_000_000 });
@@ -194,17 +263,130 @@ describe("applying Stripe state", () => {
 
   test("an old subscription ending does not touch the current one", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
-    await applySubscription(on, subscription({ id: "sub_0", status: "canceled", member: "m1" }), now);
+    await apply(subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
+    await apply(subscription({ id: "sub_0", status: "canceled", member: "m1" }), now);
     expect(await memberRow()).toMatchObject({ period_end: (t + 86_400) * S });
   });
 
-  test("a comped account is left alone", async () => {
+  test("a subscription live on a comped account is refunded and canceled, and comp is untouched", async () => {
     await customer();
     await env.DB.prepare("INSERT INTO members(id, allowance, period_end, created_at, comp) VALUES ('m1', 8000000, ?, 0, 1)").bind(now + DAY).run();
-    await applySubscription(on, subscription({ status: "active", member: "m1" }), now);
-    await applySubscription(on, subscription({ status: "canceled", member: "m1" }), now);
+    paidInvoices();
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+    await apply(subscription({ status: "active", member: "m1" }), now);
+    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_1" }]);
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_1"]);
+    expect(await subRow()).toMatchObject({ status: "none" });
+    await apply(subscription({ status: "canceled", member: "m1" }), now);
     expect(await memberRow()).toMatchObject({ allowance: 8_000_000, period_end: now + DAY, comp: 1 });
+  });
+
+  test("a charged second subscription is refunded, then canceled", async () => {
+    await customer();
+    await apply(subscription({ status: "active", member: "m1" }), now);
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1" });
+    paidInvoices();
+    routes["DELETE /subscriptions/sub_2"] = () => subscription({ id: "sub_2", status: "canceled", member: "m1" });
+    await apply(subscription({ id: "sub_2", status: "active", member: "m1", price: "price_pro", latest_invoice: { id: "in_2" } }), now);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /subscriptions/sub_1", "GET /invoice_payments", "POST /refunds",
+      "DELETE /subscriptions/sub_2"]);
+    expect(paramsOf(calls, "GET /invoice_payments")).toEqual([{ invoice: "in_2", status: "paid" }]);
+    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_2" }]);
+    expect(calls[2].headers.get("Idempotency-Key")).toBe("refund-in_2");
+    expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_1", plan: "starter" });
+    expect(await memberRow()).toMatchObject({ allowance: 2_000_000 });
+  });
+
+  test("a refund Stripe already made counts as done, and a failed refund leaves the subscription for the retry", async () => {
+    const sub = subscription({ id: "sub_2", status: "active", member: "m1", latest_invoice: { id: "in_2" } }) as StripeSubscription;
+    paidInvoices();
+    routes["POST /refunds"] = () => Response.json({ error: { type: "invalid_request_error", code: "charge_already_refunded" } }, { status: 400 });
+    routes["DELETE /subscriptions/sub_2"] = () => ({ ...sub, status: "canceled" });
+    await cancelAndRefund(on, sub, "duplicate");
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+    calls.length = 0;
+    routes["POST /refunds"] = () => new Response("down", { status: 500 });
+    await expect(cancelAndRefund(on, sub, "duplicate")).rejects.toMatchObject({ code: "billing_unavailable" });
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+  });
+
+  test("a subscription Stripe already canceled is refunded but not canceled again, and a $0 trial invoice is not refunded", async () => {
+    paidInvoices();
+    await cancelAndRefund(on, subscription({ status: "canceled" }) as StripeSubscription, "orphan");
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled" });
+    await cancelAndRefund(on, subscription({ status: "trialing", trial_end: t + 60 }) as StripeSubscription, "orphan");
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /invoice_payments", "POST /refunds", "DELETE /subscriptions/sub_1"]);
+  });
+
+  test("a stale read written after a newer one loses, so a paying member keeps the paid allowance", async () => {
+    await customer();
+    const trial = subscription({ status: "trialing", member: "m1", price: "price_pro", trial_end: t + 60 });
+    await apply(trial, now);
+    const held = gated();
+    const stale = applySubscription(held.env, trial, read(), now);
+    await held.atBatch;
+    await apply(subscription({ status: "active", member: "m1", price: "price_pro", start: t + 60, end: t + 60 + 30 * 86_400 }), now);
+    held.open();
+    expect(await stale).toBe(false);
+    expect(await memberRow()).toMatchObject({ allowance: 8_000_000, period_end: (t + 60 + 30 * 86_400) * S });
+    expect(await subRow()).toMatchObject({ status: "active", current_period_end: (t + 60 + 30 * 86_400) * S });
+  });
+
+  test("an old subscription's cancel, read before a new one lands, does not cut off the new one", async () => {
+    await customer();
+    await apply(subscription({ id: "sub_A", status: "active", member: "m1", end: t + 60 }), now);
+    routes["GET /subscriptions/sub_A"] = () => subscription({ id: "sub_A", status: "canceled", member: "m1" });
+    const held = gated();
+    const stale = applySubscription(held.env, subscription({ id: "sub_A", status: "canceled", member: "m1", end: t + 60 }), read(), now + 120_000);
+    await held.atBatch;
+    await apply(subscription({ id: "sub_B", status: "active", member: "m1", start: t + 100, end: t + 100 + 30 * 86_400 }), now + 120_000);
+    held.open();
+    expect(await stale).toBe(false);
+    expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_B", status: "active" });
+    expect((await memberRow())!.period_end).toBe((t + 100 + 30 * 86_400) * S);
+  });
+
+  test("a read whose row changed under it loses, even when its read is newer", async () => {
+    await customer();
+    await apply(subscription({ id: "sub_A", status: "active", member: "m1", end: t + 60 }), now);
+    routes["GET /subscriptions/sub_A"] = () => subscription({ id: "sub_A", status: "canceled", member: "m1" });
+    const held = gated();
+    const stale = applySubscription(held.env, subscription({ id: "sub_A", status: "canceled", member: "m1" }), Date.now() + 60_000, now);
+    await held.atBatch;
+    await apply(subscription({ id: "sub_B", status: "active", member: "m1", end: t + 30 * 86_400 }), now);
+    held.open();
+    expect(await stale).toBe(false);
+    expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_B", status: "active" });
+    expect((await memberRow())!.period_end).toBe((t + 30 * 86_400) * S);
+  });
+
+  test("two first subscriptions applied together keep one; the other is refunded and canceled", async () => {
+    await customer();
+    const first = subscription({ id: "sub_A", status: "active", member: "m1", latest_invoice: { id: "in_A" } });
+    const second = subscription({ id: "sub_B", status: "active", member: "m1", latest_invoice: { id: "in_B" } });
+    routes["GET /subscriptions/sub_A"] = () => first;
+    routes["GET /subscriptions/sub_B"] = () => second;
+    paidInvoices();
+    routes["DELETE /subscriptions/sub_B"] = () => ({ ...second, status: "canceled" });
+    const held = gated();
+    const late = syncSubscription(held.env, "sub_B");
+    await held.atBatch;
+    await syncSubscription(on, "sub_A");
+    held.open();
+    await late;
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_B"]);
+    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_B" }]);
+    expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_A", status: "active" });
+  });
+
+  test("a sync that keeps losing to newer reads fails, so its caller retries", async () => {
+    await customer();
+    await apply(subscription({ status: "active", member: "m1" }), now);
+    await env.DB.prepare("UPDATE subscriptions SET synced_at = ? WHERE member_id = 'm1'").bind(Date.now() + DAY).run();
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "past_due", member: "m1" });
+    await expect(syncSubscription(on, "sub_1")).rejects.toThrow("subscription_apply_contended");
+    expect(paramsOf(calls, "GET /subscriptions/sub_1")).toHaveLength(3);
+    expect(await subRow()).toMatchObject({ status: "active" });
   });
 });
 
@@ -231,6 +413,34 @@ describe("the Stripe webhook", () => {
       data: { object: { id: "in_1", parent: { type: "subscription_details", subscription_details: { subscription: "sub_1" } } } } });
     expect(response.status).toBe(200);
     expect(await memberRow()).toMatchObject({ allowance: 2_000_000 });
+  });
+
+  test("a paid invoice in a pre-basil payload finds its subscription at the top level", async () => {
+    await customer();
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1" });
+    const response = await deliver({ id: "evt_7", type: "invoice.paid", data: { object: { id: "in_1", subscription: "sub_1" } } });
+    expect(response.status).toBe(200);
+    expect(await memberRow()).toMatchObject({ allowance: 2_000_000 });
+  });
+
+  test("a paid invoice with no subscription is acknowledged and logged", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await deliver({ id: "evt_8", type: "invoice.paid", data: { object: { id: "in_1", parent: null } } })).status).toBe(200);
+    expect(calls).toHaveLength(0);
+    expect(events(logged)).toContainEqual({ event: "stripe_event_unmatched", id: "evt_8", type: "invoice.paid" });
+  });
+
+  test("each refused delivery logs why", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const post = async (body: string, signature: string, target = on) => (await worker.fetch(new Request("http://localhost:8787/webhooks/stripe",
+      { method: "POST", headers: { "Stripe-Signature": signature }, body }), target as never, createExecutionContext())).status;
+    const event = JSON.stringify({ id: "evt_1", type: "invoice.paid", data: { object: {} } });
+    expect(await post(event, "t=1,v1=00")).toBe(400);
+    expect(await post("not json", await sign("not json"))).toBe(400);
+    expect(await post("{\"id\":1}", await sign("{\"id\":1}"))).toBe(400);
+    expect(await post(event, await sign(event), { ...on, STRIPE_WEBHOOK_SECRET: undefined } as Env)).toBe(404);
+    expect(events(logged).filter((e) => e.event === "stripe_webhook_rejected")).toEqual(
+      ["signature", "unreadable", "unreadable", "not_configured"].map((reason) => ({ event: "stripe_webhook_rejected", reason })));
   });
 
   test("a bad signature is refused before any Stripe call", async () => {
@@ -307,17 +517,17 @@ describe("public sign-up", () => {
     const user = await signedIn();
     await customer(user.id);
     const t = Math.floor(Date.now() / 1000);
-    await applySubscription(on, subscription({ status: "trialing", member: user.id, trial_end: t + 86_400, cancel_at_period_end: true }));
+    await apply(subscription({ status: "trialing", member: user.id, trial_end: t + 86_400, cancel_at_period_end: true }));
     expect(await (await api("/v1/account", undefined, user.token)).json())
       .toMatchObject({ access: "active", subscription_status: "trialing", cancel_at_period_end: true, manage: true });
-    await applySubscription(on, subscription({ status: "canceled", member: user.id }));
+    await apply(subscription({ status: "canceled", member: user.id }));
     expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ access: "plan_required", trial_available: false });
   });
 
   test("an active subscription shows its plan", async () => {
     const user = await signedIn();
     await customer(user.id);
-    await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro" }));
+    await apply(subscription({ status: "active", member: user.id, price: "price_pro" }));
     expect(await (await api("/v1/account", undefined, user.token)).json())
       .toMatchObject({ access: "active", plan: "pro", subscription_status: "active", can_ask: true, remaining_micro_usd: 8_000_000 });
   });
@@ -410,7 +620,7 @@ describe("billing routes", () => {
   test("a live subscription gets the Portal instead of a second checkout", async () => {
     const user = await signedIn();
     await customer(user.id);
-    await applySubscription(on, subscription({ status: "active", member: user.id }));
+    await apply(subscription({ status: "active", member: user.id }));
     expect(await (await api("/v1/billing/checkout", { plan: "pro" }, user.token)).json()).toEqual({ url: "https://billing.stripe.com/p/session/1" });
     expect(posted("/checkout/sessions")).toHaveLength(0);
   });
@@ -456,7 +666,7 @@ describe("billing routes", () => {
     const user = await signedIn();
     expect((await api("/v1/billing/portal", {}, user.token)).status).toBe(404);
     await customer(user.id);
-    await applySubscription(on, subscription({ status: "active", member: user.id }));
+    await apply(subscription({ status: "active", member: user.id }));
     expect((await api("/v1/billing/portal", {}, user.token)).status).toBe(200);
     expect(posted("/billing_portal/sessions")[0].params.get("return_url")).toBe("http://localhost:8787/billing/done?state=portal");
   });
@@ -465,11 +675,32 @@ describe("billing routes", () => {
     const user = await signedIn();
     await customer(user.id);
     const t = Math.floor(Date.now() / 1000);
-    await applySubscription(on, subscription({ status: "trialing", member: user.id, price: "price_pro", trial_end: t + 86_400 }));
+    await apply(subscription({ status: "trialing", member: user.id, price: "price_pro", trial_end: t + 86_400 }));
     routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, price: "price_pro", start: t, end: t + 30 * 86_400 });
     const view = await (await api("/v1/billing/start-now", {}, user.token)).json();
     expect(posted("/subscriptions/sub_1")[0].params.get("trial_end")).toBe("now");
     expect(posted("/subscriptions/sub_1")[0].params.get("expand[0]")).toBe("latest_invoice");
+    expect(view).toMatchObject({ access: "active", subscription_status: "active", remaining_micro_usd: 8_000_000 });
+  });
+
+  test("start-now whose result loses to a newer read applies Stripe's state again", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    const t = Math.floor(Date.now() / 1000);
+    await apply(subscription({ status: "trialing", member: user.id, price: "price_pro", trial_end: t + 86_400 }));
+    const paid = subscription({ status: "active", member: user.id, price: "price_pro", start: t, end: t + 30 * 86_400 });
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
+    routes["POST /subscriptions/sub_1"] = async () => {
+      // A webhook's read, taken after this call started, lands first: its invoice was still open.
+      await pause();
+      await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro", start: t, end: t + 30 * 86_400,
+        latest_invoice: { status: "open" } }), Date.now());
+      await pause();
+      return paid;
+    };
+    routes["GET /subscriptions/sub_1"] = () => paid;
+    const view = await (await api("/v1/billing/start-now", {}, user.token)).json();
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["POST /subscriptions/sub_1", "GET /subscriptions/sub_1"]);
     expect(view).toMatchObject({ access: "active", subscription_status: "active", remaining_micro_usd: 8_000_000 });
   });
 
@@ -483,7 +714,7 @@ describe("billing routes", () => {
     await customer(user.id);
     // One fixed period end: a different end would read as a renewal and reset spending.
     const end = Math.floor(Date.now() / 1000) + 86_400;
-    await applySubscription(on, subscription({ status: "active", member: user.id, end }));
+    await apply(subscription({ status: "active", member: user.id, end }));
     await env.DB.prepare("UPDATE members SET spent = 1800000 WHERE id = ?").bind(user.id).run();
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, end });
     routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, price: "price_pro", end });
@@ -498,7 +729,7 @@ describe("billing routes", () => {
     const user = await signedIn();
     await customer(user.id);
     const end = Math.floor(Date.now() / 1000) + 86_400;
-    await applySubscription(on, subscription({ status: "active", member: user.id, end }));
+    await apply(subscription({ status: "active", member: user.id, end }));
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, end });
     routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, end, pending_update: { expires_at: 1 } });
     const response = await api("/v1/billing/upgrade", {}, user.token);
@@ -509,7 +740,7 @@ describe("billing routes", () => {
   test("only an active Starter plan can upgrade", async () => {
     const user = await signedIn();
     await customer(user.id);
-    await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro" }));
+    await apply(subscription({ status: "active", member: user.id, price: "price_pro" }));
     expect((await api("/v1/billing/upgrade", {}, user.token)).status).toBe(409);
   });
 });
@@ -536,7 +767,7 @@ describe("comp and renewals", () => {
     expect((await operate({ action: "comp", email: "nobody@example.com" })).status).toBe(404);
     const user = await signedIn();
     await customer(user.id);
-    await applySubscription(on, subscription({ status: "active", member: user.id }));
+    await apply(subscription({ status: "active", member: user.id }));
     expect((await operate({ action: "comp", email: "producer@example.com" })).status).toBe(409);
   });
 
@@ -562,16 +793,32 @@ describe("comp and renewals", () => {
   test("maintenance renews a subscription whose webhook never came", async () => {
     await customer();
     const t = Math.floor(Date.now() / 1000);
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t - 7200 }));
+    await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 });
     await maintain(on);
     expect((await memberRow())!.period_end).toBe((t + 30 * 86_400) * 1000);
   });
 
+  test("a renewal whose invoice.paid was lost is granted by renewals once Stripe shows it paid", async () => {
+    await customer();
+    const t = Math.floor(Date.now() / 1000);
+    await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
+    await env.DB.prepare("UPDATE members SET spent = 1500000 WHERE id = 'm1'").run();
+    const renewal = { status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 };
+    routes["GET /subscriptions/sub_1"] = () => subscription({ ...renewal, latest_invoice: { status: "open" } });
+    await maintain(on);
+    expect(await subRow()).toMatchObject({ current_period_end: (t - 7200) * S });
+    expect(await memberRow()).toMatchObject({ spent: 1_500_000 });
+    routes["GET /subscriptions/sub_1"] = () => subscription(renewal);
+    await maintain(on);
+    expect(await memberRow()).toMatchObject({ allowance: 2_000_000, spent: 0, period_end: (t + 30 * 86_400) * S });
+    expect(await subRow()).toMatchObject({ current_period_end: (t + 30 * 86_400) * S });
+  });
+
   test("a subscription that ended under an hour ago waits for its webhook", async () => {
     await customer();
     const t = Math.floor(Date.now() / 1000);
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t - 60 }));
+    await apply(subscription({ status: "active", member: "m1", end: t - 60 }));
     await maintain(on);
     expect(calls.filter((c) => c.method === "GET")).toHaveLength(0);
   });
@@ -580,8 +827,8 @@ describe("comp and renewals", () => {
     await customer("m1", "cus_1");
     await customer("m2", "cus_2");
     const t = Math.floor(Date.now() / 1000);
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t - 7200 }));
-    await applySubscription(on, subscription({ id: "sub_2", customer: "cus_2", status: "active", member: "m2", end: t - 7200 }));
+    await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
+    await apply(subscription({ id: "sub_2", customer: "cus_2", status: "active", member: "m2", end: t - 7200 }));
     routes["GET /subscriptions/sub_1"] = () => new Response("down", { status: 500 });
     routes["GET /subscriptions/sub_2"] = () => subscription({ id: "sub_2", customer: "cus_2", status: "active", member: "m2", end: t + 86_400 });
     await maintain(on);
@@ -593,9 +840,10 @@ describe("comp and renewals", () => {
     for (let i = 0; i < 20; i++) {
       await env.DB.prepare(`INSERT INTO subscriptions(member_id, stripe_customer_id, stripe_subscription_id, status, current_period_end, updated_at)
         VALUES (?, ?, ?, 'active', ?, 0)`).bind(`s${i}`, `cus_s${i}`, `sub_s${i}`, (t - 10 * 86_400) * 1000).run();
+      routes[`GET /subscriptions/sub_s${i}`] = missing;
     }
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1", end: t - 7200 }));
+    await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1", start: t - 7200, end: t + 30 * 86_400 });
     await maintain(on);
     expect((await memberRow())!.period_end).toBe((t + 30 * 86_400) * 1000);
@@ -603,7 +851,7 @@ describe("comp and renewals", () => {
 
   test("billing-sync applies Stripe's state now", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await apply(subscription({ status: "active", member: "m1" }));
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "past_due", member: "m1" });
     expect(await (await operate({ action: "billing_sync", member_id: "m1" })).json()).toEqual({ status: "past_due" });
   });
@@ -631,11 +879,12 @@ describe("account deletion", () => {
 
   test("the next sweep cancels a live subscription at Stripe, with no refund, and removes the row", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await apply(subscription({ status: "active", member: "m1" }));
     await deleted("m1");
     routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1" })] });
     routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
     await maintain(on);
+    expect(paramsOf(calls, "GET /subscriptions")).toEqual([{ customer: "cus_1", status: "all", limit: "10" }]);
     const cancel = calls.find((c) => c.method === "DELETE")!;
     expect(cancel.path).toBe("/subscriptions/sub_1");
     expect(cancel.params.has("prorate")).toBe(false);
@@ -645,7 +894,7 @@ describe("account deletion", () => {
 
   test("when Stripe is down, the deletion waits and retries", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await apply(subscription({ status: "active", member: "m1" }));
     await deleted("m1");
     routes["GET /subscriptions"] = () => new Response("down", { status: 500 });
     await maintain(on);
@@ -655,7 +904,7 @@ describe("account deletion", () => {
 
   test("a customer Stripe no longer has holds nothing to cancel, so the deletion completes", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await apply(subscription({ status: "active", member: "m1" }));
     await deleted("m1");
     routes["GET /subscriptions"] = () => Response.json({ error: { type: "invalid_request_error", code: "resource_missing" } }, { status: 404 });
     await maintain(on);
@@ -665,7 +914,7 @@ describe("account deletion", () => {
 
   test("a subscription Stripe already canceled is not canceled again", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await apply(subscription({ status: "active", member: "m1" }));
     await deleted("m1");
     routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "canceled", member: "m1" })] });
     await maintain(on);
@@ -686,7 +935,7 @@ describe("account deletion", () => {
 
   test("the subscription is canceled even while shared-content cleanup is unfinished", async () => {
     await customer();
-    await applySubscription(on, subscription({ status: "active", member: "m1" }));
+    await apply(subscription({ status: "active", member: "m1" }));
     await deleted("m1");
     await env.DB.prepare(`INSERT INTO support_reports(id, user_id, object_key, state, created_at, updated_at)
       VALUES ('r1', 'm1', 'reports/r1', 'deleting', 0, 0)`).run();

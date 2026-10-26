@@ -23,26 +23,34 @@ export async function stripe<T>(env: Env, method: "GET" | "POST" | "DELETE", pat
   const query = params ? encode(params).join("&") : "";
   // The resource name only: ids and messages stay out of the logs.
   const resource = path.split("/")[1];
-  let response: Response;
-  try {
-    response = await fetch(method === "GET" && query ? `${API}${path}?${query}` : `${API}${path}`, { method,
-      headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`, "Stripe-Version": STRIPE_VERSION,
-        ...(method !== "GET" ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
-        ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) },
-      body: method === "GET" ? undefined : query, signal: AbortSignal.timeout(10_000) });
-  } catch {
-    console.error(JSON.stringify({ event: "stripe_unreachable", resource }));
-    throw new ApiError(503, "billing_unavailable", UNAVAILABLE);
-  }
-  if (!response.ok) {
-    const failure = await response.json<{ error?: { type?: string; code?: string } }>().catch(() => null);
-    console.error(JSON.stringify({ event: "stripe_failed", resource, status: response.status, code: failure?.error?.code ?? null }));
+  for (let attempt = 1; ; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(method === "GET" && query ? `${API}${path}?${query}` : `${API}${path}`, { method,
+        headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`, "Stripe-Version": STRIPE_VERSION,
+          ...(method !== "GET" ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
+          ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) },
+        body: method === "GET" ? undefined : query, signal: AbortSignal.timeout(10_000) });
+    } catch {
+      console.error(JSON.stringify({ event: "stripe_unreachable", resource }));
+      throw new ApiError(503, "billing_unavailable", UNAVAILABLE);
+    }
+    if (response.ok) return response.json<T>();
+    const failure = await response.json<{ error?: { type?: string; code?: string; param?: string } }>().catch(() => null);
+    const code = failure?.error?.code ?? null;
+    console.error(JSON.stringify({ event: "stripe_failed", resource, status: response.status, code,
+      type: failure?.error?.type ?? null, param: failure?.error?.param ?? null }));
+    // The same key is still running elsewhere, as after a double click. Once it finishes, Stripe replays its result.
+    if (idempotencyKey && response.status === 409 && code === "idempotency_key_in_use" && attempt === 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      continue;
+    }
     if (failure?.error?.type === "card_error") throw new ApiError(402, "card_declined", "Your card was declined. Update it in Manage subscription.");
     // Permanent, unlike an outage: callers that can treat it as nothing there must be able to tell.
-    if (failure?.error?.code === "resource_missing") throw new ApiError(404, "stripe_not_found", "Billing record not found.");
+    if (code === "resource_missing") throw new ApiError(404, "stripe_not_found", "Billing record not found.");
+    if (code === "charge_already_refunded") throw new ApiError(409, "stripe_already_refunded", "Already refunded.");
     throw new ApiError(503, "billing_unavailable", UNAVAILABLE);
   }
-  return response.json<T>();
 }
 
 /** Stripe's manual check: v1 signatures only, HMAC-SHA256 over "t.body", constant-time compare. */

@@ -10,6 +10,8 @@ export const COMP_PERIOD = 30 * DAY;
 export const COMP_ALLOWANCE = ALLOWANCE.pro;
 // Stripe statuses that still hold a trial or a paid period.
 export const LIVE = new Set(["trialing", "active", "past_due"]);
+// Stripe statuses that can still charge: an unpaid invoice can be paid later, and a paused subscription can resume.
+export const BILLABLE = new Set([...LIVE, "unpaid", "paused"]);
 
 export function priceFor(env: Env, plan: Plan): string {
   const price = plan === "pro" ? env.STRIPE_PRICE_PRO : env.STRIPE_PRICE_STARTER;

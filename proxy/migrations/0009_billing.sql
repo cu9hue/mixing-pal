@@ -10,7 +10,9 @@ CREATE TABLE subscriptions (
   current_period_end INTEGER,
   cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
   trial_used INTEGER NOT NULL DEFAULT 0,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  -- When the Stripe read last applied here started, in ms. An older read loses.
+  synced_at INTEGER NOT NULL DEFAULT 0
 );
 
 -- Free access granted by the operator. maintain renews it every 30 days.

@@ -17,25 +17,41 @@ export function stubNetwork(routes: StripeRoutes, calls: StripeCall[], onEmail?:
       const path = url.pathname.replace(/^\/v1/, "");
       calls.push({ method, path, params, headers: new Headers(init?.headers) });
       const route = routes[`${method} ${path}`];
-      if (!route) return Response.json({ error: { type: "invalid_request_error", code: "resource_missing" } }, { status: 404 });
-      const result = route(params);
+      // Never a default answer: a 404 would read as "nothing there" to the deletion code.
+      if (!route) throw new Error(`Unexpected Stripe call: ${method} ${path}`);
+      const result = await route(params);
       return result instanceof Response ? result : Response.json(result);
     }
     throw new Error(`Unexpected network request: ${url.href}`);
   });
 }
 
+/** The params of each recorded call to one route, keyed "METHOD /path", as plain objects. */
+export function paramsOf(calls: StripeCall[], route: string): Record<string, string>[] {
+  return calls.filter((c) => `${c.method} ${c.path}` === route).map((c) => Object.fromEntries(c.params));
+}
+
+export const missing = () => Response.json({ error: { type: "invalid_request_error", code: "resource_missing" } }, { status: 404 });
+
+type Invoice = { id?: string; status?: string; amount_paid?: number };
+
 /** A subscription shaped as API version 2026-09-30.endive returns it. Times are seconds. */
 export function subscription(o: { id?: string; status?: string; price?: string; member?: string; customer?: string;
   start?: number; end?: number; trial_end?: number | null; cancel_at_period_end?: boolean; pending_update?: unknown;
-  latest_invoice?: string | { status?: string } | null } = {}) {
+  latest_invoice?: string | Invoice | null } = {}) {
   const now = Math.floor(Date.now() / 1000);
-  return { id: o.id ?? "sub_1", object: "subscription", customer: o.customer ?? "cus_1", status: o.status ?? "active",
+  const status = o.status ?? "active";
+  // A trial's first invoice is for $0. Any other paid invoice charged something, in cents.
+  const invoice = { id: "in_1", status: "paid", amount_paid: status === "trialing" ? 0 : 800 };
+  // Stripe ends a trialing subscription's period at the trial's end.
+  const end = o.end ?? (status === "trialing" && o.trial_end ? o.trial_end : now + 30 * 86_400);
+  return { id: o.id ?? "sub_1", object: "subscription", customer: o.customer ?? "cus_1", status,
     cancel_at_period_end: o.cancel_at_period_end ?? false, trial_end: o.trial_end ?? null,
     metadata: o.member === undefined ? {} : { member_id: o.member }, pending_update: o.pending_update ?? null,
-    latest_invoice: o.latest_invoice === undefined ? { status: "paid" } : o.latest_invoice,
+    latest_invoice: o.latest_invoice === undefined ? invoice
+      : typeof o.latest_invoice === "object" && o.latest_invoice ? { ...invoice, ...o.latest_invoice } : o.latest_invoice,
     items: { data: [{ id: "si_1", price: { id: o.price ?? "price_starter" },
-      current_period_start: o.start ?? now, current_period_end: o.end ?? now + 30 * 86_400 }] } };
+      current_period_start: o.start ?? now, current_period_end: end }] } };
 }
 
 /** Signs a body the way Stripe does: HMAC-SHA256 of "t.body", keyed by the whole whsec_ secret, hex. */
