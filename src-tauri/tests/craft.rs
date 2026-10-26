@@ -516,9 +516,11 @@ const PLAIN_WORDS: Property = Property {
     key: "plain_words",
     description: "Readable by someone new to music production. Uses everyday words and short sentences. Each technical term it needs (for example MIDI, clip, fader, compressor) is explained in a few words the first time it appears. It uses no unexplained abbreviations such as dB, EQ, or BPM. Track, clip, and section names from the set are names, not jargon.",
 };
-const LIVE_TERMS: Property = Property {
-    key: "live_terms",
-    description: "Names every device and parameter the way Live shows it (for example Compressor, EQ Eight, Threshold, Ratio, Output Gain). Every other technical term (for example gain reduction, transient, knee, sidechain) is explained in a few plain words the first time it appears. A unit Live shows beside a value (dB, ms) and track, clip, and section names from the set need no explanation. Quote the first unexplained term or wrongly named device or parameter in the reason.",
+// The terms block's shape is checked in code (`common::terms_defect`); the
+// judge grades only what needs reading.
+const TERMS_LISTED: Property = Property {
+    key: "terms_listed",
+    description: "Every technical term in the prose that a producer who finishes tracks in Live probably does not know (for example gain reduction, transient, sidechain) is either replaced by a plain word or listed under TERMS SHE CAN TAP. Live's own device and parameter labels (Compressor, Threshold, Ratio, Attack, Release, Output Gain), units such as dB and ms, and names from the set count as known. Each listed meaning is correct and plain: one everyday sentence on what the term changes. Quote the first unlisted term, or the first wrong or unplain meaning, in the reason.",
 };
 const GOAL_TIED: Property = Property {
     key: "goal_tied",
@@ -554,6 +556,9 @@ struct Scenario {
     mentor: &'static str,
     must: &'static [Property],
     craft: &'static [Property],
+    /// The answer's `terms` block gates the trust majority through
+    /// `common::terms_defect`, and the judge sees the terms she can tap.
+    checks_terms: bool,
 }
 
 impl Scenario {
@@ -844,6 +849,22 @@ fn context_for(goal: Option<&str>) -> String {
     base.replace(line, &format!("GOAL  {goal}"))
 }
 
+/// Heads the terms appended to what the judge reads, one `Term: meaning`
+/// line each, the way the card opens them one at a time.
+const TERMS_HEADER: &str = "TERMS SHE CAN TAP (each opens one line under the paragraph that holds it)";
+
+/// What the judge reads: the prose she sees, plus, where the scenario checks
+/// terms, the lines she can open. Elsewhere the block stays out of sight.
+fn judged_answer(sc: &Scenario, prose: &str, raw: &str) -> String {
+    match common::terms_block(raw) {
+        Ok(Some(terms)) if sc.checks_terms && !terms.is_empty() => {
+            let lines: Vec<String> = terms.iter().map(|(t, m)| format!("{t}: {m}")).collect();
+            format!("{prose}\n\n{TERMS_HEADER}\n{}", lines.join("\n"))
+        }
+        _ => prose.to_string(),
+    }
+}
+
 struct Run {
     answer: String,
     raw_answer: String,
@@ -886,7 +907,8 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
             invalid_evaluation: None, judge_report: None,
         };
     }
-    match judge(sc.question, &context, &turn.answer, &turn.calls, sc.mentor, &properties).await {
+    let judged = judged_answer(sc, &turn.answer, &turn.raw_answer);
+    match judge(sc.question, &context, &judged, &turn.calls, sc.mentor, &properties).await {
         Ok(reply) => {
             let judge_report = Some(format!(
                 "model {}; finish_reason {}; reasoning_tokens {}; content: {}",
@@ -926,9 +948,10 @@ const RUNS: usize = 3;
 fn report_line(i: usize, run: &Run) -> String {
     let evidence = serde_json::to_string(&run.calls).unwrap();
     let defects = common::note_defects(&run.raw_answer);
+    let terms = common::terms_defect(&run.raw_answer);
     format!(
         "\n--- run {i}: tools {:?}\njudge: {}\ninfra_error: {:?}\ninvalid_evaluation: {:?}\n\
-         tool evidence: {evidence}\nnote defects (report only): {defects:?}\n\
+         tool evidence: {evidence}\nnote defects (report only): {defects:?}\nterms defect: {terms:?}\n\
          VISIBLE ANSWER\n{}\nRAW ANSWER\n{}\nVERDICTS\n{:#?}\n",
         run.called, run.judge_report.as_deref().unwrap_or("no reply"), run.infra_error,
         run.invalid_evaluation, run.answer, run.raw_answer, run.verdicts
@@ -988,7 +1011,7 @@ fn an_invalid_judge_prevents_even_a_green_majority() {
 fn the_report_keeps_raw_notes_without_changing_verdicts() {
     let raw = "Keep it.\n```note\n+ heard <to be filled>\n```";
     let run = Run {
-        answer: common::strip_note_blocks(raw), raw_answer: raw.into(),
+        answer: common::strip_blocks(raw), raw_answer: raw.into(),
         called: vec![], calls: vec![],
         verdicts: BTreeMap::from([("one_move".into(), (true, "one intervention".into()))]),
         infra_error: None, invalid_evaluation: None, judge_report: None,
@@ -1014,10 +1037,15 @@ fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, S
         sc.must.iter().all(|p| r.verdicts.get(p.key).is_some_and(|v| v.0))
             && extra(r)
             && common::tool_talk(&r.answer).is_none()
+            && !(sc.checks_terms && common::terms_defect(&r.raw_answer).is_some())
     }).count();
     let total = runs.len();
     let reads = runs.iter().filter(|r| extra(r)).count();
     let mut scores = format!("trust: {passes}/{total} runs; required reads: {reads}/{total}\n");
+    if sc.checks_terms {
+        let clean = runs.iter().filter(|r| common::terms_defect(&r.raw_answer).is_none()).count();
+        scores.push_str(&format!("terms block: {clean}/{total}\n"));
+    }
     let review: Vec<&str> = HUMAN_REVIEW_PROPERTIES.iter().copied()
         .filter(|key| sc.must.iter().chain(sc.craft).any(|p| p.key == *key)).collect();
     if !review.is_empty() {
@@ -1076,6 +1104,48 @@ fn the_trust_majority_keeps_craft_misses_visible() {
     assert!(std::panic::catch_unwind(|| tally(&WHAT_NEXT, &runs, |_| true)).is_err());
 }
 
+/// A run whose trust verdicts all pass, so only the terms checks decide it.
+fn trusted_run(sc: &Scenario, raw: &str) -> Run {
+    Run {
+        answer: common::strip_blocks(raw), raw_answer: raw.into(), called: vec![], calls: vec![],
+        verdicts: sc.must.iter().map(|p| (p.key.to_string(), (true, "fine".to_string()))).collect(),
+        infra_error: None, invalid_evaluation: None, judge_report: None,
+    }
+}
+
+#[test]
+fn the_terms_checks_gate_scenario_seven_and_nothing_else() {
+    let good = "Watch the gain reduction.\n```terms\nGain reduction: How far the Compressor turns the signal down.\n```";
+    let sounds = "Watch the gain reduction.\n```terms\nGain reduction: Makes the vocal sound glued.\n```";
+    let runs = |raws: [&str; 3], sc: &Scenario| Vec::from(raws.map(|r| trusted_run(sc, r)));
+
+    let (passes, scores) = tally(&COMPRESSOR_IN_PLAIN_TERMS, &runs([good, good, sounds], &COMPRESSOR_IN_PLAIN_TERMS), |_| true);
+    assert_eq!(passes, 2);
+    assert!(scores.contains("terms block: 2/3"), "{scores}");
+    assert_eq!(tally(&COMPRESSOR_IN_PLAIN_TERMS, &runs([good, sounds, sounds], &COMPRESSOR_IN_PLAIN_TERMS), |_| true).0, 1);
+    // No block is zero terms, which is allowed.
+    assert_eq!(tally(&COMPRESSOR_IN_PLAIN_TERMS, &runs(["Leave it."; 3], &COMPRESSOR_IN_PLAIN_TERMS), |_| true).0, 3);
+
+    let (passes, scores) = tally(&WHAT_NEXT, &runs([sounds; 3], &WHAT_NEXT), |_| true);
+    assert_eq!(passes, 3);
+    assert!(!scores.contains("terms block"), "{scores}");
+}
+
+#[test]
+fn the_judge_sees_the_terms_she_can_tap_only_where_they_are_checked() {
+    let raw = "Watch the gain reduction.\n```move\n«Vox», none: leave it\n```\n```terms\nGain reduction: How far it turns the signal down.\n```";
+    let prose = common::strip_blocks(raw);
+    assert_eq!(prose, "Watch the gain reduction.");
+    assert_eq!(
+        judged_answer(&COMPRESSOR_IN_PLAIN_TERMS, &prose, raw),
+        format!("Watch the gain reduction.\n\n{TERMS_HEADER}\nGain reduction: How far it turns the signal down."),
+    );
+    assert_eq!(judged_answer(&WHAT_NEXT, &prose, raw), prose);
+    assert_eq!(judged_answer(&COMPRESSOR_IN_PLAIN_TERMS, "Leave it.", "Leave it."), "Leave it.");
+    // The mentor shows the bar in the shape the judge sees.
+    assert!(COMPRESSOR_IN_PLAIN_TERMS.mentor.contains(&format!("\n\n{TERMS_HEADER}\n")));
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum Stance {
     Keep,
@@ -1121,6 +1191,7 @@ const DROP_FALLS_FLAT: Scenario = Scenario {
     mentor: "For the stated GOAL, I would make the Drop an arrival. The arrangement shows Pad leaving at beat 64 (bar 17) as Vox arrives; Drums continues and Bass has no placements. Intro and Drop each have two occupied tracks. On contrast at section boundaries, I would try a new part on the empty Bass track. One move: load a bass instrument and draw a four-beat MIDI loop using A and F, the roots in the Pad notes, then repeat it over beats 64–96 (bars 17–24). Keep it out of Intro so its entrance tests that contrast; mute the new clip to undo the trial. Play from beat 60 (bar 16) and listen for whether bar 17 feels like an arrival with the bass enabled. The continuous drum placement is enough on repetition for this trial; leave it alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[SECTION_PURPOSE, NAMED_AXIS, ONE_MOVE, WHY, LISTEN_FOR, LEAVE_IT, SOURCE_NAMED],
+    checks_terms: false,
 };
 
 #[tokio::test]
@@ -1139,6 +1210,7 @@ const WHAT_NEXT: Scenario = Scenario {
     mentor: "For the stated GOAL, I would give the Drop a new part to mark its arrival. The arrangement shows Bass has no placements, Pad leaves at beat 64 (bar 17), Vox enters there, and Drums continues. I rank contrast first: the empty Bass track gives us a place to try an entrance. One move: load a bass instrument and draw a four-beat MIDI loop on A and F, the roots read in the Pad notes; repeat it over beats 64–96 (bars 17–24), keeping it out of Intro. Mute that clip to undo the trial. Play from beat 60 (bar 16) through beat 68 (bar 18) and listen for whether the Drop now lands. The Pad's two-chord repetition and the continuous drum placement are enough for this trial; leave both alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[ONE_MOVE, RANKED, WHY, LISTEN_FOR, LEAVE_IT, SOURCE_NAMED],
+    checks_terms: false,
 };
 
 #[tokio::test]
@@ -1158,6 +1230,7 @@ const PAD_TOO_BUSY: Scenario = Scenario {
     mentor: "For the stated GOAL, I would use the Pad as a repeating harmonic idea. The notes show two triad attacks in a four-beat, one-bar loop: A2/C3/E3 at clip beat 0 and F2/A2/C3 at clip beat 2, each note lasting half a beat. The arrangement repeats it over beats 0–64 (bars 1–16) and 96–128 (bars 25–32); it does not overlap Vox's placements. I find no readable density problem in those two stabs per bar. Whether the sound or release tails feel crowded is yours to hear. Leave the Pad as it is.",
     must: &[READABLE_PROBLEM, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[SOURCE_NAMED],
+    checks_terms: false,
 };
 
 /// The verdict has to rest on the notes, so a read of them is required.
@@ -1200,6 +1273,7 @@ const MIX_OKAY: Scenario = Scenario {
     mentor: "The device chains show no devices on Pad or Bass, a Drum Rack on Drums, and a Compressor on Vox. The rack read lists Kick, Clap and Hats chains, each with a Simpler. Vox's parameter read gives a threshold of -18 dB, ratio 4:1, attack 10 ms, release 100 ms and output gain +3 dB. Those settings do not tell me the gain reduction or audible balance. Tone, loudness, masking and groove are yours to hear; I cannot judge them. The arrangement shows Bass has no placements, but that does not prove what frequencies the other tracks contain. I find no established mix problem in these reads. Leave the processing alone.",
     must: &[EAR_ONLY_HANDED_OVER, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, CONDITIONAL_MOVE],
     craft: &[SOURCE_NAMED],
+    checks_terms: false,
 };
 
 #[tokio::test]
@@ -1219,6 +1293,7 @@ const DROP_FOR_A_NEWCOMER: Scenario = Scenario {
     mentor: "For dark garage at 2am, the drop should feel like you have arrived somewhere. Right now, at bar 17 the Pad stops and the Vox starts. The Drums keep going. The Bass track has nothing on it. **Try adding a bass part that starts at the drop.** Put an instrument on the Bass track. Draw a short MIDI clip (a loop of notes Live plays for you) using A and F, the lowest notes of your Pad chords. Let it play from bar 17 to bar 24, and keep it out of the intro. If you don't like it, mute the clip. Play from bar 16 and listen: does bar 17 now feel like an arrival? The drums are fine. Leave them alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE, PLAIN_WORDS],
     craft: &[ONE_MOVE, WHY, LISTEN_FOR],
+    checks_terms: false,
 };
 
 #[tokio::test]
@@ -1232,14 +1307,17 @@ async fn why_does_the_drop_fall_flat_for_a_newcomer() {
 
 // Scenario 7. A settings question at "I finish tracks", where the answer
 // cannot avoid compressor terms. A pilot producer at this level found the
-// answers too clever: Live's names, and a few plain words for the rest.
+// answers too clever. The prose stays short and lists the terms she may not
+// know for a tap. Code checks the block's shape in `tally`; the judge grades
+// whether the right terms are listed and the meanings are right and plain.
 const COMPRESSOR_IN_PLAIN_TERMS: Scenario = Scenario {
     question: "what is the compressor on the vox doing?",
     goal: None,
     experience: Experience::FinishesTracks,
-    mentor: "Vox has one device, a Compressor. Its parameters read Threshold -18.0 dB, Ratio 4.00 : 1, Attack 10.0 ms, Release 100 ms and Output Gain 3.0 dB. When the vocal goes above the Threshold, the Compressor turns the part above it down: at a Ratio of 4 : 1, 4 dB over comes out as 1 dB over. Attack is how fast it starts turning down, here 10 ms. Release is how fast it lets go, here 100 ms. Output Gain then lifts the whole result by 3 dB. The settings do not tell me how often the vocal crosses the Threshold, so not how much it is turned down. Whether it sounds squashed or natural is yours to hear. I find no readable problem in these settings. Leave the Compressor as it is.",
-    must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE, LIVE_TERMS],
-    craft: &[SOURCE_NAMED],
+    mentor: "Vox has one device, a Compressor. Its parameters read Threshold -18.0 dB, Ratio 4.00 : 1, Attack 10.0 ms, Release 100 ms and Output Gain 3.0 dB. Each 4 dB the vocal goes over the Threshold comes out as 1 dB over, and Output Gain adds 3 dB of make-up gain after that. The settings do not tell me how often the vocal crosses the Threshold, so I cannot say how much gain reduction there is. Whether it sounds squashed or natural is yours to hear. I find no readable problem in these settings. Leave the Compressor as it is.\n\nTERMS SHE CAN TAP (each opens one line under the paragraph that holds it)\nMake-up gain: Volume added after the Compressor to win back what it took away.\nGain reduction: How far the Compressor is turning the signal down at a given moment.",
+    must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
+    craft: &[TERMS_LISTED, SOURCE_NAMED],
+    checks_terms: true,
 };
 
 #[tokio::test]
@@ -1264,6 +1342,7 @@ const CHORDS_GARAGE: Scenario = Scenario {
     mentor: "",
     must: &[CHORDS_KEPT, CHORDS_CHANGED, GOAL_TIED],
     craft: &[],
+    checks_terms: false,
 };
 
 const CHORDS_TECHNO: Scenario = Scenario {
@@ -1273,6 +1352,7 @@ const CHORDS_TECHNO: Scenario = Scenario {
     mentor: "",
     must: &[CHORDS_KEPT, CHORDS_CHANGED, GOAL_TIED],
     craft: &[],
+    checks_terms: false,
 };
 
 /// The stance of one run, or `None` when the run never earned one: no note

@@ -894,16 +894,16 @@ fn tool_evidence_is_bounded_and_marks_the_missing_tail() {
     assert!(record.result["json_prefix"].as_str().unwrap().contains("🎹"));
 }
 
-/// What the card shows: the answer with every fenced `note` block removed,
-/// the way `noteDelta` in src/notes/note.ts strips it before she reads it.
-/// The judge and the wording assertions must score what she sees; the block
-/// is the model's bookkeeping, not part of the answer.
-pub fn strip_note_blocks(answer: &str) -> String {
+/// What the card shows: the answer with every fenced `note`, `move`, and
+/// `terms` block removed, the way src/notes/note.ts, move.ts, and terms.ts
+/// strip them before she reads it. The judge and the wording assertions must
+/// score what she sees; the blocks are the model's bookkeeping, not prose.
+pub fn strip_blocks(answer: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut block_start = None;
     for line in answer.lines() {
         let t = line.trim();
-        if block_start.is_none() && t == "```note" {
+        if block_start.is_none() && matches!(t, "```note" | "```move" | "```terms") {
             block_start = Some(out.len());
         } else if t == "```" {
             if let Some(start) = block_start.take() {
@@ -914,6 +914,80 @@ pub fn strip_note_blocks(answer: &str) -> String {
         out.push(line);
     }
     out.join("\n").trim().to_string()
+}
+
+/// The last `terms` block's lines as (term, meaning). Stricter than the
+/// card, which drops what it cannot use: here a malformed line or an
+/// unclosed block is a named defect. `Ok(None)` means there is no block.
+pub fn terms_block(answer: &str) -> Result<Option<Vec<(String, String)>>, String> {
+    let mut last = None;
+    let mut open: Option<Vec<&str>> = None;
+    for line in answer.lines() {
+        let t = line.trim();
+        match &mut open {
+            None if t == "```terms" => open = Some(Vec::new()),
+            Some(_) if t == "```" => last = open.take(),
+            Some(lines) => lines.push(t),
+            None => {}
+        }
+    }
+    if open.is_some() {
+        return Err("unclosed terms block".into());
+    }
+    let Some(lines) = last else { return Ok(None) };
+    lines
+        .into_iter()
+        .filter(|l| !l.is_empty())
+        .map(|l| match l.split_once(':') {
+            Some((term, meaning)) if !term.trim().is_empty() && !meaning.trim().is_empty() => {
+                Ok((term.trim().to_string(), meaning.trim().to_string()))
+            }
+            _ => Err(format!("malformed terms line {l:?}")),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// The words `SYSTEM_PROMPT` names as claims about sound, plus three a
+/// meaning reaches for. A meaning says what a control changes, never this.
+pub const SOUND_WORDS: &[&str] =
+    &["masking", "loudness", "tone", "timbre", "muddy", "harsh", "punchy", "warm", "tight", "glued"];
+/// The model never sees Live's screen, so a meaning never places anything.
+pub const POSITION_WORDS: &[&str] = &["left", "right", "top", "bottom", "above", "below", "corner"];
+
+/// `word` in `text` as a whole word, ignoring case.
+fn has_word(text: &str, word: &str) -> bool {
+    let (text, word) = (text.to_lowercase(), word.to_lowercase());
+    let is_word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    text.match_indices(&word).any(|(i, _)| {
+        !is_word(text[..i].chars().next_back()) && !is_word(text[i + word.len()..].chars().next())
+    })
+}
+
+/// The first thing wrong with an answer's `terms` block, or `None`. An
+/// answer with no block has nothing wrong here: zero terms is allowed.
+pub fn terms_defect(answer: &str) -> Option<String> {
+    let terms = match terms_block(answer) {
+        Err(e) => return Some(e),
+        Ok(None) => return None,
+        Ok(Some(terms)) => terms,
+    };
+    if terms.len() > 4 {
+        return Some(format!("{} terms; the cap is 4", terms.len()));
+    }
+    let prose = strip_blocks(answer);
+    for (term, meaning) in &terms {
+        if !has_word(&prose, term) {
+            return Some(format!("{term:?} is not in the prose"));
+        }
+        if let Some(w) = SOUND_WORDS.iter().find(|w| has_word(meaning, w)) {
+            return Some(format!("the meaning of {term:?} says how it sounds: {w:?}"));
+        }
+        if let Some(w) = POSITION_WORDS.iter().find(|w| has_word(meaning, w)) {
+            return Some(format!("the meaning of {term:?} gives a screen position: {w:?}"));
+        }
+    }
+    None
 }
 
 // The proxy asks for the fastest host (proxy/src/policy.ts). Without the
@@ -927,16 +1001,55 @@ fn eval_requests_ask_for_the_fastest_host_like_the_proxy() {
 }
 
 #[test]
-fn stripping_the_note_block_leaves_what_she_reads() {
+fn stripping_the_blocks_leaves_what_she_reads() {
     let raw = "Try a high-pass.\n\n```note\n+ move low end: high-pass the pad\n```";
-    assert_eq!(strip_note_blocks(raw), "Try a high-pass.");
-    assert_eq!(strip_note_blocks("No block here."), "No block here.");
-    assert_eq!(strip_note_blocks("```note\n+ move a\n```"), "");
+    assert_eq!(strip_blocks(raw), "Try a high-pass.");
+    assert_eq!(strip_blocks("No block here."), "No block here.");
+    assert_eq!(strip_blocks("```note\n+ move a\n```"), "");
     let unclosed = "Keep it.\n```note\n+ decided keep";
-    assert_eq!(strip_note_blocks(unclosed), unclosed);
+    assert_eq!(strip_blocks(unclosed), unclosed);
     let bare = "Keep it.\n```\nnote\n+ move try it\n```";
-    assert_eq!(strip_note_blocks(bare), bare);
-    assert_eq!(strip_note_blocks("Keep it.\r\n```note\r\n+ decided keep\r\n```"), "Keep it.");
+    assert_eq!(strip_blocks(bare), bare);
+    assert_eq!(strip_blocks("Keep it.\r\n```note\r\n+ decided keep\r\n```"), "Keep it.");
+    let all = "Cut it.\n```move\n«Pad», mud: cut\n```\n```terms\nLow cut: Removes the lows.\n```\n```note\n+ move a\n```";
+    assert_eq!(strip_blocks(all), "Cut it.");
+    let unclosed_terms = "Cut it.\n```terms\nLow cut: Removes";
+    assert_eq!(strip_blocks(unclosed_terms), unclosed_terms);
+}
+
+#[test]
+fn the_terms_block_parses_strictly_and_the_last_one_counts() {
+    let terms = |lines: &str| format!("Lower the knee.\n```terms\n{lines}\n```");
+    assert_eq!(terms_block("No block."), Ok(None));
+    assert_eq!(
+        terms_block(&format!("{}\n{}", terms("Old: one."), terms("Knee: How gently it starts.\n\nRatio: How hard."))),
+        Ok(Some(vec![("Knee".into(), "How gently it starts.".into()), ("Ratio".into(), "How hard.".into())])),
+    );
+    assert!(terms_block(&terms("no colon")).unwrap_err().contains("no colon"));
+    assert!(terms_block(&terms("Knee:")).is_err());
+    assert!(terms_block("Lower it.\n```terms\nKnee: soft").unwrap_err().contains("unclosed"));
+}
+
+#[test]
+fn a_terms_defect_names_what_the_card_or_the_rules_cannot_take() {
+    let answer = |lines: &str| format!("Watch the gain reduction and the soft knee.\n\n```terms\n{lines}\n```");
+    assert_eq!(terms_defect("No block."), None);
+    assert_eq!(terms_defect(&answer("Gain reduction: How far it turns the signal down.\nKnee: How gently it starts.")), None);
+    for (lines, defect) in [
+        ("A: a.\nB: b.\nC: c.\nD: d.\nE: e.", "5 terms"),
+        ("Sidechain: Another signal sets when it acts.", "\"Sidechain\" is not in the prose"),
+        ("Knee: Makes it sound warm.", "\"warm\""),
+        ("Knee: Gives the TONE more body.", "\"tone\""),
+        ("Knee: The knob on the right.", "\"right\""),
+        ("Knee: Top corner of the device.", "\"top\""),
+        ("Knee soft", "Knee soft"),
+    ] {
+        let found = terms_defect(&answer(lines));
+        assert!(found.as_deref().is_some_and(|d| d.contains(defect)), "{lines}: {found:?}");
+    }
+    // Whole words only: "stone" is not "tone", "knees" is not "knee".
+    assert_eq!(terms_defect(&answer("Knee: Sets how gently the Compressor starts, like a stone ramp.")), None);
+    assert!(terms_defect("The knees.\n```terms\nKnee: soft.\n```").is_some());
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -1155,7 +1268,7 @@ pub async fn ask_after(
                 let _ = std::fs::write(name, body.to_string());
             }
             return Turn {
-                answer: strip_note_blocks(&completion.text),
+                answer: strip_blocks(&completion.text),
                 raw_answer: completion.text,
                 called,
                 calls,

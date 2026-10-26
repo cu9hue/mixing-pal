@@ -171,13 +171,16 @@ change, not as theory. Still one move, and still never say how the set sounds.";
 
 /// Appended to `SYSTEM_PROMPT` for a producer who chose "I finish tracks",
 /// and for one who never chose. A pilot producer here found the answers too
-/// clever to follow. Lighter than `NEW_TO_LIVE`, which also drops
-/// abbreviations and theory. It changes the words, not the advice.
+/// clever to follow. Inline explanations would lengthen every answer, so
+/// the terms she may not know ride in a block the card strips and marks for
+/// a tap (src/notes/terms.ts). It changes the words, not the advice.
 pub const FINISHES_TRACKS: &str = "\
 Who you are talking to:
-- The producer finishes tracks in Live. When a plain word will do, use it \
-instead of a technical term. A term that is not a label in Live gets a few \
-plain words the first time.";
+- The producer finishes tracks in Live. When a plain word will do, use it. \
+After the prose, add a fenced `terms` block: up to 4 terms she probably does \
+not know, spelled as in the answer, one `Term: what it means` line each. Each \
+meaning is one plain sentence on what it changes, never how anything sounds \
+or where it is on screen.";
 
 /// Appended to `SYSTEM_PROMPT` for a producer who chose "I mix for other
 /// people".
@@ -1080,6 +1083,20 @@ mod tests {
         // to follow. Live's own names are the words every level can look up.
         assert!(SYSTEM_PROMPT.contains("as Live shows them"));
         assert!(SYSTEM_PROMPT.contains("EQ Eight"));
+    }
+
+    #[test]
+    fn i_finish_tracks_lists_terms_to_tap_instead_of_explaining_them_inline() {
+        // The webview strips the block and marks each term; the fence name
+        // ties the two, so a rename on one side is caught here.
+        assert!(FINISHES_TRACKS.contains("fenced `terms` block"));
+        assert!(FINISHES_TRACKS.contains("`Term: what it means`"));
+        assert!(include_str!("../../src/notes/terms.ts").contains("```terms"));
+        assert!(!FINISHES_TRACKS.contains("a few plain words"));
+        // New to Live keeps its inline explanations; nobody else gets the block.
+        for section in [NEW_TO_LIVE, MIXES_FOR_OTHERS, SYSTEM_PROMPT] {
+            assert!(!section.contains("`terms`"));
+        }
     }
 
     #[test]

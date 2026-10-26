@@ -191,9 +191,10 @@ Ordered. Each item says what, why, size, and what it waits on.
    can change the answer. The answer is stored in `preferences.json`, and
    it adds a short section to the system prompt. "I finish tracks" first
    added nothing, and a pilot producer at that level found the answers too
-   clever. Since 2026-10-26 it gets a few plain words for each term that is
-   not a label in Live, every level names devices and parameters as Live
-   shows them, and craft scenario seven checks both.
+   clever. Since 2026-10-26 every level names devices and parameters as
+   Live shows them. At "I finish tracks" the answer lists up to four terms
+   she may not know; the card underlines each one and opens one plain line
+   under it on a tap. Craft scenario seven checks that list.
    The level changes the words, not the advice. Every level also got
    shorter answers: short sentences, plain words, the move in bold, and
    about 120 words. The answer text is set in Atkinson Hyperlegible at
