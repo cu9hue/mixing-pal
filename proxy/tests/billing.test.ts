@@ -380,6 +380,18 @@ describe("applying Stripe state", () => {
       expect(await subRow()).toMatchObject({ status: "none", stripe_subscription_id: null });
     });
 
+    test("one created before the request but paid after it is refunded and canceled", async () => {
+      await customer();
+      await deletionRequested(now - 60_000);
+      paidInvoices();
+      routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+      // A renewal: Stripe creates the invoice at period start and charges it about an hour later.
+      await apply(subscription({ status: "active", member: "m1",
+        latest_invoice: { id: "in_2", created: t - 3600, status_transitions: { paid_at: t } } }), now);
+      expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_2" }]);
+      expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_1"]);
+    });
+
     test("one paid before the request is canceled with no refund when its invoice.paid replays", async () => {
       await customer();
       await deletionRequested(now - 60_000);
@@ -746,6 +758,7 @@ describe("billing routes", () => {
     routes["POST /billing_portal/sessions"] = () => ({ url: "https://billing.stripe.com/p/session/1" });
     routes["GET /subscriptions"] = () => ({ data: [] });
     routes["GET /customers/search"] = () => ({ data: [] });
+    routes["GET /customers/cus_1"] = () => ({ id: "cus_1", object: "customer" });
   });
   const posted = (path: string) => calls.filter((c) => c.method === "POST" && c.path === path);
   const checkoutUrl = { url: "https://checkout.stripe.com/c/pay/cs_1" };
@@ -892,6 +905,7 @@ describe("billing routes", () => {
     await customer(user.id, "cus_dead");
     await env.DB.prepare("UPDATE subscriptions SET status = 'canceled', trial_used = 1 WHERE member_id = ?").bind(user.id).run();
     routes["GET /subscriptions"] = missing;
+    routes["GET /customers/cus_dead"] = missing;
     routes["POST /customers"] = () => ({ id: "cus_new" });
     expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
     expect(paramsOf(calls, "GET /customers/search")).toEqual([{ query: `metadata['member_id']:'${user.id}'` }]);
@@ -900,6 +914,20 @@ describe("billing routes", () => {
     expect(posted("/checkout/sessions")[0].params.get("customer")).toBe("cus_new");
     expect(posted("/checkout/sessions")[0].params.has("subscription_data[trial_period_days]")).toBe(false);
     expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_new", status: "canceled" });
+  });
+
+  test("a deleted customer whose subscription list still answers gets a new customer and a Checkout", async () => {
+    const user = await signedIn();
+    await customer(user.id, "cus_dead");
+    await env.DB.prepare("UPDATE subscriptions SET stripe_subscription_id = 'sub_1', status = 'canceled', trial_used = 1 WHERE member_id = ?")
+      .bind(user.id).run();
+    // Stripe keeps a deleted customer readable, and deleting it canceled its subscriptions.
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "canceled", member: user.id, customer: "cus_dead" })] });
+    routes["GET /customers/cus_dead"] = () => ({ id: "cus_dead", object: "customer", deleted: true });
+    routes["POST /customers"] = () => ({ id: "cus_new" });
+    expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
+    expect(posted("/checkout/sessions")[0].params.get("customer")).toBe("cus_new");
+    expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_new" });
   });
 
   test("checkout offers cards only; Apple Pay and Google Pay are card payments", async () => {
@@ -1030,6 +1058,37 @@ describe("billing routes", () => {
     expect(view).toMatchObject({ plan: "pro", remaining_micro_usd: 6_200_000 });
   });
 
+  test("an upgrade charged at Stripe whose write then fails answers 503, and the webhook's apply grants the prorated Pro allowance", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    const t = Math.floor(Date.now() / 1000);
+    const start = t - 15 * 86_400;
+    const end = t + 15 * 86_400;
+    await apply(subscription({ status: "active", member: user.id, start, end }));
+    await env.DB.prepare("UPDATE members SET spent = 1800000 WHERE id = ?").bind(user.id).run();
+    // Upgraded at the period's midpoint and paid at once.
+    const upgraded = subscription({ status: "active", member: user.id, price: "price_pro", start, end,
+      latest_invoice: { id: "in_2", billing_reason: "subscription_update", created: t } });
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, start, end });
+    let charged = false;
+    routes["POST /subscriptions/sub_1"] = () => { charged = true; return upgraded; };
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, "batch").mockImplementation(async (statements) => {
+      if (charged) { charged = false; throw new Error("D1_ERROR: unavailable"); }
+      return batch(statements);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await api("/v1/billing/upgrade", {}, user.token);
+    expect(response.status).toBe(503);
+    expect(await memberRow(user.id)).toMatchObject({ allowance: 2_000_000, spent: 1_800_000 });
+    expect(await subRow(user.id)).toMatchObject({ plan: "starter" });
+    // invoice.paid arrives: the webhook reads the subscription and applies it.
+    routes["GET /subscriptions/sub_1"] = () => upgraded;
+    await syncSubscription(on, "sub_1");
+    expect(await memberRow(user.id)).toMatchObject({ allowance: 5_000_000, spent: 1_800_000 });
+    expect(await subRow(user.id)).toMatchObject({ plan: "pro" });
+  });
+
   test("a declined upgrade leaves Starter in place and says the card was declined", async () => {
     const user = await signedIn();
     await customer(user.id);
@@ -1134,6 +1193,7 @@ describe("comp and renewals", () => {
     const user = await signedIn();
     await customer(user.id);
     routes["GET /subscriptions"] = missing;
+    routes["GET /customers/cus_1"] = () => ({ id: "cus_1", object: "customer", deleted: true });
     routes["GET /checkout/sessions"] = missing;
     expect((await operate({ action: "comp", email: "producer@example.com" })).status).toBe(200);
     expect(await memberRow(user.id)).toMatchObject({ comp: 1 });
@@ -1150,6 +1210,25 @@ describe("comp and renewals", () => {
     expect(paramsOf(calls, "GET /checkout/sessions")).toEqual([{ customer: "cus_1", status: "open", limit: "100" }]);
     expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/checkout/sessions/cs_1/expire", "/checkout/sessions/cs_2/expire"]);
     expect(await memberRow(user.id)).toMatchObject({ comp: 1 });
+  });
+
+  test("comp refunds and cancels a subscription that went live after its first look at Stripe", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    paidInvoices();
+    const live = subscription({ status: "active", member: user.id });
+    let lists = 0;
+    routes["GET /subscriptions"] = () => ({ data: lists++ ? [live] : [] });
+    // The Checkout completes after comp's list, so it is no longer open, and its first apply grants paid access.
+    routes["GET /checkout/sessions"] = async () => {
+      await apply(live);
+      return { data: [] };
+    };
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: user.id });
+    expect((await operate({ action: "comp", email: "producer@example.com" })).status).toBe(200);
+    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_1" }]);
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_1"]);
+    expect(await memberRow(user.id)).toMatchObject({ allowance: 8_000_000, comp: 1 });
   });
 
   test("uncomp ends access now, and refuses an account that is not comped", async () => {
@@ -1266,6 +1345,7 @@ describe("comp and renewals", () => {
     for (let i = 0; i < 20; i++) {
       await env.DB.prepare(`INSERT INTO subscriptions(member_id, stripe_customer_id, stripe_subscription_id, status, current_period_end, updated_at)
         VALUES (?, ?, ?, 'active', ?, 0)`).bind(`s${i}`, `cus_s${i}`, `sub_s${i}`, (t - 10 * 86_400) * 1000).run();
+      routes[`GET /customers/cus_s${i}`] = () => ({ id: `cus_s${i}`, object: "customer", deleted: true });
     }
     await customer();
     await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
@@ -1314,16 +1394,33 @@ describe("comp and renewals", () => {
     expect(calls.filter((c) => c.path === "/subscriptions")).toHaveLength(1);
   });
 
-  test("a lapsed row whose customer Stripe no longer has is marked canceled, so it is not read again", async () => {
+  test("a lapsed row whose customer Stripe deleted is marked canceled, read for a day after, and not after", async () => {
     await customer();
     const t = Math.floor(Date.now() / 1000);
     await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
     await env.DB.prepare("UPDATE subscriptions SET updated_at = ? WHERE member_id = 'm1'").bind(Date.now() - 27 * HOUR).run();
     routes["GET /subscriptions"] = missing;
+    routes["GET /customers/cus_1"] = () => ({ id: "cus_1", object: "customer", deleted: true });
+    const before = Date.now();
     await maintain(on);
     expect(await subRow()).toMatchObject({ status: "canceled" });
+    expect((await subRow())!.updated_at).toBeGreaterThanOrEqual(before);
     await renewals(on, Date.now() + 2 * HOUR);
-    expect(calls.filter((c) => c.path === "/subscriptions")).toHaveLength(1);
+    expect(calls.filter((c) => c.path === "/subscriptions")).toHaveLength(2);
+    await renewals(on, Date.now() + 27 * HOUR);
+    expect(calls.filter((c) => c.path === "/subscriptions")).toHaveLength(2);
+  });
+
+  test("a list Stripe cannot find for a customer it still has, as with a wrong key, marks nothing and is logged", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await customer();
+    const t = Math.floor(Date.now() / 1000);
+    await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
+    routes["GET /subscriptions"] = missing;
+    routes["GET /customers/cus_1"] = () => ({ id: "cus_1", object: "customer" });
+    await maintain(on);
+    expect(await subRow()).toMatchObject({ status: "active" });
+    expect(events(logged)).toContainEqual({ event: "stripe_customer_lookup_mismatch", member_id: "m1", customer: "cus_1" });
   });
 
   test("a billable row with no period, as recreated after a restore, is read", async () => {
@@ -1358,6 +1455,13 @@ describe("comp and renewals", () => {
     await user("m1");
     routes["GET /customers/search"] = () => ({ data: [] });
     expect(await (await operate({ action: "billing_sync", member_id: "m1" })).json()).toEqual({ status: "no_customer" });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /customers/search"]);
+    expect(await subRow()).toBeNull();
+  });
+
+  test("billing-sync for a member Stripe has a customer for but whose account is gone says so, and stores nothing", async () => {
+    routes["GET /customers/search"] = () => ({ data: [{ id: "cus_1" }] });
+    expect(await (await operate({ action: "billing_sync", member_id: "m1" })).json()).toEqual({ status: "no_account" });
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /customers/search"]);
     expect(await subRow()).toBeNull();
   });

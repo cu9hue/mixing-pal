@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { AccountPanel } from "./AccountPanel";
 import { invoke } from "@tauri-apps/api/core";
 import { AccountState, AccountView } from "../model/account";
+import { useState } from "react";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 afterEach(cleanup);
 
@@ -141,6 +142,30 @@ it("opens the invoice page for an upgrade and shows the browser note instead of 
   fireEvent.click(screen.getByRole("button", { name: "Upgrade to Pro" }));
   expect(await screen.findByText(/Finish in your browser/)).toBeTruthy();
   expect(change).not.toHaveBeenCalled();
+});
+
+it("a start-now that opens the invoice page keeps polling, though the account it reads first has changed", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.mocked(invoke).mockResolvedValue({ opened: true });
+    const trialing: AccountView = { access: "active", capture: false, email: "producer@example.com", subscription_status: "trialing",
+      plan: "starter", can_ask: false, remaining_micro_usd: 100, period_end: Date.UTC(2026, 10, 27) };
+    // The proxy applied the declined start-now before it answered: the next read is past due, with a new period end.
+    const declined: AccountView = { ...trialing, subscription_status: "past_due", period_end: Date.UTC(2026, 11, 4) };
+    const refresh = vi.fn();
+    function Harness() {
+      const [view, setView] = useState(trialing);
+      refresh.mockImplementation(async () => setView(declined));
+      return <AccountPanel account={{ ...account, view, refresh }} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Start my plan now" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText(/Finish in your browser/)).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(screen.getByText(/Finish in your browser/)).toBeTruthy();
+    expect(refresh).toHaveBeenCalledTimes(3);
+  } finally { vi.useRealTimers(); }
 });
 
 it("a plan set to end says it ends, not that it resets", () => {

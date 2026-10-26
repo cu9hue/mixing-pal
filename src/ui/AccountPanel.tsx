@@ -51,8 +51,15 @@ export function AccountPanel({ account }: { account: AccountState }) {
   // Each trip to the browser restarts the polling window.
   const [trip, setTrip] = useState(0);
   const view = account.view;
-  // The note is about a trip to the browser; once the account changes, it is stale.
-  useEffect(() => { setOpened(false); }, [view?.access, view?.plan, view?.subscription_status, view?.cancel_at_period_end, view?.comp, view?.period_end]);
+  // The note is about a trip to the browser; once the account changes from the view the note first showed with, it is stale.
+  // Not the view before the click: start-now and upgrade change the account, and that read can land in the note's first render.
+  const shown = [view?.access, view?.plan, view?.subscription_status, view?.cancel_at_period_end, view?.comp, view?.period_end].join();
+  const seen = useRef<{ trip: number; shown: string } | null>(null);
+  useEffect(() => {
+    if (!opened) seen.current = null;
+    else if (seen.current?.trip !== trip) seen.current = { trip, shown };
+    else if (seen.current.shown !== shown) setOpened(false);
+  }, [opened, trip, shown]);
   // Checkout and invoice pages finish in the browser. Look again every 5 seconds for 2 minutes, then drop the note.
   useEffect(() => {
     if (!opened) return;
@@ -74,7 +81,11 @@ export function AccountPanel({ account }: { account: AccountState }) {
   function billing(action: "checkout" | "portal" | "start-now" | "upgrade", plan?: "starter" | "pro") {
     void act(async () => {
       const reply = await invoke<AccountView | { opened: true }>("account_billing", plan ? { action, plan } : { action });
-      if ("opened" in reply) { setOpened(true); setTrip((n) => n + 1); } else account.change(reply);
+      if (!("opened" in reply)) { account.change(reply); return; }
+      // Start-now and upgrade change the account before the invoice page opens. Read it first, so the note starts from that view.
+      if (action === "start-now" || action === "upgrade") await account.refresh();
+      setOpened(true);
+      setTrip((n) => n + 1);
     });
   }
 

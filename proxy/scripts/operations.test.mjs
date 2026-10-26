@@ -290,4 +290,5 @@ test("the restore sequence names a fallback for subscriptions billing-sync canno
   const output = [];
   await run(["help"], {}, (text) => output.push(text));
   assert.match(output[0], /billing-sync member-id[\s\S]*resend the subscriptions' events from\s+the Stripe Dashboard/);
+  assert.match(output[0], /no_account means/);
 });

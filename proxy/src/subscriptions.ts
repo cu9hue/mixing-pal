@@ -15,7 +15,7 @@ export interface StripeSubscription {
   pending_update?: unknown;
   // Expanded by every read that is applied; a bare id means it was not.
   latest_invoice?: string | { id: string; status: string | null; amount_paid: number; billing_reason?: string | null;
-    created?: number; hosted_invoice_url?: string | null } | null;
+    created?: number; status_transitions?: { paid_at: number | null }; hosted_invoice_url?: string | null } | null;
   items: { data: { id: string; price: { id: string }; current_period_start: number; current_period_end: number }[] };
 }
 
@@ -161,7 +161,9 @@ export async function applySubscription(env: Env, sub: StripeSubscription, stamp
     const requestedAt = deletion?.requested_at ?? null;
     if (requestedAt !== null) {
       const invoice = typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
-      if (invoice?.status === "paid" && (invoice.created ?? 0) * 1000 >= requestedAt) await cancelAndRefund(env, sub, "orphan");
+      // A renewal's invoice is created about an hour before it is charged: the time of payment decides.
+      const paidAt = invoice?.status_transitions?.paid_at ?? invoice?.created ?? 0;
+      if (invoice?.status === "paid" && paidAt * 1000 >= requestedAt) await cancelAndRefund(env, sub, "orphan");
       else {
         await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
         console.error(JSON.stringify({ event: "subscription_canceled_for_deletion", subscription: sub.id }));
@@ -239,6 +241,16 @@ export async function syncSubscription(env: Env, id: string): Promise<void> {
   throw new Error("subscription_apply_contended");
 }
 
+/** Stripe keeps a deleted customer readable, marked deleted, so its subscription list can still answer. Ask for the customer. */
+async function customerGone(env: Env, id: string): Promise<boolean> {
+  try {
+    return (await stripe<{ deleted?: boolean }>(env, "GET", `/customers/${encodeURIComponent(id)}`)).deleted === true;
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "stripe_not_found") return true;
+    throw error;
+  }
+}
+
 /**
  * Asks Stripe for the customer's subscriptions, not the row, and applies each one that can still charge,
  * plus the row's own when its state differs from the row's. billable: one can still charge.
@@ -249,9 +261,15 @@ async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable:
   const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
     { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] }).catch(async (error) => {
     if (!(error instanceof ApiError && error.code === "stripe_not_found")) throw error;
+    if (!await customerGone(env, row.stripe_customer_id)) {
+      // The customer is there but its list is not, as with a wrong key: for the operator. A mark would end a paying row.
+      console.error(JSON.stringify({ event: "stripe_customer_lookup_mismatch", member_id: row.member_id, customer: row.stripe_customer_id }));
+      throw error;
+    }
     // A customer Stripe no longer has holds nothing that can charge, so the row stops showing a plan.
-    await env.DB.prepare(`UPDATE subscriptions SET status = 'canceled' WHERE member_id = ? AND stripe_customer_id = ?
-      AND status IN (${[...BILLABLE].map(() => "?").join(", ")})`).bind(row.member_id, row.stripe_customer_id, ...BILLABLE).run();
+    // updated_at: renewals reads the row again for a day, in case the mark was wrong.
+    await env.DB.prepare(`UPDATE subscriptions SET status = 'canceled', updated_at = ? WHERE member_id = ? AND stripe_customer_id = ?
+      AND status IN (${[...BILLABLE].map(() => "?").join(", ")})`).bind(Date.now(), row.member_id, row.stripe_customer_id, ...BILLABLE).run();
     return null;
   });
   if (!listed) return { billable: false, gone: true };
@@ -392,7 +410,8 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   let row = existing;
   // A customer found at Stripe belongs to a member restored from a backup, who has had the trial.
   let found = false;
-  if (!row || synced?.gone) {
+  // Past the Portal, the row's customer has nothing billable. A deleted one can still list its subscriptions.
+  if (!row || synced?.gone || await customerGone(env, row.stripe_customer_id)) {
     // A customer Stripe no longer has cannot take a Checkout; Stripe canceled its subscriptions when it was deleted.
     const made = await customerFor(env, memberId, row?.stripe_customer_id);
     if (made.found && (await syncCustomer(env, made.row)).billable) return portalUrl(env, made.row);
@@ -481,6 +500,8 @@ export async function comp(env: Env, email: string, now = Date.now()): Promise<{
       spent = CASE WHEN members.period_end <= ? THEN 0 ELSE members.spent END,
       period_end = MAX(members.period_end, excluded.period_end)`)
     .bind(user.id, COMP_ALLOWANCE, now + COMP_PERIOD, now, now).run();
+  // A Checkout that completed after the first look is no longer open. Look again: the apply refunds and cancels it now that comp is set.
+  if (row) await syncCustomer(env, row);
   return { member_id: user.id };
 }
 
@@ -497,8 +518,10 @@ export async function billingSync(env: Env, memberId: string): Promise<{ status:
     const customer = await searchCustomer(env, memberId);
     if (!customer) return { status: "no_customer" };
     row = await storeCustomer(env, memberId, customer);
+    // No account to store it for, as after a restore to before the sign-up. The subscription's next event refunds and cancels it.
+    if (!row) return { status: "no_account" };
   }
-  if (row) await syncCustomer(env, row);
+  await syncCustomer(env, row);
   return { status: (await subscriptionRow(env, memberId))?.status ?? "none" };
 }
 

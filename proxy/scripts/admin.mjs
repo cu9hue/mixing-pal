@@ -53,8 +53,9 @@ account_cleanup_failed, prune_skipped, generation_id_mismatch, deletion_failed,
 capture_cleanup_backlog, capture_failed, report_deletion_failed,
 release_read_failed, request_failed, upstream_failed. Billing adds
 stripe_unreachable, stripe_failed, stripe_event_failed, stripe_event_unmatched,
-stripe_webhook_rejected, subscription_unknown, subscription_unknown_price,
-subscription_customer_mismatch, duplicate_subscription, subscription_refunded,
+stripe_webhook_rejected, stripe_customer_lookup_mismatch, subscription_unknown,
+subscription_unknown_price, subscription_customer_mismatch,
+duplicate_subscription, subscription_refunded,
 subscription_canceled_unrefunded, refund_failed,
 subscription_canceled_for_deletion, renewal_sync_failed,
 renewal_maintenance_failed, deletion_cancel_failed. Alert on any of these in
@@ -77,6 +78,8 @@ Run every replay-deletions page, then sweep. Then run
 npm run admin -- billing-sync member-id for every member with a subscription in
 Stripe (its metadata holds member_id), or resend the subscriptions' events from
 the Stripe Dashboard. no_customer means Stripe has no customer for that member.
+no_account means Stripe has a customer but the restored database has no account
+for that member; the subscription's next event refunds and cancels it.
 Do not run deploy or enable until
 all deletion pages and spending recovery are complete. Replay blocks ordinary
 resume until spending is recovered too.
