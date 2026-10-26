@@ -3,14 +3,15 @@
 //!
 //! Not run by `cargo test`: the target needs `--features evals`. Fixture,
 //! harness, parsing and reporting tests cost nothing and need no credentials.
-//! The seven scenario tests ask a real model, then a judge, and cost money.
-//! Run only scenarios 1 to 4 and 6 while scenario 5 is parked (the
+//! The eight scenario tests ask a real model, then a judge, and cost money.
+//! Run only scenarios 1 to 4, 6 and 7 while scenario 5 is parked (the
 //! `why_does_the_drop_fall_flat` filter also matches scenario 6):
 //!
 //!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
 //!     MIXINGPAL_JUDGE_MODEL=anthropic/claude-opus-5.5 \
 //!     cargo test --features evals --test craft -- --test-threads=1 --nocapture \
-//!       why_does_the_drop_fall_flat what_should_i_do_next is_the_pad_too_busy is_the_mix_okay
+//!       why_does_the_drop_fall_flat what_should_i_do_next is_the_pad_too_busy is_the_mix_okay \
+//!       what_is_the_compressor_on_the_vox_doing
 //!
 //! With the same variables, replay only the judge on the fixed labelled sample:
 //!   cargo test --features evals --test craft the_judge_matches_the_saved_calibration \
@@ -33,8 +34,8 @@
 //! with finish reason and reasoning-token usage (when supplied) in the report.
 //!
 //! Unlike `evals.rs`, these assert on prose, through a judge. Wording is
-//! not stable across runs. Scenarios 1 to 4 pass on a majority of three
-//! runs of the trust checks and required reads. Craft properties are scored
+//! not stable across runs. Scenarios 1 to 4, 6 and 7 pass on a majority of
+//! three runs of the trust checks and required reads. Craft properties are scored
 //! separately and do not gate that majority. Scenario 5 is a gate of one run
 //! per arm at temperature 0, plus a report of three runs per arm at the app's
 //! own sampling.
@@ -514,6 +515,10 @@ const CHORDS_CHANGED: Property = Property {
 const PLAIN_WORDS: Property = Property {
     key: "plain_words",
     description: "Readable by someone new to music production. Uses everyday words and short sentences. Each technical term it needs (for example MIDI, clip, fader, compressor) is explained in a few words the first time it appears. It uses no unexplained abbreviations such as dB, EQ, or BPM. Track, clip, and section names from the set are names, not jargon.",
+};
+const LIVE_TERMS: Property = Property {
+    key: "live_terms",
+    description: "Names every device and parameter the way Live shows it (for example Compressor, EQ Eight, Threshold, Ratio, Output Gain). Every other technical term (for example gain reduction, transient, knee, sidechain) is explained in a few plain words the first time it appears. A unit Live shows beside a value (dB, ms) and track, clip, and section names from the set need no explanation. Quote the first unexplained term or wrongly named device or parameter in the reason.",
 };
 const GOAL_TIED: Property = Property {
     key: "goal_tied",
@@ -1221,6 +1226,28 @@ async fn why_does_the_drop_fall_flat_for_a_newcomer() {
     passes_majority(&DROP_FOR_A_NEWCOMER, |run| {
         run.calls.iter().any(|c| c.name == "get_arrangement" && c.missing_reason.is_none())
             && run.answer.split_whitespace().count() <= 180
+    })
+    .await;
+}
+
+// Scenario 7. A settings question at "I finish tracks", where the answer
+// cannot avoid compressor terms. A pilot producer at this level found the
+// answers too clever: Live's names, and a few plain words for the rest.
+const COMPRESSOR_IN_PLAIN_TERMS: Scenario = Scenario {
+    question: "what is the compressor on the vox doing?",
+    goal: None,
+    experience: Experience::FinishesTracks,
+    mentor: "Vox has one device, a Compressor. Its parameters read Threshold -18.0 dB, Ratio 4.00 : 1, Attack 10.0 ms, Release 100 ms and Output Gain 3.0 dB. When the vocal goes above the Threshold, the Compressor turns the part above it down: at a Ratio of 4 : 1, 4 dB over comes out as 1 dB over. Attack is how fast it starts turning down, here 10 ms. Release is how fast it lets go, here 100 ms. Output Gain then lifts the whole result by 3 dB. The settings do not tell me how often the vocal crosses the Threshold, so not how much it is turned down. Whether it sounds squashed or natural is yours to hear. I find no readable problem in these settings. Leave the Compressor as it is.",
+    must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE, LIVE_TERMS],
+    craft: &[SOURCE_NAMED],
+};
+
+#[tokio::test]
+async fn what_is_the_compressor_on_the_vox_doing() {
+    passes_majority(&COMPRESSOR_IN_PLAIN_TERMS, |run| {
+        run.calls.iter().any(|c| {
+            c.name == "get_device_params" && c.args["track"] == json!(3) && c.missing_reason.is_none()
+        })
     })
     .await;
 }

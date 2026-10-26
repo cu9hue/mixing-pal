@@ -117,7 +117,8 @@ if you need it, read it.
 lists, and pipe tables of at most three columns. Links are NOT rendered; do \
 not use them.
 - Answer briefly. The producer is working, not reading. Short sentences, one \
-idea each, everyday words. Spell out an abbreviation the first time unless \
+idea each, everyday words. Name devices and parameters as Live shows them \
+(EQ Eight, Glue Compressor). Spell out an abbreviation the first time unless \
 the producer used it. Put the move in bold. Stay under about 120 words unless \
 asked for more.
 
@@ -168,19 +169,29 @@ the move needs a technical term, use it and say what it means in a few words, \
 the first time only. Use no abbreviations. Give the why as what she will hear \
 change, not as theory. Still one move, and still never say how the set sounds.";
 
+/// Appended to `SYSTEM_PROMPT` for a producer who chose "I finish tracks",
+/// and for one who never chose. A pilot producer here found the answers too
+/// clever to follow. Lighter than `NEW_TO_LIVE`, which also drops
+/// abbreviations and theory. It changes the words, not the advice.
+pub const FINISHES_TRACKS: &str = "\
+Who you are talking to:
+- The producer finishes tracks in Live. When a plain word will do, use it \
+instead of a technical term. A term that is not a label in Live gets a few \
+plain words the first time.";
+
 /// Appended to `SYSTEM_PROMPT` for a producer who chose "I mix for other
-/// people". "I finish tracks" appends nothing.
+/// people".
 pub const MIXES_FOR_OTHERS: &str = "\
 Who you are talking to:
 - The producer mixes for other people. Use standard terms and abbreviations \
 without explaining them. Skip the basics. Give exact values where you have \
 them.";
 
-fn experience_section(experience: Experience) -> Option<&'static str> {
+fn experience_section(experience: Experience) -> &'static str {
     match experience {
-        Experience::NewToLive => Some(NEW_TO_LIVE),
-        Experience::FinishesTracks => None,
-        Experience::MixesForOthers => Some(MIXES_FOR_OTHERS),
+        Experience::NewToLive => NEW_TO_LIVE,
+        Experience::FinishesTracks => FINISHES_TRACKS,
+        Experience::MixesForOthers => MIXES_FOR_OTHERS,
     }
 }
 
@@ -348,10 +359,7 @@ pub fn build_body(
         ));
     }
 
-    let prompt = match experience_section(experience) {
-        Some(section) => format!("{SYSTEM_PROMPT}\n\n{section}"),
-        None => SYSTEM_PROMPT.to_string(),
-    };
+    let prompt = format!("{SYSTEM_PROMPT}\n\n{}", experience_section(experience));
     let mut wire = vec![ChatMessage {
         role: "system".to_string(),
         content: Some(prompt),
@@ -642,7 +650,7 @@ mod tests {
 
         let body = sent_body(&server).await;
         assert_eq!(body["messages"][0]["role"], "system");
-        assert_eq!(body["messages"][0]["content"], SYSTEM_PROMPT);
+        assert_eq!(body["messages"][0]["content"], format!("{SYSTEM_PROMPT}\n\n{FINISHES_TRACKS}"));
         assert_eq!(body["messages"][1]["content"], "hi");
         assert_eq!(body["model"], "test/model");
         assert_eq!(
@@ -1067,6 +1075,14 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_names_devices_as_live_does() {
+        // A pilot producer on "I finish tracks" found the answers too clever
+        // to follow. Live's own names are the words every level can look up.
+        assert!(SYSTEM_PROMPT.contains("as Live shows them"));
+        assert!(SYSTEM_PROMPT.contains("EQ Eight"));
+    }
+
+    #[test]
     fn the_prompt_makes_a_choice_question_a_choice() {
         // Three real runs of the goal eval on 2026-09-03 showed the model
         // hedging a keep-or-change question with a move from the other side.
@@ -1115,17 +1131,20 @@ mod tests {
             .unwrap()
             .to_string();
 
-        // A producer who never chose gets `SYSTEM_PROMPT`, byte for byte.
-        assert_eq!(first(Experience::FinishesTracks), SYSTEM_PROMPT);
+        // A producer who never chose gets the "I finish tracks" section.
+        assert_eq!(first(Experience::default()), first(Experience::FinishesTracks));
         for (e, section) in [
             (Experience::NewToLive, NEW_TO_LIVE),
+            (Experience::FinishesTracks, FINISHES_TRACKS),
             (Experience::MixesForOthers, MIXES_FOR_OTHERS),
         ] {
             let body = build_body(&Settings::default(), e, &turn).unwrap();
             assert_eq!(roles_of(&body), vec!["system", "user", "system"]);
             assert_eq!(first(e), format!("{SYSTEM_PROMPT}\n\n{section}"));
-            // The same cost ceiling the prompt alone answers to.
-            assert!(first(e).chars().count() <= 7000, "{e:?} pushes the prompt past 7000");
+            // The prompt alone answers to 7000. New to Live sat 16 characters
+            // under it until the rule to use Live's names joined every level
+            // on 2026-10-26, so the joined prompt answers to 7100.
+            assert!(first(e).chars().count() <= 7100, "{e:?} pushes the prompt past 7100");
         }
     }
 
