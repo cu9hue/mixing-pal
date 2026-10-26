@@ -36,8 +36,9 @@ export async function subscriptionRow(env: Env, memberId: string): Promise<Subsc
 }
 
 /**
- * Stamps a Stripe read when it starts: ms time in microseconds, plus a random part,
- * so two reads in the same ms never share a stamp. Stored in subscriptions.synced_at only.
+ * Stamps a Stripe read when it starts: ms time in microseconds, plus a random part, so two
+ * reads in the same ms share a stamp only 1 time in 1000. On a tie the loser's members writes
+ * can land too; it then retries with a fresh read. Stored in subscriptions.synced_at only.
  */
 export function readStamp(): number {
   return Date.now() * 1000 + Math.floor(Math.random() * 1000);
