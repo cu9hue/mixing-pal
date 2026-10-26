@@ -97,18 +97,22 @@ beforeEach(async () => {
       ] } });
     }
     if (String(url) === `${provider}/api/v1/models/openai/gpt-6-luna/endpoints`) {
-      // Prices as OpenRouter lists them on 2026-10-22: a higher tier past 272k prompt tokens,
+      // Prices as OpenRouter lists them on 2026-10-26: a higher tier past 272k prompt tokens,
       // cache writes, and a web search price that applies only when a request asks for search.
       const pricing = { prompt: "0.0000001", completion: "0.0000005", web_search: "0.01", input_cache_read: "0.00000001",
         input_cache_write: "0.000000125", discount: 0,
         overrides: [{ min_prompt_tokens: 272000, prompt: "0.0000002", completion: "0.00000075", input_cache_read: "0.00000002", input_cache_write: "0.00000025" }] };
+      // A regional Azure host costs 10% more than the global one.
+      const regional = { prompt: "0.00000011", completion: "0.00000055", web_search: "0.01", input_cache_read: "0.000000011",
+        input_cache_write: "0.0000001375", discount: 0,
+        overrides: [{ min_prompt_tokens: 272000, prompt: "0.00000022", completion: "0.000000825", input_cache_read: "0.000000022", input_cache_write: "0.000000275" }] };
       return Response.json({ data: { endpoints: [
         { tag: "azure", status: 0, context_length: 1050000, pricing },
-        { tag: "azure/eu", status: 0, context_length: 1050000, pricing },
+        { tag: "azure/eu", status: 0, context_length: 1050000, pricing: regional },
         // OpenAI's own endpoint keeps data, so it is not an approved route.
         { tag: "openai", status: 0, context_length: 1050000, pricing },
         { tag: "azure/us", status: 0, context_length: 1050000,
-          pricing: { ...pricing, overrides: [{ ...pricing.overrides[0], completion: "0.000002" }] } },
+          pricing: { ...regional, overrides: [{ ...regional.overrides[0], completion: "0.000002" }] } },
       ] } });
     }
     if (String(url) === `${provider}/api/v1/chat/completions`) {
@@ -624,7 +628,7 @@ describe("metered requests", () => {
     expect(response.status, await response.clone().text()).toBe(200);
     // azure/us is left out: its long-prompt completion price is over Luna's cap.
     expect(sent[0]).toMatchObject({ model: "openai/gpt-6-luna", max_tokens: 12000, reasoning: { effort: "low" },
-      provider: { only: ["azure", "azure/eu"], zdr: true, sort: "throughput", max_price: { prompt: 0.25, completion: 1 } } });
+      provider: { only: ["azure", "azure/eu"], zdr: true, sort: "throughput", max_price: { prompt: 0.275, completion: 1 } } });
     expect(await env.DB.prepare("SELECT model, policy_version FROM requests").first())
       .toEqual({ model: "openai/gpt-6-luna", policy_version: LUNA.version });
   });
