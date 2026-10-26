@@ -241,12 +241,15 @@ export async function syncSubscription(env: Env, id: string): Promise<void> {
   throw new Error("subscription_apply_contended");
 }
 
-/** Stripe keeps a deleted customer readable, marked deleted, so its subscription list can still answer. Ask for the customer. */
+/**
+ * Stripe keeps a deleted customer readable, marked deleted, so only that mark means gone. A customer it
+ * cannot find at all points at the key (the other mode, another account), so it is not gone.
+ */
 async function customerGone(env: Env, id: string): Promise<boolean> {
   try {
     return (await stripe<{ deleted?: boolean }>(env, "GET", `/customers/${encodeURIComponent(id)}`)).deleted === true;
   } catch (error) {
-    if (error instanceof ApiError && error.code === "stripe_not_found") return true;
+    if (error instanceof ApiError && error.code === "stripe_not_found") return false;
     throw error;
   }
 }
@@ -262,7 +265,7 @@ async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable:
     { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] }).catch(async (error) => {
     if (!(error instanceof ApiError && error.code === "stripe_not_found")) throw error;
     if (!await customerGone(env, row.stripe_customer_id)) {
-      // The customer is there but its list is not, as with a wrong key: for the operator. A mark would end a paying row.
+      // Stripe has no deleted mark for the customer, as with a wrong key: for the operator. A mark would end a paying row.
       console.error(JSON.stringify({ event: "stripe_customer_lookup_mismatch", member_id: row.member_id, customer: row.stripe_customer_id }));
       throw error;
     }

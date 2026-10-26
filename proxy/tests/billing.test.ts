@@ -905,7 +905,8 @@ describe("billing routes", () => {
     await customer(user.id, "cus_dead");
     await env.DB.prepare("UPDATE subscriptions SET status = 'canceled', trial_used = 1 WHERE member_id = ?").bind(user.id).run();
     routes["GET /subscriptions"] = missing;
-    routes["GET /customers/cus_dead"] = missing;
+    // Stripe answers a deleted customer with its deleted mark, not "not found".
+    routes["GET /customers/cus_dead"] = () => ({ id: "cus_dead", object: "customer", deleted: true });
     routes["POST /customers"] = () => ({ id: "cus_new" });
     expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
     expect(paramsOf(calls, "GET /customers/search")).toEqual([{ query: `metadata['member_id']:'${user.id}'` }]);
@@ -1418,6 +1419,18 @@ describe("comp and renewals", () => {
     await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
     routes["GET /subscriptions"] = missing;
     routes["GET /customers/cus_1"] = () => ({ id: "cus_1", object: "customer" });
+    await maintain(on);
+    expect(await subRow()).toMatchObject({ status: "active" });
+    expect(events(logged)).toContainEqual({ event: "stripe_customer_lookup_mismatch", member_id: "m1", customer: "cus_1" });
+  });
+
+  test("a customer Stripe cannot find at all, as with a key from the other mode, marks nothing and is logged", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await customer();
+    const t = Math.floor(Date.now() / 1000);
+    await apply(subscription({ status: "active", member: "m1", end: t - 7200 }));
+    routes["GET /subscriptions"] = missing;
+    routes["GET /customers/cus_1"] = missing;
     await maintain(on);
     expect(await subRow()).toMatchObject({ status: "active" });
     expect(events(logged)).toContainEqual({ event: "stripe_customer_lookup_mismatch", member_id: "m1", customer: "cus_1" });
