@@ -99,10 +99,14 @@ export async function maintain(env: Env): Promise<void> {
     if (failed || objects.results.length < CAPTURE_DELETE_BATCH) break;
   }
   // Billing first, apart from cleanup. The job tried longest ago goes first, so jobs Stripe keeps failing on cannot hold up the others.
-  const unbilled = await env.DB.prepare(`SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND billing_cleared_at IS NULL
-    AND requested_at < ? ORDER BY billing_checked_at LIMIT 20`).bind(now - 10 * 60_000).all<{ member_id: string }>();
-  for (const { member_id: id } of unbilled.results) {
-    await env.DB.prepare("UPDATE deletion_jobs SET billing_checked_at = ? WHERE member_id = ?").bind(now, id).run();
+  const unbilled = await env.DB.prepare(`SELECT member_id, billing_checked_at FROM deletion_jobs WHERE completed_at IS NULL
+    AND billing_cleared_at IS NULL AND requested_at < ? ORDER BY billing_checked_at LIMIT 20`).bind(now - 10 * 60_000)
+    .all<{ member_id: string; billing_checked_at: number }>();
+  for (const { member_id: id, billing_checked_at: checked } of unbilled.results) {
+    // Claimed, so an overlapping sweep skips the job instead of canceling the same subscriptions.
+    const claimed = await env.DB.prepare("UPDATE deletion_jobs SET billing_checked_at = ? WHERE member_id = ? AND billing_checked_at = ?")
+      .bind(now, id, checked).run();
+    if (!claimed.meta.changes) continue;
     if (await cancelForDeletion(env, id)) await env.DB.prepare("UPDATE deletion_jobs SET billing_cleared_at = ? WHERE member_id = ?").bind(now, id).run();
   }
   const deletions = await env.DB.prepare(`SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND billing_cleared_at IS NOT NULL

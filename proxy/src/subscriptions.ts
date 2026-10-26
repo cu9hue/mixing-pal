@@ -246,15 +246,18 @@ export async function syncSubscription(env: Env, id: string): Promise<void> {
 async function syncCustomer(env: Env, row: SubscriptionRow): Promise<boolean> {
   const stamp = readStamp();
   const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
-    { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] }).catch((error) => {
-    // A customer Stripe no longer has holds nothing that can charge.
-    if (error instanceof ApiError && error.code === "stripe_not_found") return { data: [] };
-    throw error;
+    { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] }).catch(async (error) => {
+    if (!(error instanceof ApiError && error.code === "stripe_not_found")) throw error;
+    // A customer Stripe no longer has holds nothing that can charge, so the row stops showing a plan.
+    await env.DB.prepare(`UPDATE subscriptions SET status = 'canceled' WHERE member_id = ? AND stripe_customer_id = ?
+      AND status IN (${[...BILLABLE].map(() => "?").join(", ")})`).bind(row.member_id, row.stripe_customer_id, ...BILLABLE).run();
+    return { data: [] };
   });
   let billable = false;
   for (const sub of listed.data) {
     if (BILLABLE.has(sub.status)) billable = true;
-    else if (sub.id !== row.stripe_subscription_id) continue;
+    // An ended subscription the row already shows needs no write; the write would keep the row in renewals' window.
+    else if (sub.id !== row.stripe_subscription_id || sub.status === row.status) continue;
     // Applies after the first share the read's stamp and lose; the retry reads that one subscription again.
     if (!await applySubscription(env, sub, stamp)) await syncSubscription(env, sub.id);
   }
@@ -324,21 +327,30 @@ function requireBilling(env: Env): void {
   if (env.BILLING_ENABLED !== "true") throw new ApiError(404, "not_found", "Not found.");
 }
 
+/** The member's Stripe customer, found by the member id its metadata holds. */
+async function searchCustomer(env: Env, memberId: string): Promise<string | undefined> {
+  const search = await stripe<{ data: { id: string }[] }>(env, "GET", "/customers/search",
+    { query: `metadata['member_id']:'${memberId}'` });
+  return search.data[0]?.id;
+}
+
+/** Stores the member's customer row and returns it. Only while the user exists: a deletion or the cleanup during the Stripe calls must not leave a row for nobody. */
+async function storeCustomer(env: Env, memberId: string, customer: string): Promise<SubscriptionRow | null> {
+  await env.DB.prepare(`INSERT INTO subscriptions(member_id, stripe_customer_id, updated_at) SELECT ?, ?, ?
+    WHERE EXISTS (SELECT 1 FROM "user" WHERE id = ?) ON CONFLICT(member_id) DO NOTHING`)
+    .bind(memberId, customer, Date.now(), memberId).run();
+  return subscriptionRow(env, memberId);
+}
+
 /** The member's customer row, made now. found: the customer was already at Stripe, as after a database restore. */
 async function customerFor(env: Env, memberId: string): Promise<{ row: SubscriptionRow; found: boolean }> {
   const user = await env.DB.prepare('SELECT email FROM "user" WHERE id = ?').bind(memberId).first<{ email: string }>();
   if (!user) throw new ApiError(401, "sign_in_required", "Sign in again.");
-  const search = await stripe<{ data: { id: string }[] }>(env, "GET", "/customers/search",
-    { query: `metadata['member_id']:'${memberId}'` });
-  const found = search.data[0]?.id;
+  const found = await searchCustomer(env, memberId);
   // The key makes two quick clicks create one customer.
   const customer = found ?? (await stripe<{ id: string }>(env, "POST", "/customers",
     { email: user.email, metadata: { member_id: memberId } }, `customer-${memberId}`)).id;
-  // Only while the user exists: a deletion or the cleanup during the Stripe calls must not leave a row for nobody.
-  await env.DB.prepare(`INSERT INTO subscriptions(member_id, stripe_customer_id, updated_at) SELECT ?, ?, ?
-    WHERE EXISTS (SELECT 1 FROM "user" WHERE id = ?) ON CONFLICT(member_id) DO NOTHING`)
-    .bind(memberId, customer, Date.now(), memberId).run();
-  const row = await subscriptionRow(env, memberId);
+  const row = await storeCustomer(env, memberId, customer);
   if (!row) throw new ApiError(401, "sign_in_required", "Sign in again.");
   return { row, found: found !== undefined };
 }
@@ -466,7 +478,13 @@ export async function uncomp(env: Env, memberId: string, now = Date.now()): Prom
 }
 
 export async function billingSync(env: Env, memberId: string): Promise<{ status: string }> {
-  const row = await subscriptionRow(env, memberId);
+  let row = await subscriptionRow(env, memberId);
+  if (!row) {
+    // A row lost to a database restore: find the customer Stripe has. Never make one here.
+    const customer = await searchCustomer(env, memberId);
+    if (!customer) return { status: "no_customer" };
+    row = await storeCustomer(env, memberId, customer);
+  }
   if (row) await syncCustomer(env, row);
   return { status: (await subscriptionRow(env, memberId))?.status ?? "none" };
 }
@@ -474,21 +492,26 @@ export async function billingSync(env: Env, memberId: string): Promise<{ status:
 /**
  * Comped periods roll every 30 days. Rows whose webhook may have been lost are read from Stripe,
  * each at most once an hour: a period an hour past its end, since the stored end moves only on payment,
- * and a sign-up whose Checkout may have completed, since a session lasts 24 hours.
+ * and a row with no plan that can charge, touched in the last day, whose Checkout may have completed,
+ * since a session lasts 24 hours.
  */
 export async function renewals(env: Env, now = Date.now()): Promise<void> {
   await env.DB.prepare("UPDATE members SET spent = 0, period_end = ? WHERE comp = 1 AND period_end <= ? AND revoked = 0 AND deleted_at IS NULL")
     .bind(now + COMP_PERIOD, now).run();
   if (!env.STRIPE_SECRET_KEY) return;
   const hour = 60 * 60_000;
+  const billable = [...BILLABLE].map(() => "?").join(", ");
   const due = await env.DB.prepare(`SELECT * FROM subscriptions WHERE checked_at < ? AND (
-      (status IN (${[...BILLABLE].map(() => "?").join(", ")}) AND stripe_subscription_id IS NOT NULL AND current_period_end < ?)
-      OR (status = 'none' AND updated_at > ?))
+      (status IN (${billable}) AND stripe_subscription_id IS NOT NULL AND COALESCE(current_period_end, 0) < ?)
+      OR (status NOT IN (${billable}) AND updated_at > ?))
     ORDER BY checked_at LIMIT 20`)
-    .bind(now - hour, ...BILLABLE, now - hour, now - 26 * hour).all<SubscriptionRow>();
+    .bind(now - hour, ...BILLABLE, now - hour, ...BILLABLE, now - 26 * hour).all<SubscriptionRow>();
   for (const row of due.results) {
-    // Before the read, whatever its outcome, so a row Stripe keeps failing on waits its turn.
-    await env.DB.prepare("UPDATE subscriptions SET checked_at = ? WHERE member_id = ?").bind(now, row.member_id).run();
+    // Claimed before the read, whatever its outcome, so a row Stripe keeps failing on waits its turn,
+    // and an overlapping run skips it.
+    const claimed = await env.DB.prepare("UPDATE subscriptions SET checked_at = ? WHERE member_id = ? AND checked_at < ?")
+      .bind(now, row.member_id, now - hour).run();
+    if (!claimed.meta.changes) continue;
     try { await syncCustomer(env, row); }
     catch { console.error(JSON.stringify({ event: "renewal_sync_failed", member_id: row.member_id, subscription: row.stripe_subscription_id })); }
   }

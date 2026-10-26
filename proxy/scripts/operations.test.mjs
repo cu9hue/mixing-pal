@@ -281,4 +281,13 @@ test("the Stripe runbook in the deploy help uses the API version the proxy sends
   const version = (await readFile(fileURLToPath(new URL("../src/stripe.ts", import.meta.url)), "utf8")).match(/STRIPE_VERSION = "([^"]+)"/)[1];
   assert.match(help, new RegExp(`API version ${version.replaceAll(".", "\\.")}`));
   assert.match(help, /\/webhooks\/stripe/);
+  // A Portal upgrade would charge with no allowance: only the app's upgrade grants it.
+  assert.match(help, /Plan switching off/);
+  assert.doesNotMatch(help, /downgrades/i);
+});
+
+test("the restore sequence names a fallback for subscriptions billing-sync cannot find", async () => {
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  assert.match(output[0], /billing-sync member-id[\s\S]*resend the subscriptions' events from\s+the Stripe Dashboard/);
 });

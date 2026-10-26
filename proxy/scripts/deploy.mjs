@@ -44,15 +44,17 @@ Webhook endpoint: <API_ORIGIN>/webhooks/stripe, with Snapshot payloads, not
 Thin, and API version 2026-09-30.endive. Events: customer.subscription.created,
 customer.subscription.updated, customer.subscription.deleted, invoice.paid.
 Its signing secret is STRIPE_WEBHOOK_SECRET.
-Customer Portal: a default configuration in each mode. Plan upgrades off; the
-app's Upgrade button does that. If downgrades are on, they take effect at
-period end. Quantity changes off. Cancellations take effect at period end.
+Customer Portal: a default configuration in each mode. Plan switching off.
+Members change plan by upgrading in the app, or by canceling at period end and
+subscribing again. Quantity changes off. Cancellations take effect at period
+end.
 Tax and prices: Stripe Tax active, with an origin address. Both prices monthly,
 with tax_behavior=exclusive. Each stage's prices come from the same mode as
 that stage's key.
 Payments: the proxy restricts Checkout to cards in code. In test mode, confirm
-that Checkout still shows Apple Pay and Google Pay. After all payment retries
-fail, cancel the subscription.
+that Checkout still shows Apple Pay and Google Pay. Link should not show. If a
+wallet is missing, enable it under Payment methods before billing on. After all
+payment retries fail, cancel the subscription.
 Recovery: after a D1 restore, billing-sync every member with a subscription;
 see the restore sequence in npm run admin -- help. During a rollback that
 pauses inference for more than a day, pause payment collection in Stripe.

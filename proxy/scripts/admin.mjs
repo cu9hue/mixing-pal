@@ -75,7 +75,9 @@ paused even if restoring D1 revives pending mail. After restoring, apply current
 migrations with Wrangler using .deploy-STAGE.json; keep REPORT_RECOVERY=true.
 Run every replay-deletions page, then sweep. Then run
 npm run admin -- billing-sync member-id for every member with a subscription in
-Stripe (its metadata holds member_id). Do not run deploy or enable until
+Stripe (its metadata holds member_id), or resend the subscriptions' events from
+the Stripe Dashboard. no_customer means Stripe has no customer for that member.
+Do not run deploy or enable until
 all deletion pages and spending recovery are complete. Replay blocks ordinary
 resume until spending is recovered too.
 Deletion and revocation metadata is journaled separately in private R2 for 90 days.
