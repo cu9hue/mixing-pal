@@ -257,7 +257,7 @@ async function customerGone(env: Env, id: string): Promise<boolean> {
 /**
  * Asks Stripe for the customer's subscriptions, not the row, and applies each one that can still charge,
  * plus the row's own when its state differs from the row's. billable: one can still charge.
- * gone: Stripe no longer has the customer.
+ * gone: Stripe marks the customer deleted.
  */
 async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable: boolean; gone: boolean }> {
   const stamp = readStamp();
@@ -269,7 +269,7 @@ async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable:
       console.error(JSON.stringify({ event: "stripe_customer_lookup_mismatch", member_id: row.member_id, customer: row.stripe_customer_id }));
       throw error;
     }
-    // A customer Stripe no longer has holds nothing that can charge, so the row stops showing a plan.
+    // A customer Stripe marks deleted holds nothing that can charge, so the row stops showing a plan.
     // updated_at: renewals reads the row again for a day, in case the mark was wrong.
     await env.DB.prepare(`UPDATE subscriptions SET status = 'canceled', updated_at = ? WHERE member_id = ? AND stripe_customer_id = ?
       AND status IN (${[...BILLABLE].map(() => "?").join(", ")})`).bind(Date.now(), row.member_id, row.stripe_customer_id, ...BILLABLE).run();
@@ -367,7 +367,7 @@ async function storeCustomer(env: Env, memberId: string, customer: string): Prom
 
 /**
  * The member's customer row, made now. found: the customer was already at Stripe, as after a database restore.
- * gone: the row's customer, which Stripe no longer has; the row then takes the new one.
+ * gone: the row's customer, which Stripe marks deleted; the row then takes the new one.
  */
 async function customerFor(env: Env, memberId: string, gone?: string): Promise<{ row: SubscriptionRow; found: boolean }> {
   const user = await env.DB.prepare('SELECT email FROM "user" WHERE id = ?').bind(memberId).first<{ email: string }>();
@@ -415,7 +415,7 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   let found = false;
   // Past the Portal, the row's customer has nothing billable. A deleted one can still list its subscriptions.
   if (!row || synced?.gone || await customerGone(env, row.stripe_customer_id)) {
-    // A customer Stripe no longer has cannot take a Checkout; Stripe canceled its subscriptions when it was deleted.
+    // A customer Stripe marks deleted cannot take a Checkout; Stripe canceled its subscriptions when it was deleted.
     const made = await customerFor(env, memberId, row?.stripe_customer_id);
     if (made.found && (await syncCustomer(env, made.row)).billable) return portalUrl(env, made.row);
     row = made.row;
