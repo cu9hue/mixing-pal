@@ -33,6 +33,7 @@ OPENROUTER_KEY and ADMIN_TOKEN. Keep independent values for staging/production.
 secrets also sends STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET when both are set.
 deploy, enable and recovery need MIXINGPAL_BILLING=on|off. Every deploy sends the stage's Stripe
 price IDs from billing-prices.json; on needs both. Commit the IDs there before turning billing on.
+On also needs STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in the environment.
 Off restores invites; existing subscribers keep working.
 Configure the sending domain signin@mixingpal.com in Resend first. The auth
 secret must stay stable across deployments; rotating it revokes sessions and
@@ -53,8 +54,12 @@ with tax_behavior=exclusive. Each stage's prices come from the same mode as
 that stage's key.
 Payments: the proxy restricts Checkout to cards in code. In test mode, confirm
 that Checkout still shows Apple Pay and Google Pay. Link should not show. If a
-wallet is missing, enable it under Payment methods before billing on. After all
-payment retries fail, cancel the subscription.
+wallet is missing, enable it under Payment methods before billing on.
+Set the invoice payment methods (Settings, Invoices) to cards only. Start now,
+Upgrade and Stripe's failed-payment emails use Stripe's invoice page, which
+ignores Checkout's card-only setting.
+Set the subscription retry schedule to end within 7 days, then cancel. This
+matches the app's 7-day grace.
 Recovery: after a D1 restore, billing-sync every member with a subscription;
 see the restore sequence in npm run admin -- help. During a rollback that
 pauses inference for more than a day, pause payment collection in Stripe.
@@ -76,7 +81,9 @@ The recovery command sets REPORT_RECOVERY=true in Worker configuration, outside
 D1. Keep it enabled through every deletion replay page and spending recovery.
 See npm run admin -- help for the restore sequence.
 
-Rollback changes only the Worker version; never reverse ledger migrations.
+A rollback restores that version's code, BILLING_ENABLED, price IDs and secrets.
+Rolling back past a billing-off deploy turns billing back on. Redeploy forward
+with MIXINGPAL_BILLING=off if needed. Never reverse ledger migrations.
 A Worker older than the latest ledger migration cannot admit calls. To roll
 back, pause inference (npm run admin -- pause), then deploy the previous
 version. Keep inference paused until you deploy a fixed Worker forward. On the
@@ -131,6 +138,10 @@ export async function run(args) {
   // Every deploy rebuilds the vars, so billing is always stated, never inherited.
   if (["deploy", "enable", "recovery"].includes(command) && !["on", "off"].includes(process.env.MIXINGPAL_BILLING ?? "")) {
     throw new Error("Set MIXINGPAL_BILLING=on or off for this deploy.");
+  }
+  if (["deploy", "enable", "recovery"].includes(command) && process.env.MIXINGPAL_BILLING === "on"
+    && !(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET)) {
+    throw new Error("Billing on needs both Stripe secrets. Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in the environment.");
   }
   // Committed, so a deploy can never blank the IDs that live subscriptions are matched by.
   const prices = JSON.parse(await readFile(new URL("../billing-prices.json", import.meta.url), "utf8"));

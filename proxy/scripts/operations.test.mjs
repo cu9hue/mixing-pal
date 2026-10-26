@@ -261,6 +261,28 @@ test("deploy without MIXINGPAL_BILLING stops before any Wrangler call", async ()
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test("a billing-on deploy, enable or recovery without both Stripe secrets stops before any Wrangler call", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  try {
+    await writeFile(join(dir, "wrangler.jsonc"), JSON.stringify({ vars: {} }));
+    await mkdir(join(dir, "node_modules/wrangler/bin"), { recursive: true });
+    await writeFile(join(dir, "node_modules/wrangler/bin/wrangler.js"),
+      `require("node:fs").appendFileSync("calls.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");`);
+    for (const command of ["deploy", "enable", "recovery"]) {
+      for (const secrets of [{}, { STRIPE_SECRET_KEY: "sk_test_x" }, { STRIPE_WEBHOOK_SECRET: "whsec_x" }]) {
+        const result = spawnSync(process.execPath, [script, command, "staging"], { cwd: dir, encoding: "utf8", env: {
+          PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000", MIXINGPAL_BILLING: "on",
+          MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: "yes", ...secrets,
+        } });
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET/);
+        await assert.rejects(access(join(dir, "calls.jsonl")));
+      }
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("the operator help names every event the proxy logs, so each can be alerted on", async () => {
   const output = [];
   await run(["help"], {}, (text) => output.push(text));

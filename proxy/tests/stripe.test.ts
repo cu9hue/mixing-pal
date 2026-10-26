@@ -118,9 +118,11 @@ describe("the Stripe client", () => {
     expect(unrouted.splice(0)).toEqual(["GET /subscriptions/sub_9"]);
   });
 
-  test("no secret key means billing is unavailable, with no network call", async () => {
+  test("no secret key means billing is unavailable, with no network call, and is logged", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(stripe({ ...live, STRIPE_SECRET_KEY: undefined }, "GET", "/subscriptions/sub_1")).rejects.toBeInstanceOf(ApiError);
     expect(calls).toHaveLength(0);
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([{ event: "billing_not_configured" }]);
   });
 });
 

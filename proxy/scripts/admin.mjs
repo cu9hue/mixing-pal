@@ -58,8 +58,8 @@ subscription_unknown_price, subscription_customer_mismatch,
 duplicate_subscription, subscription_refunded,
 subscription_canceled_unrefunded, refund_failed,
 subscription_canceled_for_deletion, renewal_sync_failed,
-renewal_maintenance_failed, deletion_cancel_failed. Alert on any of these in
-Cloudflare Logs.
+renewal_maintenance_failed, deletion_cancel_failed, billing_not_configured.
+Alert on any of these in Cloudflare Logs.
 For provisional costs without a generation ID, check the provider billing record
 before resolve. A provisional cost is already charged to the service at its bound; resolve it only from provider evidence.
 

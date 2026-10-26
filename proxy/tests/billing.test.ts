@@ -1,6 +1,7 @@
 import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
+import { deleteAccount } from "../src/capture";
 import { DAY, Env } from "../src/env";
 import { maintain } from "../src/maintenance";
 import { StripeSubscription, applySubscription, cancelAndRefund, readStamp, renewals, syncSubscription } from "../src/subscriptions";
@@ -60,6 +61,8 @@ function paidInvoices() {
 }
 
 const events = (logged: { mock: { calls: unknown[][] } }) => logged.mock.calls.map(([line]) => JSON.parse(String(line)));
+// The hour that idempotency keys end with.
+const hour = () => Math.floor(Date.now() / 3_600_000);
 
 /** An env whose D1 batch waits at a gate: it holds one apply between its reads and its write, as a slow Worker would. */
 function gated() {
@@ -425,7 +428,7 @@ describe("applying Stripe state", () => {
       "DELETE /subscriptions/sub_2"]);
     expect(paramsOf(calls, "GET /invoice_payments")).toEqual([{ invoice: "in_2", status: "paid" }]);
     expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_2" }]);
-    expect(calls[2].headers.get("Idempotency-Key")).toBe("refund-in_2");
+    expect(calls[2].headers.get("Idempotency-Key")).toBe(`refund-in_2-${hour()}`);
     expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_1", plan: "starter" });
     expect(await memberRow()).toMatchObject({ allowance: 2_000_000 });
   });
@@ -441,6 +444,26 @@ describe("applying Stripe state", () => {
     routes["POST /refunds"] = () => new Response("down", { status: 500 });
     await expect(cancelAndRefund(on, sub, "duplicate")).rejects.toMatchObject({ code: "billing_unavailable" });
     expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+  });
+
+  test("a refund that failed with a 500 is retried in the next hour with a new key, and refunds", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const sub = subscription({ status: "active", member: "m1", latest_invoice: { id: "in_2" } }) as StripeSubscription;
+      paidInvoices();
+      routes["DELETE /subscriptions/sub_1"] = () => ({ ...sub, status: "canceled" });
+      routes["POST /refunds"] = () => new Response("down", { status: 500 });
+      vi.setSystemTime(Date.UTC(2026, 9, 26, 10, 59));
+      await expect(cancelAndRefund(on, sub, "duplicate")).rejects.toMatchObject({ code: "billing_unavailable" });
+      // Stripe replays a key's saved 500 for a day. A key from the next hour is a new request.
+      paidInvoices();
+      vi.setSystemTime(Date.UTC(2026, 9, 26, 11, 1));
+      await cancelAndRefund(on, sub, "duplicate");
+      const hours = [Date.UTC(2026, 9, 26, 10), Date.UTC(2026, 9, 26, 11)].map((at) => at / 3_600_000);
+      expect(calls.filter((c) => c.path === "/refunds").map((c) => c.headers.get("Idempotency-Key"))).toEqual(hours.map((h) => `refund-in_2-${h}`));
+      expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
   });
 
   test("a subscription Stripe already canceled is refunded but not canceled again, and a $0 trial invoice is not refunded", async () => {
@@ -770,7 +793,7 @@ describe("billing routes", () => {
     const response = await api("/v1/billing/checkout", { plan: "pro" }, user.token);
     expect(await response.json()).toEqual({ url: "https://checkout.stripe.com/c/pay/cs_1" });
     expect(posted("/customers")[0].params.get("metadata[member_id]")).toBe(user.id);
-    expect(posted("/customers")[0].headers.get("Idempotency-Key")).toBe(`customer-${user.id}`);
+    expect(posted("/customers")[0].headers.get("Idempotency-Key")).toBe(`customer-${user.id}-${hour()}`);
     const session = posted("/checkout/sessions")[0].params;
     expect(Object.fromEntries(session)).toMatchObject({ mode: "subscription", customer: "cus_1", "line_items[0][price]": "price_pro",
       "line_items[0][quantity]": "1", "subscription_data[metadata][member_id]": user.id, "subscription_data[trial_period_days]": "7",
@@ -858,6 +881,7 @@ describe("billing routes", () => {
   test("checkout reuses a Stripe customer found by member id, so a restored database makes no second customer", async () => {
     const user = await signedIn();
     routes["GET /customers/search"] = () => ({ data: [{ id: "cus_found" }] });
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "canceled", member: user.id, customer: "cus_found" })] });
     expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
     expect(paramsOf(calls, "GET /customers/search")).toEqual([{ query: `metadata['member_id']:'${user.id}'` }]);
     expect(posted("/customers")).toHaveLength(0);
@@ -866,6 +890,16 @@ describe("billing routes", () => {
     // The restored member used the trial before; the row that recorded it was lost.
     expect(posted("/checkout/sessions")[0].params.has("subscription_data[trial_period_days]")).toBe(false);
     expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_found" });
+  });
+
+  test("a found customer that never held a subscription gets the trial, as after a failed first try", async () => {
+    const user = await signedIn();
+    // The customer was created, then storing its row failed.
+    routes["GET /customers/search"] = () => ({ data: [{ id: "cus_found" }] });
+    expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
+    expect(posted("/customers")).toHaveLength(0);
+    expect(posted("/checkout/sessions")[0].params.get("customer")).toBe("cus_found");
+    expect(posted("/checkout/sessions")[0].params.get("subscription_data[trial_period_days]")).toBe("7");
   });
 
   test("a cached unpaid subscription that Stripe has since canceled lets the member check out again", async () => {
@@ -911,7 +945,7 @@ describe("billing routes", () => {
     expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
     expect(paramsOf(calls, "GET /customers/search")).toEqual([{ query: `metadata['member_id']:'${user.id}'` }]);
     // Not the first customer's key: Stripe would replay the deleted customer for a day.
-    expect(posted("/customers")[0].headers.get("Idempotency-Key")).toBe(`customer-${user.id}-cus_dead`);
+    expect(posted("/customers")[0].headers.get("Idempotency-Key")).toBe(`customer-${user.id}-cus_dead-${hour()}`);
     expect(posted("/checkout/sessions")[0].params.get("customer")).toBe("cus_new");
     expect(posted("/checkout/sessions")[0].params.has("subscription_data[trial_period_days]")).toBe(false);
     expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_new", status: "canceled" });
@@ -1523,7 +1557,7 @@ describe("account deletion", () => {
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /checkout/sessions", "POST /checkout/sessions/cs_1/expire", "GET /subscriptions",
       "DELETE /subscriptions/sub_unpaid", "DELETE /subscriptions/sub_paused", "DELETE /subscriptions/sub_incomplete"]);
     expect(paramsOf(calls, "GET /checkout/sessions")).toEqual([{ customer: "cus_1", status: "open", limit: "100" }]);
-    expect(paramsOf(calls, "GET /subscriptions")).toEqual([{ customer: "cus_1", status: "all", limit: "10" }]);
+    expect(paramsOf(calls, "GET /subscriptions")).toEqual([{ customer: "cus_1", status: "all", limit: "10", "expand[0]": "data.latest_invoice" }]);
     expect((await job("m1"))!.completed_at).not.toBeNull();
   });
 
@@ -1534,12 +1568,70 @@ describe("account deletion", () => {
     routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1" })] });
     routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
     await maintain(on);
-    expect(paramsOf(calls, "GET /subscriptions")).toEqual([{ customer: "cus_1", status: "all", limit: "10" }]);
+    expect(paramsOf(calls, "GET /subscriptions")).toEqual([{ customer: "cus_1", status: "all", limit: "10", "expand[0]": "data.latest_invoice" }]);
     const cancel = calls.find((c) => c.method === "DELETE")!;
     expect(cancel.path).toBe("/subscriptions/sub_1");
     expect(cancel.params.has("prorate")).toBe(false);
     expect(await subRow()).toBeNull();
     expect((await job("m1"))!.completed_at).not.toBeNull();
+  });
+
+  test("a payment taken after the request is refunded when the sweep cancels before its webhook applies", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await customer();
+    await apply(subscription({ status: "active", member: "m1" }));
+    await deleted("m1");
+    paidInvoices();
+    // A renewal charged a minute after the request. Its invoice.paid delivery failed once; Stripe retries it later.
+    const paidAt = Math.floor((Date.now() - 10 * 60_000) / 1000);
+    const renewal = { id: "in_renewal", created: paidAt - 3600, status_transitions: { paid_at: paidAt } };
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1", latest_invoice: renewal })] });
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1", latest_invoice: renewal });
+    await maintain(on);
+    // Stripe's retry now reads a canceled subscription.
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1", latest_invoice: renewal });
+    await syncSubscription(on, "sub_1");
+    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_renewal" }]);
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_1"]);
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+  });
+
+  test("a payment taken before the request is canceled with no refund", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await customer();
+    await apply(subscription({ status: "active", member: "m1" }));
+    await deleted("m1");
+    const paidAt = Math.floor((Date.now() - 20 * 60_000) / 1000);
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1",
+      latest_invoice: { id: "in_1", created: paidAt, status_transitions: { paid_at: paidAt } } })] });
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+    await maintain(on);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /checkout/sessions", "GET /subscriptions", "DELETE /subscriptions/sub_1"]);
+    expect(events(logged)).toContainEqual({ event: "subscription_canceled_for_deletion", subscription: "sub_1" });
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+  });
+
+  test("a deletion that commits while a first payment's apply waits at its batch leaves no live member", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await user("m1");
+    await customer();
+    paidInvoices();
+    const t = Math.floor(Date.now() / 1000);
+    const sub = subscription({ status: "active", member: "m1", latest_invoice: { id: "in_1", created: t, status_transitions: { paid_at: t } } });
+    const slow = gated();
+    const applying = applySubscription(slow.env, sub as StripeSubscription, read());
+    await slow.atBatch;
+    // Open sign-up: the account has no members row yet, so only the job records the deletion.
+    await deleteAccount(on, "m1", false);
+    slow.open();
+    await applying;
+    await env.DB.prepare("UPDATE deletion_jobs SET requested_at = ? WHERE member_id = 'm1'").bind(Date.now() - 11 * 60_000).run();
+    routes["GET /subscriptions"] = () => ({ data: [sub] });
+    routes["DELETE /subscriptions/sub_1"] = () => ({ ...sub, status: "canceled" });
+    await maintain(on);
+    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_1" }]);
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE id = 'm1' AND deleted_at IS NULL").first()).toEqual({ n: 0 });
   });
 
   test("when Stripe is down, the deletion waits and retries", async () => {

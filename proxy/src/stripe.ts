@@ -19,7 +19,10 @@ export function encode(value: unknown, key = "", out: string[] = []): string[] {
 
 export async function stripe<T>(env: Env, method: "GET" | "POST" | "DELETE", path: string,
   params?: Record<string, unknown>, idempotencyKey?: string): Promise<T> {
-  if (!env.STRIPE_SECRET_KEY) throw new ApiError(503, "billing_unavailable", UNAVAILABLE);
+  if (!env.STRIPE_SECRET_KEY) {
+    console.error(JSON.stringify({ event: "billing_not_configured" }));
+    throw new ApiError(503, "billing_unavailable", UNAVAILABLE);
+  }
   const query = params ? encode(params).join("&") : "";
   // The resource name only: ids and messages stay out of the logs.
   const resource = path.split("/")[1];

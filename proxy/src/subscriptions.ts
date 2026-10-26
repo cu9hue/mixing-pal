@@ -52,14 +52,15 @@ const WON = "EXISTS (SELECT 1 FROM subscriptions WHERE member_id = ? AND synced_
 
 // A later period end is a new paid period, so the allowance is the plan's and spending starts again.
 // The same end keeps both: an upgrade raises the allowance separately, prorated. reserved is never touched:
-// requests in flight settle later.
+// requests in flight settle later. No new row while a deletion is pending: with no row yet, only the job records it.
 function grant(env: Env, memberId: string, allowance: number, periodEnd: number, now: number, won: unknown[]) {
   return env.DB.prepare(`INSERT INTO members(id, allowance, period_end, created_at) SELECT ?, ?, ?, ? WHERE ${WON}
+      AND NOT EXISTS (SELECT 1 FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL)
     ON CONFLICT(id) DO UPDATE SET
       allowance = CASE WHEN members.period_end < excluded.period_end THEN excluded.allowance ELSE members.allowance END,
       spent = CASE WHEN members.period_end < excluded.period_end THEN 0 ELSE members.spent END,
       period_end = MAX(members.period_end, excluded.period_end)
-    WHERE members.comp = 0 AND members.deleted_at IS NULL`).bind(memberId, allowance, periodEnd, now, ...won);
+    WHERE members.comp = 0 AND members.deleted_at IS NULL`).bind(memberId, allowance, periodEnd, now, ...won, memberId);
 }
 
 interface InvoicePayment { payment: { type: string; payment_intent?: string | null; charge?: string | null } }
@@ -86,7 +87,9 @@ export async function cancelAndRefund(env: Env, sub: StripeSubscription,
         : payment.type === "charge" ? { charge: payment.charge } : null;
       if (!target) continue;
       try {
-        await stripe(env, "POST", "/refunds", target, `refund-${invoiceId}${i ? `-${i}` : ""}`);
+        // Stripe replays a key's first result for a day, a 500 too. The hour gives a later retry a fresh key;
+        // a second refund of the same payment fails as already refunded.
+        await stripe(env, "POST", "/refunds", target, `refund-${invoiceId}${i ? `-${i}` : ""}-${Math.floor(Date.now() / 3_600_000)}`);
         refunded = true;
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
@@ -99,6 +102,27 @@ export async function cancelAndRefund(env: Env, sub: StripeSubscription,
   }
   if (sub.status !== "canceled") await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
   console.error(JSON.stringify({ event: refunded ? "subscription_refunded" : "subscription_canceled_unrefunded", reason, subscription: sub.id }));
+}
+
+/**
+ * Cancels a subscription of an account whose deletion is pending, and returns true; false when none is.
+ * Deletion cancels with no refund, but a payment taken after the request bought access that never came.
+ */
+async function cancelForDeletionRequest(env: Env, sub: StripeSubscription, memberId: string): Promise<boolean> {
+  const deletion = await env.DB.prepare(`SELECT COALESCE(
+      (SELECT requested_at FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL),
+      (SELECT deleted_at FROM members WHERE id = ?)) AS requested_at`).bind(memberId, memberId).first<{ requested_at: number | null }>();
+  const requestedAt = deletion?.requested_at ?? null;
+  if (requestedAt === null) return false;
+  const invoice = typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
+  // A renewal's invoice is created about an hour before it is charged: the time of payment decides.
+  const paidAt = invoice?.status_transitions?.paid_at ?? invoice?.created ?? 0;
+  if (invoice?.status === "paid" && paidAt * 1000 >= requestedAt) await cancelAndRefund(env, sub, "orphan");
+  else {
+    await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
+    console.error(JSON.stringify({ event: "subscription_canceled_for_deletion", subscription: sub.id }));
+  }
+  return true;
 }
 
 /** A subscription with no row for its member and customer, after recreating the row was refused. */
@@ -153,24 +177,7 @@ export async function applySubscription(env: Env, sub: StripeSubscription, stamp
     await cancelAndRefund(env, sub, "comp");
     return true;
   }
-  if (BILLABLE.has(sub.status)) {
-    // Deletion cancels with no refund, but a payment taken after the request bought access that never came.
-    const deletion = await env.DB.prepare(`SELECT COALESCE(
-        (SELECT requested_at FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL),
-        (SELECT deleted_at FROM members WHERE id = ?)) AS requested_at`).bind(memberId, memberId).first<{ requested_at: number | null }>();
-    const requestedAt = deletion?.requested_at ?? null;
-    if (requestedAt !== null) {
-      const invoice = typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
-      // A renewal's invoice is created about an hour before it is charged: the time of payment decides.
-      const paidAt = invoice?.status_transitions?.paid_at ?? invoice?.created ?? 0;
-      if (invoice?.status === "paid" && paidAt * 1000 >= requestedAt) await cancelAndRefund(env, sub, "orphan");
-      else {
-        await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
-        console.error(JSON.stringify({ event: "subscription_canceled_for_deletion", subscription: sub.id }));
-      }
-      return true;
-    }
-  }
+  if (BILLABLE.has(sub.status) && await cancelForDeletionRequest(env, sub, memberId)) return true;
   if (row.stripe_subscription_id && row.stripe_subscription_id !== sub.id) {
     if (!LIVE.has(sub.status)) return true;
     // Read the stored one fresh: our cached status can lag a deletion webhook that has not arrived.
@@ -257,9 +264,9 @@ async function customerGone(env: Env, id: string): Promise<boolean> {
 /**
  * Asks Stripe for the customer's subscriptions, not the row, and applies each one that can still charge,
  * plus the row's own when its state differs from the row's. billable: one can still charge.
- * gone: Stripe marks the customer deleted.
+ * gone: Stripe marks the customer deleted. subscribed: the customer has held a subscription, of any status.
  */
-async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable: boolean; gone: boolean }> {
+async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable: boolean; gone: boolean; subscribed: boolean }> {
   const stamp = readStamp();
   const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
     { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] }).catch(async (error) => {
@@ -275,7 +282,7 @@ async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable:
       AND status IN (${[...BILLABLE].map(() => "?").join(", ")})`).bind(Date.now(), row.member_id, row.stripe_customer_id, ...BILLABLE).run();
     return null;
   });
-  if (!listed) return { billable: false, gone: true };
+  if (!listed) return { billable: false, gone: true, subscribed: false };
   let billable = false;
   for (const sub of listed.data) {
     if (BILLABLE.has(sub.status)) billable = true;
@@ -284,7 +291,7 @@ async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable:
     // Applies after the first share the read's stamp and lose; the retry reads that one subscription again.
     if (!await applySubscription(env, sub, stamp)) await syncSubscription(env, sub.id);
   }
-  return { billable, gone: false };
+  return { billable, gone: false, subscribed: listed.data.length > 0 };
 }
 
 /** Expires the customer's open Checkout sessions, so none can start a subscription later. */
@@ -375,10 +382,10 @@ async function customerFor(env: Env, memberId: string, gone?: string): Promise<{
   // Search can lag a deletion by about a minute.
   const searched = await searchCustomer(env, memberId);
   const found = searched === gone ? undefined : searched;
-  // The key makes two quick clicks create one customer. A replacement has its own: Stripe replays a key's
-  // result for a day, which would be the deleted customer.
-  const customer = found ?? (await stripe<{ id: string }>(env, "POST", "/customers",
-    { email: user.email, metadata: { member_id: memberId } }, gone ? `customer-${memberId}-${gone}` : `customer-${memberId}`)).id;
+  // The key makes two quick clicks create one customer. Stripe replays a key's first result for a day, a 500 too,
+  // so a replacement has its own key, and the hour gives a later retry a fresh one.
+  const customer = found ?? (await stripe<{ id: string }>(env, "POST", "/customers", { email: user.email, metadata: { member_id: memberId } },
+    `${gone ? `customer-${memberId}-${gone}` : `customer-${memberId}`}-${Math.floor(Date.now() / 3_600_000)}`)).id;
   // Only the row that still holds the gone customer: if another checkout replaced it first, the row keeps that one.
   if (gone) await env.DB.prepare("UPDATE subscriptions SET stripe_customer_id = ? WHERE member_id = ? AND stripe_customer_id = ?")
     .bind(customer, memberId, gone).run();
@@ -411,19 +418,21 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   // A pilot period still running would mix its spending into the plan's allowance.
   if (m && m.period_end > now) throw new ApiError(409, "access_active", "Your current access hasn't ended yet.");
   let row = existing;
-  // A customer found at Stripe belongs to a member restored from a backup, who has had the trial.
-  let found = false;
+  // A found customer that has held a subscription belongs to a member restored from a backup, who has had the trial.
+  // One that has held none was made by an earlier try that failed before its row was stored.
+  let subscribed = false;
   // Past the Portal, the row's customer has nothing billable. A deleted one can still list its subscriptions.
   if (!row || synced?.gone || await customerGone(env, row.stripe_customer_id)) {
     // A customer Stripe marks deleted cannot take a Checkout; Stripe canceled its subscriptions when it was deleted.
     const made = await customerFor(env, memberId, row?.stripe_customer_id);
-    if (made.found && (await syncCustomer(env, made.row)).billable) return portalUrl(env, made.row);
+    const listed = made.found ? await syncCustomer(env, made.row) : null;
+    if (listed?.billable) return portalUrl(env, made.row);
     row = made.row;
-    found = made.found;
+    subscribed = listed?.subscribed ?? false;
   }
   // Sign-in refuses an account being deleted; this catches a deletion requested while Stripe answered.
   if (await env.DB.prepare("SELECT 1 FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL").bind(memberId).first()) throw denied();
-  const trial = !m && !found && row.trial_used !== 1;
+  const trial = !m && !subscribed && row.trial_used !== 1;
   const session = await stripe<{ url: string }>(env, "POST", "/checkout/sessions", {
     mode: "subscription", customer: row.stripe_customer_id, client_reference_id: memberId,
     line_items: [{ price: priceFor(env, plan), quantity: 1 }],
@@ -556,7 +565,10 @@ export async function renewals(env: Env, now = Date.now()): Promise<void> {
   }
 }
 
-/** Cancels every subscription that can still charge, at once, with no refund. False means Stripe was unreachable and the deletion should wait. */
+/**
+ * Cancels every subscription that can still charge, at once, refunding only a payment taken after the request.
+ * False means Stripe was unreachable and the deletion should wait.
+ */
 export async function cancelForDeletion(env: Env, memberId: string): Promise<boolean> {
   const row = await subscriptionRow(env, memberId);
   if (!row) return true;
@@ -565,13 +577,14 @@ export async function cancelForDeletion(env: Env, memberId: string): Promise<boo
     await expireCheckouts(env, row.stripe_customer_id);
     // Ask Stripe, not the row: a Checkout or resubscribe whose webhook is late leaves the row stale.
     const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
-      { customer: row.stripe_customer_id, status: "all", limit: 10 }).catch((error) => {
+      { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] }).catch((error) => {
       // A customer Stripe no longer has holds nothing that can renew.
       if (error instanceof ApiError && error.code === "stripe_not_found") return { data: [] };
       throw error;
     });
     for (const sub of listed.data) {
-      if (sub.status !== "canceled" && sub.status !== "incomplete_expired") await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
+      // The open job gives the request time, so each one is canceled.
+      if (sub.status !== "canceled" && sub.status !== "incomplete_expired") await cancelForDeletionRequest(env, sub, memberId);
     }
     return true;
   } catch {
