@@ -45,7 +45,9 @@ export const K26: ModelPolicy = { version: "k26-2026-10-03", model: "moonshotai/
 export const LUNA: ModelPolicy = { version: "luna-2026-10-22", model: "openai/gpt-6-luna",
   // Only Azure serves Luna with zero retention; OpenAI's own endpoint keeps data.
   routes: ["azure", "azure/us", "azure/eu"],
-  maxContext: 1_050_000, maxPromptPrice: 0.25, maxCompletionPrice: 1.0 };
+  // The regional hosts list long-prompt cache writes at 0.275, 10% over the
+  // global host. Below that cap, a global outage leaves Luna with no host.
+  maxContext: 1_050_000, maxPromptPrice: 0.275, maxCompletionPrice: 1.0 };
 
 // 0.2.11 is the first app to let optional tool arguments be null. Luna sends
 // every argument, so with an older app's schema its reads fail.
