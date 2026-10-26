@@ -6,7 +6,7 @@ import { admissionDeadline, settle, settleExpired } from "../src/ledger";
 import { canDispatch, complete, dispatchStatement } from "../src/completion";
 import { redeem } from "../src/account";
 import { maintain } from "../src/maintenance";
-import { K26, LUNA, MAX_OUTPUT, RESERVATION, policyFor, toolNames, worstCase } from "../src/policy";
+import { K26, LUNA, MAX_OUTPUT, ModelPolicy, RESERVATION, policyFor, toolNames, worstCase } from "../src/policy";
 import sharedTools from "../../shared/tool-names.json";
 import { runTurn } from "../../src/agent/loop";
 
@@ -61,6 +61,21 @@ function defaultReply(extra: Record<string, unknown> = {}) {
 
 function reply(extra: Record<string, unknown> = {}) {
   replies.push(defaultReply(extra));
+}
+
+/** Answers a model's endpoints catalog with this response instead of the default one. */
+function catalog(p: ModelPolicy, response: () => Response) {
+  const network = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (url, options) =>
+    String(url) === `${provider}/api/v1/models/${p.model}/endpoints` ? response() : network(url, options));
+}
+
+// routes() keeps a good catalog for 5 minutes. Each call moves the clock past every catalog kept so far.
+let skew = 0;
+function pastCatalogCache() {
+  const real = Date.now;
+  skew += 6 * 60_000;
+  vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
 }
 
 /** The scripted non-stream reply, as OpenRouter would stream it: content, tool calls, finish, then usage. */
@@ -640,6 +655,43 @@ describe("metered requests", () => {
     expect(policyFor("0.2.11")).toBe(LUNA);
     expect(policyFor("0.10.0")).toBe(LUNA);
     expect(policyFor("1.0.0")).toBe(LUNA);
+  });
+
+  test.each([
+    ["Luna has no eligible host", () => Response.json({ data: { endpoints: ["azure", "azure/us", "azure/eu"].map((tag) =>
+      ({ tag, status: -2, context_length: 1050000, pricing: { prompt: "0.0000001", completion: "0.0000005" } })) } })],
+    ["Luna's catalog cannot be read", () => Response.json({}, { status: 500 })],
+  ])("answers with K2.6 when %s", async (_, lunaCatalog) => {
+    const user = await joined();
+    pastCatalogCache();
+    catalog(LUNA, lunaCatalog);
+    reply();
+    const response = await api("/v1/completions", { ...question(), app_version: "0.2.11" }, user.token);
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(sent[0]).toMatchObject({ model: "moonshotai/kimi-k2.6",
+      provider: { only: ["inceptron/int4"], max_price: { prompt: 1, completion: 4 } } });
+    expect(await env.DB.prepare("SELECT model, policy_version FROM requests").first())
+      .toEqual({ model: K26.model, policy_version: K26.version });
+  });
+
+  test("never asks for Luna on behalf of an app from before nullable tool arguments", async () => {
+    const user = await joined();
+    reply();
+    expect((await api("/v1/completions", { ...question(), app_version: "0.2.10" }, user.token)).status).toBe(200);
+    expect(sent[0]).toMatchObject({ model: "moonshotai/kimi-k2.6" });
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).not.toContain(`${provider}/api/v1/models/${LUNA.model}/endpoints`);
+  });
+
+  test("reports the model unavailable when neither Luna nor K2.6 has an eligible host", async () => {
+    const user = await joined();
+    pastCatalogCache();
+    catalog(LUNA, () => Response.json({ data: { endpoints: [] } }));
+    catalog(K26, () => Response.json({ data: { endpoints: [] } }));
+    const response = await api("/v1/completions", { ...question(), app_version: "0.2.11" }, user.token);
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toMatchObject({ code: "policy_unavailable", message: "The model is unavailable within the pilot's limits." });
+    expect(sent).toHaveLength(0);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM requests").first())!.n).toBe(0);
   });
 
   test("reserves enough for either model's most expensive request", () => {
