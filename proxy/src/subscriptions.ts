@@ -152,6 +152,22 @@ export async function applySubscription(env: Env, sub: StripeSubscription, stamp
     await cancelAndRefund(env, sub, "comp");
     return true;
   }
+  if (BILLABLE.has(sub.status)) {
+    // Deletion cancels with no refund, but a payment taken after the request bought access that never came.
+    const deletion = await env.DB.prepare(`SELECT COALESCE(
+        (SELECT requested_at FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL),
+        (SELECT deleted_at FROM members WHERE id = ?)) AS requested_at`).bind(memberId, memberId).first<{ requested_at: number | null }>();
+    const requestedAt = deletion?.requested_at ?? null;
+    if (requestedAt !== null) {
+      const invoice = typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
+      if (invoice?.status === "paid" && (invoice.created ?? 0) * 1000 >= requestedAt) await cancelAndRefund(env, sub, "orphan");
+      else {
+        await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
+        console.error(JSON.stringify({ event: "subscription_canceled_for_deletion", subscription: sub.id }));
+      }
+      return true;
+    }
+  }
   if (row.stripe_subscription_id && row.stripe_subscription_id !== sub.id) {
     if (!LIVE.has(sub.status)) return true;
     // Read the stored one fresh: our cached status can lag a deletion webhook that has not arrived.
@@ -229,7 +245,11 @@ export async function syncSubscription(env: Env, id: string): Promise<void> {
 async function syncCustomer(env: Env, row: SubscriptionRow): Promise<boolean> {
   const stamp = readStamp();
   const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
-    { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] });
+    { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] }).catch((error) => {
+    // A customer Stripe no longer has holds nothing that can charge.
+    if (error instanceof ApiError && error.code === "stripe_not_found") return { data: [] };
+    throw error;
+  });
   let billable = false;
   for (const sub of listed.data) {
     if (BILLABLE.has(sub.status)) billable = true;
@@ -340,18 +360,22 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   const existing = touched.meta.changes ? await subscriptionRow(env, memberId) : null;
   // Our cached status lags Stripe's webhook, so a second click would open a second Checkout. Stripe decides,
   // and what it has is applied now, so a member whose webhooks were lost gets access too.
-  if (existing && (BILLABLE.has(existing.status) || await syncCustomer(env, existing))) return portalUrl(env, existing);
+  // An unpaid or paused one is asked about too: if Stripe has since ended it, the member can subscribe again.
+  if (existing && (LIVE.has(existing.status) || await syncCustomer(env, existing))) return portalUrl(env, existing);
   // A pilot period still running would mix its spending into the plan's allowance.
   if (m && m.period_end > now) throw new ApiError(409, "access_active", "Your current access hasn't ended yet.");
   let row = existing;
+  // A customer found at Stripe belongs to a member restored from a backup, who has had the trial.
+  let found = false;
   if (!row) {
     const made = await customerFor(env, memberId);
     if (made.found && await syncCustomer(env, made.row)) return portalUrl(env, made.row);
     row = made.row;
+    found = made.found;
   }
   // Sign-in refuses an account being deleted; this catches a deletion requested while Stripe answered.
   if (await env.DB.prepare("SELECT 1 FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL").bind(memberId).first()) throw denied();
-  const trial = !m && row.trial_used !== 1;
+  const trial = !m && !found && row.trial_used !== 1;
   const session = await stripe<{ url: string }>(env, "POST", "/checkout/sessions", {
     mode: "subscription", customer: row.stripe_customer_id, client_reference_id: memberId,
     line_items: [{ price: priceFor(env, plan), quantity: 1 }],
@@ -395,7 +419,8 @@ export async function upgrade(env: Env, memberId: string, modern: boolean): Prom
   const path = `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`;
   const current = await stripe<StripeSubscription>(env, "GET", path);
   // Stripe moves the period about an hour before it charges. Until the renewal is paid, an upgrade's
-  // paid proration would read as the new period being paid.
+  // paid proration would read as the new period being paid. Stripe can still move the period between this
+  // read and the POST; that one round trip is an accepted risk, and a renewal that then fails gets past_due grace.
   if (current.items.data[0].current_period_end * 1000 > (row.current_period_end ?? 0)) {
     throw new ApiError(409, "renewal_pending", "Your renewal is still processing. Try again in an hour.");
   }

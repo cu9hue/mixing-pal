@@ -359,6 +359,49 @@ describe("applying Stripe state", () => {
     expect(await memberRow()).toMatchObject({ allowance: 8_000_000, period_end: now + DAY, comp: 1 });
   });
 
+  describe("a subscription for an account whose deletion is pending", () => {
+    // As deleteAccount does: the member is revoked and deleted, and a job is queued for the sweep.
+    async function deletionRequested(at: number, job = true) {
+      await env.DB.prepare("INSERT INTO members(id, allowance, period_end, created_at, revoked, deleted_at) VALUES ('m1', 2000000, ?, 0, 1, ?)")
+        .bind(now + DAY, at).run();
+      if (job) await env.DB.prepare("INSERT INTO deletion_jobs(member_id, requested_at) VALUES ('m1', ?)").bind(at).run();
+    }
+
+    test("one paid after the request is refunded and canceled", async () => {
+      await customer();
+      await deletionRequested(now - 60_000);
+      paidInvoices();
+      routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      await apply(subscription({ status: "active", member: "m1", latest_invoice: { id: "in_2", created: t } }), now);
+      expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_2" }]);
+      expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_1"]);
+      expect(events(logged)).toContainEqual({ event: "subscription_refunded", reason: "orphan", subscription: "sub_1" });
+      expect(await subRow()).toMatchObject({ status: "none", stripe_subscription_id: null });
+    });
+
+    test("one paid before the request is canceled with no refund when its invoice.paid replays", async () => {
+      await customer();
+      await deletionRequested(now - 60_000);
+      routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      await apply(subscription({ status: "active", member: "m1", latest_invoice: { id: "in_1", created: t - 10 * 86_400 } }), now);
+      expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /subscriptions/sub_1"]);
+      expect(events(logged)).toContainEqual({ event: "subscription_canceled_for_deletion", subscription: "sub_1" });
+      expect(await memberRow()).toMatchObject({ allowance: 2_000_000, period_end: now + DAY });
+    });
+
+    test("with no open job, the member's deleted_at is the request time", async () => {
+      await customer();
+      await deletionRequested(now - 60_000, false);
+      paidInvoices();
+      routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+      await apply(subscription({ status: "active", member: "m1", latest_invoice: { id: "in_2", created: t } }), now);
+      expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_2" }]);
+      expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
+    });
+  });
+
   test("a charged second subscription is refunded, then canceled", async () => {
     await customer();
     await apply(subscription({ status: "active", member: "m1" }), now);
@@ -807,7 +850,19 @@ describe("billing routes", () => {
     expect(posted("/customers")).toHaveLength(0);
     expect(paramsOf(calls, "GET /subscriptions")).toMatchObject([{ customer: "cus_found" }]);
     expect(posted("/checkout/sessions")[0].params.get("customer")).toBe("cus_found");
+    // The restored member used the trial before; the row that recorded it was lost.
+    expect(posted("/checkout/sessions")[0].params.has("subscription_data[trial_period_days]")).toBe(false);
     expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_found" });
+  });
+
+  test("a cached unpaid subscription that Stripe has since canceled lets the member check out again", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    await env.DB.prepare("UPDATE subscriptions SET stripe_subscription_id = 'sub_1', status = 'unpaid', trial_used = 1 WHERE member_id = ?")
+      .bind(user.id).run();
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "canceled", member: user.id })] });
+    expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
+    expect(await subRow(user.id)).toMatchObject({ status: "canceled" });
   });
 
   test("a found customer that still pays for a plan gets the Portal and its access back", async () => {
@@ -1058,6 +1113,15 @@ describe("comp and renewals", () => {
     expect(await response.json()).toMatchObject({ error: { code: "subscription_live" } });
     expect(await memberRow(user.id)).toMatchObject({ comp: 0 });
     expect(calls.some((c) => c.path === "/checkout/sessions")).toBe(false);
+  });
+
+  test("comp for an account whose Stripe customer was deleted grants as if Stripe had nothing", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    routes["GET /subscriptions"] = missing;
+    routes["GET /checkout/sessions"] = missing;
+    expect((await operate({ action: "comp", email: "producer@example.com" })).status).toBe(200);
+    expect(await memberRow(user.id)).toMatchObject({ comp: 1 });
   });
 
   test("comp expires the account's open Checkout sessions before it grants", async () => {
