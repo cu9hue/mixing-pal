@@ -22,6 +22,12 @@ function dateWord(view: AccountView): string {
   return view.cancel_at_period_end ? "ends" : "resets";
 }
 
+function periodNote(view: AccountView): string | null {
+  if (!(view.comp || (view.plan && view.subscription_status === "active")) || !view.period_end) return null;
+  const date = new Date(view.period_end).toLocaleDateString();
+  return view.cancel_at_period_end ? ` Your plan ends on ${date}.` : ` It resets on ${date}.`;
+}
+
 export function AccountPanel({ account }: { account: AccountState }) {
   const id = useId();
   const [email, setEmail] = useState("");
@@ -42,6 +48,8 @@ export function AccountPanel({ account }: { account: AccountState }) {
   }, [deleting]);
   const [sharedDeleted, setSharedDeleted] = useState(false);
   const [opened, setOpened] = useState(false);
+  // Each trip to the browser restarts the polling window.
+  const [trip, setTrip] = useState(0);
   const view = account.view;
   // The note is about a trip to the browser; once the account changes, it is stale.
   useEffect(() => { setOpened(false); }, [view?.access, view?.plan, view?.subscription_status, view?.cancel_at_period_end, view?.comp, view?.period_end]);
@@ -51,7 +59,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
     const poll = setInterval(() => { void account.refresh(); }, 5_000);
     const stop = setTimeout(() => setOpened(false), 120_000);
     return () => { clearInterval(poll); clearTimeout(stop); };
-  }, [opened, account.refresh]);
+  }, [opened, trip, account.refresh]);
   const problem = error ?? account.error;
   const signingIn = view === null || view.access === "signed_out" || view.access === "invitation_required";
 
@@ -66,7 +74,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
   function billing(action: "checkout" | "portal" | "start-now" | "upgrade", plan?: "starter" | "pro") {
     void act(async () => {
       const reply = await invoke<AccountView | { opened: true }>("account_billing", plan ? { action, plan } : { action });
-      if ("opened" in reply) setOpened(true); else account.change(reply);
+      if ("opened" in reply) { setOpened(true); setTrip((n) => n + 1); } else account.change(reply);
     });
   }
 
@@ -136,8 +144,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
             ? "We’re checking the last request’s usage before you can ask again."
             : <>
               The remaining allowance cannot cover another request.
-              {(view.comp || (view.plan && view.subscription_status === "active")) && view.period_end
-                && (view.cancel_at_period_end ? ` Your plan ends on ${new Date(view.period_end).toLocaleDateString()}.` : ` It resets on ${new Date(view.period_end).toLocaleDateString()}.`)}
+              {periodNote(view)}
               {view.subscription_status === "trialing" && <div className="account__actions">
                 <button className="account__primary" disabled={busy || operations.install} onClick={() => billing("start-now")}>Start my plan now</button>
                 <span>Ends your trial and charges your card today.</span>

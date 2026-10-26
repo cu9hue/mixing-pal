@@ -150,3 +150,45 @@ it("a plan set to end says it ends, not that it resets", () => {
   expect(screen.getByText(`Your plan ends on ${new Date(end).toLocaleDateString()}.`, { exact: false })).toBeTruthy();
   expect(screen.queryByText(/It resets on/)).toBeNull();
 });
+
+const active = { subscription_status: "active", plan: "starter", manage: true, remaining_micro_usd: 1_000_000, period_end: Date.UTC(2026, 10, 20) } as const;
+const openPortal = async () => {
+  fireEvent.click(screen.getByRole("button", { name: "Manage subscription" }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+};
+
+it("a second browser trip polls once per tick and restarts the 2-minute window", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.mocked(invoke).mockResolvedValue({ opened: true });
+    const refresh = vi.fn(async () => {});
+    render(<AccountPanel account={{ ...signedIn(active), refresh }} />);
+    await openPortal();
+    await openPortal();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(105_000); });
+    await openPortal();
+    refresh.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(119_000); });
+    expect(screen.getByText(/Finish in your browser/)).toBeTruthy();
+    expect(refresh).toHaveBeenCalledTimes(23);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(screen.queryByText(/Finish in your browser/)).toBeNull();
+    expect(refresh).toHaveBeenCalledTimes(24);
+  } finally { vi.useRealTimers(); }
+});
+
+it("leaving the panel stops the polling", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.mocked(invoke).mockResolvedValue({ opened: true });
+    const refresh = vi.fn(async () => {});
+    const { unmount } = render(<AccountPanel account={{ ...signedIn(active), refresh }} />);
+    await openPortal();
+    expect(screen.getByText(/Finish in your browser/)).toBeTruthy();
+    unmount();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(refresh).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
