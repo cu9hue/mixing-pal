@@ -11,6 +11,7 @@ export interface StripeSubscription {
   status: string;
   cancel_at_period_end: boolean;
   trial_end: number | null;
+  ended_at: number | null;
   metadata: Record<string, string>;
   pending_update?: unknown;
   // Expanded by every read that is applied; a bare id means it was not.
@@ -65,6 +66,10 @@ function grant(env: Env, memberId: string, allowance: number, periodEnd: number,
 
 interface InvoicePayment { payment: { type: string; payment_intent?: string | null; charge?: string | null } }
 
+// Ends each idempotency key. Stripe replays a key's first result for a day, a 500 too: a retry in a later hour
+// gets a fresh key, and two clicks in the same hour still share one.
+const keyHour = () => Math.floor(Date.now() / 3_600_000);
+
 // Refund errors that come back the same on every retry. Waiting on them would only keep the subscription charging.
 const REFUSED = new Set(["stripe_rejected", "stripe_not_found", "card_declined"]);
 
@@ -73,7 +78,7 @@ const REFUSED = new Set(["stripe_rejected", "stripe_not_found", "card_declined"]
  * Refund first: if the refund fails for now, the subscription is still there when the webhook retries.
  */
 export async function cancelAndRefund(env: Env, sub: StripeSubscription,
-  reason: "duplicate" | "orphan" | "comp" | "customer_mismatch"): Promise<void> {
+  reason: "duplicate" | "orphan" | "comp" | "customer_mismatch" | "after_end"): Promise<void> {
   const invoice = sub.latest_invoice;
   const invoiceId = typeof invoice === "string" ? invoice : invoice?.id;
   // An expanded invoice that shows nothing paid saves the call; for a bare id, the list's status filter decides.
@@ -87,9 +92,8 @@ export async function cancelAndRefund(env: Env, sub: StripeSubscription,
         : payment.type === "charge" ? { charge: payment.charge } : null;
       if (!target) continue;
       try {
-        // Stripe replays a key's first result for a day, a 500 too. The hour gives a later retry a fresh key;
-        // a second refund of the same payment fails as already refunded.
-        await stripe(env, "POST", "/refunds", target, `refund-${invoiceId}${i ? `-${i}` : ""}-${Math.floor(Date.now() / 3_600_000)}`);
+        // A second refund of the same payment, under a later hour's key, fails as already refunded.
+        await stripe(env, "POST", "/refunds", target, `refund-${invoiceId}${i ? `-${i}` : ""}-${keyHour()}`);
         refunded = true;
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
@@ -156,6 +160,12 @@ export async function applySubscription(env: Env, sub: StripeSubscription, stamp
     console.error(JSON.stringify({ event: "subscription_unknown", subscription: sub.id }));
     return true;
   }
+  // Canceling leaves an open invoice payable on Stripe's page, so a payment can come after the end and buy nothing.
+  // ended_at, not canceled_at: a cancel at period end sets canceled_at while the plan still runs.
+  // The apply goes on, so the row still records the cancel.
+  const last = typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
+  if (sub.status === "canceled" && sub.ended_at !== null && last?.status === "paid" && last.amount_paid > 0
+    && (last.status_transitions?.paid_at ?? last.created ?? 0) > sub.ended_at) await cancelAndRefund(env, sub, "after_end");
   const find = () => env.DB.prepare("SELECT * FROM subscriptions WHERE member_id = ? AND stripe_customer_id = ?")
     .bind(memberId, sub.customer).first<SubscriptionRow>();
   let row = await find();
@@ -382,10 +392,9 @@ async function customerFor(env: Env, memberId: string, gone?: string): Promise<{
   // Search can lag a deletion by about a minute.
   const searched = await searchCustomer(env, memberId);
   const found = searched === gone ? undefined : searched;
-  // The key makes two quick clicks create one customer. Stripe replays a key's first result for a day, a 500 too,
-  // so a replacement has its own key, and the hour gives a later retry a fresh one.
+  // The key makes two quick clicks create one customer. A replacement has its own: Stripe would replay the deleted customer.
   const customer = found ?? (await stripe<{ id: string }>(env, "POST", "/customers", { email: user.email, metadata: { member_id: memberId } },
-    `${gone ? `customer-${memberId}-${gone}` : `customer-${memberId}`}-${Math.floor(Date.now() / 3_600_000)}`)).id;
+    `${gone ? `customer-${memberId}-${gone}` : `customer-${memberId}`}-${keyHour()}`)).id;
   // Only the row that still holds the gone customer: if another checkout replaced it first, the row keeps that one.
   if (gone) await env.DB.prepare("UPDATE subscriptions SET stripe_customer_id = ? WHERE member_id = ? AND stripe_customer_id = ?")
     .bind(customer, memberId, gone).run();
@@ -583,8 +592,10 @@ export async function cancelForDeletion(env: Env, memberId: string): Promise<boo
       throw error;
     });
     for (const sub of listed.data) {
-      // The open job gives the request time, so each one is canceled.
-      if (sub.status !== "canceled" && sub.status !== "incomplete_expired") await cancelForDeletionRequest(env, sub, memberId);
+      // The sweep runs only for an open job. Without one, fail rather than skip the cancel.
+      if (sub.status !== "canceled" && sub.status !== "incomplete_expired" && !await cancelForDeletionRequest(env, sub, memberId)) {
+        throw new Error("deletion_not_pending");
+      }
     }
     return true;
   } catch {

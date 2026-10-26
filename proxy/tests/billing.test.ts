@@ -4,7 +4,7 @@ import worker from "../src/index";
 import { deleteAccount } from "../src/capture";
 import { DAY, Env } from "../src/env";
 import { maintain } from "../src/maintenance";
-import { StripeSubscription, applySubscription, cancelAndRefund, readStamp, renewals, syncSubscription } from "../src/subscriptions";
+import { StripeSubscription, applySubscription, cancelAndRefund, cancelForDeletion, readStamp, renewals, syncSubscription } from "../src/subscriptions";
 import { StripeCall, StripeRoutes, missing, paramsOf, sign, stubNetwork, subscription } from "./stripe-fixtures";
 
 const on = { ...env, BILLING_ENABLED: "true" } as unknown as Env;
@@ -61,8 +61,8 @@ function paidInvoices() {
 }
 
 const events = (logged: { mock: { calls: unknown[][] } }) => logged.mock.calls.map(([line]) => JSON.parse(String(line)));
-// The hour that idempotency keys end with.
-const hour = () => Math.floor(Date.now() / 3_600_000);
+// Idempotency keys end with the hour, which can turn during a call: the keys a call started at `from` can send.
+const hourKeys = (prefix: string, from: number) => [0, 1].map((n) => `${prefix}-${Math.floor(from / 3_600_000) + n}`);
 
 /** An env whose D1 batch waits at a gate: it holds one apply between its reads and its write, as a slow Worker would. */
 function gated() {
@@ -417,18 +417,69 @@ describe("applying Stripe state", () => {
     });
   });
 
+  describe("a canceled subscription whose open invoice is paid", () => {
+    const ended = t - 3600;
+    // Paid on Stripe's invoice page after the end, as from an earlier failed-payment email.
+    const late = { id: "in_2", created: ended - 86_400, status_transitions: { paid_at: t } };
+
+    test("after it ended is refunded, and the row shows the cancel", async () => {
+      await customer();
+      await apply(subscription({ status: "active", member: "m1", start: t - 40 * 86_400, end: t - 10 * 86_400 }), now);
+      await apply(subscription({ status: "past_due", member: "m1", start: t - 10 * 86_400, end: t + 20 * 86_400 }), now);
+      paidInvoices();
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      await apply(subscription({ status: "canceled", member: "m1", ended_at: ended, latest_invoice: late }), now);
+      expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /invoice_payments", "POST /refunds"]);
+      expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_2" }]);
+      expect(events(logged)).toContainEqual({ event: "subscription_refunded", reason: "after_end", subscription: "sub_1" });
+      expect(await subRow()).toMatchObject({ status: "canceled" });
+      expect((await memberRow())!.period_end).toBeLessThanOrEqual(now);
+    });
+
+    test("after it ended is refunded for an account that is gone, with no row", async () => {
+      paidInvoices();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await apply(subscription({ status: "canceled", member: "m1", ended_at: ended, latest_invoice: late }), now);
+      expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_2" }]);
+      expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+      expect(await subRow()).toBeNull();
+    });
+
+    test("while it still ran, under a cancel at period end, is kept", async () => {
+      await customer();
+      // A past-due invoice paid before the period ended bought that period.
+      await apply(subscription({ status: "canceled", member: "m1", cancel_at_period_end: true, ended_at: t,
+        latest_invoice: { id: "in_2", created: t - 10 * 86_400, status_transitions: { paid_at: t - 86_400 } } }), now);
+      expect(calls).toHaveLength(0);
+      expect(await subRow()).toMatchObject({ status: "canceled" });
+    });
+
+    test("is safe to read again once refunded", async () => {
+      await customer();
+      paidInvoices();
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      const sub = subscription({ status: "canceled", member: "m1", ended_at: ended, latest_invoice: late });
+      await apply(sub, now);
+      routes["POST /refunds"] = () => Response.json({ error: { type: "invalid_request_error", code: "charge_already_refunded" } }, { status: 400 });
+      await apply(sub, now);
+      expect(events(logged).filter((e) => e.event === "subscription_refunded")).toHaveLength(2);
+      expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    });
+  });
+
   test("a charged second subscription is refunded, then canceled", async () => {
     await customer();
     await apply(subscription({ status: "active", member: "m1" }), now);
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: "m1" });
     paidInvoices();
     routes["DELETE /subscriptions/sub_2"] = () => subscription({ id: "sub_2", status: "canceled", member: "m1" });
+    const from = Date.now();
     await apply(subscription({ id: "sub_2", status: "active", member: "m1", price: "price_pro", latest_invoice: { id: "in_2" } }), now);
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /subscriptions/sub_1", "GET /invoice_payments", "POST /refunds",
       "DELETE /subscriptions/sub_2"]);
     expect(paramsOf(calls, "GET /invoice_payments")).toEqual([{ invoice: "in_2", status: "paid" }]);
     expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_2" }]);
-    expect(calls[2].headers.get("Idempotency-Key")).toBe(`refund-in_2-${hour()}`);
+    expect(hourKeys("refund-in_2", from)).toContain(calls[2].headers.get("Idempotency-Key"));
     expect(await subRow()).toMatchObject({ stripe_subscription_id: "sub_1", plan: "starter" });
     expect(await memberRow()).toMatchObject({ allowance: 2_000_000 });
   });
@@ -790,10 +841,11 @@ describe("billing routes", () => {
 
   test("a new account's checkout creates one customer and a session with a 7-day trial", async () => {
     const user = await signedIn();
+    const from = Date.now();
     const response = await api("/v1/billing/checkout", { plan: "pro" }, user.token);
     expect(await response.json()).toEqual({ url: "https://checkout.stripe.com/c/pay/cs_1" });
     expect(posted("/customers")[0].params.get("metadata[member_id]")).toBe(user.id);
-    expect(posted("/customers")[0].headers.get("Idempotency-Key")).toBe(`customer-${user.id}-${hour()}`);
+    expect(hourKeys(`customer-${user.id}`, from)).toContain(posted("/customers")[0].headers.get("Idempotency-Key"));
     const session = posted("/checkout/sessions")[0].params;
     expect(Object.fromEntries(session)).toMatchObject({ mode: "subscription", customer: "cus_1", "line_items[0][price]": "price_pro",
       "line_items[0][quantity]": "1", "subscription_data[metadata][member_id]": user.id, "subscription_data[trial_period_days]": "7",
@@ -942,10 +994,11 @@ describe("billing routes", () => {
     // Stripe answers a deleted customer with its deleted mark, not "not found".
     routes["GET /customers/cus_dead"] = () => ({ id: "cus_dead", object: "customer", deleted: true });
     routes["POST /customers"] = () => ({ id: "cus_new" });
+    const from = Date.now();
     expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
     expect(paramsOf(calls, "GET /customers/search")).toEqual([{ query: `metadata['member_id']:'${user.id}'` }]);
     // Not the first customer's key: Stripe would replay the deleted customer for a day.
-    expect(posted("/customers")[0].headers.get("Idempotency-Key")).toBe(`customer-${user.id}-cus_dead-${hour()}`);
+    expect(hourKeys(`customer-${user.id}-cus_dead`, from)).toContain(posted("/customers")[0].headers.get("Idempotency-Key"));
     expect(posted("/checkout/sessions")[0].params.get("customer")).toBe("cus_new");
     expect(posted("/checkout/sessions")[0].params.has("subscription_data[trial_period_days]")).toBe(false);
     expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_new", status: "canceled" });
@@ -1615,9 +1668,10 @@ describe("account deletion", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     await user("m1");
     await customer();
-    paidInvoices();
-    const t = Math.floor(Date.now() / 1000);
-    const sub = subscription({ status: "active", member: "m1", latest_invoice: { id: "in_1", created: t, status_transitions: { paid_at: t } } });
+    // Paid just before the deletion, as in the race. The sweep below needs the request backdated past its 10 minutes.
+    const paidAt = Math.floor((Date.now() - 12 * 60_000) / 1000);
+    const sub = subscription({ status: "active", member: "m1",
+      latest_invoice: { id: "in_1", created: paidAt, status_transitions: { paid_at: paidAt } } });
     const slow = gated();
     const applying = applySubscription(slow.env, sub as StripeSubscription, read());
     await slow.atBatch;
@@ -1629,9 +1683,18 @@ describe("account deletion", () => {
     routes["GET /subscriptions"] = () => ({ data: [sub] });
     routes["DELETE /subscriptions/sub_1"] = () => ({ ...sub, status: "canceled" });
     await maintain(on);
-    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_1" }]);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /checkout/sessions", "GET /subscriptions", "DELETE /subscriptions/sub_1"]);
     expect((await job("m1"))!.completed_at).not.toBeNull();
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE id = 'm1' AND deleted_at IS NULL").first()).toEqual({ n: 0 });
+  });
+
+  test("a deletion cancel that finds no pending request cancels nothing, and fails so the sweep retries", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await customer();
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1" })] });
+    expect(await cancelForDeletion(on, "m1")).toBe(false);
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(events(logged)).toContainEqual({ event: "deletion_cancel_failed", member_id: "m1" });
   });
 
   test("when Stripe is down, the deletion waits and retries", async () => {

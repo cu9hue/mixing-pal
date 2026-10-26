@@ -33,7 +33,7 @@ OPENROUTER_KEY and ADMIN_TOKEN. Keep independent values for staging/production.
 secrets also sends STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET when both are set.
 deploy, enable and recovery need MIXINGPAL_BILLING=on|off. Every deploy sends the stage's Stripe
 price IDs from billing-prices.json; on needs both. Commit the IDs there before turning billing on.
-On also needs STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in the environment.
+Deploy and enable with on also need STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in the environment.
 Off restores invites; existing subscribers keep working.
 Configure the sending domain signin@mixingpal.com in Resend first. The auth
 secret must stay stable across deployments; rotating it revokes sessions and
@@ -139,7 +139,8 @@ export async function run(args) {
   if (["deploy", "enable", "recovery"].includes(command) && !["on", "off"].includes(process.env.MIXINGPAL_BILLING ?? "")) {
     throw new Error("Set MIXINGPAL_BILLING=on or off for this deploy.");
   }
-  if (["deploy", "enable", "recovery"].includes(command) && process.env.MIXINGPAL_BILLING === "on"
+  // Not recovery: it uploads no secrets, and the check would make an operator export the live key.
+  if (["deploy", "enable"].includes(command) && process.env.MIXINGPAL_BILLING === "on"
     && !(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET)) {
     throw new Error("Billing on needs both Stripe secrets. Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in the environment.");
   }

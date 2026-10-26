@@ -44,7 +44,7 @@ type Invoice = { id?: string; status?: string; amount_paid?: number; billing_rea
 
 /** A subscription shaped as API version 2026-09-30.endive returns it. Times are seconds. */
 export function subscription(o: { id?: string; status?: string; price?: string; member?: string; customer?: string;
-  start?: number; end?: number; trial_end?: number | null; cancel_at_period_end?: boolean; pending_update?: unknown;
+  start?: number; end?: number; trial_end?: number | null; ended_at?: number | null; cancel_at_period_end?: boolean; pending_update?: unknown;
   latest_invoice?: string | Invoice | null } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const status = o.status ?? "active";
@@ -53,7 +53,7 @@ export function subscription(o: { id?: string; status?: string; price?: string; 
   // Stripe ends a trialing subscription's period at the trial's end.
   const end = o.end ?? (status === "trialing" && o.trial_end ? o.trial_end : now + 30 * 86_400);
   return { id: o.id ?? "sub_1", object: "subscription", customer: o.customer ?? "cus_1", status,
-    cancel_at_period_end: o.cancel_at_period_end ?? false, trial_end: o.trial_end ?? null,
+    cancel_at_period_end: o.cancel_at_period_end ?? false, trial_end: o.trial_end ?? null, ended_at: o.ended_at ?? null,
     metadata: o.member === undefined ? {} : { member_id: o.member }, pending_update: o.pending_update ?? null,
     latest_invoice: o.latest_invoice === undefined ? invoice
       : typeof o.latest_invoice === "object" && o.latest_invoice ? { ...invoice, ...o.latest_invoice } : o.latest_invoice,

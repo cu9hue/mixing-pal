@@ -261,7 +261,7 @@ test("deploy without MIXINGPAL_BILLING stops before any Wrangler call", async ()
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test("a billing-on deploy, enable or recovery without both Stripe secrets stops before any Wrangler call", async () => {
+test("a billing-on deploy or enable without both Stripe secrets stops before any Wrangler call; recovery does not need them", async () => {
   const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));
   const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
   try {
@@ -269,17 +269,23 @@ test("a billing-on deploy, enable or recovery without both Stripe secrets stops 
     await mkdir(join(dir, "node_modules/wrangler/bin"), { recursive: true });
     await writeFile(join(dir, "node_modules/wrangler/bin/wrangler.js"),
       `require("node:fs").appendFileSync("calls.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");`);
-    for (const command of ["deploy", "enable", "recovery"]) {
+    const run = (command, secrets) => spawnSync(process.execPath, [script, command, "staging"], { cwd: dir, encoding: "utf8", env: {
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000", MIXINGPAL_BILLING: "on",
+      MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: "yes", ...secrets,
+    } });
+    for (const command of ["deploy", "enable"]) {
       for (const secrets of [{}, { STRIPE_SECRET_KEY: "sk_test_x" }, { STRIPE_WEBHOOK_SECRET: "whsec_x" }]) {
-        const result = spawnSync(process.execPath, [script, command, "staging"], { cwd: dir, encoding: "utf8", env: {
-          PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000", MIXINGPAL_BILLING: "on",
-          MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: "yes", ...secrets,
-        } });
+        const result = run(command, secrets);
         assert.notEqual(result.status, 0);
         assert.match(result.stderr, /Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET/);
         await assert.rejects(access(join(dir, "calls.jsonl")));
       }
+      // Both set gets past this check, whatever the next one says.
+      assert.doesNotMatch(run(command, { STRIPE_SECRET_KEY: "sk_test_x", STRIPE_WEBHOOK_SECRET: "whsec_x" }).stderr, /STRIPE_SECRET_KEY/);
+      await rm(join(dir, "calls.jsonl"), { force: true });
     }
+    // Recovery uploads no secrets, so it must not make the operator export the live key.
+    assert.doesNotMatch(run("recovery", {}).stderr, /STRIPE_SECRET_KEY/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
