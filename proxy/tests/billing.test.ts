@@ -101,12 +101,44 @@ describe("applying Stripe state", () => {
     expect(await memberRow()).toMatchObject({ allowance: 8_000_000, spent: 0, period_end: (t + 30 * 86_400) * S });
   });
 
-  test("an upgrade in the same period raises the allowance and keeps what she spent", async () => {
+  // A paid upgrade halfway through a Starter period: Stripe invoices the proration at once.
+  const start = t - 15 * 86_400;
+  const end = t + 15 * 86_400;
+  const upgraded = () => subscription({ status: "active", member: "m1", price: "price_pro", start, end,
+    latest_invoice: { id: "in_2", billing_reason: "subscription_update", created: t } });
+
+  test("an upgrade at the period's midpoint adds half of Pro's extra allowance, keeps what she spent, and a replay changes nothing", async () => {
     await customer();
-    await apply(subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", start, end }), now);
     await env.DB.prepare("UPDATE members SET spent = 1500000 WHERE id = 'm1'").run();
-    await apply(subscription({ status: "active", member: "m1", price: "price_pro", end: t + 86_400 }), now);
-    expect(await memberRow()).toMatchObject({ allowance: 8_000_000, spent: 1_500_000 });
+    await apply(upgraded(), now);
+    expect(await memberRow()).toMatchObject({ allowance: 5_000_000, spent: 1_500_000, period_end: end * S });
+    await env.DB.prepare("UPDATE members SET spent = 1600000 WHERE id = 'm1'").run();
+    await apply(upgraded(), now);
+    expect(await memberRow()).toMatchObject({ allowance: 5_000_000, spent: 1_600_000, period_end: end * S });
+  });
+
+  test("a plain paid read in the same period does not raise the allowance", async () => {
+    await customer();
+    await apply(subscription({ status: "active", member: "m1", start, end }), now);
+    await apply(subscription({ status: "active", member: "m1", price: "price_pro", start, end }), now);
+    expect(await memberRow()).toMatchObject({ allowance: 2_000_000 });
+  });
+
+  test("the paid renewal after an upgrade grants Pro's full allowance", async () => {
+    await customer();
+    await apply(subscription({ status: "active", member: "m1", start, end }), now);
+    await apply(upgraded(), now);
+    await apply(subscription({ status: "active", member: "m1", price: "price_pro", start: end, end: end + 30 * 86_400 }), now);
+    expect(await memberRow()).toMatchObject({ allowance: 8_000_000, spent: 0, period_end: (end + 30 * 86_400) * S });
+  });
+
+  test("a trial started early gets the plan's full allowance, though its first invoice is an update", async () => {
+    await customer();
+    await apply(subscription({ status: "trialing", member: "m1", price: "price_pro", trial_end: t + 3 * 86_400 }), now);
+    await apply(subscription({ status: "active", member: "m1", price: "price_pro", start: t, end: t + 30 * 86_400,
+      latest_invoice: { billing_reason: "subscription_update", created: t } }), now);
+    expect(await memberRow()).toMatchObject({ allowance: 8_000_000, period_end: (t + 30 * 86_400) * S });
   });
 
   test("a renewal starts spending again, and the same state applied twice changes nothing more", async () => {
@@ -298,7 +330,8 @@ describe("applying Stripe state", () => {
 
   test("a new subscription replaces one Stripe already canceled, even before its webhook arrives", async () => {
     await customer();
-    await apply(subscription({ status: "active", member: "m1" }), now);
+    // The old subscription started earlier, so its period ends before the new one's.
+    await apply(subscription({ status: "active", member: "m1", end: t + 86_400 }), now);
     routes["GET /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
     await apply(subscription({ id: "sub_2", status: "active", member: "m1", price: "price_pro" }), now);
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
@@ -669,8 +702,12 @@ describe("billing routes", () => {
     routes["POST /checkout/sessions"] = () => ({ id: "cs_1", url: "https://checkout.stripe.com/c/pay/cs_1" });
     routes["POST /billing_portal/sessions"] = () => ({ url: "https://billing.stripe.com/p/session/1" });
     routes["GET /subscriptions"] = () => ({ data: [] });
+    routes["GET /customers/search"] = () => ({ data: [] });
   });
   const posted = (path: string) => calls.filter((c) => c.method === "POST" && c.path === path);
+  const checkoutUrl = { url: "https://checkout.stripe.com/c/pay/cs_1" };
+  const portalUrl = { url: "https://billing.stripe.com/p/session/1" };
+  const invoicePage = "https://invoice.stripe.com/i/in_2";
 
   test("a new account's checkout creates one customer and a session with a 7-day trial", async () => {
     const user = await signedIn();
@@ -725,12 +762,82 @@ describe("billing routes", () => {
     expect(posted("/checkout/sessions")).toHaveLength(0);
   });
 
-  test("a subscription Stripe has but our webhook hasn't delivered still gets the Portal", async () => {
+  test("a checkout whose first webhook was lost gets the Portal, and access from Stripe's state", async () => {
     const user = await signedIn();
     await customer(user.id);
-    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: user.id })] });
-    expect(await (await api("/v1/billing/checkout", { plan: "pro" }, user.token)).json()).toEqual({ url: "https://billing.stripe.com/p/session/1" });
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: user.id, price: "price_pro" })] });
+    expect(await (await api("/v1/billing/checkout", { plan: "pro" }, user.token)).json()).toEqual(portalUrl);
+    expect(paramsOf(calls, "GET /subscriptions")).toEqual([{ customer: "cus_1", status: "all", limit: "10", "expand[0]": "data.latest_invoice" }]);
     expect(posted("/checkout/sessions")).toHaveLength(0);
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ access: "active", plan: "pro" });
+  });
+
+  test("the 90-day cleanup running while checkout waits on Stripe keeps the account and its customer", async () => {
+    const user = await signedIn();
+    await env.DB.prepare('UPDATE "user" SET createdAt = ? WHERE id = ?').bind(new Date(Date.now() - 100 * DAY).toISOString(), user.id).run();
+    await customer(user.id);
+    routes["GET /subscriptions"] = async () => {
+      await maintain(on);
+      return { data: [] };
+    };
+    expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
+    expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_1" });
+    expect(await env.DB.prepare('SELECT id FROM "user" WHERE id = ?').bind(user.id).first()).toEqual({ id: user.id });
+  });
+
+  test("an account deleted while checkout waits on Stripe gets no Checkout session", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    // Sign-in already refuses a pending deletion; this one is requested from another window mid-call.
+    routes["GET /subscriptions"] = async () => {
+      await env.DB.prepare("INSERT INTO deletion_jobs(member_id, requested_at) VALUES (?, ?)").bind(user.id, Date.now()).run();
+      return { data: [] };
+    };
+    const response = await api("/v1/billing/checkout", { plan: "starter" }, user.token);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "access_denied", message: "This account cannot subscribe." } });
+    expect(posted("/checkout/sessions")).toHaveLength(0);
+  });
+
+  test("checkout reuses a Stripe customer found by member id, so a restored database makes no second customer", async () => {
+    const user = await signedIn();
+    routes["GET /customers/search"] = () => ({ data: [{ id: "cus_found" }] });
+    expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(checkoutUrl);
+    expect(paramsOf(calls, "GET /customers/search")).toEqual([{ query: `metadata['member_id']:'${user.id}'` }]);
+    expect(posted("/customers")).toHaveLength(0);
+    expect(paramsOf(calls, "GET /subscriptions")).toMatchObject([{ customer: "cus_found" }]);
+    expect(posted("/checkout/sessions")[0].params.get("customer")).toBe("cus_found");
+    expect(await subRow(user.id)).toMatchObject({ stripe_customer_id: "cus_found" });
+  });
+
+  test("a found customer that still pays for a plan gets the Portal and its access back", async () => {
+    const user = await signedIn();
+    routes["GET /customers/search"] = () => ({ data: [{ id: "cus_found" }] });
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: user.id, customer: "cus_found" })] });
+    expect(await (await api("/v1/billing/checkout", { plan: "starter" }, user.token)).json()).toEqual(portalUrl);
+    expect(posted("/checkout/sessions")).toHaveLength(0);
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ access: "active", plan: "starter" });
+  });
+
+  test("an account removed while its customer is created stores nothing and must sign in again", async () => {
+    const user = await signedIn();
+    routes["POST /customers"] = async () => {
+      await env.DB.prepare('DELETE FROM "user" WHERE id = ?').bind(user.id).run();
+      return { id: "cus_1" };
+    };
+    const response = await api("/v1/billing/checkout", { plan: "starter" }, user.token);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { code: "sign_in_required" } });
+    expect(await subRow(user.id)).toBeNull();
+    expect(posted("/checkout/sessions")).toHaveLength(0);
+  });
+
+  test("checkout offers cards only; Apple Pay and Google Pay are card payments", async () => {
+    const user = await signedIn();
+    await api("/v1/billing/checkout", { plan: "starter" }, user.token);
+    expect(posted("/checkout/sessions")[0].params.getAll("allowed_payment_method_types[0]")).toEqual(["card"]);
+    expect(posted("/checkout/sessions")[0].params.has("allowed_payment_method_types[1]")).toBe(false);
+    expect(posted("/checkout/sessions")[0].params.has("payment_method_types[0]")).toBe(false);
   });
 
   test("a refused pilot member gets no Stripe customer", async () => {
@@ -808,15 +915,18 @@ describe("billing routes", () => {
     const user = await signedIn();
     await customer(user.id);
     const end = Math.floor(Date.now() / 1000) + 86_400;
-    await apply(subscription({ status: "active", member: user.id, end }));
+    const start = end - 30 * 86_400;
+    await apply(subscription({ status: "active", member: user.id, start, end }));
     await env.DB.prepare("UPDATE members SET spent = 1800000 WHERE id = ?").bind(user.id).run();
-    const upgraded = subscription({ status: "active", member: user.id, price: "price_pro", end });
+    // Upgraded on the period's first day, so the whole of Pro's extra applies.
+    const upgraded = subscription({ status: "active", member: user.id, price: "price_pro", start, end,
+      latest_invoice: { id: "in_2", billing_reason: "subscription_update", created: start } });
     const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
     routes["GET /subscriptions/sub_1"] = () => upgraded;
     routes["POST /subscriptions/sub_1"] = async () => {
       // A webhook's read, taken after this call started, lands first: the proration invoice was still open.
       await pause();
-      await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro", end,
+      await applySubscription(on, subscription({ status: "active", member: user.id, price: "price_pro", start, end,
         latest_invoice: { status: "open" } }), readStamp());
       await pause();
       return upgraded;
@@ -836,10 +946,13 @@ describe("billing routes", () => {
     await customer(user.id);
     // One fixed period end: a different end would read as a renewal and reset spending.
     const end = Math.floor(Date.now() / 1000) + 86_400;
-    await apply(subscription({ status: "active", member: user.id, end }));
+    const start = end - 30 * 86_400;
+    await apply(subscription({ status: "active", member: user.id, start, end }));
     await env.DB.prepare("UPDATE members SET spent = 1800000 WHERE id = ?").bind(user.id).run();
-    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, end });
-    routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, price: "price_pro", end });
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, start, end });
+    // Upgraded on the period's first day, so the whole of Pro's extra applies.
+    routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, price: "price_pro", start, end,
+      latest_invoice: { id: "in_2", billing_reason: "subscription_update", created: start } });
     const view = await (await api("/v1/billing/upgrade", {}, user.token)).json();
     expect(Object.fromEntries(posted("/subscriptions/sub_1")[0].params)).toMatchObject({ "items[0][id]": "si_1",
       "items[0][price]": "price_pro", proration_behavior: "always_invoice", payment_behavior: "pending_if_incomplete",
@@ -864,6 +977,48 @@ describe("billing routes", () => {
     await customer(user.id);
     await apply(subscription({ status: "active", member: user.id, price: "price_pro" }));
     expect((await api("/v1/billing/upgrade", {}, user.token)).status).toBe(409);
+  });
+
+  test("an upgrade while the renewal is still unpaid is refused, with no change at Stripe", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    const end = Math.floor(Date.now() / 1000) - 60;
+    await apply(subscription({ status: "active", member: user.id, end }));
+    // Stripe has moved the period; the renewal invoice is not paid yet.
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, start: end, end: end + 30 * 86_400,
+      latest_invoice: { status: "draft" } });
+    const response = await api("/v1/billing/upgrade", {}, user.token);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "renewal_pending", message: "Your renewal is still processing. Try again in an hour." } });
+    expect(posted("/subscriptions/sub_1")).toHaveLength(0);
+  });
+
+  test("an upgrade whose charge needs the member is sent to the invoice page, and stays Starter", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    const end = Math.floor(Date.now() / 1000) + 86_400;
+    await apply(subscription({ status: "active", member: user.id, end }));
+    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, end });
+    routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, end, pending_update: { expires_at: 1 },
+      latest_invoice: { id: "in_2", status: "open", amount_paid: 0, hosted_invoice_url: invoicePage } });
+    const response = await api("/v1/billing/upgrade", {}, user.token);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ url: invoicePage });
+    expect(await subRow(user.id)).toMatchObject({ plan: "starter" });
+    expect(await memberRow(user.id)).toMatchObject({ allowance: 2_000_000 });
+  });
+
+  test("start-now whose first charge is not paid sends the member to the invoice page", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    const t = Math.floor(Date.now() / 1000);
+    await apply(subscription({ status: "trialing", member: user.id, price: "price_pro", trial_end: t + 86_400 }));
+    routes["POST /subscriptions/sub_1"] = () => subscription({ status: "active", member: user.id, price: "price_pro", start: t, end: t + 30 * 86_400,
+      latest_invoice: { id: "in_2", status: "open", amount_paid: 0, hosted_invoice_url: invoicePage } });
+    const response = await api("/v1/billing/start-now", {}, user.token);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ url: invoicePage });
+    expect(await memberRow(user.id)).toMatchObject({ allowance: 1_000_000 });
   });
 });
 
@@ -890,7 +1045,32 @@ describe("comp and renewals", () => {
     const user = await signedIn();
     await customer(user.id);
     await apply(subscription({ status: "active", member: user.id }));
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: user.id })] });
     expect((await operate({ action: "comp", email: "producer@example.com" })).status).toBe(409);
+  });
+
+  test("comp is refused when Stripe has a live subscription our row has not seen", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: user.id })] });
+    const response = await operate({ action: "comp", email: "producer@example.com" });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "subscription_live" } });
+    expect(await memberRow(user.id)).toMatchObject({ comp: 0 });
+    expect(calls.some((c) => c.path === "/checkout/sessions")).toBe(false);
+  });
+
+  test("comp expires the account's open Checkout sessions before it grants", async () => {
+    const user = await signedIn();
+    await customer(user.id);
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "canceled", member: user.id })] });
+    routes["GET /checkout/sessions"] = () => ({ data: [{ id: "cs_1" }, { id: "cs_2" }] });
+    routes["POST /checkout/sessions/cs_1/expire"] = () => ({ id: "cs_1", status: "expired" });
+    routes["POST /checkout/sessions/cs_2/expire"] = () => ({ id: "cs_2", status: "expired" });
+    expect((await operate({ action: "comp", email: "producer@example.com" })).status).toBe(200);
+    expect(paramsOf(calls, "GET /checkout/sessions")).toEqual([{ customer: "cus_1", status: "open", limit: "100" }]);
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/checkout/sessions/cs_1/expire", "/checkout/sessions/cs_2/expire"]);
+    expect(await memberRow(user.id)).toMatchObject({ comp: 1 });
   });
 
   test("uncomp ends access now, and refuses an account that is not comped", async () => {
@@ -974,8 +1154,22 @@ describe("comp and renewals", () => {
   test("billing-sync applies Stripe's state now", async () => {
     await customer();
     await apply(subscription({ status: "active", member: "m1" }));
-    routes["GET /subscriptions/sub_1"] = () => subscription({ status: "past_due", member: "m1" });
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "past_due", member: "m1" })] });
     expect(await (await operate({ action: "billing_sync", member_id: "m1" })).json()).toEqual({ status: "past_due" });
+  });
+
+  test("billing-sync applies a cancel of the row's own subscription whose webhook was lost", async () => {
+    await customer();
+    await apply(subscription({ status: "active", member: "m1" }));
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "canceled", member: "m1" })] });
+    expect(await (await operate({ action: "billing_sync", member_id: "m1" })).json()).toEqual({ status: "canceled" });
+  });
+
+  test("billing-sync finds a subscription our row never recorded", async () => {
+    await customer();
+    routes["GET /subscriptions"] = () => ({ data: [subscription({ status: "active", member: "m1" })] });
+    expect(await (await operate({ action: "billing_sync", member_id: "m1" })).json()).toEqual({ status: "active" });
+    expect(paramsOf(calls, "GET /subscriptions")).toEqual([{ customer: "cus_1", status: "all", limit: "10", "expand[0]": "data.latest_invoice" }]);
   });
 
   test("an abandoned sign-up is removed after 90 days, but one with a subscription is kept", async () => {
@@ -998,6 +1192,26 @@ describe("account deletion", () => {
     await env.DB.prepare("UPDATE members SET revoked = 1, deleted_at = ? WHERE id = ?").bind(Date.now(), memberId).run();
   }
   const job = (id: string) => env.DB.prepare("SELECT completed_at FROM deletion_jobs WHERE member_id = ?").bind(id).first<{ completed_at: number | null }>();
+  beforeEach(() => {
+    routes["GET /checkout/sessions"] = () => ({ data: [] });
+  });
+
+  test("the sweep expires open Checkout sessions first, then cancels every subscription that can still charge", async () => {
+    await customer();
+    await apply(subscription({ status: "active", member: "m1" }));
+    await deleted("m1");
+    routes["GET /checkout/sessions"] = () => ({ data: [{ id: "cs_1" }] });
+    routes["POST /checkout/sessions/cs_1/expire"] = () => ({ id: "cs_1", status: "expired" });
+    const listed = ["unpaid", "paused", "incomplete", "canceled", "incomplete_expired"].map((status) => subscription({ id: `sub_${status}`, status, member: "m1" }));
+    routes["GET /subscriptions"] = () => ({ data: listed });
+    for (const sub of listed) routes[`DELETE /subscriptions/${sub.id}`] = () => ({ ...sub, status: "canceled" });
+    await maintain(on);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /checkout/sessions", "POST /checkout/sessions/cs_1/expire", "GET /subscriptions",
+      "DELETE /subscriptions/sub_unpaid", "DELETE /subscriptions/sub_paused", "DELETE /subscriptions/sub_incomplete"]);
+    expect(paramsOf(calls, "GET /checkout/sessions")).toEqual([{ customer: "cus_1", status: "open", limit: "100" }]);
+    expect(paramsOf(calls, "GET /subscriptions")).toEqual([{ customer: "cus_1", status: "all", limit: "10" }]);
+    expect((await job("m1"))!.completed_at).not.toBeNull();
+  });
 
   test("the next sweep cancels a live subscription at Stripe, with no refund, and removes the row", async () => {
     await customer();
@@ -1028,7 +1242,8 @@ describe("account deletion", () => {
     await customer();
     await apply(subscription({ status: "active", member: "m1" }));
     await deleted("m1");
-    routes["GET /subscriptions"] = () => Response.json({ error: { type: "invalid_request_error", code: "resource_missing" } }, { status: 404 });
+    routes["GET /checkout/sessions"] = missing;
+    routes["GET /subscriptions"] = missing;
     await maintain(on);
     expect((await job("m1"))!.completed_at).not.toBeNull();
     expect(await subRow()).toBeNull();

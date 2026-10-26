@@ -14,7 +14,8 @@ export interface StripeSubscription {
   metadata: Record<string, string>;
   pending_update?: unknown;
   // Expanded by every read that is applied; a bare id means it was not.
-  latest_invoice?: string | { id: string; status: string | null; amount_paid: number } | null;
+  latest_invoice?: string | { id: string; status: string | null; amount_paid: number; billing_reason?: string | null;
+    created?: number; hosted_invoice_url?: string | null } | null;
   items: { data: { id: string; price: { id: string }; current_period_start: number; current_period_end: number }[] };
 }
 
@@ -48,11 +49,13 @@ export function readStamp(): number {
 // Binds: member id, read stamp, subscription id.
 const WON = "EXISTS (SELECT 1 FROM subscriptions WHERE member_id = ? AND synced_at = ? AND stripe_subscription_id = ?)";
 
-// A later period end is a new paid period, so spending starts again; the same
-// end (an upgrade) keeps it. reserved is never touched: requests in flight settle later.
+// A later period end is a new paid period, so the allowance is the plan's and spending starts again.
+// The same end keeps both: an upgrade raises the allowance separately, prorated. reserved is never touched:
+// requests in flight settle later.
 function grant(env: Env, memberId: string, allowance: number, periodEnd: number, now: number, won: unknown[]) {
   return env.DB.prepare(`INSERT INTO members(id, allowance, period_end, created_at) SELECT ?, ?, ?, ? WHERE ${WON}
-    ON CONFLICT(id) DO UPDATE SET allowance = excluded.allowance,
+    ON CONFLICT(id) DO UPDATE SET
+      allowance = CASE WHEN members.period_end < excluded.period_end THEN excluded.allowance ELSE members.allowance END,
       spent = CASE WHEN members.period_end < excluded.period_end THEN 0 ELSE members.spent END,
       period_end = MAX(members.period_end, excluded.period_end)
     WHERE members.comp = 0 AND members.deleted_at IS NULL`).bind(memberId, allowance, periodEnd, now, ...won);
@@ -170,7 +173,8 @@ export async function applySubscription(env: Env, sub: StripeSubscription, stamp
   }
   const start = item.current_period_start * 1000;
   const end = item.current_period_end * 1000;
-  const paid = sub.status === "active" && typeof sub.latest_invoice === "object" && sub.latest_invoice?.status === "paid";
+  const invoice = typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
+  const paid = sub.status === "active" && invoice?.status === "paid";
   // The stored period moves only with a grant, so renewals() keeps re-reading a renewal that is not paid yet.
   const grants = sub.status === "trialing" || paid;
   const won = [memberId, stamp, sub.id];
@@ -183,7 +187,17 @@ export async function applySubscription(env: Env, sub: StripeSubscription, stamp
     .bind(sub.id, plan, sub.status, grants ? end : null, Number(sub.cancel_at_period_end), Number(sub.trial_end !== null), now, stamp,
       memberId, stamp, row.stripe_subscription_id, sub.id)];
   if (sub.status === "trialing") writes.push(grant(env, memberId, TRIAL_ALLOWANCE, (sub.trial_end ?? item.current_period_end) * 1000, now, won));
-  else if (paid) writes.push(grant(env, memberId, ALLOWANCE[plan], end, now, won));
+  else if (paid) {
+    writes.push(grant(env, memberId, ALLOWANCE[plan], end, now, won));
+    if (invoice?.billing_reason === "subscription_update") {
+      // An upgrade adds the plan's extra over Starter only for the time left in the period, as Stripe prorates its price.
+      // After a grant for a new period the allowance is already the full one, so MAX changes nothing.
+      const upgradedAt = Math.min(Math.max((invoice.created ?? 0) * 1000, start), end);
+      const prorated = Math.floor(ALLOWANCE.starter + (ALLOWANCE[plan] - ALLOWANCE.starter) * (end - upgradedAt) / (end - start));
+      writes.push(env.DB.prepare(`UPDATE members SET allowance = MAX(allowance, ?) WHERE id = ? AND comp = 0 AND ${WON}`)
+        .bind(prorated, memberId, ...won));
+    }
+  }
   else if (sub.status === "active" || sub.status === "past_due") {
     // Stripe moves the period about an hour before it charges, and ends a trial before the first charge:
     // until the invoice is paid, keep the old allowance and spending, as for a failed payment.
@@ -206,6 +220,35 @@ export async function syncSubscription(env: Env, id: string): Promise<void> {
     if (await applySubscription(env, await stripe<StripeSubscription>(env, "GET", `/subscriptions/${encodeURIComponent(id)}`, EXPAND), stamp)) return;
   }
   throw new Error("subscription_apply_contended");
+}
+
+/**
+ * Asks Stripe for the customer's subscriptions, not the row, and applies each one that can still charge,
+ * plus the row's own whatever its state. True when one can still charge.
+ */
+async function syncCustomer(env: Env, row: SubscriptionRow): Promise<boolean> {
+  const stamp = readStamp();
+  const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
+    { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] });
+  let billable = false;
+  for (const sub of listed.data) {
+    if (BILLABLE.has(sub.status)) billable = true;
+    else if (sub.id !== row.stripe_subscription_id) continue;
+    // Applies after the first share the read's stamp and lose; the retry reads that one subscription again.
+    if (!await applySubscription(env, sub, stamp)) await syncSubscription(env, sub.id);
+  }
+  return billable;
+}
+
+/** Expires the customer's open Checkout sessions, so none can start a subscription later. */
+async function expireCheckouts(env: Env, customer: string): Promise<void> {
+  const open = await stripe<{ data: { id: string }[] }>(env, "GET", "/checkout/sessions", { customer, status: "open", limit: 100 })
+    .catch((error) => {
+      // A customer Stripe no longer has has no sessions.
+      if (error instanceof ApiError && error.code === "stripe_not_found") return { data: [] };
+      throw error;
+    });
+  for (const { id } of open.data) await stripe(env, "POST", `/checkout/sessions/${encodeURIComponent(id)}/expire`);
 }
 
 const event = z.object({ id: z.string(), type: z.string(), data: z.object({ object: z.record(z.string(), z.unknown()) }) });
@@ -260,17 +303,23 @@ function requireBilling(env: Env): void {
   if (env.BILLING_ENABLED !== "true") throw new ApiError(404, "not_found", "Not found.");
 }
 
-async function customerFor(env: Env, memberId: string): Promise<SubscriptionRow> {
-  const existing = await subscriptionRow(env, memberId);
-  if (existing) return existing;
+/** The member's customer row, made now. found: the customer was already at Stripe, as after a database restore. */
+async function customerFor(env: Env, memberId: string): Promise<{ row: SubscriptionRow; found: boolean }> {
   const user = await env.DB.prepare('SELECT email FROM "user" WHERE id = ?').bind(memberId).first<{ email: string }>();
   if (!user) throw new ApiError(401, "sign_in_required", "Sign in again.");
+  const search = await stripe<{ data: { id: string }[] }>(env, "GET", "/customers/search",
+    { query: `metadata['member_id']:'${memberId}'` });
+  const found = search.data[0]?.id;
   // The key makes two quick clicks create one customer.
-  const created = await stripe<{ id: string }>(env, "POST", "/customers",
-    { email: user.email, metadata: { member_id: memberId } }, `customer-${memberId}`);
-  await env.DB.prepare(`INSERT INTO subscriptions(member_id, stripe_customer_id, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(member_id) DO NOTHING`).bind(memberId, created.id, Date.now()).run();
-  return (await subscriptionRow(env, memberId))!;
+  const customer = found ?? (await stripe<{ id: string }>(env, "POST", "/customers",
+    { email: user.email, metadata: { member_id: memberId } }, `customer-${memberId}`)).id;
+  // Only while the user exists: a deletion or the cleanup during the Stripe calls must not leave a row for nobody.
+  await env.DB.prepare(`INSERT INTO subscriptions(member_id, stripe_customer_id, updated_at) SELECT ?, ?, ?
+    WHERE EXISTS (SELECT 1 FROM "user" WHERE id = ?) ON CONFLICT(member_id) DO NOTHING`)
+    .bind(memberId, customer, Date.now(), memberId).run();
+  const row = await subscriptionRow(env, memberId);
+  if (!row) throw new ApiError(401, "sign_in_required", "Sign in again.");
+  return { row, found: found !== undefined };
 }
 
 async function portalUrl(env: Env, row: SubscriptionRow): Promise<Response> {
@@ -283,25 +332,33 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   requireBilling(env);
   const { plan } = z.object({ plan: z.enum(["starter", "pro"]) }).parse(input);
   const m = await member(env, memberId);
-  if (m && (m.revoked || m.deleted_at)) throw new ApiError(403, "access_denied", "This account cannot subscribe.");
+  const denied = () => new ApiError(403, "access_denied", "This account cannot subscribe.");
+  if (m && (m.revoked || m.deleted_at)) throw denied();
   if (m?.comp) throw new ApiError(409, "comp_active", "Your account already has free access.");
-  const existing = await subscriptionRow(env, memberId);
-  // Our cached status lags Stripe's webhook, so a second click would open a second Checkout. Stripe decides.
-  if (existing && (LIVE.has(existing.status) || (await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
-    { customer: existing.stripe_customer_id, status: "all", limit: 3 })).data.some((s) => LIVE.has(s.status)))) {
-    return portalUrl(env, existing);
-  }
+  // The 90-day cleanup removes an untouched sign-up. Touch first, so it cannot remove this one while Stripe answers.
+  const touched = await env.DB.prepare("UPDATE subscriptions SET updated_at = ? WHERE member_id = ?").bind(now, memberId).run();
+  const existing = touched.meta.changes ? await subscriptionRow(env, memberId) : null;
+  // Our cached status lags Stripe's webhook, so a second click would open a second Checkout. Stripe decides,
+  // and what it has is applied now, so a member whose webhooks were lost gets access too.
+  if (existing && (BILLABLE.has(existing.status) || await syncCustomer(env, existing))) return portalUrl(env, existing);
   // A pilot period still running would mix its spending into the plan's allowance.
   if (m && m.period_end > now) throw new ApiError(409, "access_active", "Your current access hasn't ended yet.");
-  const row = existing ?? await customerFor(env, memberId);
-  // The 90-day cleanup removes an untouched sign-up; one in Checkout now must keep its customer.
-  if (existing) await env.DB.prepare("UPDATE subscriptions SET updated_at = ? WHERE member_id = ?").bind(now, memberId).run();
+  let row = existing;
+  if (!row) {
+    const made = await customerFor(env, memberId);
+    if (made.found && await syncCustomer(env, made.row)) return portalUrl(env, made.row);
+    row = made.row;
+  }
+  // Sign-in refuses an account being deleted; this catches a deletion requested while Stripe answered.
+  if (await env.DB.prepare("SELECT 1 FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL").bind(memberId).first()) throw denied();
   const trial = !m && row.trial_used !== 1;
   const session = await stripe<{ url: string }>(env, "POST", "/checkout/sessions", {
     mode: "subscription", customer: row.stripe_customer_id, client_reference_id: memberId,
     line_items: [{ price: priceFor(env, plan), quantity: 1 }],
     subscription_data: { metadata: { member_id: memberId },
       ...(trial ? { trial_period_days: TRIAL_DAYS, trial_settings: { end_behavior: { missing_payment_method: "cancel" } } } : {}) },
+    // Cards only, so a payment settles at once. Apple Pay and Google Pay are card payments.
+    allowed_payment_method_types: ["card"],
     payment_method_collection: "always", automatic_tax: { enabled: true }, customer_update: { address: "auto" },
     success_url: `${env.API_ORIGIN}/billing/done`, cancel_url: `${env.API_ORIGIN}/billing/done?state=canceled`,
   });
@@ -323,6 +380,9 @@ export async function startNow(env: Env, memberId: string, modern: boolean): Pro
   const started = await stripe<StripeSubscription>(env, "POST",
     `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`, { trial_end: "now", proration_behavior: "none", ...EXPAND });
   if (!await applySubscription(env, started, stamp)) await syncSubscription(env, started.id);
+  // A declined card or a 3-D Secure check leaves the first invoice open: the member pays it on Stripe's page.
+  const invoice = typeof started.latest_invoice === "object" ? started.latest_invoice : null;
+  if (invoice && invoice.status !== "paid" && invoice.hosted_invoice_url) return json({ url: invoice.hosted_invoice_url });
   return account(env, memberId, modern);
 }
 
@@ -334,13 +394,23 @@ export async function upgrade(env: Env, memberId: string, modern: boolean): Prom
   }
   const path = `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`;
   const current = await stripe<StripeSubscription>(env, "GET", path);
+  // Stripe moves the period about an hour before it charges. Until the renewal is paid, an upgrade's
+  // paid proration would read as the new period being paid.
+  if (current.items.data[0].current_period_end * 1000 > (row.current_period_end ?? 0)) {
+    throw new ApiError(409, "renewal_pending", "Your renewal is still processing. Try again in an hour.");
+  }
   const stamp = readStamp();
   // pending_if_incomplete: a declined card leaves Starter in place, with the change pending.
   const updated = await stripe<StripeSubscription>(env, "POST", path, {
     items: [{ id: current.items.data[0].id, price: priceFor(env, "pro") }],
     proration_behavior: "always_invoice", payment_behavior: "pending_if_incomplete", ...EXPAND });
   if (!await applySubscription(env, updated, stamp)) await syncSubscription(env, updated.id);
-  if (updated.pending_update) throw new ApiError(402, "card_declined", "Your card was declined. Update it in Manage subscription.");
+  if (updated.pending_update) {
+    // A declined card or a 3-D Secure check: paying the open invoice on Stripe's page applies the upgrade.
+    const invoice = typeof updated.latest_invoice === "object" ? updated.latest_invoice : null;
+    if (invoice?.status === "open" && invoice.hosted_invoice_url) return json({ url: invoice.hosted_invoice_url });
+    throw new ApiError(402, "card_declined", "Your card was declined. Update it in Manage subscription.");
+  }
   return account(env, memberId, modern);
 }
 
@@ -348,9 +418,13 @@ export async function comp(env: Env, email: string, now = Date.now()): Promise<{
   const user = await env.DB.prepare('SELECT id FROM "user" WHERE lower(email) = ?').bind(email).first<{ id: string }>();
   if (!user) throw new ApiError(404, "user_not_found", "No account uses that email. Ask them to sign in once first.");
   const row = await subscriptionRow(env, user.id);
-  if (row && LIVE.has(row.status)) throw new ApiError(409, "subscription_live", "This account has a live subscription. Cancel it in Stripe first.");
+  if (row && await syncCustomer(env, row)) {
+    throw new ApiError(409, "subscription_live", "This account has a live subscription. Cancel it in Stripe first.");
+  }
   const m = await member(env, user.id);
   if (m?.revoked || m?.deleted_at) throw new ApiError(409, "access_denied", "This account is revoked or deleted.");
+  // A Checkout opened before comp would start a paid subscription; the apply path refunds any that slips through.
+  if (row) await expireCheckouts(env, row.stripe_customer_id);
   await env.DB.prepare(`INSERT INTO members(id, allowance, period_end, created_at, comp) VALUES (?, ?, ?, ?, 1)
     ON CONFLICT(id) DO UPDATE SET comp = 1, allowance = excluded.allowance,
       spent = CASE WHEN members.period_end <= ? THEN 0 ELSE members.spent END,
@@ -367,7 +441,7 @@ export async function uncomp(env: Env, memberId: string, now = Date.now()): Prom
 
 export async function billingSync(env: Env, memberId: string): Promise<{ status: string }> {
   const row = await subscriptionRow(env, memberId);
-  if (row?.stripe_subscription_id) await syncSubscription(env, row.stripe_subscription_id);
+  if (row) await syncCustomer(env, row);
   return { status: (await subscriptionRow(env, memberId))?.status ?? "none" };
 }
 
@@ -386,11 +460,13 @@ export async function renewals(env: Env, now = Date.now()): Promise<void> {
   }
 }
 
-/** Cancels every live subscription at once with no refund. False means Stripe was unreachable and the deletion should wait. */
+/** Cancels every subscription that can still charge, at once, with no refund. False means Stripe was unreachable and the deletion should wait. */
 export async function cancelForDeletion(env: Env, memberId: string): Promise<boolean> {
   const row = await subscriptionRow(env, memberId);
   if (!row) return true;
   try {
+    // First, so no Checkout still open can start a subscription after the list.
+    await expireCheckouts(env, row.stripe_customer_id);
     // Ask Stripe, not the row: a Checkout or resubscribe whose webhook is late leaves the row stale.
     const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
       { customer: row.stripe_customer_id, status: "all", limit: 10 }).catch((error) => {
@@ -399,7 +475,7 @@ export async function cancelForDeletion(env: Env, memberId: string): Promise<boo
       throw error;
     });
     for (const sub of listed.data) {
-      if (LIVE.has(sub.status)) await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
+      if (sub.status !== "canceled" && sub.status !== "incomplete_expired") await stripe(env, "DELETE", `/subscriptions/${encodeURIComponent(sub.id)}`);
     }
     return true;
   } catch {

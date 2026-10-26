@@ -39,7 +39,7 @@ export function paramsOf(calls: StripeCall[], route: string): Record<string, str
 
 export const missing = () => Response.json({ error: { type: "invalid_request_error", code: "resource_missing" } }, { status: 404 });
 
-type Invoice = { id?: string; status?: string; amount_paid?: number };
+type Invoice = { id?: string; status?: string; amount_paid?: number; billing_reason?: string; created?: number; hosted_invoice_url?: string | null };
 
 /** A subscription shaped as API version 2026-09-30.endive returns it. Times are seconds. */
 export function subscription(o: { id?: string; status?: string; price?: string; member?: string; customer?: string;
