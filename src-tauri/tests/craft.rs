@@ -883,6 +883,8 @@ struct Run {
     raw_answer: String,
     called: Vec<String>,
     calls: Vec<common::ToolCallRecord>,
+    /// The context block the model was given; its values are evidence too.
+    context: String,
     verdicts: BTreeMap<String, (bool, String)>,
     /// Set when the provider call or the judge call failed outright, rather
     /// than the run exhausting its round trips or answering empty. Those two
@@ -916,7 +918,7 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
         let infra_error = turn.error.as_ref().map(|_| reason.clone());
         return Run {
             raw_answer: turn.raw_answer,
-            answer: turn.answer, called: turn.called, calls: turn.calls, verdicts, infra_error,
+            answer: turn.answer, called: turn.called, calls: turn.calls, context, verdicts, infra_error,
             invalid_evaluation: None, judge_report: None,
         };
     }
@@ -935,7 +937,7 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
             };
             Run {
                 raw_answer: turn.raw_answer,
-                answer: turn.answer, called: turn.called, calls: turn.calls, verdicts,
+                answer: turn.answer, called: turn.called, calls: turn.calls, context, verdicts,
                 infra_error: None, invalid_evaluation, judge_report,
             }
         }
@@ -945,6 +947,7 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
                 answer: turn.answer,
                 called: turn.called,
                 calls: turn.calls,
+                context,
                 verdicts: BTreeMap::new(),
                 infra_error: Some(e),
                 invalid_evaluation: None,
@@ -962,7 +965,7 @@ fn report_line(i: usize, run: &Run) -> String {
     let evidence = serde_json::to_string(&run.calls).unwrap();
     let defects = common::note_defects(&run.raw_answer);
     let terms = common::terms_defects(&run.raw_answer);
-    let values = common::checks::value_defects(&run.answer, &run.calls);
+    let values = common::checks::value_defects(&run.answer, &run.calls, &run.context);
     format!(
         "\n--- run {i}: tools {:?}\njudge: {}\ninfra_error: {:?}\ninvalid_evaluation: {:?}\n\
          tool evidence: {evidence}\nnote defects (report only): {defects:?}\nterms defects: {terms:?}\n\
@@ -1005,7 +1008,7 @@ fn require_valid_evaluation(question: &str, runs: &[Run], report: &str) {
 #[test]
 fn an_invalid_judge_prevents_even_a_green_majority() {
     let mut runs: Vec<Run> = (0..RUNS).map(|_| Run {
-        answer: "one move".into(), raw_answer: "one move".into(), called: vec![], calls: vec![],
+        answer: "one move".into(), raw_answer: "one move".into(), called: vec![], calls: vec![], context: String::new(),
         verdicts: BTreeMap::from([("one_move".into(), (true, "one intervention".into()))]),
         infra_error: None, invalid_evaluation: None, judge_report: None,
     }).collect();
@@ -1026,7 +1029,7 @@ fn the_report_keeps_raw_notes_without_changing_verdicts() {
     let raw = "Keep it.\n```note\n+ heard <to be filled>\n```";
     let run = Run {
         answer: common::strip_blocks(raw, common::SHOWN), raw_answer: raw.into(),
-        called: vec![], calls: vec![],
+        called: vec![], calls: vec![], context: String::new(),
         verdicts: BTreeMap::from([("one_move".into(), (true, "one intervention".into()))]),
         infra_error: None, invalid_evaluation: None, judge_report: None,
     };
@@ -1070,7 +1073,7 @@ fn studio_words_clean(sc: &Scenario, run: &Run) -> bool {
 /// Whether a run's visible answer states only values the tools returned.
 /// Reported, never gated.
 fn values_clean(run: &Run) -> bool {
-    common::checks::value_defects(&run.answer, &run.calls).is_empty()
+    common::checks::value_defects(&run.answer, &run.calls, &run.context).is_empty()
 }
 
 /// Trust checks gate the automated majority; craft misses stay visible.
@@ -1130,7 +1133,7 @@ fn the_trust_majority_keeps_craft_misses_visible() {
         }), &WHAT_NEXT.properties());
         Run {
             answer: "two grounded changes".into(), raw_answer: "two grounded changes".into(),
-            called: vec![], calls: vec![], verdicts: reply.verdicts.unwrap(),
+            called: vec![], calls: vec![], context: String::new(), verdicts: reply.verdicts.unwrap(),
             infra_error: None, invalid_evaluation: None, judge_report: None,
         }
     }).collect();
@@ -1156,7 +1159,7 @@ fn the_trust_majority_keeps_craft_misses_visible() {
 /// A run whose trust verdicts all pass, so only the terms checks decide it.
 fn trusted_run(sc: &Scenario, raw: &str) -> Run {
     Run {
-        answer: common::strip_blocks(raw, common::SHOWN), raw_answer: raw.into(), called: vec![], calls: vec![],
+        answer: common::strip_blocks(raw, common::SHOWN), raw_answer: raw.into(), called: vec![], calls: vec![], context: String::new(),
         verdicts: sc.must.iter().map(|p| (p.key.to_string(), (true, "fine".to_string()))).collect(),
         infra_error: None, invalid_evaluation: None, judge_report: None,
     }
@@ -1224,6 +1227,11 @@ fn the_tally_reports_stated_values_without_gating_on_them() {
     let report = report_line(1, &runs[1]);
     assert!(report.contains("value defects (report only): [\"") && report.contains("18 dB"), "{report}");
     assert!(report_line(0, &runs[0]).contains("value defects (report only): []"));
+    // A value the model was given in its context is not a defect.
+    let mut run = trusted_run(&WHAT_NEXT, "The set runs at 132 BPM.");
+    assert!(!values_clean(&run));
+    run.context = context_for(None);
+    assert!(values_clean(&run));
 }
 
 #[test]

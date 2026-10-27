@@ -183,12 +183,12 @@ fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
 }
 
 /// One defect per value the prose states (a number with dB, ms, s, Hz, kHz,
-/// %, BPM or `n:1`) that no successful tool result shows with the same unit
-/// and number, sign kept. A value after `by`, `to`, `try` or `set` is a change
+/// %, BPM or `n:1`) that neither a successful tool result nor the context block
+/// the model was given shows with the same unit and number, sign kept. A value after `by`, `to`, `try` or `set` is a change
 /// she is told to make, so it is skipped. Prose is read as `studio_word_defects`
 /// reads it: never inside code or a «name».
-pub fn value_defects(prose: &str, calls: &[ToolCallRecord]) -> Vec<String> {
-    let mut strings = Vec::new();
+pub fn value_defects(prose: &str, calls: &[ToolCallRecord], context: &str) -> Vec<String> {
+    let mut strings = vec![context.to_string()];
     for call in calls.iter().filter(|c| c.missing_reason.is_none()) {
         collect_strings(&call.result, &mut strings);
     }
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn a_dropped_minus_sign_is_a_value_defect() {
-        let defects = value_defects("an 18 dB threshold", &[read(&["«-18.0 dB»"])]);
+        let defects = value_defects("an 18 dB threshold", &[read(&["«-18.0 dB»"])], "");
         assert_eq!(defects.len(), 1, "{defects:?}");
         assert!(defects[0].contains("18 dB") && defects[0].contains("-18.0 dB"), "{defects:?}");
     }
@@ -262,42 +262,52 @@ mod tests {
     #[test]
     fn unicode_minus_and_decimals_match() {
         let calls = [read(&["«-18.0 dB»", "«4.00 : 1»", "«10.0 ms»"])];
-        let defects = value_defects("−18 dB, 4:1 and 10 ms", &calls);
+        let defects = value_defects("−18 dB, 4:1 and 10 ms", &calls, "");
         assert!(defects.is_empty(), "{defects:?}");
-        assert!(value_defects("+10.00 ms", &calls).is_empty());
+        assert!(value_defects("+10.00 ms", &calls, "").is_empty());
     }
 
     #[test]
     fn a_change_is_not_a_claim() {
         let calls = [read(&["«10.0 ms»"])];
-        assert!(value_defects("lower Threshold by 3 dB", &calls).is_empty());
-        assert!(value_defects("set it to -20 dB", &calls).is_empty());
-        assert!(value_defects("Then you could set the ratio to 8:1.", &calls).is_empty());
-        assert!(value_defects("try 6:1 here", &calls).is_empty());
+        assert!(value_defects("lower Threshold by 3 dB", &calls, "").is_empty());
+        assert!(value_defects("set it to -20 dB", &calls, "").is_empty());
+        assert!(value_defects("Then you could set the ratio to 8:1.", &calls, "").is_empty());
+        assert!(value_defects("try 6:1 here", &calls, "").is_empty());
         // A sentence ends the look-back.
-        assert_eq!(value_defects("Set it. The attack is 2 ms.", &calls).len(), 1);
+        assert_eq!(value_defects("Set it. The attack is 2 ms.", &calls, "").len(), 1);
     }
 
     #[test]
     fn a_set_to_that_describes_the_device_is_a_claim() {
         let calls = [read(&["«-18.0 dB»", "«4.00 : 1»"])];
-        assert_eq!(value_defects("The Vox has a Compressor set to 18 dB.", &calls).len(), 1);
-        assert_eq!(value_defects("The ratio is set to 8:1.", &calls).len(), 1);
-        assert!(value_defects("The ratio is set to 4:1.", &calls).is_empty());
+        assert_eq!(value_defects("The Vox has a Compressor set to 18 dB.", &calls, "").len(), 1);
+        assert_eq!(value_defects("The ratio is set to 8:1.", &calls, "").len(), 1);
+        assert_eq!(value_defects("Compressor set to 18 dB threshold", &calls, "").len(), 1);
+        assert!(value_defects("set it to -20 dB", &calls, "").is_empty());
+        assert!(value_defects("The ratio is set to 4:1.", &calls, "").is_empty());
+    }
+
+    #[test]
+    fn the_context_block_is_evidence_too() {
+        let context = "SET  132 BPM · A Minor\n 3 «Vox» -8.0 dB";
+        assert!(value_defects("At 132 BPM the Vox sits at −8 dB.", &[], context).is_empty());
+        assert_eq!(value_defects("At 128 BPM.", &[], context).len(), 1);
+        assert_eq!(value_defects("At 132 BPM.", &[], "").len(), 1);
     }
 
     #[test]
     fn a_value_with_no_evidence_is_a_defect() {
-        let defects = value_defects("a 2 ms attack", &[read(&["«10.0 ms»"])]);
+        let defects = value_defects("a 2 ms attack", &[read(&["«10.0 ms»"])], "");
         assert_eq!(defects.len(), 1, "{defects:?}");
         assert!(defects[0].contains("2 ms"), "{defects:?}");
     }
 
     #[test]
     fn the_unit_must_match_too() {
-        assert_eq!(value_defects("10 s", &[read(&["«10.0 ms»"])]).len(), 1);
-        assert_eq!(value_defects("a 3 dB boost", &[read(&["«3.0 %»"])]).len(), 1);
-        assert!(value_defects("a 3 % boost", &[read(&["«3.0 %»"])]).is_empty());
+        assert_eq!(value_defects("10 s", &[read(&["«10.0 ms»"])], "").len(), 1);
+        assert_eq!(value_defects("a 3 dB boost", &[read(&["«3.0 %»"])], "").len(), 1);
+        assert!(value_defects("a 3 % boost", &[read(&["«3.0 %»"])], "").is_empty());
     }
 
     #[test]
@@ -307,20 +317,20 @@ mod tests {
             json!({}),
             json!({ "missing_reason": "no_such_target", "value": ["«-18.0 dB»"] }),
         );
-        assert_eq!(value_defects("-18 dB", &[failed]).len(), 1);
+        assert_eq!(value_defects("-18 dB", &[failed], "").len(), 1);
     }
 
     #[test]
     fn things_that_are_not_values_are_not_flagged() {
         let calls = [read(&["«-18.0 dB»"])];
         let prose = "In bar 17, play 1/8 notes on the 2nd beat of «Drop 2», track 3, at 3:30. The `10 ms` stays.";
-        assert!(value_defects(prose, &calls).is_empty(), "{:?}", value_defects(prose, &calls));
-        assert!(value_defects("3 songs, 5 seconds, 4:10", &calls).is_empty());
+        assert!(value_defects(prose, &calls, "").is_empty(), "{:?}", value_defects(prose, &calls, ""));
+        assert!(value_defects("3 songs, 5 seconds, 4:10", &calls, "").is_empty());
     }
 
     #[test]
     fn a_repeated_value_is_one_defect() {
-        assert_eq!(value_defects("2 ms now, 2 ms later", &[read(&["«10.0 ms»"])]).len(), 1);
+        assert_eq!(value_defects("2 ms now, 2 ms later", &[read(&["«10.0 ms»"])], "").len(), 1);
     }
 
     /// The three compressor answers and their `get_device_params` reads, copied
@@ -337,7 +347,7 @@ mod tests {
             runs: Vec<Run>,
         }
         let fixture: Fixture = serde_json::from_str(include_str!("../fixtures/values-2026-10-27.json")).unwrap();
-        let defects: Vec<Vec<String>> = fixture.runs.iter().map(|r| value_defects(&r.answer, &r.calls)).collect();
+        let defects: Vec<Vec<String>> = fixture.runs.iter().map(|r| value_defects(&r.answer, &r.calls, "")).collect();
         assert_eq!(defects.len(), 3);
         assert!(defects[0].is_empty(), "{defects:?}");
         assert!(defects[1].is_empty(), "{defects:?}");
