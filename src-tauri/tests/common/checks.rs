@@ -69,8 +69,8 @@ struct Value {
 
 const UNITS: [(&str, &str); 6] = [("db", "dB"), ("ms", "ms"), ("s", "s"), ("hz", "Hz"), ("khz", "kHz"), ("bpm", "BPM")];
 
-/// The unit that starts at `at`, after any spaces: a symbol, a word from
-/// `UNITS`, or the `: 1` of an `n:1` ratio. Returns it with where it ends.
+/// The unit at `at` after any spaces: a symbol, a `UNITS` word, or `: 1`.
+/// A bare `s` needs a space, so `808s` and `80s` are plurals, not seconds.
 fn unit_at(chars: &[char], at: usize) -> Option<(&'static str, usize)> {
     let spaced = |mut i: usize| {
         while i < chars.len() && matches!(chars[i], ' ' | '\u{a0}' | '\u{202f}') {
@@ -88,7 +88,7 @@ fn unit_at(chars: &[char], at: usize) -> Option<(&'static str, usize)> {
         c if c.is_ascii_alphabetic() => {
             let end = i + chars[i..].iter().take_while(|c| c.is_ascii_alphabetic()).count();
             let word = chars[i..end].iter().collect::<String>().to_lowercase();
-            UNITS.iter().find(|(w, _)| *w == word).map(|(_, unit)| (*unit, end))
+            UNITS.iter().find(|(w, _)| *w == word && (*w != "s" || i > at)).map(|(_, unit)| (*unit, end))
         }
         _ => None,
     }
@@ -116,9 +116,8 @@ fn number_end(chars: &[char], start: usize) -> usize {
 const BEFORE_AN_INSTRUCTION: [&str; 17] =
     ["and", "then", "or", "to", "just", "also", "please", "maybe", "could", "should", "can", "would", "will", "might", "must", "you", "i"];
 
-/// Whether `by`, `to`, `try` or `set` sits within three words before `at`, in
-/// the same sentence: the number is then a change, not a claim. A `set to`
-/// that describes the device is not a change.
+/// Whether `by`, `to`, `try` or an imperative `set` sits within three words
+/// before `at`, in the same sentence: a change, not a claim.
 fn follows_a_change_word(chars: &[char], at: usize) -> bool {
     let before: String = chars[..at].iter().collect();
     let tokens: Vec<&str> = before.split_whitespace().rev().take(4).collect();
@@ -182,11 +181,8 @@ fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
     }
 }
 
-/// One defect per value the prose states (a number with dB, ms, s, Hz, kHz,
-/// %, BPM or `n:1`) that neither a successful tool result nor the context block
-/// the model was given shows with the same unit and number, sign kept. A value after `by`, `to`, `try` or `set` is a change
-/// she is told to make, so it is skipped. Prose is read as `studio_word_defects`
-/// reads it: never inside code or a «name».
+/// One defect per stated value (dB, ms, s, Hz, kHz, %, BPM, n:1) that no tool result or
+/// context value shows, sign kept. Changes, code and «names» are skipped.
 pub fn value_defects(prose: &str, calls: &[ToolCallRecord], context: &str) -> Vec<String> {
     let mut strings = vec![context.to_string()];
     for call in calls.iter().filter(|c| c.missing_reason.is_none()) {
@@ -326,6 +322,14 @@ mod tests {
         let prose = "In bar 17, play 1/8 notes on the 2nd beat of «Drop 2», track 3, at 3:30. The `10 ms` stays.";
         assert!(value_defects(prose, &calls, "").is_empty(), "{:?}", value_defects(prose, &calls, ""));
         assert!(value_defects("3 songs, 5 seconds, 4:10", &calls, "").is_empty());
+    }
+
+    #[test]
+    fn a_plural_or_decade_is_not_seconds() {
+        let calls = [read(&["«10.0 ms»"])];
+        assert!(value_defects("808s and 909s from the 80s, 1/4s too", &calls, "").is_empty());
+        assert!(value_defects("an 80s-style pad", &calls, "").is_empty());
+        assert_eq!(value_defects("a 5 s tail", &calls, "").len(), 1);
     }
 
     #[test]
