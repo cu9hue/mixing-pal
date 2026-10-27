@@ -163,7 +163,8 @@ Ordered. Each item says what, why, size, and what it waits on.
    sessions, where the producer can say whether the suggestions helped.
 
    Extended the harness on 2026-10-27. Provisional properties are split into
-   timeline, settings and move target (`move_performable`). Code checks now
+   timeline, settings, move target (`move_performable`) and whether the move
+   acts where the question points (`move_on_question`). Code checks now
    catch values with their sign, studio words and read coverage. Reports
    print 80% intervals, read agreement and the properties that fail
    together. Scenarios one to four can run as a same-session A/B against

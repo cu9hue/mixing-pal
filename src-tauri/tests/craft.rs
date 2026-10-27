@@ -508,7 +508,7 @@ const READABLE_PROBLEM: Property = Property {
 };
 const EVIDENCE_SUPPORTS: Property = Property {
     key: "evidence_supports",
-    description: "The supplied context and tool calls (arguments, results and missing_reason) support every factual claim about the set. Audit all claims, not just the main diagnosis: track/clip, every pitch including range endpoints, durations, loop length, beat/bar/second conversions, section names, placements and settings. Compute conversions from the supplied tempo and time signature; compare section labels with locator boundaries even when a nearby bar range is correct. MIDI note-off and empty placements do not establish audible silence or release tails. A disclaimer does not excuse a contradictory audible claim elsewhere. Session and arrangement note reads are both valid for the notes they return. A failed read supports only a named gap; partial data supports only what it contains. Proposed notes and placements are suggestions, not claims that they already exist. Do not infer tone, level, masking or groove from settings. Genre/style claims are not graded, but applying one to assert a sonic fact about THIS set still needs evidence. Fail on any unsupported set claim; quote it and identify the conflicting or missing evidence in the reason.",
+    description: "The supplied context and tool calls (arguments, results and missing_reason) support every factual claim about the set. Audit all claims, not just the main diagnosis: track/clip, every pitch including range endpoints, durations, loop length, beat/bar/second conversions, section names, placements and settings. Compute conversions from the supplied tempo and time signature; compare section labels with locator boundaries even when a nearby bar range is correct. Bars count from 1, and a bar range may end on its last bar or on the first bar after it: in 4/4, beats 64–96 are bars 17–24, and 'bars 17–25' or '17.1.1 to 25.1.1' names the same span. A listening test claims that the existing parts it names play in the bars it points to; fail one that points at bars where they do not. MIDI note-off and empty placements do not establish audible silence or release tails. A disclaimer does not excuse a contradictory audible claim elsewhere. Session and arrangement note reads are both valid for the notes they return. A failed read supports only a named gap; partial data supports only what it contains. Proposed notes and placements are suggestions, not claims that they already exist. Do not infer tone, level, masking or groove from settings. Genre/style claims are not graded, but applying one to assert a sonic fact about THIS set still needs evidence. Fail on any unsupported set claim; quote it and identify the conflicting or missing evidence in the reason.",
 };
 const NO_INVENTED_CHANGE: Property = Property {
     key: "no_invented_change",
@@ -549,7 +549,7 @@ const GOAL_TIED: Property = Property {
 // `timeline_supported` is judged alone, on `timeline_evidence`.
 const TIMELINE_SUPPORTED: Property = Property {
     key: "timeline_supported",
-    description: "Every claim about what plays where or when (track, section, bar, beat) matches the arrangement evidence. Quote the first claim that does not.",
+    description: "Every claim about what plays where or when (track, section, bar, beat), including where a listening test says an existing part plays, matches the arrangement evidence. Bars count from 1, and a bar range may end on its last bar or on the first bar after it: in 4/4, beats 64–96 are bars 17–24, and 'bars 17–25' names the same span. Quote the first claim that does not match.",
 };
 const SETTINGS_SUPPORTED: Property = Property {
     key: "settings_supported",
@@ -560,9 +560,14 @@ const MOVE_PERFORMABLE: Property = Property {
     description: "The move acts on something that exists as read (a clip, a phrase, a device, a placement). A move on something the reads show does not exist fails. No move proposed also passes.",
 };
 
+const MOVE_ON_QUESTION: Property = Property {
+    key: "move_on_question",
+    description: "The move acts on the part, section or moment the producer's question asks about, and its listening test checks the spot the move changes. A move elsewhere fails, even when it would help the song; quote where the question points and where the move acts. A question that names no part or section passes, and so does an answer with no move.",
+};
+
 /// Provisional keys never invalidate a reply; gating and craft keys do.
 fn is_provisional(key: &str) -> bool {
-    [TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE].iter().any(|p| p.key == key)
+    [TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE, MOVE_ON_QUESTION].iter().any(|p| p.key == key)
 }
 
 const JUDGE_PROMPT: &str = "\
@@ -787,6 +792,18 @@ fn the_rubric_has_no_source_property() {
         assert!(sc.properties().iter().all(|p| p.key != "source_named"), "{}", sc.question);
     }
     assert!(EAR_ONLY_HANDED_OVER.description.contains("Restating the GOAL's intended feel"));
+}
+
+#[test]
+fn the_judge_reads_a_bar_range_either_way_and_checks_where_a_listening_test_points() {
+    // One judge failed "bars 17–25" for a span another run called "bars 17–24".
+    for p in [EVIDENCE_SUPPORTS, TIMELINE_SUPPORTED] {
+        assert!(p.description.contains("'bars 17–25'"), "{}", p.key);
+        assert!(p.description.contains("listening test"), "{}", p.key);
+    }
+    for sc in [&DROP_FALLS_FLAT, &WHAT_NEXT, &PAD_TOO_BUSY, &MIX_OKAY, &DROP_FOR_A_NEWCOMER, &COMPRESSOR_IN_PLAIN_TERMS] {
+        assert!(sc.provisional.iter().any(|p| p.key == MOVE_ON_QUESTION.key), "{}", sc.question);
+    }
 }
 
 /// Saved answers isolate judge disagreements from answer-model variance.
@@ -1619,6 +1636,7 @@ fn a_bad_provisional_verdict_in_the_main_reply_never_invalidates_the_run() {
     assert_eq!(passes, 1);
     assert!(scores.contains("trust (provisional, report only) settings_supported: 0/0 (1 invalid)"), "{scores}");
     assert!(scores.contains("trust (provisional, report only) move_performable: 0/0 (1 invalid)"), "{scores}");
+    assert!(scores.contains("trust (provisional, report only) move_on_question: 0/0 (1 invalid)"), "{scores}");
 
     // A gating key stays strict.
     let strict = content.replace("\"no_invented_change\"", "\"renamed\"");
@@ -2118,7 +2136,7 @@ const DROP_FALLS_FLAT: Scenario = Scenario {
     mentor: "For the stated GOAL, I would make the Drop an arrival. The arrangement shows Pad leaving at beat 64 (bar 17) as Vox arrives; Drums continues and Bass has no placements. Intro and Drop each have two occupied tracks. On contrast at section boundaries, I would try a new part on the empty Bass track. One move: load a bass instrument and draw a four-beat MIDI loop using A and F, the roots in the Pad notes, then repeat it over beats 64–96 (bars 17–24). Keep it out of Intro so its entrance tests that contrast; mute the new clip to undo the trial. Play from beat 60 (bar 16) and listen for whether bar 17 feels like an arrival with the bass enabled. The continuous drum placement is enough on repetition for this trial; leave it alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[SECTION_PURPOSE, NAMED_AXIS, ONE_MOVE, WHY, LISTEN_FOR, LEAVE_IT],
-    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE, MOVE_ON_QUESTION],
     terms_required: false,
 };
 
@@ -2138,7 +2156,7 @@ const WHAT_NEXT: Scenario = Scenario {
     mentor: "For the stated GOAL, I would give the Drop a new part to mark its arrival. The arrangement shows Bass has no placements, Pad leaves at beat 64 (bar 17), Vox enters there, and Drums continues. I rank contrast first: the empty Bass track gives us a place to try an entrance. One move: load a bass instrument and draw a four-beat MIDI loop on A and F, the roots read in the Pad notes; repeat it over beats 64–96 (bars 17–24), keeping it out of Intro. Mute that clip to undo the trial. Play from beat 60 (bar 16) through beat 68 (bar 18) and listen for whether the Drop now lands. The Pad's two-chord repetition and the continuous drum placement are enough for this trial; leave both alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[ONE_MOVE, RANKED, WHY, LISTEN_FOR, LEAVE_IT],
-    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE, MOVE_ON_QUESTION],
     terms_required: false,
 };
 
@@ -2159,7 +2177,7 @@ const PAD_TOO_BUSY: Scenario = Scenario {
     mentor: "For the stated GOAL, I would use the Pad as a repeating harmonic idea. The notes show two triad attacks in a four-beat, one-bar loop: A2/C3/E3 at clip beat 0 and F2/A2/C3 at clip beat 2, each note lasting half a beat. The arrangement repeats it over beats 0–64 (bars 1–16) and 96–128 (bars 25–32); it does not overlap Vox's placements. I find no readable density problem in those two stabs per bar. Whether the sound or release tails feel crowded is yours to hear. Leave the Pad as it is.",
     must: &[READABLE_PROBLEM, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[],
-    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE, MOVE_ON_QUESTION],
     terms_required: false,
 };
 
@@ -2203,7 +2221,7 @@ const MIX_OKAY: Scenario = Scenario {
     mentor: "The device chains show no devices on Pad or Bass, a Drum Rack on Drums, and a Compressor on Vox. The rack read lists Kick, Clap and Hats chains, each with a Simpler. Vox's parameter read gives a threshold of -18 dB, ratio 4:1, attack 10 ms, release 100 ms and output gain +3 dB. Those settings do not tell me the gain reduction or audible balance. Tone, loudness, masking and groove are yours to hear; I cannot judge them. The arrangement shows Bass has no placements, but that does not prove what frequencies the other tracks contain. I find no established mix problem in these reads. Leave the processing alone.",
     must: &[EAR_ONLY_HANDED_OVER, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, CONDITIONAL_MOVE],
     craft: &[],
-    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE, MOVE_ON_QUESTION],
     terms_required: false,
 };
 
@@ -2224,7 +2242,7 @@ const DROP_FOR_A_NEWCOMER: Scenario = Scenario {
     mentor: "For dark garage at 2am, the drop should feel like you have arrived somewhere. Right now, at bar 17 the Pad stops and the Vox starts. The Drums keep going. The Bass track has nothing on it. **Try adding a bass part that starts at the drop.** Put an instrument on the Bass track. Draw a short MIDI clip (a loop of notes Live plays for you) using A and F, the lowest notes of your Pad chords. Let it play from bar 17 to bar 24, and keep it out of the intro. If you don't like it, mute the clip. Play from bar 16 and listen: does bar 17 now feel like an arrival? The drums are fine. Leave them alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE, PLAIN_WORDS],
     craft: &[ONE_MOVE, WHY, LISTEN_FOR],
-    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE, MOVE_ON_QUESTION],
     terms_required: false,
 };
 
@@ -2248,7 +2266,7 @@ const COMPRESSOR_IN_PLAIN_TERMS: Scenario = Scenario {
     mentor: "Vox has one device, a Compressor. Its parameters read Threshold -18.0 dB, Ratio 4.00 : 1, Attack 10.0 ms, Release 100 ms and Output Gain 3.0 dB. Each 4 dB the vocal goes over the Threshold comes out as 1 dB over, and Output Gain adds 3 dB of make-up gain after that. The settings do not tell me how often the vocal crosses the Threshold, so I cannot say how much gain reduction there is. Whether it sounds squashed or natural is yours to hear. I find no readable problem in these settings. Leave the Compressor as it is.\n\nTERMS SHE CAN TAP (each opens one line under the paragraph that holds it)\nMake-up gain: Volume added after the Compressor to win back what it took away.\nGain reduction: How far the Compressor is turning the signal down at a given moment.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[TERMS_LISTED],
-    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE, MOVE_ON_QUESTION],
     terms_required: true,
 };
 
