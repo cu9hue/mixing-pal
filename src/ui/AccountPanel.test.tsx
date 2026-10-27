@@ -83,13 +83,19 @@ it("says Subscribe when no trial is left", () => {
   expect(screen.queryByRole("button", { name: "Start 7-day free trial" })).toBeNull();
 });
 
-it("lets a trialist who ran out start her plan now", async () => {
+it("lets a trialist who ran out start their plan now", async () => {
   const change = vi.fn();
   vi.mocked(invoke).mockResolvedValue({ access: "active", capture: false, subscription_status: "active" });
   render(<AccountPanel account={{ ...signedIn({ subscription_status: "trialing", plan: "starter", can_ask: false, remaining_micro_usd: 100 }), change }} />);
   fireEvent.click(screen.getByRole("button", { name: "Start my plan now" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("account_billing", { action: "start-now" }));
   expect(change).toHaveBeenCalledWith(expect.objectContaining({ subscription_status: "active" }));
+});
+
+it("keeps the plan line short when the allowance is used up: the lines below say so", () => {
+  render(<AccountPanel account={signedIn({ subscription_status: "trialing", plan: "pro", can_ask: false, remaining_micro_usd: 0, period_end: Date.UTC(2026, 10, 1) })} />);
+  expect(planLine()).toBe(`Pro · free trial · trial ends ${day(Date.UTC(2026, 10, 1))}`);
+  expect(screen.getByText(/cannot cover another request/)).toBeTruthy();
 });
 
 it("offers Pro to a Starter member who ran out, and only the plan line's reset date to Pro", () => {

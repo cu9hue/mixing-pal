@@ -184,6 +184,11 @@
   border-bottom: none;
 }
 
+/* The card's last row needs room from the window edge. */
+.card__account--solo .account {
+  padding-bottom: var(--space-5);
+}
+
 /* Settings keeps account content aligned with its section, not nested in a panel. */
 .advanced__body > .account {
   padding: 0 0 var(--space-5);
@@ -217,6 +222,11 @@
 
 .account .account__actions .account__link {
   margin-top: 0;
+}
+
+/* Two links side by side need more air than the row's gap, or they read as one phrase. */
+.account .account__actions .account__link + .account__link {
+  margin-left: var(--space-2);
 }
 
 /* One flat choice on the account surface: rows split by a rule, not cards. */

@@ -153,7 +153,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
       {view?.access === "active" && <>
         <div className="account__group">
           <div className="account__summary">
-            <div className="account__plan">{planLabel(view)}{(view.remaining_micro_usd ?? 0) > 0 ? "" : " · allowance used up"}
+            <div className="account__plan">{planLabel(view)}
               {view.period_end && ` · ${dateWord(view)} ${new Date(view.period_end).toLocaleDateString()}`}</div>
             <div className="account__email">{view.email}</div>
             <div>${((view.remaining_micro_usd ?? 0) / 1_000_000).toFixed(2)} of model usage remains.
