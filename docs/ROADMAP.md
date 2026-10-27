@@ -163,13 +163,20 @@ Ordered. Each item says what, why, size, and what it waits on.
    sessions, where the producer can say whether the suggestions helped.
 
    Extended the harness on 2026-10-27. Provisional properties are split into
-   timeline, settings and move target. Code checks now catch values with
-   their sign, studio words and read coverage. Reports print 80% intervals,
-   read agreement and the properties that fail together. Any scenario at "I
-   finish tracks" can run as a same-session A/B against main's prompt, with a
-   pairwise judge that judges each pair in both orders. Draft calibration
-   labels for the new properties wait for the owner to confirm them. Paid
-   calibration and the A/B come next, under the design doc's decision rules.
+   timeline, settings and move target (`move_performable`). Code checks now
+   catch values with their sign, studio words and read coverage. Reports
+   print 80% intervals, read agreement and the properties that fail
+   together. Scenarios one to four can run as a same-session A/B against
+   main's prompt, with a pairwise judge that judges each pair in both
+   orders. Scenarios six and seven, and the goal report, cannot. Draft
+   calibration labels for the new properties wait for the owner to confirm
+   them. Paid calibration and the A/B come next, under these rules. A
+   property can gate once it has at least 5 owner-confirmed labels and the
+   judge agrees with at least 80% of them. For the A/B, run scenarios one to
+   three with 5 pairs each. Ship the prompt if it trails main's by at
+   most 1 pass per scenario and at most 2 across all 15. Do not ship if it
+   trails by 3 or more across 15. In between, run 5 more pairs on the
+   scenario that differs and apply the same rule.
 
 7. **Default model and latency.** Done 2026-09-11. `tests/latency.rs` runs
    one two-tool question five times against the model the environment
