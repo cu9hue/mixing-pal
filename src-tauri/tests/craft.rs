@@ -1299,7 +1299,7 @@ const DROP_FALLS_FLAT: Scenario = Scenario {
 #[tokio::test]
 async fn why_does_the_drop_fall_flat() {
     passes_majority(&DROP_FALLS_FLAT, |run| {
-        run.calls.iter().any(|c| c.name == "get_arrangement" && c.missing_reason.is_none())
+        common::checks::arrangement_covers(&run.calls, 60.0, 68.0)
     })
     .await;
 }
@@ -1318,7 +1318,7 @@ const WHAT_NEXT: Scenario = Scenario {
 #[tokio::test]
 async fn what_should_i_do_next() {
     passes_majority(&WHAT_NEXT, |run| {
-        run.calls.iter().any(|c| c.name == "get_arrangement" && c.missing_reason.is_none())
+        common::checks::arrangement_covers(&run.calls, 60.0, 68.0)
     })
     .await;
 }
@@ -1401,7 +1401,7 @@ const DROP_FOR_A_NEWCOMER: Scenario = Scenario {
 #[tokio::test]
 async fn why_does_the_drop_fall_flat_for_a_newcomer() {
     passes_majority(&DROP_FOR_A_NEWCOMER, |run| {
-        run.calls.iter().any(|c| c.name == "get_arrangement" && c.missing_reason.is_none())
+        common::checks::arrangement_covers(&run.calls, 60.0, 68.0)
             && run.answer.split_whitespace().count() <= 180
     })
     .await;

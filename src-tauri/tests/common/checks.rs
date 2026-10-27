@@ -211,6 +211,30 @@ pub fn value_defects(prose: &str, calls: &[ToolCallRecord], context: &str) -> Ve
     defects
 }
 
+/// True when the successful `get_arrangement` reads together span `[from_beat, to_beat)`.
+/// A missing or null bound is open on that side, as in the tool; `track` is not considered.
+pub fn arrangement_covers(calls: &[ToolCallRecord], from_beat: f64, to_beat: f64) -> bool {
+    let mut ranges: Vec<(f64, f64)> = calls
+        .iter()
+        .filter(|c| c.name == "get_arrangement" && c.missing_reason.is_none())
+        .map(|c| {
+            (
+                c.args["start_beats"].as_f64().unwrap_or(f64::NEG_INFINITY),
+                c.args["end_beats"].as_f64().unwrap_or(f64::INFINITY),
+            )
+        })
+        .collect();
+    ranges.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut reached = from_beat;
+    for (start, end) in ranges {
+        if start > reached {
+            break;
+        }
+        reached = reached.max(end);
+    }
+    reached >= to_beat
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +243,55 @@ mod tests {
     /// A successful read whose result holds `values` as strings.
     fn read(values: &[&str]) -> ToolCallRecord {
         ToolCallRecord::new("get_device_params".into(), json!({}), json!({ "missing_reason": null, "value": values }))
+    }
+
+    /// A `get_arrangement` call with `args`; `missing` makes it a failed read.
+    fn arrangement(args: serde_json::Value, missing: bool) -> ToolCallRecord {
+        let result = if missing { json!({ "missing_reason": "not_connected" }) } else { json!({ "missing_reason": null }) };
+        ToolCallRecord::new("get_arrangement".into(), args, result)
+    }
+
+    #[test]
+    fn an_unranged_read_covers_everything() {
+        assert!(arrangement_covers(&[arrangement(json!({}), false)], 60.0, 68.0));
+        assert!(arrangement_covers(&[arrangement(json!({ "track": 0 }), false)], 60.0, 68.0));
+    }
+
+    #[test]
+    fn the_10_27_drop_reads_do_not_cover_the_boundary() {
+        let calls = [
+            arrangement(json!({ "start_beats": 64, "end_beats": 96 }), false),
+            arrangement(json!({ "start_beats": 128, "end_beats": 160 }), false),
+        ];
+        assert!(!arrangement_covers(&calls, 60.0, 68.0));
+    }
+
+    #[test]
+    fn two_ranges_that_meet_cover_the_boundary() {
+        let calls = [
+            arrangement(json!({ "start_beats": 64, "end_beats": 96 }), false),
+            arrangement(json!({ "start_beats": 0, "end_beats": 64 }), false),
+        ];
+        assert!(arrangement_covers(&calls, 60.0, 68.0));
+    }
+
+    #[test]
+    fn a_missing_bound_is_open_on_that_side() {
+        assert!(arrangement_covers(&[arrangement(json!({ "end_beats": 96 }), false)], 60.0, 68.0));
+        assert!(arrangement_covers(&[arrangement(json!({ "start_beats": 32 }), false)], 60.0, 68.0));
+        assert!(!arrangement_covers(&[arrangement(json!({ "start_beats": 64 }), false)], 60.0, 68.0));
+    }
+
+    #[test]
+    fn a_missing_read_covers_nothing() {
+        assert!(!arrangement_covers(&[arrangement(json!({}), true)], 60.0, 68.0));
+        assert!(!arrangement_covers(&[], 60.0, 68.0));
+    }
+
+    #[test]
+    fn another_tool_covers_nothing() {
+        let other = ToolCallRecord::new("get_clips".into(), json!({}), json!({ "missing_reason": null }));
+        assert!(!arrangement_covers(&[other], 60.0, 68.0));
     }
 
     #[test]
