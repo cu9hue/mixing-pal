@@ -969,9 +969,13 @@ fn clean_term_line(term: &str, meaning: &str) -> (String, String) {
 
 /// The last `terms` block's lines as (term, meaning), cleaned the way the
 /// card cleans them, a repeated term dropped. Stricter than the card, which
-/// drops or cuts what it cannot use: here a malformed or overlong line and
-/// an unclosed block are named. `Ok(None)` means there is no block.
-pub fn terms_block(answer: &str) -> Result<Option<Vec<(String, String)>>, String> {
+/// drops or cuts what it cannot use: here a malformed or overlong line is
+/// named. A block the card cannot close, unclosed or closed with fewer than
+/// three backticks, shows as raw text, so it is a trust defect. `Ok(None)`
+/// means there is no block.
+pub fn terms_block(answer: &str) -> Result<Option<Vec<(String, String)>>, TermsDefect> {
+    let shown = |reason: &str| TermsDefect { trust: true, reason: reason.into() };
+    let reported = |reason: String| TermsDefect { trust: false, reason };
     let mut last = None;
     let mut open: Option<Vec<&str>> = None;
     for line in answer.lines() {
@@ -979,26 +983,29 @@ pub fn terms_block(answer: &str) -> Result<Option<Vec<(String, String)>>, String
         match &mut open {
             None if t == "```terms" => open = Some(Vec::new()),
             Some(_) if t == "```" => last = open.take(),
+            Some(_) if matches!(t, "`" | "``") => {
+                return Err(shown("terms block closed with fewer than three backticks"));
+            }
             Some(lines) => lines.push(t),
             None => {}
         }
     }
     if open.is_some() {
-        return Err("unclosed terms block".into());
+        return Err(shown("unclosed terms block"));
     }
     let Some(lines) = last else { return Ok(None) };
     let max = term_vectors().line_max_chars;
     let mut terms: Vec<(String, String)> = Vec::new();
     for l in lines.into_iter().filter(|l| !l.is_empty()) {
         if l.chars().count() > max {
-            return Err(format!("terms line longer than {max} characters: {l:?}"));
+            return Err(reported(format!("terms line longer than {max} characters: {l:?}")));
         }
         let (term, meaning) = match l.split_once(':') {
             Some((t, m)) => clean_term_line(t, m),
-            None => return Err(format!("malformed terms line {l:?}")),
+            None => return Err(reported(format!("malformed terms line {l:?}"))),
         };
         if term.is_empty() || meaning.is_empty() {
-            return Err(format!("malformed terms line {l:?}"));
+            return Err(reported(format!("malformed terms line {l:?}")));
         }
         if !terms.iter().any(|(t, _)| t.to_lowercase() == term.to_lowercase()) {
             terms.push((term, meaning));
@@ -1146,7 +1153,8 @@ pub const SCREEN_PHRASES: &[&str] = &[
 ];
 
 /// One thing wrong with an answer's terms. A `trust` defect claims a sound
-/// or hides bookkeeping in a grey code box; the rest are reported.
+/// or shows the model's bookkeeping as code or raw text; the rest are
+/// reported.
 #[derive(Debug, PartialEq)]
 pub struct TermsDefect {
     pub trust: bool,
@@ -1166,7 +1174,7 @@ pub fn terms_defects(answer: &str) -> Vec<TermsDefect> {
         }
     }
     let terms = match terms_block(answer) {
-        Err(e) => { found(false, e); return defects }
+        Err(e) => { found(e.trust, e.reason); return defects }
         Ok(None) => return defects,
         Ok(Some(terms)) => terms,
     };
@@ -1245,13 +1253,13 @@ fn the_terms_block_parses_strictly_and_the_last_one_counts() {
         terms_block(&format!("{}\n{}", terms("Old: one."), terms("Knee: How gently it starts.\n\nRatio: How hard."))),
         Ok(Some(vec![("Knee".into(), "How gently it starts.".into()), ("Ratio".into(), "How hard.".into())])),
     );
-    assert!(terms_block(&terms("no colon")).unwrap_err().contains("no colon"));
+    assert!(terms_block(&terms("no colon")).unwrap_err().reason.contains("no colon"));
     assert!(terms_block(&terms("Knee:")).is_err());
-    assert!(terms_block("Lower it.\n```terms\nKnee: soft").unwrap_err().contains("unclosed"));
+    assert!(terms_block("Lower it.\n```terms\nKnee: soft").unwrap_err().reason.contains("unclosed"));
     let max = term_vectors().line_max_chars;
     let at_cap = format!("Knee: {}", "x".repeat(max - "Knee: ".len()));
     assert!(terms_block(&terms(&at_cap)).is_ok());
-    assert!(terms_block(&terms(&format!("{at_cap}x"))).unwrap_err().contains(&max.to_string()));
+    assert!(terms_block(&terms(&format!("{at_cap}x"))).unwrap_err().reason.contains(&max.to_string()));
 }
 
 fn trust_and_reasons(raw: &str) -> Vec<(bool, String)> {
@@ -1270,6 +1278,22 @@ fn a_meaning_may_name_what_a_control_changes() {
         assert_eq!(trust_and_reasons(&answer(meaning)), vec![], "{meaning}");
     }
     assert_eq!(terms_defects("No block."), vec![]);
+}
+
+// The card shows a block it cannot close as raw text under the answer.
+#[test]
+fn an_unclosed_or_short_closed_block_is_a_trust_defect() {
+    for (raw, reason) in [
+        ("Watch the knee.\n```terms\nKnee: How gently it starts.", "unclosed"),
+        ("Two triads.\n```terms\nTriad: Three notes played together.\n``", "fewer than three backticks"),
+        ("Two triads.\n```terms\nTriad: Three notes.\n`\n```move\n«Pad», none: leave it\n```", "fewer than three backticks"),
+    ] {
+        let found = trust_and_reasons(raw);
+        assert!(found.iter().any(|(trust, r)| *trust && r.contains(reason)), "{raw}: {found:?}");
+    }
+    // A malformed line inside a closed block is still only reported.
+    let found = trust_and_reasons("Watch the knee.\n```terms\nKnee soft\n```");
+    assert!(!found.is_empty() && found.iter().all(|(trust, _)| !trust), "{found:?}");
 }
 
 #[test]

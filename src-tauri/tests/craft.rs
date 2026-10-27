@@ -556,8 +556,8 @@ struct Scenario {
     mentor: &'static str,
     must: &'static [Property],
     craft: &'static [Property],
-    /// Needs a non-empty terms block with no defect at all. Every "I finish
-    /// tracks" scenario has its terms checked; see `tally`.
+    /// Needs a non-empty terms block. Every "I finish tracks" scenario has
+    /// its terms checked; see `tally`.
     terms_required: bool,
 }
 
@@ -1030,20 +1030,16 @@ const HUMAN_REVIEW_PROPERTIES: &[&str] = &[
     "evidence_supports", "ear_only_handed_over", "conditional_move", "listen_for", "section_purpose",
 ];
 
-/// Whether a run's terms pass `sc`. At "I finish tracks" a sound claim or a
-/// misnamed fence fails trust, like a sound claim in the prose; the other
-/// defects are reported. A scenario with `terms_required` needs clean terms.
+/// Whether a run's terms pass `sc`. At "I finish tracks" a trust defect (a
+/// sound claim, a block shown as code or raw text) fails trust, like a sound
+/// claim in the prose; the other defects are reported. A scenario with
+/// `terms_required` also needs a non-empty block.
 fn terms_pass(sc: &Scenario, run: &Run) -> bool {
     if sc.experience != Experience::FinishesTracks {
         return true;
     }
-    let defects = common::terms_defects(&run.raw_answer);
-    if sc.terms_required {
-        let listed = matches!(common::terms_block(&run.raw_answer), Ok(Some(t)) if !t.is_empty());
-        listed && defects.is_empty()
-    } else {
-        !defects.iter().any(|d| d.trust)
-    }
+    let listed = matches!(common::terms_block(&run.raw_answer), Ok(Some(t)) if !t.is_empty());
+    (listed || !sc.terms_required) && !common::terms_defects(&run.raw_answer).iter().any(|d| d.trust)
 }
 
 /// Trust checks gate the automated majority; craft misses stay visible.
@@ -1140,11 +1136,13 @@ fn the_terms_checks_gate_by_level_and_scenario_seven_needs_clean_terms() {
     let runs = |raws: [&str; 3], sc: &Scenario| Vec::from(raws.map(|r| trusted_run(sc, r)));
     let passes = |sc: &Scenario, raws: [&str; 3]| tally(sc, &runs(raws, sc), |_| true).0;
 
-    // Scenario 7: a non-empty block with no defect at all.
+    // Scenario 7: a non-empty block and no trust defect.
     let (count, scores) = tally(&COMPRESSOR_IN_PLAIN_TERMS, &runs([good, good, sounds], &COMPRESSOR_IN_PLAIN_TERMS), |_| true);
     assert_eq!(count, 2);
     assert!(scores.contains("terms: 2/3 clean; trust defects 1/3"), "{scores}");
-    assert_eq!(passes(&COMPRESSOR_IN_PLAIN_TERMS, [good, untappable, misnamed]), 1);
+    assert_eq!(passes(&COMPRESSOR_IN_PLAIN_TERMS, [good, untappable, misnamed]), 2);
+    let unclosed = "Watch the gain reduction.\n```terms\nGain reduction: How far it turns the signal down.";
+    assert_eq!(passes(&COMPRESSOR_IN_PLAIN_TERMS, [unclosed, unclosed, good]), 1);
     assert_eq!(passes(&COMPRESSOR_IN_PLAIN_TERMS, ["Leave it."; 3]), 0);
 
     // Another "I finish tracks" scenario: a sound claim or a misnamed fence
@@ -1153,6 +1151,7 @@ fn the_terms_checks_gate_by_level_and_scenario_seven_needs_clean_terms() {
     assert_eq!(count, 3);
     assert!(scores.contains("terms: 2/3 clean; trust defects 0/3"), "{scores}");
     assert_eq!(passes(&WHAT_NEXT, [sounds, misnamed, good]), 1);
+    assert_eq!(passes(&WHAT_NEXT, [unclosed, good, good]), 2);
 
     // New to Live gets no terms block, so nothing here reads one.
     let (count, scores) = tally(&DROP_FOR_A_NEWCOMER, &runs([sounds; 3], &DROP_FOR_A_NEWCOMER), |_| true);
