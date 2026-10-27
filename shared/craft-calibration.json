@@ -1682,10 +1682,6 @@
         "conditional_move": {
           "pass": false,
           "reason": "It instructs Pad filtering and reverb before confirmation of the ear-only problem; a later listen test is not a prerequisite."
-        },
-        "source_named": {
-          "pass": true,
-          "reason": "Mixer state and device headings attribute the claims, even when those claims are not supported."
         }
       }
     },
@@ -3694,10 +3690,6 @@
         "leave_it": {
           "pass": true,
           "reason": "The Pad repetition is explicitly enough and its notes are left alone."
-        },
-        "source_named": {
-          "pass": true,
-          "reason": "It names arrangement and Pad note sources."
         }
       }
     },
@@ -4229,10 +4221,6 @@
         "conditional_move": {
           "pass": true,
           "reason": "No edit needs a prerequisite."
-        },
-        "source_named": {
-          "pass": true,
-          "reason": "The notes are named as the source."
         }
       }
     },

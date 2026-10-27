@@ -484,10 +484,6 @@ const READABLE_PROBLEM: Property = Property {
     key: "readable_problem",
     description: "If it proposes changing the Pad, it names the problem on a readable axis that the change addresses. If it finds no readable problem, it says so and stops without prescribing a change. Either keep or change can pass; do not require the mentor's decision. Asking to listen or read more is not a change.",
 };
-const SOURCE_NAMED: Property = Property {
-    key: "source_named",
-    description: "Each factual claim about the set names its source: context, notes, arrangement or device/settings reads. A heading may source the claims beneath it; literal tool names are not required. Grade attribution here, not whether the named source supports the claim.",
-};
 const EVIDENCE_SUPPORTS: Property = Property {
     key: "evidence_supports",
     description: "The supplied context and tool calls (arguments, results and missing_reason) support every factual claim about the set. Audit all claims, not just the main diagnosis: track/clip, every pitch including range endpoints, durations, loop length, beat/bar/second conversions, section names, placements and settings. Compute conversions from the supplied tempo and time signature; compare section labels with locator boundaries even when a nearby bar range is correct. MIDI note-off and empty placements do not establish audible silence or release tails. A disclaimer does not excuse a contradictory audible claim elsewhere. Session and arrangement note reads are both valid for the notes they return. A failed read supports only a named gap; partial data supports only what it contains. Proposed notes and placements are suggestions, not claims that they already exist. Do not infer tone, level, masking or groove from settings. Genre/style claims are not graded, but applying one to assert a sonic fact about THIS set still needs evidence. Fail on any unsupported set claim; quote it and identify the conflicting or missing evidence in the reason.",
@@ -498,7 +494,7 @@ const NO_INVENTED_CHANGE: Property = Property {
 };
 const EAR_ONLY_HANDED_OVER: Property = Property {
     key: "ear_only_handed_over",
-    description: "Gives no verdict on this set's tone, loudness, masking, groove, feel or audible low-end ownership. Where those come up, it hands the question to the producer. Inspect the whole answer: an ear-only disclaimer does not cancel a sonic verdict elsewhere. A readable gap can motivate a trial, but does not prove its audible cause or outcome. Do not grade generic genre/style claims.",
+    description: "Gives no verdict on this set's tone, loudness, masking, groove, feel or audible low-end ownership. Where those come up, it hands the question to the producer. Inspect the whole answer: an ear-only disclaimer does not cancel a sonic verdict elsewhere. A readable gap can motivate a trial, but does not prove its audible cause or outcome. Do not grade generic genre/style claims. Restating the GOAL's intended feel (for example, keeping a sparse mood) is not a verdict on the set.",
 };
 const CONDITIONAL_MOVE: Property = Property {
     key: "conditional_move",
@@ -615,6 +611,18 @@ fn the_calibration_labels_match_the_scenarios() {
             assert!(!label.reason.trim().is_empty(), "{}: unreasoned label {key}", case.id);
         }
     }
+}
+
+#[test]
+fn the_rubric_has_no_source_property() {
+    let scenarios = [
+        &DROP_FALLS_FLAT, &WHAT_NEXT, &PAD_TOO_BUSY, &MIX_OKAY,
+        &DROP_FOR_A_NEWCOMER, &COMPRESSOR_IN_PLAIN_TERMS, &CHORDS_GARAGE, &CHORDS_TECHNO,
+    ];
+    for sc in scenarios {
+        assert!(sc.properties().iter().all(|p| p.key != "source_named"), "{}", sc.question);
+    }
+    assert!(EAR_ONLY_HANDED_OVER.description.contains("Restating the GOAL's intended feel"));
 }
 
 /// Saved answers isolate judge disagreements from answer-model variance.
@@ -1088,10 +1096,9 @@ fn the_trust_majority_keeps_craft_misses_visible() {
                 "conditional_move": { "pass": true, "reason": "readable gap" },
                 "one_move": { "pass": false, "reason": "two independent changes" },
                 "ranked": { "pass": true, "reason": "first gap explained" },
-                "why": { "pass": true, "reason": "contrast" },
+                "why": { "pass": false, "reason": "no contrast" },
                 "listen_for": { "pass": true, "reason": "tests both changes" },
-                "leave_it": { "pass": false, "reason": "no leave-alone instruction" },
-                "source_named": { "pass": false, "reason": "no attribution" }
+                "leave_it": { "pass": false, "reason": "no leave-alone instruction" }
             }).to_string() } }]
         }), &WHAT_NEXT.properties());
         Run {
@@ -1104,7 +1111,7 @@ fn the_trust_majority_keeps_craft_misses_visible() {
     assert_eq!(passes, 3);
     assert!(scores.contains("trust: 3/3 runs; required reads: 3/3"), "{scores}");
     assert!(scores.contains("HUMAN REVIEW REQUIRED: evidence_supports, ear_only_handed_over, conditional_move, listen_for;"), "{scores}");
-    for key in ["one_move", "leave_it", "source_named"] {
+    for key in ["one_move", "leave_it", "why"] {
         assert!(scores.contains(&format!("craft (report only) {key}: 0/3")), "{scores}");
     }
     assert_eq!(tally(&WHAT_NEXT, &runs, |_| false).0, 0);
@@ -1217,7 +1224,7 @@ const DROP_FALLS_FLAT: Scenario = Scenario {
     experience: Experience::FinishesTracks,
     mentor: "For the stated GOAL, I would make the Drop an arrival. The arrangement shows Pad leaving at beat 64 (bar 17) as Vox arrives; Drums continues and Bass has no placements. Intro and Drop each have two occupied tracks. On contrast at section boundaries, I would try a new part on the empty Bass track. One move: load a bass instrument and draw a four-beat MIDI loop using A and F, the roots in the Pad notes, then repeat it over beats 64–96 (bars 17–24). Keep it out of Intro so its entrance tests that contrast; mute the new clip to undo the trial. Play from beat 60 (bar 16) and listen for whether bar 17 feels like an arrival with the bass enabled. The continuous drum placement is enough on repetition for this trial; leave it alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
-    craft: &[SECTION_PURPOSE, NAMED_AXIS, ONE_MOVE, WHY, LISTEN_FOR, LEAVE_IT, SOURCE_NAMED],
+    craft: &[SECTION_PURPOSE, NAMED_AXIS, ONE_MOVE, WHY, LISTEN_FOR, LEAVE_IT],
     terms_required: false,
 };
 
@@ -1236,7 +1243,7 @@ const WHAT_NEXT: Scenario = Scenario {
     experience: Experience::FinishesTracks,
     mentor: "For the stated GOAL, I would give the Drop a new part to mark its arrival. The arrangement shows Bass has no placements, Pad leaves at beat 64 (bar 17), Vox enters there, and Drums continues. I rank contrast first: the empty Bass track gives us a place to try an entrance. One move: load a bass instrument and draw a four-beat MIDI loop on A and F, the roots read in the Pad notes; repeat it over beats 64–96 (bars 17–24), keeping it out of Intro. Mute that clip to undo the trial. Play from beat 60 (bar 16) through beat 68 (bar 18) and listen for whether the Drop now lands. The Pad's two-chord repetition and the continuous drum placement are enough for this trial; leave both alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
-    craft: &[ONE_MOVE, RANKED, WHY, LISTEN_FOR, LEAVE_IT, SOURCE_NAMED],
+    craft: &[ONE_MOVE, RANKED, WHY, LISTEN_FOR, LEAVE_IT],
     terms_required: false,
 };
 
@@ -1256,7 +1263,7 @@ const PAD_TOO_BUSY: Scenario = Scenario {
     experience: Experience::FinishesTracks,
     mentor: "For the stated GOAL, I would use the Pad as a repeating harmonic idea. The notes show two triad attacks in a four-beat, one-bar loop: A2/C3/E3 at clip beat 0 and F2/A2/C3 at clip beat 2, each note lasting half a beat. The arrangement repeats it over beats 0–64 (bars 1–16) and 96–128 (bars 25–32); it does not overlap Vox's placements. I find no readable density problem in those two stabs per bar. Whether the sound or release tails feel crowded is yours to hear. Leave the Pad as it is.",
     must: &[READABLE_PROBLEM, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
-    craft: &[SOURCE_NAMED],
+    craft: &[],
     terms_required: false,
 };
 
@@ -1299,7 +1306,7 @@ const MIX_OKAY: Scenario = Scenario {
     experience: Experience::FinishesTracks,
     mentor: "The device chains show no devices on Pad or Bass, a Drum Rack on Drums, and a Compressor on Vox. The rack read lists Kick, Clap and Hats chains, each with a Simpler. Vox's parameter read gives a threshold of -18 dB, ratio 4:1, attack 10 ms, release 100 ms and output gain +3 dB. Those settings do not tell me the gain reduction or audible balance. Tone, loudness, masking and groove are yours to hear; I cannot judge them. The arrangement shows Bass has no placements, but that does not prove what frequencies the other tracks contain. I find no established mix problem in these reads. Leave the processing alone.",
     must: &[EAR_ONLY_HANDED_OVER, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, CONDITIONAL_MOVE],
-    craft: &[SOURCE_NAMED],
+    craft: &[],
     terms_required: false,
 };
 
@@ -1342,7 +1349,7 @@ const COMPRESSOR_IN_PLAIN_TERMS: Scenario = Scenario {
     experience: Experience::FinishesTracks,
     mentor: "Vox has one device, a Compressor. Its parameters read Threshold -18.0 dB, Ratio 4.00 : 1, Attack 10.0 ms, Release 100 ms and Output Gain 3.0 dB. Each 4 dB the vocal goes over the Threshold comes out as 1 dB over, and Output Gain adds 3 dB of make-up gain after that. The settings do not tell me how often the vocal crosses the Threshold, so I cannot say how much gain reduction there is. Whether it sounds squashed or natural is yours to hear. I find no readable problem in these settings. Leave the Compressor as it is.\n\nTERMS SHE CAN TAP (each opens one line under the paragraph that holds it)\nMake-up gain: Volume added after the Compressor to win back what it took away.\nGain reduction: How far the Compressor is turning the signal down at a given moment.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
-    craft: &[TERMS_LISTED, SOURCE_NAMED],
+    craft: &[TERMS_LISTED],
     terms_required: true,
 };
 
