@@ -343,16 +343,20 @@ const WORD_CHAR = /[\p{L}\p{N}]/u;
 
 /**
  * A term as a pattern that takes the forms the model writes it in: space and hyphen alike,
- * and "s" or "es" on the last word, so "Return track" finds "return tracks".
+ * and "s", "es", "ing" or "ed" on the last word, so "Mute" finds "muting" and "Pan" "panning".
  */
 function termPattern(term: string): string {
   const words = term.trim().split(/[\s-]+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return `${words.join("[\\s-]+")}(?:es|s)?`;
+  const last = words.pop() ?? "";
+  const ending = last.length > 1 && /e$/i.test(last)
+    ? `${last.slice(0, -1)}(?:es|ed|ing|e)`
+    : `${last}(?:es|s|${last.slice(-1)}?(?:ing|ed))?`;
+  return [...words, ending].join("[\\s-]+");
 }
 
 /**
  * Marks each term's first occurrence in any `termPattern` form, longest term first. Walks bold
- * (the move holds terms) and italic, never code. A «name» is marked only as the whole term or its plural.
+ * (the move holds terms) and italic, never code. A «name» is marked only as the whole term in one of its forms.
  */
 export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[]): BlockNode[] {
   const order = terms.map((t, index) => ({ term: t.term, index })).sort((a, b) => b.term.length - a.term.length);

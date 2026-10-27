@@ -1033,9 +1033,12 @@ fn has_words(text: &str, phrase: &str) -> bool {
 }
 
 /// Where a term's match at `start` ends, in the forms `termPattern` in src/ui/markdown.ts
-/// allows (space = hyphen, "es" then "s" on the last word). `fits` is the test the end must pass.
+/// allows (space = hyphen; "s", "es", "ing" or "ed" on the last word, which drops a final "e").
+/// `fits` is the test the end must pass.
 fn form_end(chars: &[char], start: usize, words: &[Vec<char>], fits: impl Fn(usize) -> bool) -> Option<usize> {
     let same = |a: char, b: char| a.to_lowercase().eq(b.to_lowercase());
+    let last = words.last()?;
+    let drops_e = last.len() > 1 && same(last[last.len() - 1], 'e');
     let mut i = start;
     for (n, word) in words.iter().enumerate() {
         if n > 0 {
@@ -1047,13 +1050,20 @@ fn form_end(chars: &[char], start: usize, words: &[Vec<char>], fits: impl Fn(usi
                 return None;
             }
         }
-        for &c in word {
+        let spelled = if n + 1 == words.len() && drops_e { &word[..word.len() - 1] } else { &word[..] };
+        for &c in spelled {
             if i < chars.len() && same(chars[i], c) { i += 1 } else { return None }
         }
     }
-    ["es", "s", ""].into_iter().find_map(|suffix| {
-        let end = i + suffix.len();
-        let spelled = end <= chars.len() && chars[i..end].iter().zip(suffix.chars()).all(|(&a, b)| same(a, b));
+    let doubled = |ending: &str| format!("{}{ending}", last[last.len() - 1]);
+    let endings: Vec<String> = if drops_e {
+        ["es", "ed", "ing", "e"].map(String::from).to_vec()
+    } else {
+        vec!["es".into(), "s".into(), doubled("ing"), doubled("ed"), "ing".into(), "ed".into(), String::new()]
+    };
+    endings.iter().find_map(|ending| {
+        let end = i + ending.chars().count();
+        let spelled = end <= chars.len() && chars[i..end].iter().zip(ending.chars()).all(|(&a, b)| same(a, b));
         (spelled && fits(end)).then_some(end)
     })
 }
@@ -1189,9 +1199,18 @@ pub fn terms_defects(answer: &str) -> Vec<TermsDefect> {
     }
     let shown: Vec<String> = terms.iter().take(max).map(|(t, _)| t.clone()).collect();
     let marked = tappable(&strip_blocks(answer, CARD_PROSE), &shown);
+    let known = checks::known_words().known;
     for (term, meaning) in &terms {
         if shown.contains(term) && !marked.contains(term) {
             found(false, format!("{term:?} is not tappable in the prose"));
+        }
+        let spelled: Vec<char> = term.trim().chars().collect();
+        let is_known = |word: &String| {
+            let words: Vec<Vec<char>> = word.split_whitespace().map(|w| w.chars().collect()).collect();
+            form_end(&spelled, 0, &words, |end| end == spelled.len()).is_some()
+        };
+        if known.iter().any(is_known) {
+            found(false, format!("{term:?} is a known word; listing it spends a tap she does not need"));
         }
         if let Some(w) = SOUND_WORDS.iter().find(|w| has_words(meaning, w)) {
             found(true, format!("the meaning of {term:?} says how it sounds: {w:?}"));
@@ -1326,6 +1345,8 @@ fn other_terms_defects_are_reported_without_a_trust_flag() {
         ("Knee: Look in the corner.", "corner"),
         ("Knee: The second control on screen.", "on screen"),
         ("Knee soft", "Knee soft"),
+        ("Loop: A part that repeats.", "\"Loop\" is a known word"),
+        ("Loops: Parts that repeat.", "\"Loops\" is a known word"),
     ] {
         let found = trust_and_reasons(&answer(lines));
         assert!(!found.is_empty() && found.iter().all(|(trust, _)| !trust), "{lines}: {found:?}");

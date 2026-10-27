@@ -108,6 +108,27 @@
       "inFooter": []
     },
     {
+      "name": "an ing or ed form matches, dropping a final e",
+      "answer": "Try muting the second chord in the looped bar.\n\n```terms\nMute: Stops a note from playing without deleting it.\nLoop: A part that repeats.\n```",
+      "terms": ["Mute", "Loop"],
+      "inProse": ["Mute", "Loop"],
+      "inFooter": []
+    },
+    {
+      "name": "an ing form may double the last letter",
+      "answer": "Try panning the hats.\n\n```terms\nPan: Moves a track between the left and right speakers.\n```",
+      "terms": ["Pan"],
+      "inProse": ["Pan"],
+      "inFooter": []
+    },
+    {
+      "name": "a term without its final e is no match",
+      "answer": "Keep the mutable part.\n\n```terms\nMute: Stops a note from playing without deleting it.\n```",
+      "terms": ["Mute"],
+      "inProse": [],
+      "inFooter": ["Mute"]
+    },
+    {
       "name": "another ending is no match",
       "answer": "The sender is off.\n\n```terms\nSend: Feeds part of a track to a return track.\n```",
       "terms": ["Send"],
