@@ -652,30 +652,28 @@ async fn the_judge_matches_the_saved_calibration() {
     for case in sample.cases {
         let sc = case.scenario();
         println!("\nCALIBRATION {}: {}", case.id, case.source);
-        let reply = match judge(
-            &case.question, &sample.context, &case.answer, &case.calls, sc.mentor, &sc.properties(),
+        let (verdicts, invalid_evaluation, report) = match judge_all(
+            sc, &sample.context, &case.answer, &case.calls, &sc.properties(),
         ).await {
-            Ok(reply) => reply,
+            Ok(judged) => judged,
             Err(e) => {
                 println!("infrastructure error: {e}");
                 invalid.push(case.id);
                 continue;
             }
         };
-        println!("judge: model {}; finish_reason {}; reasoning_tokens {}; content: {}",
-            reply.model, reply.finish_reason,
-            reply.reasoning_tokens.map(|n| n.to_string()).unwrap_or("unreported".into()),
-            reply.content);
-        let verdicts = match reply.verdicts {
-            Ok(verdicts) => verdicts,
-            Err(e) => {
-                println!("invalid evaluation: {e}");
-                invalid.push(case.id);
-                continue;
-            }
-        };
+        println!("judge: {report}");
+        if let Some(e) = invalid_evaluation {
+            println!("invalid evaluation: {e}");
+            invalid.push(case.id);
+            continue;
+        }
         for (key, expected) in &case.expected {
-            let actual = &verdicts[key];
+            let Some(actual) = verdicts.get(key) else {
+                println!("invalid evaluation: no verdict for {key}");
+                invalid.push(case.id.clone());
+                continue;
+            };
             let agrees = actual.0 == expected.pass;
             let total = totals.entry(key.clone()).or_default();
             total.0 += usize::from(agrees);
@@ -926,34 +924,49 @@ fn describe_reply(reply: &JudgeReply) -> String {
     )
 }
 
+type Verdicts = BTreeMap<String, (bool, String)>;
+
+/// A bad main reply invalidates the run. A bad timeline reply only drops
+/// `timeline_supported`, which never gates.
+fn merge_verdicts(
+    main: Result<Verdicts, String>,
+    timeline: Result<Verdicts, String>,
+) -> (Verdicts, Option<String>) {
+    match (main, timeline) {
+        (Ok(mut all), Ok(more)) => { all.extend(more); (all, None) }
+        (Ok(all), Err(_)) => (all, None),
+        (Err(e), _) => (BTreeMap::new(), Some(e)),
+    }
+}
+
 /// Judges `properties` in one call, and `timeline_supported` in a second that
-/// sees only the arrangement reads. A reply that does not parse, in either
-/// call, invalidates the run. Returns the merged verdicts, the invalid
-/// reason, and the report of both replies.
+/// sees only the arrangement reads. Returns the merged verdicts, the reason
+/// the run is invalid, and the report of both replies. The second call is
+/// skipped once the first is invalid.
 async fn judge_all(
     sc: &Scenario,
     context: &str,
     answer: &str,
     calls: &[common::ToolCallRecord],
     properties: &[Property],
-) -> Result<(BTreeMap<String, (bool, String)>, Option<String>, String), String> {
+) -> Result<(Verdicts, Option<String>, String), String> {
     let (timeline, rest): (Vec<Property>, Vec<Property>) =
         properties.iter().partition(|p| p.key == TIMELINE_SUPPORTED.key);
     let main = judge(sc.question, context, answer, calls, sc.mentor, &rest).await?;
     let mut report = describe_reply(&main);
-    let mut verdicts = main.verdicts;
-    if !timeline.is_empty() {
-        let own = judge(sc.question, context, answer, &timeline_evidence(calls), sc.mentor, &timeline).await?;
-        report.push_str(&format!("\ntimeline judge: {}", describe_reply(&own)));
-        verdicts = match (verdicts, own.verdicts) {
-            (Ok(mut all), Ok(more)) => { all.extend(more); Ok(all) }
-            (Err(e), _) | (_, Err(e)) => Err(e),
-        };
+    let mut own_verdicts = Err("timeline not judged".to_string());
+    if !timeline.is_empty() && main.verdicts.is_ok() {
+        // A failed timeline call must not fail the gating verdicts.
+        match judge(sc.question, context, answer, &timeline_evidence(calls), sc.mentor, &timeline).await {
+            Ok(own) => {
+                report.push_str(&format!("\ntimeline judge: {}", describe_reply(&own)));
+                own_verdicts = own.verdicts;
+            }
+            Err(e) => report.push_str(&format!("\ntimeline judge: {e}")),
+        }
     }
-    Ok(match verdicts {
-        Ok(verdicts) => (verdicts, None, report),
-        Err(e) => (BTreeMap::new(), Some(e), report),
-    })
+    let (verdicts, invalid) = merge_verdicts(main.verdicts, own_verdicts);
+    Ok((verdicts, invalid, report))
 }
 
 async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
@@ -1157,14 +1170,19 @@ fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, S
             review.join(", ")
         ));
     }
-    for (kind, properties) in [
-        ("trust", sc.must), ("craft (report only)", sc.craft),
-        ("trust (provisional, report only)", sc.provisional),
-    ] {
+    for (kind, properties) in [("trust", sc.must), ("craft (report only)", sc.craft)] {
         for p in properties {
             let count = runs.iter().filter(|r| r.verdicts.get(p.key).is_some_and(|v| v.0)).count();
             scores.push_str(&format!("{kind} {}: {count}/{total}\n", p.key));
         }
+    }
+    // A run whose provisional verdict is missing had a bad reply for it.
+    for p in sc.provisional {
+        let judged: Vec<_> = runs.iter().filter_map(|r| r.verdicts.get(p.key)).collect();
+        let count = judged.iter().filter(|v| v.0).count();
+        let invalid = total - judged.len();
+        let note = if invalid > 0 { format!(" ({invalid} invalid)") } else { String::new() };
+        scores.push_str(&format!("trust (provisional, report only) {}: {count}/{}{note}\n", p.key, judged.len()));
     }
     (passes, scores)
 }
@@ -1301,6 +1319,25 @@ fn provisional_properties_are_judged_but_never_gate() {
     assert!(scores.contains("trust (provisional, report only) timeline_supported: 0/1"), "{scores}");
     assert!(scores.contains("trust (provisional, report only) settings_supported: 1/1"), "{scores}");
     assert!(WHAT_NEXT.properties().iter().any(|p| p.key == "move_performable"));
+}
+
+#[test]
+fn a_bad_timeline_verdict_never_invalidates_the_run() {
+    let ok = |key: &str| Verdicts::from([(key.to_string(), (true, "fine".to_string()))]);
+    let (all, invalid) = merge_verdicts(Ok(ok("one_move")), Ok(ok("timeline_supported")));
+    assert_eq!((all.len(), invalid), (2, None));
+    let (all, invalid) = merge_verdicts(Ok(ok("one_move")), Err("empty judge content".into()));
+    assert_eq!((all.keys().map(String::as_str).collect::<Vec<_>>(), invalid), (vec!["one_move"], None));
+    let (all, invalid) = merge_verdicts(Err("exhausted".into()), Ok(ok("timeline_supported")));
+    assert_eq!((all.len(), invalid.as_deref()), (0, Some("exhausted")));
+
+    // The tally counts the runs that have the verdict and names the rest.
+    let mut runs: Vec<Run> = (0..3).map(|_| trusted_run(&WHAT_NEXT, "Try a bass part.")).collect();
+    runs[0].verdicts.insert("timeline_supported".into(), (true, "matches".into()));
+    runs[1].verdicts.insert("timeline_supported".into(), (false, "wrong bar".into()));
+    let (passes, scores) = tally(&WHAT_NEXT, &runs, |_| true);
+    assert_eq!(passes, 3);
+    assert!(scores.contains("trust (provisional, report only) timeline_supported: 1/2 (1 invalid)"), "{scores}");
 }
 
 #[test]
