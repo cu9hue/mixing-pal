@@ -321,6 +321,23 @@ function parseInline(text: string): InlineNode[] {
   return nodes;
 }
 
+/** The indexes of the terms `markTerms` marked anywhere in one block. */
+export function termsIn(block: BlockNode): number[] {
+  const walk = (nodes: InlineNode[]): number[] => nodes.flatMap((n) =>
+    n.type === "term" ? [n.index] : n.type === "bold" || n.type === "italic" ? walk(n.children) : []);
+  switch (block.type) {
+    case "paragraph":
+    case "heading":
+      return walk(block.children);
+    case "list":
+      return block.items.flatMap(walk);
+    case "table":
+      return [...block.header, ...block.rows.flat()].flatMap(walk);
+    case "code_block":
+      return [];
+  }
+}
+
 // Letters and digits in any script. A term matches only where neither
 // neighbour is one, so "knee" is not marked inside "kneecap".
 const WORD_CHAR = /[\p{L}\p{N}]/u;
@@ -343,7 +360,7 @@ function termPattern(term: string): string {
  * because the move is bold and often holds a term. Never code, and never
  * part of a «name». A «name» that is the whole term, or its plural, is
  * marked: the tools fence every device and parameter label. A term with no
- * match stays unmarked.
+ * match stays unmarked; the card lists it after the answer.
  */
 export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[]): BlockNode[] {
   const order = terms.map((t, index) => ({ term: t.term, index })).sort((a, b) => b.term.length - a.term.length);

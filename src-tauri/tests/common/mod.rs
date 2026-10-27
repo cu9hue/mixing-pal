@@ -939,7 +939,12 @@ pub struct TermVector {
     pub name: String,
     pub answer: String,
     pub terms: Vec<String>,
-    pub tappable: Vec<String>,
+    /// Marked where the prose uses them.
+    #[serde(rename = "inProse")]
+    pub in_prose: Vec<String>,
+    /// Listed in the card's row after the answer.
+    #[serde(rename = "inFooter")]
+    pub in_footer: Vec<String>,
 }
 
 pub fn term_vectors() -> TermVectors {
@@ -1219,13 +1224,16 @@ fn stripping_the_blocks_leaves_what_she_reads() {
 #[test]
 fn the_shared_term_vectors_parse_and_match_as_the_card_does() {
     // src/notes/terms.test.ts runs the same file through `termsList` and
-    // `markTerms`: the eval must count tappable what the card marks.
+    // `markTerms`: the eval must find in the prose what the card marks there.
     let shared = term_vectors();
     for v in &shared.vectors {
         let terms: Vec<String> = terms_block(&v.answer).unwrap().unwrap().into_iter()
             .take(shared.max_terms).map(|(t, _)| t).collect();
         assert_eq!(terms, v.terms, "{}", v.name);
-        assert_eq!(tappable(&strip_blocks(&v.answer, CARD_PROSE), &terms), v.tappable, "{}", v.name);
+        let in_prose = tappable(&strip_blocks(&v.answer, CARD_PROSE), &terms);
+        let in_footer: Vec<String> = terms.iter().filter(|t| !in_prose.contains(t)).cloned().collect();
+        assert_eq!(in_prose, v.in_prose, "{}", v.name);
+        assert_eq!(in_footer, v.in_footer, "{}", v.name);
     }
 }
 

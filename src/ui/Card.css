@@ -556,9 +556,20 @@
   color: var(--text-muted);
 }
 
+/* Listed terms the prose does not use: one quiet row after the answer. */
+.card__terms-row {
+  margin: 0 0 1.1em;
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+}
+
+.card__terms-row:last-child {
+  margin-bottom: 0;
+}
+
 /* The one plain line a term opens, right under the block that holds it.
    The block gives up its gap so the line reads as part of it. */
-:is(.card__paragraph, .card__subhead, .card__list, .card__table-wrap):has(+ .card__term-line) {
+:is(.card__paragraph, .card__subhead, .card__list, .card__table-wrap, .card__terms-row):has(+ .card__term-line) {
   margin-bottom: var(--space-1);
 }
 

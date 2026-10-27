@@ -13,7 +13,7 @@ import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
 import { buildContext } from "../digest/build";
-import { BlockNode, InlineNode, markTerms, parseMarkdown } from "./markdown";
+import { BlockNode, InlineNode, markTerms, parseMarkdown, termsIn } from "./markdown";
 import { Read, readingLog } from "./readingLog";
 import { waitingLabel } from "./waitingLabel";
 import { Exchange, begin, complete, fail } from "./thread";
@@ -63,60 +63,67 @@ function renderInline(nodes: InlineNode[], terms?: TermControls): ReactNode {
             {n.name}
           </span>
         );
-      // A word she can tap for one plain line under its block. A button, so
-      // Enter and Space work and a screen reader hears it can open. A «name»
-      // keeps its chip.
       case "term":
-        return terms === undefined ? n.text : (
-          <button key={i} type="button" className={n.fence ? "card__fence card__term" : "card__term"}
-            aria-expanded={terms.open === n.index} aria-controls={terms.lineId(n.index)}
-            onClick={(e) => terms.toggle(n.index, e.currentTarget)}>
-            {n.text}
-          </button>
-        );
+        return terms === undefined ? n.text : termButton(i, n.index, n.text, n.fence === true, terms);
     }
   });
 }
 
-/** The indexes of the terms marked anywhere in one block. */
-function termsIn(block: BlockNode): number[] {
-  const walk = (nodes: InlineNode[]): number[] => nodes.flatMap((n) =>
-    n.type === "term" ? [n.index] : n.type === "bold" || n.type === "italic" ? walk(n.children) : []);
-  switch (block.type) {
-    case "paragraph":
-    case "heading":
-      return walk(block.children);
-    case "list":
-      return block.items.flatMap(walk);
-    case "table":
-      return [...block.header, ...block.rows.flat()].flatMap(walk);
-    case "code_block":
-      return [];
-  }
+/**
+ * A word she can tap for one plain line. A button, so Enter and Space work
+ * and a screen reader hears it can open. A «name» keeps its chip.
+ */
+function termButton(key: number, index: number, text: string, fence: boolean, terms: TermControls): ReactNode {
+  return (
+    <button key={key} type="button" className={fence ? "card__fence card__term" : "card__term"}
+      aria-expanded={terms.open === index} aria-controls={terms.lineId(index)}
+      onClick={(e) => terms.toggle(index, e.currentTarget)}>
+      {text}
+    </button>
+  );
+}
+
+function termLine(index: number, terms: TermControls & { list: Term[] }): ReactNode {
+  const term = terms.list[index];
+  return (
+    <p id={terms.lineId(index)} role="note" className="card__term-line">
+      <strong>{term.term}</strong>: {term.meaning}
+    </p>
+  );
 }
 
 /**
  * The answer's blocks. With terms, the open term's line sits directly under
  * the block that holds it, inside the card: the card clips anything that
- * floats, and the window is sized to the card.
+ * floats, and the window is sized to the card. A listed term the prose does
+ * not use sits in one quiet row at the end, and its line opens under that.
  */
 function renderBlocks(blocks: BlockNode[], terms?: TermControls & { list: Term[] }): ReactNode {
-  return blocks.map((b, i) => {
-    const open = terms?.open ?? null;
-    const term = open !== null && termsIn(b).includes(open) ? terms!.list[open] : undefined;
-    // Always a Fragment, so opening a line never remounts the block, and the
-    // button `toggle` focused stays in the page.
-    return (
-      <Fragment key={i}>
-        {renderBlock(b, i, terms)}
-        {term !== undefined && (
-          <p id={terms!.lineId(open!)} role="note" className="card__term-line">
-            <strong>{term.term}</strong>: {term.meaning}
-          </p>
-        )}
-      </Fragment>
-    );
-  });
+  const open = terms?.open ?? null;
+  // Always Fragments, so opening a line never remounts a block, and the
+  // button `toggle` focused stays in the page.
+  const body = blocks.map((b, i) => (
+    <Fragment key={i}>
+      {renderBlock(b, i, terms)}
+      {open !== null && termsIn(b).includes(open) && termLine(open, terms!)}
+    </Fragment>
+  ));
+  if (terms === undefined) return body;
+  const inProse = new Set(blocks.flatMap(termsIn));
+  const rest = terms.list.map((_, index) => index).filter((index) => !inProse.has(index));
+  if (rest.length === 0) return body;
+  return (
+    <>
+      {body}
+      <p className="card__terms-row">
+        <span className="card__terms-label">Terms:</span>
+        {rest.map((index) => (
+          <Fragment key={index}>{" "}{termButton(index, index, terms.list[index].term, false, terms)}</Fragment>
+        ))}
+      </p>
+      {open !== null && rest.includes(open) && termLine(open, terms)}
+    </>
+  );
 }
 
 function renderBlock(b: BlockNode, i: number, terms?: TermControls): ReactNode {

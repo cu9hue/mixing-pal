@@ -372,7 +372,8 @@ describe("terms she can tap", () => {
     const gain = screen.getByRole("button", { name: "gain reduction" });
     expect(gain.getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByRole("button", { name: "make-up gain" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /sidechain/i })).toBeNull();
+    // Listed but not in the prose: in the row at the end, not in the text.
+    expect(screen.getByRole("button", { name: "Sidechain" }).closest("p")?.textContent).toBe("Terms: Sidechain");
     expect(screen.queryByText(/```terms/)).toBeNull();
     expect(screen.queryByRole("note")).toBeNull();
     expect(invoke).toHaveBeenCalledWith("save_thread", expect.objectContaining({
@@ -450,6 +451,44 @@ describe("terms she can tap", () => {
     await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
     fireEvent.click(screen.getByRole("button", { name: "gain reduction" }));
     expect(screen.getByRole("note").textContent).toBe("Gain reduction: How far the Compressor turns the signal down.");
+  });
+
+  it("puts a term the prose does not use in a row at the end, and opens its line under that row", async () => {
+    const text = "Watch the knee.\n\n```terms\nKnee: How gently it starts.\nSidechain: Another signal decides when it acts.\n```";
+    await ask(text);
+    const knee = screen.getByRole("button", { name: "knee" });
+    const sidechain = screen.getByRole("button", { name: "Sidechain" });
+    const row = sidechain.closest("p")!;
+    expect(row.textContent).toBe("Terms: Sidechain");
+    expect(knee.closest("p")).not.toBe(row);
+
+    const windowEscape = vi.fn();
+    window.addEventListener("keydown", windowEscape);
+    try {
+      fireEvent.click(sidechain);
+      expect(document.activeElement).toBe(sidechain);
+      expect(sidechain.getAttribute("aria-expanded")).toBe("true");
+      const line = screen.getByRole("note");
+      expect(line.textContent).toBe("Sidechain: Another signal decides when it acts.");
+      expect(sidechain.getAttribute("aria-controls")).toBe(line.id);
+      expect(row.nextElementSibling).toBe(line);
+
+      fireEvent.click(knee);
+      expect(screen.getAllByRole("note")).toHaveLength(1);
+      expect(sidechain.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(sidechain);
+      fireEvent.keyDown(sidechain, { key: "Escape" });
+      expect(screen.queryByRole("note")).toBeNull();
+      expect(windowEscape).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", windowEscape);
+    }
+  });
+
+  it("shows no row when every term is in the prose", async () => {
+    await ask("Watch the knee.\n\n```terms\nKnee: How gently it starts.\n```");
+    expect(screen.getByRole("button", { name: "knee" })).toBeTruthy();
+    expect(screen.queryByText(/^Terms:/)).toBeNull();
   });
 
   it("renders an answer without terms as before", async () => {
