@@ -547,7 +547,7 @@ const TIMELINE_SUPPORTED: Property = Property {
 };
 const SETTINGS_SUPPORTED: Property = Property {
     key: "settings_supported",
-    description: "Every stated device or mixer value matches the read, including sign and unit.",
+    description: "Every stated device or mixer value matches the read, including sign and unit. A proposed new value is a change, not a stated value.",
 };
 const MOVE_PERFORMABLE: Property = Property {
     key: "move_performable",
