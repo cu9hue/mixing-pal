@@ -591,6 +591,9 @@ struct CalibrationCase {
     id: String,
     source: String,
     question: String,
+    /// `None` is "I finish tracks". Scenarios 1 and 6 share a question.
+    #[serde(default)]
+    experience: Option<Experience>,
     answer: String,
     calls: Vec<common::ToolCallRecord>,
     expected: BTreeMap<String, CalibrationLabel>,
@@ -600,13 +603,71 @@ struct CalibrationCase {
 struct CalibrationLabel {
     pass: bool,
     reason: String,
+    /// An unconfirmed label is a draft for the owner: listed, never scored.
+    #[serde(default = "yes")]
+    confirmed: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl CalibrationCase {
     fn scenario(&self) -> &Scenario {
-        [&DROP_FALLS_FLAT, &WHAT_NEXT, &PAD_TOO_BUSY, &MIX_OKAY].into_iter()
-            .find(|s| s.question == self.question).expect("unknown calibration question")
+        let experience = self.experience.unwrap_or(Experience::FinishesTracks);
+        [&DROP_FALLS_FLAT, &WHAT_NEXT, &PAD_TOO_BUSY, &MIX_OKAY, &DROP_FOR_A_NEWCOMER, &COMPRESSOR_IN_PLAIN_TERMS]
+            .into_iter()
+            .find(|s| s.question == self.question && s.experience == experience)
+            .expect("unknown calibration question and experience")
     }
+}
+
+/// One replayed case. Confirmed labels count toward agreement; drafts are
+/// listed under `DRAFT (owner to confirm)` and never count.
+struct CaseScore {
+    /// Each confirmed label the judge answered, and whether it agreed.
+    scored: Vec<(String, bool)>,
+    /// Confirmed provisional labels without a verdict. A bad timeline reply
+    /// drops only that verdict, as in `tally`.
+    not_judged: Vec<String>,
+    report: String,
+}
+
+/// `Err` when a confirmed gating label has no verdict; then none of the
+/// case's labels count.
+fn score_case(case: &CalibrationCase, verdicts: &Verdicts) -> Result<CaseScore, String> {
+    let provisional = |key: &str| case.scenario().provisional.iter().any(|p| p.key == key);
+    let gap = case.expected.iter()
+        .find(|(key, label)| label.confirmed && !provisional(key) && !verdicts.contains_key(*key));
+    if let Some((key, _)) = gap {
+        return Err(format!("no verdict for {key}"));
+    }
+    let mut score = CaseScore { scored: Vec::new(), not_judged: Vec::new(), report: String::new() };
+    let mut drafts = String::new();
+    for (key, label) in &case.expected {
+        let line = match verdicts.get(key) {
+            Some(actual) => {
+                let agrees = actual.0 == label.pass;
+                if label.confirmed {
+                    score.scored.push((key.clone(), agrees));
+                }
+                format!("{} {key}: expected {}, got {}; human: {}; judge: {}\n",
+                    if agrees { "AGREE" } else { "DISAGREE" }, label.pass, actual.0,
+                    label.reason, actual.1)
+            }
+            None => {
+                if label.confirmed {
+                    score.not_judged.push(key.clone());
+                }
+                format!("NOT JUDGED {key}: expected {}; human: {}\n", label.pass, label.reason)
+            }
+        };
+        if label.confirmed { score.report.push_str(&line) } else { drafts.push_str(&line) }
+    }
+    if !drafts.is_empty() {
+        score.report.push_str(&format!("DRAFT (owner to confirm)\n{drafts}"));
+    }
+    Ok(score)
 }
 
 fn calibration() -> Calibration {
@@ -622,12 +683,71 @@ fn the_calibration_labels_match_the_scenarios() {
     for case in sample.cases {
         assert!(ids.insert(case.id.clone()), "duplicate case {}", case.id);
         assert!(!case.answer.trim().is_empty() && !case.expected.is_empty(), "{}", case.id);
+        if let Some(experience) = case.experience {
+            assert_eq!(case.scenario().experience, experience, "{}", case.id);
+        }
         let props = case.scenario().properties();
         for (key, label) in case.expected {
             assert!(props.iter().any(|p| p.key == key), "{}: unknown property {key}", case.id);
             assert!(!label.reason.trim().is_empty(), "{}: unreasoned label {key}", case.id);
         }
     }
+}
+
+fn calibration_case(question: &str, experience: Option<&str>, expected: Value) -> CalibrationCase {
+    let mut case = json!({
+        "id": "test", "source": "test", "question": question, "answer": "An answer.",
+        "calls": [], "expected": expected,
+    });
+    if let Some(experience) = experience {
+        case["experience"] = json!(experience);
+    }
+    serde_json::from_value(case).unwrap()
+}
+
+#[test]
+fn a_newcomer_case_maps_to_the_newcomer_scenario() {
+    let question = "why does the drop fall flat?";
+    let newcomer = calibration_case(question, Some("new_to_live"), json!({}));
+    assert_eq!(newcomer.scenario().experience, Experience::NewToLive);
+    assert!(newcomer.scenario().properties().iter().any(|p| p.key == "plain_words"));
+    let finishes = calibration_case(question, None, json!({}));
+    assert_eq!(finishes.scenario().experience, Experience::FinishesTracks);
+    assert!(finishes.scenario().properties().iter().all(|p| p.key != "plain_words"));
+}
+
+#[test]
+fn draft_labels_are_listed_not_scored() {
+    let case = calibration_case("what should I do next?", None, json!({
+        "one_move": { "pass": true, "reason": "One bass part." },
+        "leave_it": { "pass": true, "reason": "Leaves the drums alone.", "confirmed": false },
+    }));
+    let verdicts = Verdicts::from([
+        ("one_move".to_string(), (true, "one move".to_string())),
+        ("leave_it".to_string(), (false, "nothing left alone".to_string())),
+    ]);
+    let score = score_case(&case, &verdicts).unwrap();
+    assert_eq!(score.scored, vec![("one_move".to_string(), true)]);
+    let (scored, drafts) = score.report.split_once("DRAFT (owner to confirm)\n").expect(&score.report);
+    assert!(!scored.contains("leave_it"), "{}", score.report);
+    assert!(drafts.contains("DISAGREE leave_it: expected true, got false"), "{}", score.report);
+}
+
+#[test]
+fn a_replayed_case_is_scored_whole_or_invalid_whole() {
+    let case = calibration_case("what should I do next?", None, json!({
+        "evidence_supports": { "pass": true, "reason": "Every claim matches." },
+        "one_move": { "pass": true, "reason": "One bass part." },
+        "timeline_supported": { "pass": false, "reason": "Pad at bar 9." },
+    }));
+    let verdict = |key: &str| (key.to_string(), (true, "fine".to_string()));
+    // A missing provisional verdict leaves only that label unjudged.
+    let score = score_case(&case, &Verdicts::from([verdict("evidence_supports"), verdict("one_move")])).unwrap();
+    assert_eq!(score.scored.len(), 2);
+    assert_eq!(score.not_judged, vec!["timeline_supported".to_string()]);
+    // A missing gating verdict invalidates the case, labels before it included.
+    let err = score_case(&case, &Verdicts::from([verdict("evidence_supports"), verdict("timeline_supported")])).err();
+    assert_eq!(err.as_deref(), Some("no verdict for one_move"));
 }
 
 #[test]
@@ -647,7 +767,8 @@ fn the_rubric_has_no_source_property() {
 #[ignore = "paid judge-only calibration; run explicitly with --ignored --nocapture"]
 async fn the_judge_matches_the_saved_calibration() {
     let sample = calibration();
-    let mut totals: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    // Per key: labels that agree, labels scored, labels not judged.
+    let mut totals: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
     let mut invalid = Vec::new();
     for case in sample.cases {
         let sc = case.scenario();
@@ -668,24 +789,28 @@ async fn the_judge_matches_the_saved_calibration() {
             invalid.push(case.id);
             continue;
         }
-        for (key, expected) in &case.expected {
-            let Some(actual) = verdicts.get(key) else {
-                println!("invalid evaluation: no verdict for {key}");
-                invalid.push(case.id.clone());
-                continue;
-            };
-            let agrees = actual.0 == expected.pass;
-            let total = totals.entry(key.clone()).or_default();
-            total.0 += usize::from(agrees);
-            total.1 += 1;
-            println!("{} {key}: expected {}, got {}; human: {}; judge: {}",
-                if agrees { "AGREE" } else { "DISAGREE" }, expected.pass, actual.0,
-                expected.reason, actual.1);
+        match score_case(&case, &verdicts) {
+            Ok(score) => {
+                print!("{}", score.report);
+                for (key, agrees) in score.scored {
+                    let total = totals.entry(key).or_default();
+                    total.0 += usize::from(agrees);
+                    total.1 += 1;
+                }
+                for key in score.not_judged {
+                    totals.entry(key).or_default().2 += 1;
+                }
+            }
+            Err(e) => {
+                println!("invalid evaluation: {e}");
+                invalid.push(case.id);
+            }
         }
     }
     let mut review = Vec::new();
-    for (key, (agreed, total)) in &totals {
-        println!("calibration {key}: {agreed}/{total} labels agree");
+    for (key, (agreed, total, not_judged)) in &totals {
+        let note = if *not_judged > 0 { format!(" ({not_judged} not judged)") } else { String::new() };
+        println!("calibration {key}: {agreed}/{total} labels agree{note}");
         if agreed != total { review.push(key.as_str()); }
     }
     assert!(invalid.is_empty(), "calibration invalid for {invalid:?}; do not score those cases");
@@ -1169,10 +1294,11 @@ fn the_report_keeps_raw_notes_without_changing_verdicts() {
     require_valid_evaluation("question", &[run], &report);
 }
 
-// Sonnet 4.6 scores for these properties require human review.
-// Recalibrate and review the reasons before removing a property.
+// Sonnet 4.6 scores for the first five require human review; the last two
+// have only draft labels. Recalibrate and review the reasons before removing a property.
 const HUMAN_REVIEW_PROPERTIES: &[&str] = &[
     "evidence_supports", "ear_only_handed_over", "conditional_move", "listen_for", "section_purpose",
+    "plain_words", "terms_listed",
 ];
 
 /// Whether a run's terms pass `sc`. At "I finish tracks" a trust defect (a
