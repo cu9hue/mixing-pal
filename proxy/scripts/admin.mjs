@@ -62,6 +62,10 @@ subscription_canceled_unrefunded, refund_failed,
 subscription_canceled_for_deletion, renewal_sync_failed,
 renewal_maintenance_failed, deletion_cancel_failed, billing_not_configured.
 Alert on any of these in Cloudflare Logs.
+budget_low: less than 20 requests' worth of service budget is left. Raise the
+OpenRouter key's credit cap, then set-budget to the same amount.
+budget_exhausted: a member was turned away because the service budget ran out.
+Raise the OpenRouter key's credit cap and set-budget now.
 For provisional costs without a generation ID, check the provider billing record
 before resolve. A provisional cost is already charged to the service at its bound; resolve it only from provider evidence.
 
@@ -94,7 +98,10 @@ by the restore. Reissue them only after checking the producer's spending.
 
 Settle surviving provisional costs using provider billing evidence. Recover every
 account's TOTAL spent amount (not an adjustment), including charges lost by
-the restore, with recover-member. usage lists unrecovered accounts first;
+the restore, with recover-member. For a member with a paid plan or comp, recover
+the spending in the current period instead. That is spending since the period
+started, one month before period_end. A lifetime total would lock that member
+out until the next renewal. usage lists unrecovered accounts first;
 repeat until none remain. Then recover-budget with the verified service total,
 including spending by accounts absent from the snapshot. Amounts cannot go
 down, and the service total must cover all recorded account spending. Keep the
@@ -123,6 +130,8 @@ export async function operator(action, { origin, token, fetch: send = fetch }) {
       ? "Invitation email could not be confirmed. Run the invite command again to send a new code."
       : action.action === "set_budget" && response.status === 409
       ? "That amount is below what the service has already spent. To stop the service, run npm run admin -- pause."
+      : action.action === "revoke" && response.status === 409
+      ? "This account has a live subscription. Cancel it in Stripe first."
       : `Operator request failed (${response.status}).`;
     const error = new Error(message);
     error.status = response.status;

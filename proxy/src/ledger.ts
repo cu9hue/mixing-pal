@@ -53,10 +53,10 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
   } catch (error) {
     const text = String(error);
     const errors: [string, number, string][] = [
-      ["access_denied", 403, "Your pilot access has ended or was revoked."],
+      ["access_denied", 403, "Your access has ended or was revoked."],
       ["turn_closed", 409, "This conversation turn has ended. Ask again to start a new turn."],
       ["invalid_round", 409, "This turn cannot start another model request."],
-      ["allowance_exhausted", 402, "The pilot allowance is used up. Contact Mixing Pal for access."],
+      ["allowance_exhausted", 402, "This period's allowance is used up."],
       ["busy", 429, "Mixing Pal is busy. Try again in a moment."],
       ["service_paused", 503, "Model access is temporarily paused."],
       ["budget_exhausted", 503, "Model access is temporarily paused."],
@@ -64,7 +64,10 @@ export async function reserve(env: Env, memberId: string, input: CompletionInput
       ["UNIQUE constraint", 409, "This request has already been submitted."],
     ];
     for (const [code, status, message] of errors) {
-      if (text.includes(code)) throw new ApiError(status, code === "UNIQUE constraint" ? "duplicate_request"
+      if (!text.includes(code)) continue;
+      // Each one is a member turned away until the operator raises the service budget.
+      if (code === "budget_exhausted") console.error(JSON.stringify({ event: "budget_exhausted" }));
+      throw new ApiError(status, code === "UNIQUE constraint" ? "duplicate_request"
         : ["budget_exhausted", "lease_required"].includes(code) ? "service_paused" : code, message);
     }
     throw error;

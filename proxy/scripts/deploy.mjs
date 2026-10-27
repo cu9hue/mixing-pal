@@ -52,6 +52,9 @@ end.
 Tax and prices: Stripe Tax active, with an origin address. Both prices monthly,
 with tax_behavior=exclusive. Each stage's prices come from the same mode as
 that stage's key.
+Never change a plan's price ID in billing-prices.json while anyone subscribes
+on it. Existing subscriptions stay on the old price, and the proxy would stop
+recognizing them. A new price needs a code change that maps both IDs.
 Payments: the proxy restricts Checkout to cards in code. In test mode, confirm
 that Checkout still shows Apple Pay and Google Pay. Link should not show. If a
 wallet is missing, enable it under Payment methods before billing on.
@@ -60,6 +63,10 @@ Upgrade and Stripe's failed-payment emails use Stripe's invoice page, which
 ignores Checkout's card-only setting.
 Set the subscription retry schedule to end within 7 days, then cancel. This
 matches the app's 7-day grace.
+Disputes: in each mode, set Settings, Billing, "Manage disputed payments" to
+cancel the subscription immediately without prorating.
+Refunds: when refunding a subscription payment from the Dashboard, also cancel
+the subscription. A refund alone leaves access and renewals running.
 Recovery: after a D1 restore, billing-sync every member with a subscription;
 see the restore sequence in npm run admin -- help. During a rollback that
 pauses inference for more than a day, pause payment collection in Stripe.

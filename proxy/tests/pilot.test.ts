@@ -732,9 +732,14 @@ describe("metered requests", () => {
   test("declines exhausted or revoked accounts before an upstream generation", async () => {
     const user = await joined();
     await env.DB.prepare("UPDATE members SET allowance = 0 WHERE id = ?").bind(user.id).run();
-    expect((await api("/v1/completions", question(), user.token)).status).toBe(402);
+    const exhausted = await api("/v1/completions", question(), user.token);
+    expect(exhausted.status).toBe(402);
+    // The same words hold for a pilot member and a paying one.
+    expect((await exhausted.json()).error.message).toBe("This period's allowance is used up.");
     await env.DB.prepare("UPDATE members SET revoked = 1 WHERE id = ?").bind(user.id).run();
-    expect((await api("/v1/completions", question(), user.token)).status).toBe(403);
+    const denied = await api("/v1/completions", question(), user.token);
+    expect(denied.status).toBe(403);
+    expect((await denied.json()).error.message).toBe("Your access has ended or was revoked.");
     expect(sent).toHaveLength(0);
   });
 
@@ -1518,12 +1523,14 @@ describe("admission", () => {
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM turns WHERE status = 'superseded'").first())!.n).toBeLessThanOrEqual(1);
   });
 
-  test("global budget exhaustion is reported as a pause", async () => {
+  test("global budget exhaustion is reported as a pause, and each refusal is logged for the operator", async () => {
     const user = await joined();
     await env.DB.prepare("UPDATE budget SET allowance = spent").run();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const response = await api("/v1/completions", question(), user.token);
     expect(response.status).toBe(503);
     expect((await response.json()).error.code).toBe("service_paused");
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual({ event: "budget_exhausted" });
   });
 
   test("the model deadline shrinks by the time spent before admission", () => {
@@ -1706,6 +1713,19 @@ describe("maintenance billing", () => {
     await maintain(env);
     expect(logged.mock.calls.map(([line]) => JSON.parse(String(line))))
       .toContainEqual(expect.objectContaining({ event: "provisional_usage", count: 0, loss: 5, paused: 1 }));
+  });
+  test("a sweep warns when fewer than 20 reservations of service budget remain, and is quiet at 20", async () => {
+    const budgetEvents = (logged: { mock: { calls: unknown[][] } }) => logged.mock.calls.map(([line]) => JSON.parse(String(line)))
+      .filter((line) => String(line.event).startsWith("budget_"));
+    await env.DB.prepare("UPDATE budget SET spent = 1000000, reserved = ?").bind(RESERVATION).run();
+    await env.DB.prepare("UPDATE budget SET allowance = spent + reserved + ?").bind(20 * RESERVATION).run();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await maintain(env);
+    expect(budgetEvents(logged)).toEqual([]);
+    logged.mockClear();
+    await env.DB.prepare("UPDATE budget SET allowance = allowance - 1").run();
+    await maintain(env);
+    expect(budgetEvents(logged)).toEqual([{ event: "budget_low", remaining_micro_usd: 20 * RESERVATION - 1 }]);
   });
 });
 

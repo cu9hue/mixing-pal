@@ -361,3 +361,36 @@ test("the restore sequence names a fallback for subscriptions billing-sync canno
   assert.match(output[0], /billing-sync member-id[\s\S]*resend the subscriptions' events from\s+the Stripe Dashboard/);
   assert.match(output[0], /no_account means/);
 });
+
+test("revoke refused for a live subscription tells the operator to cancel it in Stripe first", async () => {
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token",
+    fetch: async () => Response.json({ error: { code: "subscription_live" } }, { status: 409 }) };
+  await assert.rejects(run(["revoke", "member-1"], connection),
+    /^Error: This account has a live subscription\. Cancel it in Stripe first\.$/);
+});
+
+test("the alert list names the budget events and what to do about them", async () => {
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  const help = output[0].replace(/\s+/g, " ");
+  assert.match(help, /budget_low: less than 20 requests' worth of service budget is left\. Raise the OpenRouter key's credit cap, then set-budget/);
+  assert.match(help, /budget_exhausted: a member was turned away because the service budget ran out\. Raise the OpenRouter key's credit cap and set-budget now\./);
+});
+
+test("the restore sequence recovers a paid or comped member's spending in the current period, not a lifetime total", async () => {
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  const help = output[0].replace(/\s+/g, " ");
+  assert.match(help, /For a member with a paid plan or comp, recover the spending in the current period instead\./);
+  assert.match(help, /That is spending since the period started, one month before period_end\./);
+  assert.match(help, /A lifetime total would lock that member out until the next renewal\./);
+});
+
+test("the Stripe runbook cancels on disputes and Dashboard refunds, and keeps price IDs while anyone subscribes", () => {
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  const help = spawnSync(process.execPath, [script, "help"], { encoding: "utf8" }).stdout.replace(/\s+/g, " ");
+  assert.match(help, /in each mode, set Settings, Billing, "Manage disputed payments" to cancel the subscription immediately without prorating\./);
+  assert.match(help, /when refunding a subscription payment from the Dashboard, also cancel the subscription\. A refund alone leaves access and renewals running\./);
+  assert.match(help, /Never change a plan's price ID in billing-prices\.json while anyone subscribes on it\. Existing subscriptions stay on the old price, and the proxy would stop recognizing them\./);
+  assert.match(help, /A new price needs a code change that maps both IDs\./);
+});

@@ -139,7 +139,8 @@ export async function deleteTurn(env: Env, memberId: string, turnId: string, jou
   if (!expire) await deleteReportsFor(env, memberId, turnId);
 }
 
-export async function deleteAccount(env: Env, memberId: string, journal = true): Promise<void> {
+// requestedAt: a replay passes the journal's time, so a payment taken after the original request is still refunded.
+export async function deleteAccount(env: Env, memberId: string, journal = true, requestedAt?: number): Promise<void> {
   const now = Date.now();
   if (journal) await recordRestriction(env, { member_id: memberId });
   await env.DB.batch([
@@ -150,7 +151,7 @@ export async function deleteAccount(env: Env, memberId: string, journal = true):
     env.DB.prepare("UPDATE captures SET state = 'deleting', updated_at = ? WHERE turn_id IN (SELECT id FROM turns WHERE member_id = ?) AND state != 'deleted'")
       .bind(now, memberId),
     env.DB.prepare('DELETE FROM "session" WHERE userId = ?').bind(memberId),
-    env.DB.prepare("INSERT INTO deletion_jobs(member_id, requested_at) VALUES (?, ?) ON CONFLICT DO NOTHING").bind(memberId, now),
+    env.DB.prepare("INSERT INTO deletion_jobs(member_id, requested_at) VALUES (?, ?) ON CONFLICT DO NOTHING").bind(memberId, requestedAt ?? now),
   ]);
   await deleteReportsFor(env, memberId);
 }
@@ -197,7 +198,7 @@ export async function replayDeletions(env: Env, cursor?: string): Promise<string
       const exists = await env.DB.prepare("SELECT id FROM turns WHERE id = ? AND member_id = ?").bind(entry.turn_id, entry.member_id).first();
       if (exists) await deleteTurn(env, entry.member_id, entry.turn_id, false);
     } else if (entry.shared) await deleteShared(env, entry.member_id, false);
-    else await deleteAccount(env, entry.member_id, false);
+    else await deleteAccount(env, entry.member_id, false, entry.requested_at);
   }
   return page.truncated ? page.cursor : null;
 }

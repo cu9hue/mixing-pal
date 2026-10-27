@@ -274,9 +274,9 @@ async function customerGone(env: Env, id: string): Promise<boolean> {
 /**
  * Asks Stripe for the customer's subscriptions, not the row, and applies each one that can still charge,
  * plus the row's own when its state differs from the row's. billable: one can still charge.
- * gone: Stripe marks the customer deleted. subscribed: the customer has held a subscription, of any status.
+ * gone: Stripe marks the customer deleted. A customer that has held any subscription has had its trial.
  */
-async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable: boolean; gone: boolean; subscribed: boolean }> {
+async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable: boolean; gone: boolean }> {
   const stamp = readStamp();
   const listed = await stripe<{ data: StripeSubscription[] }>(env, "GET", "/subscriptions",
     { customer: row.stripe_customer_id, status: "all", limit: 10, expand: ["data.latest_invoice"] }).catch(async (error) => {
@@ -292,7 +292,10 @@ async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable:
       AND status IN (${[...BILLABLE].map(() => "?").join(", ")})`).bind(Date.now(), row.member_id, row.stripe_customer_id, ...BILLABLE).run();
     return null;
   });
-  if (!listed) return { billable: false, gone: true, subscribed: false };
+  if (!listed) return { billable: false, gone: true };
+  // The trial is once per subscription history, also when the row never recorded it, as after a restore.
+  if (listed.data.length) await env.DB.prepare("UPDATE subscriptions SET trial_used = 1 WHERE member_id = ? AND stripe_customer_id = ?")
+    .bind(row.member_id, row.stripe_customer_id).run();
   let billable = false;
   for (const sub of listed.data) {
     if (BILLABLE.has(sub.status)) billable = true;
@@ -301,7 +304,7 @@ async function syncCustomer(env: Env, row: SubscriptionRow): Promise<{ billable:
     // Applies after the first share the read's stamp and lose; the retry reads that one subscription again.
     if (!await applySubscription(env, sub, stamp)) await syncSubscription(env, sub.id);
   }
-  return { billable, gone: false, subscribed: listed.data.length > 0 };
+  return { billable, gone: false };
 }
 
 /** Expires the customer's open Checkout sessions, so none can start a subscription later. */
@@ -427,9 +430,6 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   // A pilot period still running would mix its spending into the plan's allowance.
   if (m && m.period_end > now) throw new ApiError(409, "access_active", "Your current access hasn't ended yet.");
   let row = existing;
-  // A found customer that has held a subscription belongs to a member restored from a backup, who has had the trial.
-  // One that has held none was made by an earlier try that failed before its row was stored.
-  let subscribed = false;
   // Past the Portal, the row's customer has nothing billable. A deleted one can still list its subscriptions.
   if (!row || synced?.gone || await customerGone(env, row.stripe_customer_id)) {
     // A customer Stripe marks deleted cannot take a Checkout; Stripe canceled its subscriptions when it was deleted.
@@ -437,11 +437,12 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
     const listed = made.found ? await syncCustomer(env, made.row) : null;
     if (listed?.billable) return portalUrl(env, made.row);
     row = made.row;
-    subscribed = listed?.subscribed ?? false;
   }
   // Sign-in refuses an account being deleted; this catches a deletion requested while Stripe answered.
   if (await env.DB.prepare("SELECT 1 FROM deletion_jobs WHERE member_id = ? AND completed_at IS NULL").bind(memberId).first()) throw denied();
-  const trial = !m && !subscribed && row.trial_used !== 1;
+  // Read after the sync, which marks the trial used once Stripe lists any subscription for the customer.
+  // A found customer with none was made by a try that failed before its row was stored, and still gets the trial.
+  const trial = !m && ((await subscriptionRow(env, memberId)) ?? row).trial_used !== 1;
   const session = await stripe<{ url: string }>(env, "POST", "/checkout/sessions", {
     mode: "subscription", customer: row.stripe_customer_id, client_reference_id: memberId,
     line_items: [{ price: priceFor(env, plan), quantity: 1 }],
@@ -466,9 +467,16 @@ export async function startNow(env: Env, memberId: string, modern: boolean): Pro
   requireBilling(env);
   const row = await subscriptionRow(env, memberId);
   if (row?.status !== "trialing" || !row.stripe_subscription_id) throw new ApiError(409, "not_trialing", "Only a trial can start early.");
-  const stamp = readStamp();
-  const started = await stripe<StripeSubscription>(env, "POST",
-    `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`, { trial_end: "now", proration_behavior: "none", ...EXPAND });
+  const path = `/subscriptions/${encodeURIComponent(row.stripe_subscription_id)}`;
+  let stamp = readStamp();
+  // The row lags Stripe: an earlier try whose answer was lost may have ended the trial already.
+  // Ending it again would charge a second full period, so only a trial Stripe still shows is ended.
+  let started = await stripe<StripeSubscription>(env, "GET", path, EXPAND);
+  if (started.status === "trialing") {
+    stamp = readStamp();
+    started = await stripe<StripeSubscription>(env, "POST", path, { trial_end: "now", proration_behavior: "none", ...EXPAND },
+      `start-now-${started.id}-${keyHour()}`);
+  }
   if (!await applySubscription(env, started, stamp)) await syncSubscription(env, started.id);
   // A declined card or a 3-D Secure check leaves the first invoice open: the member pays it on Stripe's page.
   const invoice = typeof started.latest_invoice === "object" ? started.latest_invoice : null;
@@ -505,13 +513,22 @@ export async function upgrade(env: Env, memberId: string, modern: boolean): Prom
   return account(env, memberId, modern);
 }
 
-export async function comp(env: Env, email: string, now = Date.now()): Promise<{ member_id: string }> {
-  const user = await env.DB.prepare('SELECT id FROM "user" WHERE lower(email) = ?').bind(email).first<{ id: string }>();
-  if (!user) throw new ApiError(404, "user_not_found", "No account uses that email. Ask them to sign in once first.");
-  const row = await subscriptionRow(env, user.id);
+/**
+ * For an operator action that would leave a subscription charging: refuses while Stripe, not the row,
+ * shows one that can still charge. Returns the member's row.
+ */
+export async function refuseLiveSubscription(env: Env, memberId: string): Promise<SubscriptionRow | null> {
+  const row = await subscriptionRow(env, memberId);
   if (row && (await syncCustomer(env, row)).billable) {
     throw new ApiError(409, "subscription_live", "This account has a live subscription. Cancel it in Stripe first.");
   }
+  return row;
+}
+
+export async function comp(env: Env, email: string, now = Date.now()): Promise<{ member_id: string }> {
+  const user = await env.DB.prepare('SELECT id FROM "user" WHERE lower(email) = ?').bind(email).first<{ id: string }>();
+  if (!user) throw new ApiError(404, "user_not_found", "No account uses that email. Ask them to sign in once first.");
+  const row = await refuseLiveSubscription(env, user.id);
   const m = await member(env, user.id);
   if (m?.revoked || m?.deleted_at) throw new ApiError(409, "access_denied", "This account is revoked or deleted.");
   // A Checkout opened before comp would start a paid subscription; the apply path refunds any that slips through.

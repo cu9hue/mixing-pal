@@ -3,6 +3,7 @@ import { maintainReports } from "./reports";
 import { deleteTurn } from "./capture";
 import { DAY, Env, readJson } from "./env";
 import { settle, settleExpired } from "./ledger";
+import { RESERVATION } from "./policy";
 import { cancelForDeletion, renewals } from "./subscriptions";
 
 const CAPTURE_DELETE_BATCH = 100;
@@ -151,10 +152,14 @@ export async function maintain(env: Env): Promise<void> {
     SUM(generation_id IS NULL) AS without_id FROM requests WHERE provisional = 1`)
     .first<{ count: number; amount: number; oldest: number | null; without_id: number }>();
   const conflicts = await env.DB.prepare("SELECT COUNT(*) AS n FROM cost_conflicts WHERE resolved_at IS NULL").first<{ n: number }>();
-  const budget = await env.DB.prepare("SELECT loss, paused FROM budget").first<{ loss: number; paused: number }>();
+  const budget = await env.DB.prepare("SELECT loss, paused, allowance, spent, reserved FROM budget")
+    .first<{ loss: number; paused: number; allowance: number; spent: number; reserved: number }>();
   if (health?.count || conflicts?.n || budget?.loss || budget?.paused) console.error(JSON.stringify({ event: "provisional_usage",
     count: health?.count ?? 0, amount: health?.amount ?? 0, oldest: health?.oldest ?? null, without_id: health?.without_id ?? 0,
     open_conflicts: conflicts?.n ?? 0, loss: budget?.loss ?? 0, paused: budget?.paused ?? 0 }));
+  // Warns before the service budget refuses every member: raise it with set-budget and the OpenRouter key's cap.
+  const remaining = budget ? budget.allowance - budget.spent - budget.reserved : 0;
+  if (budget && remaining < 20 * RESERVATION) console.error(JSON.stringify({ event: "budget_low", remaining_micro_usd: remaining }));
   const journal = await env.CAPTURE.list({ prefix: "deletions/", limit: 100 });
   for (const object of journal.objects) {
     if (object.uploaded.getTime() < now - 90 * DAY) await env.CAPTURE.delete(object.key);
