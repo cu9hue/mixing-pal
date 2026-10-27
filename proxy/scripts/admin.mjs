@@ -27,6 +27,8 @@ The token is never an argument. Only localhost may use HTTP.
   npm run admin -- conflict conflict-id booked|dismissed reason
                                                 Resolve a disputed final cost
   npm run admin -- pause | resume               Stop or resume admissions
+  npm run admin -- set-budget micro-usd         Set the lifetime service budget to the OpenRouter credit cap
+  npm run admin -- set-capacity requests        Set how many model requests may run at once (default 20)
   npm run admin -- sweep                        Run reconciliation and deletion now
   npm run admin -- replay-deletions             Replay deletions and revocations after a D1 restore
   npm run admin -- recover-member member-id micro-usd reason
@@ -150,7 +152,7 @@ export async function run(args, connection, print = console.log) {
     return;
   }
   const arity = { report: 1, "report-notifications": 0, invite: 1, usage: 0, revoke: 1, comp: 1, uncomp: 1, "billing-sync": 1, "delete-account": 1, "delete-turn": 2, resolve: 3, "resolve-without-id": 2, conflict: 3,
-    "recover-member": 3, "recover-budget": 2, pause: 0, resume: 0, sweep: 0, export: 3 };
+    "recover-member": 3, "recover-budget": 2, "set-budget": 1, "set-capacity": 1, pause: 0, resume: 0, sweep: 0, export: 3 };
   if (!(command in arity) || values.length !== arity[command]) throw new Error("Unknown command or arguments. Run npm run admin -- help.");
   const payload = command === "report" ? { action: "report", report_id: values[0] }
     : command === "invite" ? { action: "invite", email: values[0] }
@@ -161,6 +163,8 @@ export async function run(args, connection, print = console.log) {
     : command === "conflict" ? { action: "conflict", conflict_id: Number(values[0]), resolution: values[1], reason: values[2] }
     : command === "recover-member" ? { action: "recover", member_id: values[0], spent_micro_usd: Number(values[1]), reason: values[2] }
     : command === "recover-budget" ? { action: "recover", spent_micro_usd: Number(values[0]), reason: values[1] }
+    : command === "set-budget" ? { action: "set_budget", allowance_micro_usd: Number(values[0]) }
+    : command === "set-capacity" ? { action: "set_capacity", max_in_flight: Number(values[0]) }
     : { action: command.replaceAll("-", "_"), ...(values[0] ? { member_id: values[0] } : {}), ...(values[1] ? { turn_id: values[1] } : {}) };
   const result = await operator(payload, connection);
   if (command !== "export") { print(JSON.stringify(result, null, 2)); return; }

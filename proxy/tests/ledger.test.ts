@@ -11,7 +11,7 @@ async function reset() {
   await env.DB.batch([
     ...(trigger ? [env.DB.prepare("DROP TRIGGER request_retention")] : []),
     ...["cost_conflicts", "requests", "turns", "members"].map((t) => env.DB.prepare(`DELETE FROM "${t}"`)),
-    env.DB.prepare("UPDATE budget SET spent = 0, reserved = 0, loss = 0, paused = 0, recovery_required = 0, allowance = 50000000"),
+    env.DB.prepare("UPDATE budget SET spent = 0, reserved = 0, loss = 0, paused = 0, recovery_required = 0, allowance = 50000000, max_in_flight = 20"),
     ...(trigger ? [env.DB.prepare(trigger.sql)] : []),
   ]);
 }
@@ -202,17 +202,36 @@ describe("admission", () => {
     await refused(req("old", "t", "m", 1, now, false), "service_paused");
   });
 
-  test("capacity: five live calls refuse a sixth", async () => {
-    for (let i = 0; i < 5; i++) { await member(`m${i}`); await turn(`t${i}`, `m${i}`); await req(`r${i}`, `t${i}`, `m${i}`); }
+  // Two live calls per member, on separate turns, since a member holds at most two.
+  async function liveCalls(count: number) {
+    for (let i = 0; i < count; i++) {
+      const m = `m${Math.floor(i / 2)}`;
+      if (i % 2 === 0) await member(m);
+      await turn(`t${i}`, m); await req(`r${i}`, `t${i}`, m);
+    }
+  }
+  const reserved = async () => (await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE status = 'reserved'").first())!.n;
+
+  test("capacity: twenty live calls are admitted and refuse a twenty-first", async () => {
+    await liveCalls(20);
+    expect(await reserved()).toBe(20);
     await member("x"); await turn("tx", "x");
     await refused(req("rx", "tx", "x", 1, now + 1000), "busy");
   });
 
-  test("capacity: expired leases stop counting", async () => {
-    for (let i = 0; i < 5; i++) { await member(`m${i}`); await turn(`t${i}`, `m${i}`); await req(`r${i}`, `t${i}`, `m${i}`); }
-    await member("x"); await turn("tx", "x");
-    await req("rx", "tx", "x", 1, now + 290_001);
-    expect(await env.DB.prepare("SELECT status FROM requests WHERE id = 'rx'").first()).toEqual({ status: "reserved" });
+  test("capacity: a member's third live call is busy while another member is admitted", async () => {
+    await liveCalls(2);
+    await turn("t2", "m0");
+    await refused(req("r2", "t2", "m0", 1, now + 1000), "busy");
+    await member("n"); await turn("tn", "n"); await req("rn", "tn", "n", 1, now + 1000);
+    expect(await reserved()).toBe(3);
+  });
+
+  test("capacity: expired leases stop counting toward either cap", async () => {
+    await liveCalls(20);
+    await turn("t20", "m0");
+    await req("r20", "t20", "m0", 1, now + 290_001);
+    expect(await env.DB.prepare("SELECT status FROM requests WHERE id = 'r20'").first()).toEqual({ status: "reserved" });
   });
 
   test("N7: global shortfall is budget_exhausted", async () => {

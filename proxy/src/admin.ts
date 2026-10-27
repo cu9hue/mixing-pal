@@ -31,6 +31,8 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     z.object({ action: z.literal("resolve_without_id"), cost_micro_usd: z.number().int().min(0).max(50_000_000), reason: z.string().min(5).max(500) }),
     z.object({ action: z.literal("conflict"), conflict_id: z.number().int().positive(), resolution: z.enum(["booked", "dismissed"]), reason: z.string().min(5).max(500) }),
     z.object({ action: z.literal("pause"), paused: z.boolean() }),
+    z.object({ action: z.literal("set_budget"), allowance_micro_usd: z.number().int().positive() }),
+    z.object({ action: z.literal("set_capacity"), max_in_flight: z.number().int().min(1) }),
     z.object({ action: z.literal("recover"), member_id: z.string().min(1).max(100).optional(),
       spent_micro_usd: z.number().int().min(0).max(50_000_000), reason: z.string().min(5).max(500) }),
     z.object({ action: z.literal("export"), member_id: z.string().max(100), turn_id: z.uuid() }),
@@ -76,6 +78,15 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     FROM support_reports WHERE state = 'ready' AND mail_state IN ('pending', 'sending', 'attention') ORDER BY created_at LIMIT 100`).all()).results);
   if (data.action === "export") return exportTurn(env, data.member_id, data.turn_id);
   if (data.action === "replay_deletions") return json({ cursor: await replayDeletions(env, data.cursor) });
+  if (data.action === "set_budget" || data.action === "set_capacity") {
+    const [column, value] = data.action === "set_budget" ? ["allowance", data.allowance_micro_usd] : ["max_in_flight", data.max_in_flight];
+    await env.DB.batch([
+      env.DB.prepare(`UPDATE budget SET ${column} = ? WHERE id = 1`).bind(value),
+      env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) VALUES (?, 'service', ?, ?)")
+        .bind(data.action, now, String(value)),
+    ]);
+    return json({ ok: true });
+  }
   if (data.action === "recover") {
     await recover(env, data.member_id, data.spent_micro_usd, data.reason);
     return json({ ok: true });

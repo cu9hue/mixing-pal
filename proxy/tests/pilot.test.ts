@@ -152,7 +152,7 @@ beforeEach(async () => {
     ...(retention ? [env.DB.prepare(retention.sql)] : []),
   ]);
   await env.DB.prepare(`UPDATE budget SET spent = 0, reserved = 0, loss = 0, allowance = 50000000,
-    paused = 0, recovery_required = 0, capture_bytes = 0, capture_allowance = 4000000000`).run();
+    paused = 0, recovery_required = 0, capture_bytes = 0, capture_allowance = 4000000000, max_in_flight = 20`).run();
   const objects = await env.CAPTURE.list();
   await Promise.all(objects.objects.map((o) => env.CAPTURE.delete(o.key)));
 });
@@ -495,17 +495,20 @@ describe("metered requests", () => {
     expect((await recover(1000)).status).toBe(200);
   });
 
-  test("five live calls refuse a sixth; five dead calls do not", async () => {
+  test("at set-capacity 3, three live calls refuse a fourth as busy; three dead calls do not", async () => {
+    expect((await api("/operator", { action: "set_capacity", max_in_flight: 3 }, env.ADMIN_TOKEN)).status).toBe(200);
     const holds: (() => void)[] = [];
     const pending = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 3; i++) {
       const user = await joined(`producer-${i}@example.com`);
       replies.push({ hold: new Promise<void>((r) => holds.push(r)) } as never);
       pending.push(api("/v1/completions", question(), user.token));
     }
-    await vi.waitFor(() => expect(sent).toHaveLength(5));
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
     const waiting = await joined("waiting@example.com");
-    expect((await api("/v1/completions", question(), waiting.token)).status).toBe(429);
+    const busy = await api("/v1/completions", question(), waiting.token);
+    expect(busy.status).toBe(429);
+    expect((await busy.json()).error.code).toBe("busy");
     await env.DB.prepare("UPDATE requests SET lease_until = 1 WHERE status = 'dispatched'").run();
     reply();
     expect((await api("/v1/completions", question(), waiting.token)).status).toBe(200);
@@ -1698,6 +1701,38 @@ describe("operator tools", () => {
     const usage = await (await api("/operator", { action: "usage" }, env.ADMIN_TOKEN)).json();
     expect(usage.pending[0]).toMatchObject({ provisional: 1, cost: RESERVATION, reserved: RESERVATION });
     expect(usage.conflicts).toEqual([]);
+  });
+
+  test("set-budget raises the service budget and leaves spending alone", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE budget SET spent = 40000000, allowance = 40000000").run();
+    const refused = await api("/v1/completions", question(), user.token);
+    expect(refused.status).toBe(503);
+    expect(sent).toHaveLength(0);
+    for (const bad of [0, -1, 1.5, "60000000", null]) {
+      const response = await api("/operator", { action: "set_budget", allowance_micro_usd: bad }, env.ADMIN_TOKEN);
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.message).toBe("The request has invalid fields.");
+    }
+    const set = await api("/operator", { action: "set_budget", allowance_micro_usd: 60_000_000 }, env.ADMIN_TOKEN);
+    expect(set.status).toBe(200);
+    expect(await env.DB.prepare("SELECT allowance, spent, reserved, paused FROM budget").first())
+      .toEqual({ allowance: 60_000_000, spent: 40_000_000, reserved: 0, paused: 0 });
+    expect((await env.DB.prepare("SELECT action, target, detail FROM operator_actions").all()).results)
+      .toEqual([{ action: "set_budget", target: "service", detail: "60000000" }]);
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+  });
+
+  test("set-capacity sets the in-flight cap, which usage shows", async () => {
+    expect((await (await api("/operator", { action: "usage" }, env.ADMIN_TOKEN)).json()).budget.max_in_flight).toBe(20);
+    for (const bad of [0, -1, 2.5, "3"]) {
+      expect((await api("/operator", { action: "set_capacity", max_in_flight: bad }, env.ADMIN_TOKEN)).status).toBe(400);
+    }
+    expect((await api("/operator", { action: "set_capacity", max_in_flight: 30 }, env.ADMIN_TOKEN)).status).toBe(200);
+    expect((await (await api("/operator", { action: "usage" }, env.ADMIN_TOKEN)).json()).budget.max_in_flight).toBe(30);
+    expect((await env.DB.prepare("SELECT action, target, detail FROM operator_actions").all()).results)
+      .toEqual([{ action: "set_capacity", target: "service", detail: "30" }]);
   });
 
   test("resolve twice reports already_final and books nothing", async () => {

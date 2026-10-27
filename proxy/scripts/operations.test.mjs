@@ -88,6 +88,26 @@ test("recovery commands send verified totals and reasons to the correct scope", 
   ]);
 });
 
+test("set-budget and set-capacity send one whole number each", async () => {
+  const sent = [];
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token", fetch: async (_url, options) => {
+    sent.push(JSON.parse(options.body)); return Response.json({ ok: true });
+  } };
+  await run(["set-budget", "100000000"], connection, () => {});
+  await run(["set-capacity", "30"], connection, () => {});
+  assert.deepEqual(sent, [
+    { action: "set_budget", allowance_micro_usd: 100000000 },
+    { action: "set_capacity", max_in_flight: 30 },
+  ]);
+  await assert.rejects(run(["set-budget"], connection), /Unknown command or arguments/);
+  await assert.rejects(run(["set-capacity", "3", "4"], connection), /Unknown command or arguments/);
+  assert.equal(sent.length, 2);
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  assert.match(output[0], /set-budget micro-usd/);
+  assert.match(output[0], /set-capacity requests/);
+});
+
 test("resolve-without-id sends the cost and reason for every provisional row without an ID", async () => {
   const sent = [];
   const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token", fetch: async (_url, options) => {
