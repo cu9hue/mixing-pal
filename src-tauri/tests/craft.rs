@@ -989,6 +989,35 @@ fn property_list(props: &[Property]) -> String {
         .join("\n")
 }
 
+/// The KNOWN WORDS block rides only with `terms_listed`: `plain_words` gates
+/// New to Live, where Live's own words still need explaining.
+fn judge_user_message(
+    question: &str,
+    context: &str,
+    answer: &str,
+    evidence: &str,
+    mentor: &str,
+    props: &[Property],
+) -> String {
+    let list = property_list(props);
+    let mentor_block = if mentor.is_empty() {
+        "MENTOR ANSWER\n(none for this scenario: score the answer on its own)".to_string()
+    } else {
+        format!("MENTOR ANSWER (the bar, not the key)\n{mentor}")
+    };
+    let known_block = if props.iter().any(|p| p.key == TERMS_LISTED.key) {
+        format!("KNOWN WORDS (Live shows these)\n{}\n\n", common::checks::known_words().known.join(", "))
+    } else {
+        String::new()
+    };
+    format!(
+        "QUESTION\n{question}\n\nCONTEXT BLOCK THE COPILOT SAW\n{context}\n\n\
+         {mentor_block}\n\n\
+         TOOL EVIDENCE (in call order)\n{evidence}\n\n\
+         ANSWER UNDER TEST\n{answer}\n\n{known_block}PROPERTIES\n{list}"
+    )
+}
+
 async fn judge(
     question: &str,
     context: &str,
@@ -997,24 +1026,8 @@ async fn judge(
     mentor: &str,
     props: &[Property],
 ) -> Result<JudgeReply, String> {
-    let list = property_list(props);
-    let mentor_block = if mentor.is_empty() {
-        "MENTOR ANSWER\n(none for this scenario: score the answer on its own)".to_string()
-    } else {
-        format!("MENTOR ANSWER (the bar, not the key)\n{mentor}")
-    };
     let evidence = serde_json::to_string(calls).unwrap();
-    let known_block = if props.iter().any(|p| matches!(p.key, "terms_listed" | "plain_words")) {
-        format!("KNOWN WORDS (Live shows these)\n{}\n\n", common::checks::known_words().known.join(", "))
-    } else {
-        String::new()
-    };
-    let user = format!(
-        "QUESTION\n{question}\n\nCONTEXT BLOCK THE COPILOT SAW\n{context}\n\n\
-         {mentor_block}\n\n\
-         TOOL EVIDENCE (in call order)\n{evidence}\n\n\
-         ANSWER UNDER TEST\n{answer}\n\n{known_block}PROPERTIES\n{list}"
-    );
+    let user = judge_user_message(question, context, answer, &evidence, mentor, props);
     let s = judge_settings();
     let body = json!({
         "model": s.model,
@@ -1601,6 +1614,14 @@ fn a_bad_provisional_verdict_in_the_main_reply_never_invalidates_the_run() {
         "choices": [{ "message": { "content": strict }, "finish_reason": "stop" }]
     }), &props);
     assert!(reply.verdicts.is_err());
+}
+
+#[test]
+fn the_known_words_block_rides_only_with_terms_listed() {
+    let message = |props: &[Property]| judge_user_message("q", "ctx", "answer", "[]", "mentor", props);
+    assert!(!message(&[PLAIN_WORDS]).contains("KNOWN WORDS"));
+    assert!(message(&[TERMS_LISTED]).contains("KNOWN WORDS (Live shows these)\n"));
+    assert!(message(&[PLAIN_WORDS, TERMS_LISTED]).contains("KNOWN WORDS"));
 }
 
 #[test]
