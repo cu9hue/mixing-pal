@@ -170,10 +170,9 @@ the first time only. Use no abbreviations. Give the why as what she will hear \
 change, not as theory. Still one move, and still never say how the set sounds.";
 
 /// Appended to `SYSTEM_PROMPT` for a producer who chose "I finish tracks",
-/// and for one who never chose. A pilot producer here found the answers too
-/// clever to follow. Inline explanations would lengthen every answer, so
-/// the terms she may not know ride in a block the card strips and marks for
-/// a tap (src/notes/terms.ts). It changes the words, not the advice.
+/// and for one who never chose. Inline explanations would lengthen every
+/// answer, so the terms she may not know ride in a block the card strips and
+/// marks for a tap (src/notes/terms.ts). It changes the words, not the advice.
 pub const FINISHES_TRACKS: &str = "\
 Who you are talking to:
 - The producer finishes tracks in Live. When a plain word will do, use it. \
@@ -1079,20 +1078,24 @@ mod tests {
 
     #[test]
     fn the_prompt_names_devices_as_live_does() {
-        // A pilot producer on "I finish tracks" found the answers too clever
-        // to follow. Live's own names are the words every level can look up.
+        // Live's own names are the words every level can look up.
         assert!(SYSTEM_PROMPT.contains("as Live shows them"));
         assert!(SYSTEM_PROMPT.contains("EQ Eight"));
     }
 
     #[test]
     fn i_finish_tracks_lists_terms_to_tap_instead_of_explaining_them_inline() {
-        // The webview strips the block and marks each term; the fence name
-        // ties the two, so a rename on one side is caught here.
+        // shared/term-vectors.json pins the block's parsing in the card and
+        // the eval; the prompt's cap is the one it holds.
+        #[derive(Deserialize)]
+        struct Limits {
+            #[serde(rename = "maxTerms")]
+            max_terms: usize,
+        }
+        let limits: Limits = serde_json::from_str(include_str!("../../shared/term-vectors.json")).unwrap();
         assert!(FINISHES_TRACKS.contains("fenced `terms` block"));
         assert!(FINISHES_TRACKS.contains("`Term: what it means`"));
-        assert!(include_str!("../../src/notes/terms.ts").contains("```terms"));
-        assert!(!FINISHES_TRACKS.contains("a few plain words"));
+        assert!(FINISHES_TRACKS.contains(&format!("up to {} terms", limits.max_terms)));
         // New to Live keeps its inline explanations; nobody else gets the block.
         for section in [NEW_TO_LIVE, MIXES_FOR_OTHERS, SYSTEM_PROMPT] {
             assert!(!section.contains("`terms`"));
@@ -1158,9 +1161,8 @@ mod tests {
             let body = build_body(&Settings::default(), e, &turn).unwrap();
             assert_eq!(roles_of(&body), vec!["system", "user", "system"]);
             assert_eq!(first(e), format!("{SYSTEM_PROMPT}\n\n{section}"));
-            // The prompt alone answers to 7000. New to Live sat 16 characters
-            // under it until the rule to use Live's names joined every level
-            // on 2026-10-26, so the joined prompt answers to 7100.
+            // A level's section rides on every round trip too, so the joined
+            // prompt has its own cost ceiling, a little above the prompt's.
             assert!(first(e).chars().count() <= 7100, "{e:?} pushes the prompt past 7100");
         }
     }

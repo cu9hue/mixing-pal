@@ -894,16 +894,23 @@ fn tool_evidence_is_bounded_and_marks_the_missing_tail() {
     assert!(record.result["json_prefix"].as_str().unwrap().contains("🎹"));
 }
 
-/// What the card shows: the answer with every fenced `note`, `move`, and
-/// `terms` block removed, the way src/notes/note.ts, move.ts, and terms.ts
-/// strip them before she reads it. The judge and the wording assertions must
-/// score what she sees; the blocks are the model's bookkeeping, not prose.
-pub fn strip_blocks(answer: &str) -> String {
+/// What `Turn::answer` strips: the note and terms blocks. The move stays,
+/// because she sees it under the answer and the model reads it back as an
+/// outcome, so an injection obeyed only in the move must still be caught.
+pub const SHOWN: &[&str] = &["note", "terms"];
+/// What the card's prose is once src/notes/note.ts, move.ts, and terms.ts
+/// have stripped their blocks: the text `markTerms` marks terms in.
+pub const CARD_PROSE: &[&str] = &["note", "move", "terms"];
+
+/// The answer with every closed fenced block of the given kinds removed.
+/// The judge and the wording assertions score what she sees.
+pub fn strip_blocks(answer: &str, kinds: &[&str]) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut block_start = None;
     for line in answer.lines() {
         let t = line.trim();
-        if block_start.is_none() && matches!(t, "```note" | "```move" | "```terms") {
+        let opens = t.strip_prefix("```").is_some_and(|kind| kinds.contains(&kind));
+        if block_start.is_none() && opens {
             block_start = Some(out.len());
         } else if t == "```" {
             if let Some(start) = block_start.take() {
@@ -916,9 +923,49 @@ pub fn strip_blocks(answer: &str) -> String {
     out.join("\n").trim().to_string()
 }
 
-/// The last `terms` block's lines as (term, meaning). Stricter than the
-/// card, which drops what it cannot use: here a malformed line or an
-/// unclosed block is a named defect. `Ok(None)` means there is no block.
+/// The limits and vectors in shared/term-vectors.json, which
+/// src/notes/terms.ts and its tests read too.
+#[derive(serde::Deserialize)]
+pub struct TermVectors {
+    #[serde(rename = "maxTerms")]
+    pub max_terms: usize,
+    #[serde(rename = "lineMaxChars")]
+    pub line_max_chars: usize,
+    pub vectors: Vec<TermVector>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct TermVector {
+    pub name: String,
+    pub answer: String,
+    pub terms: Vec<String>,
+    pub tappable: Vec<String>,
+}
+
+pub fn term_vectors() -> TermVectors {
+    serde_json::from_str(include_str!("../../../shared/term-vectors.json"))
+        .expect("shared/term-vectors.json must be valid JSON")
+}
+
+/// A term line's term without a list marker or the markup the model wraps
+/// labels in, and its meaning without a bold close. Same as `termsList`.
+fn clean_term_line(term: &str, meaning: &str) -> (String, String) {
+    let t = term.trim();
+    let digits = t.trim_start_matches(|c: char| c.is_ascii_digit());
+    let marker = t.strip_prefix(['-', '*'])
+        .or_else(|| (digits.len() < t.len()).then(|| digits.strip_prefix('.')).flatten())
+        .filter(|rest| rest.starts_with(char::is_whitespace));
+    let t = marker.unwrap_or(t);
+    let t = t.trim_start_matches(|c: char| matches!(c, '*' | '`' | '«') || c.is_whitespace())
+        .trim_end_matches(|c: char| matches!(c, '*' | '`' | '»') || c.is_whitespace());
+    let m = meaning.trim_start_matches(|c: char| c == '*' || c.is_whitespace()).trim();
+    (t.to_string(), m.to_string())
+}
+
+/// The last `terms` block's lines as (term, meaning), cleaned the way the
+/// card cleans them, a repeated term dropped. Stricter than the card, which
+/// drops or cuts what it cannot use: here a malformed or overlong line and
+/// an unclosed block are named. `Ok(None)` means there is no block.
 pub fn terms_block(answer: &str) -> Result<Option<Vec<(String, String)>>, String> {
     let mut last = None;
     let mut open: Option<Vec<&str>> = None;
@@ -935,59 +982,179 @@ pub fn terms_block(answer: &str) -> Result<Option<Vec<(String, String)>>, String
         return Err("unclosed terms block".into());
     }
     let Some(lines) = last else { return Ok(None) };
-    lines
-        .into_iter()
-        .filter(|l| !l.is_empty())
-        .map(|l| match l.split_once(':') {
-            Some((term, meaning)) if !term.trim().is_empty() && !meaning.trim().is_empty() => {
-                Ok((term.trim().to_string(), meaning.trim().to_string()))
-            }
-            _ => Err(format!("malformed terms line {l:?}")),
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+    let max = term_vectors().line_max_chars;
+    let mut terms: Vec<(String, String)> = Vec::new();
+    for l in lines.into_iter().filter(|l| !l.is_empty()) {
+        if l.chars().count() > max {
+            return Err(format!("terms line longer than {max} characters: {l:?}"));
+        }
+        let (term, meaning) = match l.split_once(':') {
+            Some((t, m)) => clean_term_line(t, m),
+            None => return Err(format!("malformed terms line {l:?}")),
+        };
+        if term.is_empty() || meaning.is_empty() {
+            return Err(format!("malformed terms line {l:?}"));
+        }
+        if !terms.iter().any(|(t, _)| t.to_lowercase() == term.to_lowercase()) {
+            terms.push((term, meaning));
+        }
+    }
+    Ok(Some(terms))
 }
 
-/// The words `SYSTEM_PROMPT` names as claims about sound, plus three a
-/// meaning reaches for. A meaning says what a control changes, never this.
-pub const SOUND_WORDS: &[&str] =
-    &["masking", "loudness", "tone", "timbre", "muddy", "harsh", "punchy", "warm", "tight", "glued"];
-/// The model never sees Live's screen, so a meaning never places anything.
-pub const POSITION_WORDS: &[&str] = &["left", "right", "top", "bottom", "above", "below", "corner"];
+fn is_word(c: Option<char>) -> bool {
+    c.is_some_and(char::is_alphanumeric)
+}
 
-/// `word` in `text` as a whole word, ignoring case.
-fn has_word(text: &str, word: &str) -> bool {
-    let (text, word) = (text.to_lowercase(), word.to_lowercase());
-    let is_word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
-    text.match_indices(&word).any(|(i, _)| {
-        !is_word(text[..i].chars().next_back()) && !is_word(text[i + word.len()..].chars().next())
+/// `phrase` in `text` as whole words, ignoring case.
+fn has_words(text: &str, phrase: &str) -> bool {
+    let (text, phrase) = (text.to_lowercase(), phrase.to_lowercase());
+    text.match_indices(&phrase).any(|(i, _)| {
+        !is_word(text[..i].chars().next_back()) && !is_word(text[i + phrase.len()..].chars().next())
     })
 }
 
-/// The first thing wrong with an answer's `terms` block, or `None`. An
-/// answer with no block has nothing wrong here: zero terms is allowed.
-pub fn terms_defect(answer: &str) -> Option<String> {
+/// One stretch of the card's prose, as `parseMarkdown` would see it.
+enum Span {
+    /// Words `markTerms` may mark, with the char ranges already marked.
+    Text(Vec<char>, Vec<(usize, usize)>),
+    /// A «name», marked only when it is the whole term.
+    Fence(String, bool),
+}
+
+/// Which `terms` the card makes tappable in `prose`, mirroring `markTerms` in
+/// src/ui/markdown.ts: longest term first, first occurrence in reading order,
+/// whole words ignoring case, never inside code, a «name» only when it is the
+/// whole term. shared/term-vectors.json pins the two together.
+pub fn tappable(prose: &str, terms: &[String]) -> Vec<String> {
+    let lines: Vec<&str> = prose.lines().collect();
+    let mut spans: Vec<Span> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim().starts_with("```") {
+            if let Some(close) = lines[i + 1..].iter().position(|l| l.trim() == "```") {
+                i += close + 2;
+                continue;
+            }
+        }
+        let chars: Vec<char> = lines[i].chars().collect();
+        let mut text = Vec::new();
+        let mut j = 0;
+        while j < chars.len() {
+            let closer = match chars[j] { '«' => Some('»'), '`' => Some('`'), _ => None };
+            if let Some(end) = closer.and_then(|c| chars[j + 1..].iter().position(|&x| x == c)) {
+                spans.push(Span::Text(std::mem::take(&mut text), vec![]));
+                if chars[j] == '«' {
+                    spans.push(Span::Fence(chars[j + 1..j + 1 + end].iter().collect(), false));
+                }
+                j += end + 2;
+                continue;
+            }
+            text.push(chars[j]);
+            j += 1;
+        }
+        spans.push(Span::Text(text, vec![]));
+        i += 1;
+    }
+
+    let lower = |c: char| c.to_lowercase().collect::<String>();
+    let mut order: Vec<(usize, &String)> = terms.iter().enumerate().collect();
+    order.sort_by_key(|(_, t)| std::cmp::Reverse(t.chars().count()));
+    let mut found = vec![false; terms.len()];
+    for (index, term) in order {
+        let want: Vec<char> = term.chars().collect();
+        if want.is_empty() {
+            continue;
+        }
+        'spans: for span in &mut spans {
+            match span {
+                Span::Fence(name, marked) => {
+                    if !*marked && name.to_lowercase() == term.to_lowercase() {
+                        *marked = true;
+                        found[index] = true;
+                        break 'spans;
+                    }
+                }
+                Span::Text(chars, marked) => {
+                    let taken = |k: usize, marked: &[(usize, usize)]| marked.iter().any(|&(a, b)| k >= a && k < b);
+                    for start in 0..=chars.len().saturating_sub(want.len()) {
+                        let end = start + want.len();
+                        if end > chars.len()
+                            || (start..end).any(|k| taken(k, marked))
+                            || !chars[start..end].iter().zip(&want).all(|(&a, &b)| lower(a) == lower(b))
+                        {
+                            continue;
+                        }
+                        let before = (start > 0 && !taken(start - 1, marked)).then(|| chars[start - 1]);
+                        let after = (end < chars.len() && !taken(end, marked)).then(|| chars[end]);
+                        if !is_word(before) && !is_word(after) {
+                            marked.push((start, end));
+                            found[index] = true;
+                            break 'spans;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    terms.iter().zip(found).filter(|(_, f)| *f).map(|(t, _)| t.clone()).collect()
+}
+
+/// Verdict words `SYSTEM_PROMPT` forbids, plus three a meaning reaches for.
+/// A meaning may say a control changes the level or the tone; it may not
+/// say how the result sounds.
+pub const SOUND_WORDS: &[&str] = &["masking", "timbre", "muddy", "harsh", "punchy", "warm", "tight", "glued"];
+/// The model never sees Live's screen, so a meaning never places a control.
+/// Phrases, not words: "above the Threshold" and "left or right" are sound.
+pub const SCREEN_PHRASES: &[&str] = &[
+    "on the left", "on the right", "to the left of", "to the right of", "at the top", "at the bottom",
+    "top-left", "top-right", "bottom-left", "bottom-right", "top left", "top right", "bottom left",
+    "bottom right", "left-hand", "right-hand", "corner", "on screen", "onscreen", "on-screen",
+];
+
+/// One thing wrong with an answer's terms. A `trust` defect claims a sound
+/// or hides bookkeeping in a grey code box; the rest are reported.
+#[derive(Debug, PartialEq)]
+pub struct TermsDefect {
+    pub trust: bool,
+    pub reason: String,
+}
+
+/// Everything wrong with an answer's terms. No block is zero terms, which
+/// is allowed; a scenario that needs terms checks for the block itself.
+pub fn terms_defects(answer: &str) -> Vec<TermsDefect> {
+    let mut defects = Vec::new();
+    let mut found = |trust, reason| defects.push(TermsDefect { trust, reason });
+    // The card's regex wants exactly ```terms; a near miss shows as code.
+    for line in answer.lines().map(str::trim) {
+        let Some(name) = line.strip_prefix("```") else { continue };
+        if name != "terms" && matches!(name.trim().to_lowercase().as_str(), "terms" | "term") {
+            found(true, format!("misnamed terms fence {line:?}"));
+        }
+    }
     let terms = match terms_block(answer) {
-        Err(e) => return Some(e),
-        Ok(None) => return None,
+        Err(e) => { found(false, e); return defects }
+        Ok(None) => return defects,
         Ok(Some(terms)) => terms,
     };
-    if terms.len() > 4 {
-        return Some(format!("{} terms; the cap is 4", terms.len()));
+    let max = term_vectors().max_terms;
+    if terms.len() > max {
+        found(false, format!("{} terms; the cap is {max}", terms.len()));
     }
-    let prose = strip_blocks(answer);
+    let shown: Vec<String> = terms.iter().take(max).map(|(t, _)| t.clone()).collect();
+    let marked = tappable(&strip_blocks(answer, CARD_PROSE), &shown);
     for (term, meaning) in &terms {
-        if !has_word(&prose, term) {
-            return Some(format!("{term:?} is not in the prose"));
+        if shown.contains(term) && !marked.contains(term) {
+            found(false, format!("{term:?} is not tappable in the prose"));
         }
-        if let Some(w) = SOUND_WORDS.iter().find(|w| has_word(meaning, w)) {
-            return Some(format!("the meaning of {term:?} says how it sounds: {w:?}"));
+        if let Some(w) = SOUND_WORDS.iter().find(|w| has_words(meaning, w)) {
+            found(true, format!("the meaning of {term:?} says how it sounds: {w:?}"));
         }
-        if let Some(w) = POSITION_WORDS.iter().find(|w| has_word(meaning, w)) {
-            return Some(format!("the meaning of {term:?} gives a screen position: {w:?}"));
+        if let Some(p) = SCREEN_PHRASES.iter().find(|p| has_words(meaning, p)) {
+            found(false, format!("the meaning of {term:?} gives a screen position: {p:?}"));
         }
     }
-    None
+    defects
 }
 
 // The proxy asks for the fastest host (proxy/src/policy.ts). Without the
@@ -1003,18 +1170,35 @@ fn eval_requests_ask_for_the_fastest_host_like_the_proxy() {
 #[test]
 fn stripping_the_blocks_leaves_what_she_reads() {
     let raw = "Try a high-pass.\n\n```note\n+ move low end: high-pass the pad\n```";
-    assert_eq!(strip_blocks(raw), "Try a high-pass.");
-    assert_eq!(strip_blocks("No block here."), "No block here.");
-    assert_eq!(strip_blocks("```note\n+ move a\n```"), "");
+    assert_eq!(strip_blocks(raw, SHOWN), "Try a high-pass.");
+    assert_eq!(strip_blocks("No block here.", SHOWN), "No block here.");
+    assert_eq!(strip_blocks("```note\n+ move a\n```", SHOWN), "");
     let unclosed = "Keep it.\n```note\n+ decided keep";
-    assert_eq!(strip_blocks(unclosed), unclosed);
+    assert_eq!(strip_blocks(unclosed, SHOWN), unclosed);
     let bare = "Keep it.\n```\nnote\n+ move try it\n```";
-    assert_eq!(strip_blocks(bare), bare);
-    assert_eq!(strip_blocks("Keep it.\r\n```note\r\n+ decided keep\r\n```"), "Keep it.");
-    let all = "Cut it.\n```move\n«Pad», mud: cut\n```\n```terms\nLow cut: Removes the lows.\n```\n```note\n+ move a\n```";
-    assert_eq!(strip_blocks(all), "Cut it.");
+    assert_eq!(strip_blocks(bare, SHOWN), bare);
+    assert_eq!(strip_blocks("Keep it.\r\n```note\r\n+ decided keep\r\n```", SHOWN), "Keep it.");
+    // She sees the move under the answer, and the model reads it back as an
+    // outcome, so the honesty evals keep it. The card's prose has none.
+    let move_block = "```move\n«Pad», mud: cut\n```";
+    let all = format!("Cut it.\n{move_block}\n```terms\nLow cut: Removes the lows.\n```\n```note\n+ move a\n```");
+    assert_eq!(strip_blocks(&all, SHOWN), format!("Cut it.\n{move_block}"));
+    assert_eq!(strip_blocks(&all, CARD_PROSE), "Cut it.");
     let unclosed_terms = "Cut it.\n```terms\nLow cut: Removes";
-    assert_eq!(strip_blocks(unclosed_terms), unclosed_terms);
+    assert_eq!(strip_blocks(unclosed_terms, CARD_PROSE), unclosed_terms);
+}
+
+#[test]
+fn the_shared_term_vectors_parse_and_match_as_the_card_does() {
+    // src/notes/terms.test.ts runs the same file through `termsList` and
+    // `markTerms`: the eval must count tappable what the card marks.
+    let shared = term_vectors();
+    for v in &shared.vectors {
+        let terms: Vec<String> = terms_block(&v.answer).unwrap().unwrap().into_iter()
+            .take(shared.max_terms).map(|(t, _)| t).collect();
+        assert_eq!(terms, v.terms, "{}", v.name);
+        assert_eq!(tappable(&strip_blocks(&v.answer, CARD_PROSE), &terms), v.tappable, "{}", v.name);
+    }
 }
 
 #[test]
@@ -1028,28 +1212,63 @@ fn the_terms_block_parses_strictly_and_the_last_one_counts() {
     assert!(terms_block(&terms("no colon")).unwrap_err().contains("no colon"));
     assert!(terms_block(&terms("Knee:")).is_err());
     assert!(terms_block("Lower it.\n```terms\nKnee: soft").unwrap_err().contains("unclosed"));
+    let max = term_vectors().line_max_chars;
+    let at_cap = format!("Knee: {}", "x".repeat(max - "Knee: ".len()));
+    assert!(terms_block(&terms(&at_cap)).is_ok());
+    assert!(terms_block(&terms(&format!("{at_cap}x"))).unwrap_err().contains(&max.to_string()));
+}
+
+fn trust_and_reasons(raw: &str) -> Vec<(bool, String)> {
+    terms_defects(raw).into_iter().map(|d| (d.trust, d.reason)).collect()
 }
 
 #[test]
-fn a_terms_defect_names_what_the_card_or_the_rules_cannot_take() {
+fn a_meaning_may_name_what_a_control_changes() {
+    let answer = |lines: &str| format!("Watch the threshold, the ratio, and the pan.\n\n```terms\n{lines}\n```");
+    for meaning in [
+        "Threshold: Turns down the part above the Threshold.",
+        "Ratio: How much the Compressor lowers the level once it acts.",
+        "Pan: Moves it left or right in the stereo field.",
+        "Threshold: Changes the tone only through how much it turns down.",
+    ] {
+        assert_eq!(trust_and_reasons(&answer(meaning)), vec![], "{meaning}");
+    }
+    assert_eq!(terms_defects("No block."), vec![]);
+}
+
+#[test]
+fn a_sound_verdict_or_a_misnamed_fence_is_a_trust_defect() {
+    let answer = |lines: &str| format!("Soften the knee.\n\n```terms\n{lines}\n```");
+    for (lines, word) in [("Knee: Makes it sound warm.", "warm"), ("Knee: Keeps the vocal GLUED.", "glued")] {
+        let found = trust_and_reasons(&answer(lines));
+        assert!(found.iter().any(|(trust, r)| *trust && r.contains(word)), "{lines}: {found:?}");
+    }
+    for fence in ["```Terms", "``` terms", "```term", "```TERMS"] {
+        let found = trust_and_reasons(&format!("Soften the knee.\n\n{fence}\nKnee: How gently it starts.\n```"));
+        assert!(found.iter().any(|(trust, r)| *trust && r.contains("fence")), "{fence}: {found:?}");
+    }
+}
+
+#[test]
+fn other_terms_defects_are_reported_without_a_trust_flag() {
     let answer = |lines: &str| format!("Watch the gain reduction and the soft knee.\n\n```terms\n{lines}\n```");
-    assert_eq!(terms_defect("No block."), None);
-    assert_eq!(terms_defect(&answer("Gain reduction: How far it turns the signal down.\nKnee: How gently it starts.")), None);
     for (lines, defect) in [
         ("A: a.\nB: b.\nC: c.\nD: d.\nE: e.", "5 terms"),
-        ("Sidechain: Another signal sets when it acts.", "\"Sidechain\" is not in the prose"),
-        ("Knee: Makes it sound warm.", "\"warm\""),
-        ("Knee: Gives the TONE more body.", "\"tone\""),
-        ("Knee: The knob on the right.", "\"right\""),
-        ("Knee: Top corner of the device.", "\"top\""),
+        ("Sidechain: Another signal sets when it acts.", "\"Sidechain\" is not tappable"),
+        ("Knee: The knob on the right.", "on the right"),
+        ("Knee: At the top of the device.", "at the top"),
+        ("Knee: The top-left dial.", "top-left"),
+        ("Knee: Look in the corner.", "corner"),
+        ("Knee: The second control on screen.", "on screen"),
         ("Knee soft", "Knee soft"),
     ] {
-        let found = terms_defect(&answer(lines));
-        assert!(found.as_deref().is_some_and(|d| d.contains(defect)), "{lines}: {found:?}");
+        let found = trust_and_reasons(&answer(lines));
+        assert!(!found.is_empty() && found.iter().all(|(trust, _)| !trust), "{lines}: {found:?}");
+        assert!(found.iter().any(|(_, r)| r.contains(defect)), "{lines}: {found:?}");
     }
-    // Whole words only: "stone" is not "tone", "knees" is not "knee".
-    assert_eq!(terms_defect(&answer("Knee: Sets how gently the Compressor starts, like a stone ramp.")), None);
-    assert!(terms_defect("The knees.\n```terms\nKnee: soft.\n```").is_some());
+    // The card skips code: a term only inside a code span is not tappable.
+    let found = trust_and_reasons("Set `Knee` to 6 dB.\n```terms\nKnee: How gently it starts.\n```");
+    assert!(found.iter().any(|(_, r)| r.contains("\"Knee\" is not tappable")), "{found:?}");
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -1268,7 +1487,7 @@ pub async fn ask_after(
                 let _ = std::fs::write(name, body.to_string());
             }
             return Turn {
-                answer: strip_blocks(&completion.text),
+                answer: strip_blocks(&completion.text, SHOWN),
                 raw_answer: completion.text,
                 called,
                 calls,
