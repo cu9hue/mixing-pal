@@ -21,6 +21,12 @@
 //! The 2026-09-11 replay agreed on 39/48 labels. Scenario reports flag the five
 //! properties still needing review; their automated majority is provisional.
 //!
+//! `MIXINGPAL_CRAFT_RUNS` sets the runs per scenario (default 3, a positive
+//! integer). Add `MIXINGPAL_CRAFT_AB=1` to the run command above to run this
+//! branch's prompt against main's (fixture `prompt-baseline.txt`) in one
+//! session. A pairwise judge reads each pair in both orders. The A/B refuses
+//! any scenario with `terms_required` and any level other than "I finish tracks".
+//!
 //! The judge in use since 2026-10-21 is anthropic/claude-opus-5.5. Two replays
 //! of the 13-case sample agreed on 48/50 and 44/46 labels, every label on the
 //! five review properties, with no verdict changing between runs. Two replays

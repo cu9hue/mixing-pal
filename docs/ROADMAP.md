@@ -162,6 +162,15 @@ Ordered. Each item says what, why, size, and what it waits on.
    prompt and model fixed while collecting outcomes from real production
    sessions, where the producer can say whether the suggestions helped.
 
+   Extended the harness on 2026-10-27. Provisional properties are split into
+   timeline, settings and move target. Code checks now catch values with
+   their sign, studio words and read coverage. Reports print 80% intervals,
+   read agreement and the properties that fail together. Any scenario at "I
+   finish tracks" can run as a same-session A/B against main's prompt, with a
+   pairwise judge that judges each pair in both orders. Draft calibration
+   labels for the new properties wait for the owner to confirm them. Paid
+   calibration and the A/B come next, under the design doc's decision rules.
+
 7. **Default model and latency.** Done 2026-09-11. `tests/latency.rs` runs
    one two-tool question five times against the model the environment
    names and asserts a median turn under a minute, a non-empty answer, and
@@ -194,7 +203,9 @@ Ordered. Each item says what, why, size, and what it waits on.
    clever. Since 2026-10-26 every level names devices and parameters as
    Live shows them. At "I finish tracks" the answer lists up to four terms
    she may not know; the card underlines each one and opens one plain line
-   under it on a tap. Craft scenario seven checks that list.
+   under it on a tap. Terms the prose does not use are listed in a `Terms:`
+   row after the answer, so she can still tap them. Craft scenario seven
+   checks that list.
    The level changes the words, not the advice. Every level also got
    shorter answers: short sentences, plain words, the move in bold, and
    about 120 words. The answer text is set in Atkinson Hyperlegible at
