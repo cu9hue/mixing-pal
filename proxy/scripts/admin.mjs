@@ -100,6 +100,9 @@ including spending by accounts absent from the snapshot. Amounts cannot go
 down, and the service total must cover all recorded account spending. Keep the
 service paused if lost charges cannot be attributed reliably. Recovery records
 each amount and reason atomically; it never grants allowance or renews access.
+A restore rewinds the service budget to the snapshot's amount. After
+recover-budget, run set-budget with the current amount, the same as the
+OpenRouter key's credit cap.
 Only after recovery, check access and costs, resume and run
 npm run deploy -- enable <stage>. This clears REPORT_RECOVERY and re-enables
 inference.

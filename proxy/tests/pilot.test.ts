@@ -1748,7 +1748,8 @@ describe("operator tools", () => {
     expect(await env.DB.prepare("SELECT allowance FROM budget").first()).toEqual({ allowance: 50_000_000 });
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions").first())!.n).toBe(0);
     expect((await api("/operator", { action: "set_budget", allowance_micro_usd: 41_000_000 }, env.ADMIN_TOKEN)).status).toBe(200);
-    expect(await env.DB.prepare("SELECT allowance FROM budget").first()).toEqual({ allowance: 41_000_000 });
+    expect(await env.DB.prepare("SELECT allowance, spent, reserved, paused FROM budget").first())
+      .toEqual({ allowance: 41_000_000, spent: 40_000_000, reserved: 1_000_000, paused: 0 });
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions").first())!.n).toBe(1);
   });
 

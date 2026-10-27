@@ -123,6 +123,12 @@ test("the production preflight states the pilot key cap apart from the billing t
   assert.match(help, /set-budget to the same amount/);
 });
 
+test("the restore sequence sets the service budget again, since a restore rewinds it", async () => {
+  const output = [];
+  await run(["help"], {}, (line) => output.push(line));
+  assert.match(output.join("\n"), /restore rewinds the service budget[\s\S]*set-budget/);
+});
+
 test("resolve-without-id sends the cost and reason for every provisional row without an ID", async () => {
   const sent = [];
   const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token", fetch: async (_url, options) => {
