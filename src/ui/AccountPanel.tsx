@@ -69,6 +69,8 @@ export function AccountPanel({ account }: { account: AccountState }) {
   }, [opened, trip, account.refresh]);
   const problem = error ?? account.error;
   const signingIn = view === null || view.access === "signed_out" || view.access === "invitation_required";
+  // With billing on anyone may sign up; otherwise only an invited email can.
+  const open = view?.signup === "open";
 
   async function act(action: () => Promise<void>) {
     if (!beginMutation(operations, "accountMutation")) return;
@@ -93,7 +95,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
   return (
     <section className={`account${signingIn ? " account--sign-in" : ""}`} aria-labelledby={`${id}-title`} data-tauri-drag-region="false">
       <h2 id={`${id}-title`} className="account__title">{signingIn ? "A mentor for the track you're writing." : "Account"}</h2>
-      {signingIn && <p className="account__subtitle">Sign in with your email.</p>}
+      {signingIn && <p className="account__subtitle">{open ? "Sign in with your email." : "Sign in with the email your invite came to."}</p>}
       {problem && <p id={`${id}-error`} className="account__error" role="alert">{problem}</p>}
       {view === null && <>
         <p>{problem ? "Your account could not be reached." : "Checking your account…"}</p>
@@ -114,11 +116,11 @@ export function AccountPanel({ account }: { account: AccountState }) {
       }}>
         <label htmlFor={`${id}-email`}>Email</label>
         <input id={`${id}-email`} type="email" autoComplete="email" required value={email}
-          placeholder="Enter your email"
+          placeholder={open ? "Enter your email" : "Enter the email from your invitation"}
           disabled={busy || operations.install || codeSent} onChange={(e) => setEmail(e.target.value)}
           aria-describedby={problem ? `${id}-error` : undefined} />
         {codeSent && <>
-          <p>If this email can sign in, your code is on its way.</p>
+          <p>{open ? "If this email can sign in, your code is on its way." : "If your email has an invitation, your code is on its way."}</p>
           <label htmlFor={`${id}-code`}>Six-digit sign-in code</label>
           <input id={`${id}-code`} autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}"
             maxLength={6} required value={code} autoFocus disabled={busy || operations.install} onChange={(e) => setCode(e.target.value)}

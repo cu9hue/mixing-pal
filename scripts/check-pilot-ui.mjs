@@ -423,9 +423,12 @@ assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled()
 assert.equal(await page.evaluate(()=>localStorage.getItem('copilot.setupDone')),'1');
 for (const access of ['expired','revoked']) {
 await page.goto('http://127.0.0.1:1423?access='+access);
-await page.getByText('Check your account access in Settings.').waitFor();
+const ended=access==='revoked'?'Your access was revoked. Contact Mixing Pal.':'Your pilot access has ended. Contact Mixing Pal to continue.';
+// A revoked member sees the account panel on the card; an expired pilot keeps chat.
+if(access==='revoked')await page.locator('.card__account').getByText(ended).waitFor();
+else await page.getByText('Check your account access in Settings.').waitFor();
 await page.evaluate(()=>window.emitFixture('menu://settings'));
-await page.getByText(access==='revoked'?'Your access was revoked. Contact Mixing Pal.':'Your pilot access has ended. Contact Mixing Pal to continue.').waitFor();
+await page.locator('.card__settings').getByText(ended).waitFor();
 const sharing=page.locator('.card__settings').getByLabel('Share advice and outcomes to help improve Mixing Pal');
 assert.equal(await sharing.count(),1,access+' accounts must retain a withdrawal control');
 assert.equal(await sharing.isChecked(),true);

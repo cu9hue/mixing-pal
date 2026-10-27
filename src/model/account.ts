@@ -20,6 +20,8 @@ export interface AccountView {
   comp?: boolean;
   trial_available?: boolean;
   manage?: boolean;
+  /** Only on a signed-out view: whether anyone may sign up, or only invited emails. */
+  signup?: "open" | "invite";
 }
 
 export function errorMessage(error: unknown): string {

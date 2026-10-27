@@ -26,6 +26,23 @@ it("says deleting the account is permanent, marks the button as dangerous, and s
 const signedIn = (view: Partial<AccountView>): AccountState =>
   ({ ...account, view: { access: "active", capture: false, email: "producer@example.com", ...view } });
 
+const signedOut = (signup?: "open" | "invite"): AccountState =>
+  ({ ...account, view: { access: "signed_out", capture: false, ...(signup ? { signup } : {}) } });
+const OPEN = ["Sign in with your email.", "Enter your email", "If this email can sign in, your code is on its way."];
+const INVITE = ["Sign in with the email your invite came to.", "Enter the email from your invitation",
+  "If your email has an invitation, your code is on its way."];
+
+it.each([["open", OPEN], ["invite", INVITE], [undefined, INVITE]] as const)("words sign-in for %s sign-up", async (signup, [subtitle, placeholder, sent]) => {
+  vi.mocked(invoke).mockResolvedValue(null);
+  render(<AccountPanel account={signedOut(signup)} />);
+  expect(screen.getByText(subtitle)).toBeTruthy();
+  const email = screen.getByLabelText("Email");
+  expect(email.getAttribute("placeholder")).toBe(placeholder);
+  fireEvent.change(email, { target: { value: "producer@example.com" } });
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(await screen.findByText(sent)).toBeTruthy();
+});
+
 it("offers both plans with a free trial, and opens Checkout for the one she picks", async () => {
   vi.mocked(invoke).mockResolvedValue({ opened: true });
   render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} />);
