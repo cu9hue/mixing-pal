@@ -95,6 +95,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
   return (
     <section className={`account${signingIn ? " account--sign-in" : ""}`} aria-labelledby={`${id}-title`} data-tauri-drag-region="false">
       <h2 id={`${id}-title`} className="account__title">{signingIn ? "A mentor for the track you're writing." : "Account"}</h2>
+      {view?.access === "revoked" && <p>Your access was revoked. Contact Mixing Pal.</p>}
       {signingIn && <p className="account__subtitle">{open ? "Sign in with your email." : "Sign in with the email your invite came to."}</p>}
       {problem && <p id={`${id}-error`} className="account__error" role="alert">{problem}</p>}
       {view === null && <>
@@ -199,11 +200,10 @@ export function AccountPanel({ account }: { account: AccountState }) {
       </>}
       {/* Only billing off ends a period as expired. */}
       {view?.access === "expired" && <p>Your pilot access has ended. Contact Mixing Pal to continue.</p>}
-      {view?.access === "revoked" && <p>Your access was revoked. Contact Mixing Pal.</p>}
       {view && view.access !== "signed_out" && <div className="account__actions">
         {view.manage && <button disabled={busy || operations.install} onClick={() => billing("portal")}>Manage subscription</button>}
         <button disabled={busy || operations.install} onClick={() => void act(async () => {
-          await invoke("account_sign_out"); account.change({ access: "signed_out", capture: false }); setCodeSent(false);
+          await invoke("account_sign_out"); account.change({ access: "signed_out", capture: false }); void account.refresh(); setCodeSent(false);
         })}>Sign out</button>
         <button disabled={busy || operations.install} onClick={() => setDeleting(true)}>Delete account…</button>
       </div>}
@@ -211,7 +211,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
         <p>Delete your account? This can't be undone. Your access ends, and any subscription is canceled with no refund. Everything you shared is deleted. Your set notes stay on this laptop.</p>
         <div className="account__actions">
           <button className="account__danger" disabled={busy || operations.install} onClick={() => void act(async () => {
-            await invoke("account_delete"); account.change({ access: "signed_out", capture: false }); setDeleting(false);
+            await invoke("account_delete"); account.change({ access: "signed_out", capture: false }); void account.refresh(); setDeleting(false);
           })}>Delete my account</button>
           <button ref={keep} disabled={busy || operations.install} onClick={() => setDeleting(false)}>Cancel</button>
         </div>

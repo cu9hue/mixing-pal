@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AccountPanel } from "./AccountPanel";
 import { invoke } from "@tauri-apps/api/core";
-import { AccountState, AccountView } from "../model/account";
+import { AccountState, AccountView, useAccount } from "../model/account";
 import { useState } from "react";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 afterEach(cleanup);
@@ -264,4 +264,30 @@ it("a member whose subscription still exists but is unpaid is sent to fix the ca
   // A subscription that has ended gets the plans again.
   render(<AccountPanel account={signedIn({ access: "plan_required", subscription_status: "canceled", plan: "starter", manage: true, trial_available: false })} />);
   expect(screen.getAllByRole("button", { name: "Subscribe" })).toHaveLength(1);
+});
+
+it.each([
+  ["Sign out", []],
+  ["Delete account…", ["Delete my account"]],
+] as const)("after %s, the account is read again so the sign-in copy follows sign-up", async (first, then) => {
+  let status: AccountView = { access: "active", capture: false, email: "producer@example.com", remaining_micro_usd: 5_000_000 };
+  vi.mocked(invoke).mockClear();
+  vi.mocked(invoke).mockImplementation(async (cmd) => {
+    if (cmd === "account_status") return status;
+    status = { access: "signed_out", capture: false, signup: "open" };
+    return undefined;
+  });
+  function Harness() { return <AccountPanel account={useAccount()} />; }
+  render(<Harness />);
+  fireEvent.click(await screen.findByRole("button", { name: first }));
+  for (const name of then) fireEvent.click(screen.getByRole("button", { name }));
+  expect(await screen.findByText("Sign in with your email.")).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "account_status")).toHaveLength(2);
+});
+
+it("a revoked account says so first, before the sharing choice", () => {
+  render(<AccountPanel account={signedIn({ access: "revoked" })} />);
+  const revoked = screen.getByText("Your access was revoked. Contact Mixing Pal.");
+  expect(document.querySelector(".account__title")?.nextElementSibling).toBe(revoked);
+  expect(revoked.compareDocumentPosition(screen.getByRole("checkbox")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
