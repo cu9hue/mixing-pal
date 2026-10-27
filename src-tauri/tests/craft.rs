@@ -551,8 +551,13 @@ const SETTINGS_SUPPORTED: Property = Property {
 };
 const MOVE_PERFORMABLE: Property = Property {
     key: "move_performable",
-    description: "The move acts on something that exists as read (a clip, a phrase, a device, a placement). A move on something the reads show does not exist fails.",
+    description: "The move acts on something that exists as read (a clip, a phrase, a device, a placement). A move on something the reads show does not exist fails. No move proposed also passes.",
 };
+
+/// Provisional keys never invalidate a reply; gating and craft keys do.
+fn is_provisional(key: &str) -> bool {
+    [TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE].iter().any(|p| p.key == key)
+}
 
 const JUDGE_PROMPT: &str = "\
 You grade one answer from a music-production copilot against a list of \
@@ -893,16 +898,26 @@ fn parse_judge_reply(raw: &Value, props: &[Property]) -> JudgeReply {
     let verdicts = (|| {
         let parsed = reply_json(&content, &finish_reason)?;
         let object = parsed.as_object().ok_or("judge verdicts must be an object")?;
-        if object.len() != props.len() {
-            return Err("judge must return exactly the requested property keys".to_string());
+        if object.keys().any(|k| !props.iter().any(|p| p.key == k)) {
+            return Err("judge must return only the requested property keys".to_string());
         }
-        props.iter().map(|p| {
+        let mut verdicts = BTreeMap::new();
+        for p in props {
             let v = &parsed[p.key];
-            let pass = v["pass"].as_bool().ok_or_else(|| format!("{}: missing boolean pass", p.key))?;
-            let reason = v["reason"].as_str().filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| format!("{}: missing reason", p.key))?;
-            Ok((p.key.to_string(), (pass, reason.to_string())))
-        }).collect()
+            let verdict = v["pass"].as_bool().ok_or_else(|| format!("{}: missing boolean pass", p.key))
+                .and_then(|pass| {
+                    let reason = v["reason"].as_str().filter(|s| !s.trim().is_empty())
+                        .ok_or_else(|| format!("{}: missing reason", p.key))?;
+                    Ok((pass, reason.to_string()))
+                });
+            match verdict {
+                Ok(verdict) => { verdicts.insert(p.key.to_string(), verdict); }
+                // A bad provisional verdict is dropped; `tally` counts it as invalid.
+                Err(_) if is_provisional(p.key) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(verdicts)
     })();
     let model = raw["model"].as_str().unwrap_or("?").to_string();
     JudgeReply { verdicts, content, finish_reason, reasoning_tokens, model }
@@ -1553,6 +1568,39 @@ fn a_bad_timeline_verdict_never_invalidates_the_run() {
     let (passes, scores) = tally(&WHAT_NEXT, &runs, |_| true);
     assert_eq!(passes, 3);
     assert!(scores.contains("trust (provisional, report only) timeline_supported: 1/2 (1 invalid)"), "{scores}");
+}
+
+#[test]
+fn a_bad_provisional_verdict_in_the_main_reply_never_invalidates_the_run() {
+    // The reply omits `move_performable` and nulls `settings_supported`.
+    let content = json!({
+        "evidence_supports": { "pass": true, "reason": "claims supported" },
+        "no_invented_change": { "pass": true, "reason": "no change claimed" },
+        "ear_only_handed_over": { "pass": true, "reason": "ear test handed over" },
+        "conditional_move": { "pass": true, "reason": "move is conditional" },
+        "settings_supported": { "pass": null, "reason": "no values stated" },
+    }).to_string();
+    let props: Vec<Property> = WHAT_NEXT.must.iter().chain(&[SETTINGS_SUPPORTED, MOVE_PERFORMABLE]).copied().collect();
+    let reply = parse_judge_reply(&json!({
+        "choices": [{ "message": { "content": content }, "finish_reason": "stop" }]
+    }), &props);
+    let (verdicts, invalid) = merge_verdicts(reply.verdicts, Err("timeline not judged".into()));
+    assert_eq!(invalid, None);
+    assert_eq!(verdicts.len(), 4);
+
+    let mut run = trusted_run(&WHAT_NEXT, "Try a bass part.");
+    run.verdicts = verdicts;
+    let (passes, scores) = tally(&WHAT_NEXT, &[run], |_| true);
+    assert_eq!(passes, 1);
+    assert!(scores.contains("trust (provisional, report only) settings_supported: 0/0 (1 invalid)"), "{scores}");
+    assert!(scores.contains("trust (provisional, report only) move_performable: 0/0 (1 invalid)"), "{scores}");
+
+    // A gating key stays strict.
+    let strict = content.replace("\"no_invented_change\"", "\"renamed\"");
+    let reply = parse_judge_reply(&json!({
+        "choices": [{ "message": { "content": strict }, "finish_reason": "stop" }]
+    }), &props);
+    assert!(reply.verdicts.is_err());
 }
 
 #[test]
