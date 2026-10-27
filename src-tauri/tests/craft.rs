@@ -510,13 +510,13 @@ const CHORDS_CHANGED: Property = Property {
 };
 const PLAIN_WORDS: Property = Property {
     key: "plain_words",
-    description: "Readable by someone new to music production. Uses everyday words and short sentences. Each technical term it needs (for example MIDI, clip, fader, compressor) is explained in a few words the first time it appears. It uses no unexplained abbreviations such as dB, EQ, or BPM. Track, clip, and section names from the set are names, not jargon.",
+    description: "Readable by someone new to music production. Uses everyday words and short sentences. Each technical term it needs (for example MIDI, clip, send, Compressor) is explained in a few words the first time it appears. It uses no unexplained abbreviations such as dB, EQ, or BPM. Track, clip, and section names from the set are names, not jargon. A studio word Live never shows (bus, aux, fader, channel strip) fails unless replaced by Live's word.",
 };
 // The terms block's shape is checked in code (`common::terms_defects`); the
 // judge grades only what needs reading.
 const TERMS_LISTED: Property = Property {
     key: "terms_listed",
-    description: "Live's own device and parameter labels (for example Compressor, Threshold, Ratio, Attack, Release, Output Gain), units such as dB and ms, and names from the set are known and need no listing. Every other technical term she must act on (for example gain reduction, transient, sidechain) is either a plain word or listed under TERMS SHE CAN TAP. Each listed meaning is correct and plain: one everyday sentence on what the term changes. Quote the first unlisted term, or the first wrong or unplain meaning, in the reason.",
+    description: "The words under KNOWN WORDS, Live's device and parameter labels as the tools return them (for example Compressor, Threshold, Ratio, Attack, Release, Output Gain), units such as dB and ms, and names from the set are known and need no listing. Every other technical term she must act on (for example gain reduction, transient, sidechain) is either a plain word or listed under TERMS SHE CAN TAP. Each listed meaning is correct and plain: one everyday sentence on what the term changes. Quote the first unlisted term, or the first wrong or unplain meaning, in the reason.",
 };
 const GOAL_TIED: Property = Property {
     key: "goal_tied",
@@ -823,11 +823,16 @@ async fn judge(
         format!("MENTOR ANSWER (the bar, not the key)\n{mentor}")
     };
     let evidence = serde_json::to_string(calls).unwrap();
+    let known_block = if props.iter().any(|p| matches!(p.key, "terms_listed" | "plain_words")) {
+        format!("KNOWN WORDS (Live shows these)\n{}\n\n", common::checks::known_words().known.join(", "))
+    } else {
+        String::new()
+    };
     let user = format!(
         "QUESTION\n{question}\n\nCONTEXT BLOCK THE COPILOT SAW\n{context}\n\n\
          {mentor_block}\n\n\
          TOOL EVIDENCE (in call order)\n{evidence}\n\n\
-         ANSWER UNDER TEST\n{answer}\n\nPROPERTIES\n{list}"
+         ANSWER UNDER TEST\n{answer}\n\n{known_block}PROPERTIES\n{list}"
     );
     let s = judge_settings();
     let body = json!({
@@ -1050,6 +1055,17 @@ fn terms_pass(sc: &Scenario, run: &Run) -> bool {
     (listed || !sc.terms_required) && !common::terms_defects(&run.raw_answer).iter().any(|d| d.trust)
 }
 
+/// Whether a run's visible answer keeps to Live's words. Reported, never gated.
+/// Only "I finish tracks" shows a terms block, so only there can a listed
+/// term excuse a studio word.
+fn studio_words_clean(sc: &Scenario, run: &Run) -> bool {
+    let listed: Vec<String> = match common::terms_block(&run.raw_answer) {
+        Ok(Some(terms)) if sc.experience == Experience::FinishesTracks => terms.into_iter().map(|(t, _)| t).collect(),
+        _ => vec![],
+    };
+    common::checks::studio_word_defects(&run.answer, &listed).is_empty()
+}
+
 /// Trust checks gate the automated majority; craft misses stay visible.
 fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, String) {
     require_valid_evaluation(sc.question, runs, "");
@@ -1062,6 +1078,8 @@ fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, S
     let total = runs.len();
     let reads = runs.iter().filter(|r| extra(r)).count();
     let mut scores = format!("trust: {passes}/{total} runs; required reads: {reads}/{total}\n");
+    let studio_clean = runs.iter().filter(|r| studio_words_clean(sc, r)).count();
+    scores.push_str(&format!("studio words: {studio_clean}/{total} clean\n"));
     if sc.experience == Experience::FinishesTracks {
         let defects: Vec<_> = runs.iter().map(|r| common::terms_defects(&r.raw_answer)).collect();
         let clean = defects.iter().filter(|d| d.is_empty()).count();
@@ -1110,6 +1128,7 @@ fn the_trust_majority_keeps_craft_misses_visible() {
     let (passes, scores) = tally(&WHAT_NEXT, &runs, |_| true);
     assert_eq!(passes, 3);
     assert!(scores.contains("trust: 3/3 runs; required reads: 3/3"), "{scores}");
+    assert!(scores.contains("studio words: 3/3 clean"), "{scores}");
     assert!(scores.contains("HUMAN REVIEW REQUIRED: evidence_supports, ear_only_handed_over, conditional_move, listen_for;"), "{scores}");
     for key in ["one_move", "leave_it", "why"] {
         assert!(scores.contains(&format!("craft (report only) {key}: 0/3")), "{scores}");
@@ -1164,6 +1183,18 @@ fn the_terms_checks_gate_by_level_and_scenario_seven_needs_clean_terms() {
     let (count, scores) = tally(&DROP_FOR_A_NEWCOMER, &runs([sounds; 3], &DROP_FOR_A_NEWCOMER), |_| true);
     assert_eq!(count, 3);
     assert!(!scores.contains("terms:"), "{scores}");
+}
+
+#[test]
+fn the_tally_reports_studio_words_without_gating_on_them() {
+    let studio = "Pull the fader down.";
+    let listed = "Pull the fader down.\n```terms\nFader: The control that sets a track's volume.\n```";
+    let runs: Vec<Run> = [studio, listed, "Pull the volume down."].iter().map(|r| trusted_run(&WHAT_NEXT, r)).collect();
+    let (passes, scores) = tally(&WHAT_NEXT, &runs, |_| true);
+    assert_eq!(passes, 3);
+    assert!(scores.contains("studio words: 2/3 clean"), "{scores}");
+    let (_, scores) = tally(&DROP_FOR_A_NEWCOMER, &runs, |_| true);
+    assert!(scores.contains("studio words: 1/3 clean"), "{scores}");
 }
 
 #[test]

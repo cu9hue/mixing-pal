@@ -6,6 +6,8 @@
 //! include it are gated on that feature in `Cargo.toml`.
 #![allow(dead_code)] // each binary uses a subset
 
+pub mod checks;
+
 use mixing_pal_lib::eval_api::*;
 use rosc::OscType;
 use serde_json::{Value, json};
@@ -1062,12 +1064,9 @@ enum Span {
     Fence(String, bool),
 }
 
-/// Which `terms` the card makes tappable in `prose`, mirroring `markTerms` in
-/// src/ui/markdown.ts: longest term first, first occurrence in reading order,
-/// whole words ignoring case in any of `form_end`'s forms, never inside code,
-/// a «name» only when it is the whole term or its plural.
-/// shared/term-vectors.json pins the two together.
-pub fn tappable(prose: &str, terms: &[String]) -> Vec<String> {
+/// `prose` cut into the stretches `markTerms` sees: a line at a time, with
+/// closed fenced blocks dropped and «names» and `code` set apart.
+fn prose_spans(prose: &str) -> Vec<Span> {
     let lines: Vec<&str> = prose.lines().collect();
     let mut spans: Vec<Span> = Vec::new();
     let mut i = 0;
@@ -1097,7 +1096,16 @@ pub fn tappable(prose: &str, terms: &[String]) -> Vec<String> {
         spans.push(Span::Text(text, vec![]));
         i += 1;
     }
+    spans
+}
 
+/// Which `terms` the card makes tappable in `prose`, mirroring `markTerms` in
+/// src/ui/markdown.ts: longest term first, first occurrence in reading order,
+/// whole words ignoring case in any of `form_end`'s forms, never inside code,
+/// a «name» only when it is the whole term or its plural.
+/// shared/term-vectors.json pins the two together.
+pub fn tappable(prose: &str, terms: &[String]) -> Vec<String> {
+    let mut spans = prose_spans(prose);
     let mut order: Vec<(usize, &String)> = terms.iter().enumerate().collect();
     order.sort_by_key(|(_, t)| std::cmp::Reverse(t.chars().count()));
     let mut found = vec![false; terms.len()];
