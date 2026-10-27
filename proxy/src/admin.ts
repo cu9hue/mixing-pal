@@ -7,7 +7,7 @@ import { maintain } from "./maintenance";
 import { exportTurn } from "./export";
 import { sendInvitation } from "./invitation-email";
 import { pilotStats } from "./stats";
-import { billingSync, comp, refuseLiveSubscription, uncomp } from "./subscriptions";
+import { billingSync, comp, withoutSubscription, uncomp } from "./subscriptions";
 
 export async function admin(request: Request, env: Env, input: unknown): Promise<Response> {
   if (!env.ADMIN_TOKEN) throw new ApiError(503, "admin_disabled", "Operator access is not configured.");
@@ -105,8 +105,7 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
   const target = "member_id" in data ? data.member_id : "request_id" in data ? data.request_id : "service";
   if (data.action === "revoke") {
     // Revoking would leave the subscription charging for no access. Only this action asks Stripe: a replay must revoke regardless.
-    await refuseLiveSubscription(env, data.member_id);
-    await revokeAccess(env, data.member_id);
+    await withoutSubscription(env, data.member_id, () => revokeAccess(env, data.member_id));
   }
   if (data.action === "uncomp") await uncomp(env, data.member_id, now);
   if (data.action === "delete_account") await deleteAccount(env, data.member_id);

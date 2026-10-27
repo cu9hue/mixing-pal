@@ -78,7 +78,7 @@ const REFUSED = new Set(["stripe_rejected", "stripe_not_found", "card_declined"]
  * Refund first: if the refund fails for now, the subscription is still there when the webhook retries.
  */
 export async function cancelAndRefund(env: Env, sub: StripeSubscription,
-  reason: "duplicate" | "orphan" | "comp" | "customer_mismatch" | "after_end"): Promise<void> {
+  reason: "duplicate" | "orphan" | "comp" | "customer_mismatch" | "after_end" | "revoked"): Promise<void> {
   const invoice = sub.latest_invoice;
   const invoiceId = typeof invoice === "string" ? invoice : invoice?.id;
   // An expanded invoice that shows nothing paid saves the call; for a bare id, the list's status filter decides.
@@ -188,6 +188,11 @@ export async function applySubscription(env: Env, sub: StripeSubscription, stamp
     return true;
   }
   if (BILLABLE.has(sub.status) && await cancelForDeletionRequest(env, sub, memberId)) return true;
+  // Revoked means no access. A subscription that slipped in through a Checkout opened before the revoke is a mistake.
+  if (BILLABLE.has(sub.status) && (await member(env, memberId))?.revoked) {
+    await cancelAndRefund(env, sub, "revoked");
+    return true;
+  }
   if (row.stripe_subscription_id && row.stripe_subscription_id !== sub.id) {
     if (!LIVE.has(sub.status)) return true;
     // Read the stored one fresh: our cached status can lag a deletion webhook that has not arrived.
@@ -514,32 +519,30 @@ export async function upgrade(env: Env, memberId: string, modern: boolean): Prom
 }
 
 /**
- * For an operator action that would leave a subscription charging: refuses while Stripe, not the row,
- * shows one that can still charge. Returns the member's row.
+ * Runs an operator action that would leave a subscription charging for no access. Refuses while Stripe, not the row,
+ * shows one that can still charge. Then expires open Checkouts, acts, and looks again: the apply path refunds and
+ * cancels a subscription from a Checkout that completed in between.
  */
-export async function refuseLiveSubscription(env: Env, memberId: string): Promise<SubscriptionRow | null> {
+export async function withoutSubscription(env: Env, memberId: string, act: () => Promise<unknown>): Promise<void> {
   const row = await subscriptionRow(env, memberId);
   if (row && (await syncCustomer(env, row)).billable) {
     throw new ApiError(409, "subscription_live", "This account has a live subscription. Cancel it in Stripe first.");
   }
-  return row;
+  if (row) await expireCheckouts(env, row.stripe_customer_id);
+  await act();
+  if (row) await syncCustomer(env, row);
 }
 
 export async function comp(env: Env, email: string, now = Date.now()): Promise<{ member_id: string }> {
   const user = await env.DB.prepare('SELECT id FROM "user" WHERE lower(email) = ?').bind(email).first<{ id: string }>();
   if (!user) throw new ApiError(404, "user_not_found", "No account uses that email. Ask them to sign in once first.");
-  const row = await refuseLiveSubscription(env, user.id);
   const m = await member(env, user.id);
   if (m?.revoked || m?.deleted_at) throw new ApiError(409, "access_denied", "This account is revoked or deleted.");
-  // A Checkout opened before comp would start a paid subscription; the apply path refunds any that slips through.
-  if (row) await expireCheckouts(env, row.stripe_customer_id);
-  await env.DB.prepare(`INSERT INTO members(id, allowance, period_end, created_at, comp) VALUES (?, ?, ?, ?, 1)
+  await withoutSubscription(env, user.id, () => env.DB.prepare(`INSERT INTO members(id, allowance, period_end, created_at, comp) VALUES (?, ?, ?, ?, 1)
     ON CONFLICT(id) DO UPDATE SET comp = 1, allowance = excluded.allowance,
       spent = CASE WHEN members.period_end <= ? THEN 0 ELSE members.spent END,
       period_end = MAX(members.period_end, excluded.period_end)`)
-    .bind(user.id, COMP_ALLOWANCE, now + COMP_PERIOD, now, now).run();
-  // A Checkout that completed after the first look is no longer open. Look again: the apply refunds and cancels it now that comp is set.
-  if (row) await syncCustomer(env, row);
+    .bind(user.id, COMP_ALLOWANCE, now + COMP_PERIOD, now, now).run());
   return { member_id: user.id };
 }
 

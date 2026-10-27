@@ -365,6 +365,17 @@ describe("applying Stripe state", () => {
     expect(await memberRow()).toMatchObject({ allowance: 8_000_000, period_end: now + DAY, comp: 1 });
   });
 
+  test("a subscription live on a revoked account is refunded and canceled", async () => {
+    await customer();
+    await env.DB.prepare("INSERT INTO members(id, allowance, period_end, created_at, revoked) VALUES ('m1', 2000000, ?, 0, 1)").bind(now + DAY).run();
+    paidInvoices();
+    routes["DELETE /subscriptions/sub_1"] = () => subscription({ status: "canceled", member: "m1" });
+    await apply(subscription({ status: "active", member: "m1" }), now);
+    expect(paramsOf(calls, "POST /refunds")).toEqual([{ payment_intent: "pi_in_1" }]);
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual(["/subscriptions/sub_1"]);
+    expect(await memberRow()).toMatchObject({ allowance: 2_000_000, period_end: now + DAY });
+  });
+
   describe("a subscription for an account whose deletion is pending", () => {
     // As deleteAccount does: the member is revoked and deleted, and a job is queued for the sweep.
     async function deletionRequested(at: number, job = true) {
@@ -1395,7 +1406,11 @@ describe("comp and renewals", () => {
     await apply(subscription({ status: "active", member: user.id }));
     await apply(canceled);
     routes["GET /subscriptions"] = () => ({ data: [canceled] });
+    // A Checkout still open would start a subscription the revoked member cannot use.
+    routes["GET /checkout/sessions"] = () => ({ data: [{ id: "cs_1" }] });
+    routes["POST /checkout/sessions/cs_1/expire"] = () => ({ id: "cs_1", status: "expired" });
     expect((await operate({ action: "revoke", member_id: user.id })).status).toBe(200);
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/checkout/sessions/cs_1/expire"]);
     expect(await revoked(user.id)).toBe(1);
     // A restore to before the revoke. Replay must revoke even if a subscription went live since.
     await env.DB.prepare("UPDATE members SET revoked = 0 WHERE id = ?").bind(user.id).run();

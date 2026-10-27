@@ -61,6 +61,7 @@ duplicate_subscription, subscription_refunded,
 subscription_canceled_unrefunded, refund_failed,
 subscription_canceled_for_deletion, renewal_sync_failed,
 renewal_maintenance_failed, deletion_cancel_failed, billing_not_configured.
+The service budget adds budget_low and budget_exhausted.
 Alert on any of these in Cloudflare Logs.
 budget_low: less than 20 requests' worth of service budget is left. Raise the
 OpenRouter key's credit cap, then set-budget to the same amount.
