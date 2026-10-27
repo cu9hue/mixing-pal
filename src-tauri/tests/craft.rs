@@ -18,15 +18,21 @@
 //!     -- --ignored --nocapture
 //! Disagreements require human review of the affected properties. Agreement on
 //! this small sample does not establish general judge accuracy.
-//! The 2026-09-11 replay agreed on 39/48 labels. Scenario reports flag the five
+//! The 2026-09-11 replay agreed on 39/48 labels. Scenario reports flag the
 //! properties still needing review; their automated majority is provisional.
 //!
 //! `MIXINGPAL_CRAFT_RUNS` sets the runs per scenario (default 3, a positive
-//! integer). Add `MIXINGPAL_CRAFT_AB=1` to the run command above to run the
-//! app's current prompt against main's prompt as saved in `prompt-baseline.txt`
-//! in one session. A pairwise judge reads each pair in both orders. The A/B
-//! refuses any scenario with `terms_required` and any level other than
-//! "I finish tracks".
+//! integer). `MIXINGPAL_CRAFT_AB=1` runs the app's current prompt against
+//! main's prompt as saved in `prompt-baseline.txt` in one session. A pairwise
+//! judge reads each pair in both orders. The A/B refuses any scenario with
+//! `terms_required` and any level other than "I finish tracks", so it runs
+//! scenarios 1 to 3 only. Exact names keep scenario 6 out:
+//!
+//!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
+//!     MIXINGPAL_JUDGE_MODEL=anthropic/claude-opus-5.5 \
+//!     MIXINGPAL_CRAFT_AB=1 MIXINGPAL_CRAFT_RUNS=5 \
+//!     cargo test --features evals --test craft -- --test-threads=1 --nocapture --exact \
+//!       why_does_the_drop_fall_flat what_should_i_do_next is_the_pad_too_busy
 //!
 //! The judge in use since 2026-10-21 is anthropic/claude-opus-5.5. Two replays
 //! of the 13-case sample agreed on 48/50 and 44/46 labels, every label on the
