@@ -1021,7 +1021,60 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
     }
 }
 
-const RUNS: usize = 3;
+const DEFAULT_RUNS: usize = 3;
+
+fn parse_runs(raw: Option<&str>) -> usize {
+    let Some(raw) = raw else { return DEFAULT_RUNS };
+    match raw.trim().parse::<usize>() {
+        Ok(n) if n > 0 => n,
+        _ => panic!("MIXINGPAL_CRAFT_RUNS must be a positive whole number, got {raw:?}"),
+    }
+}
+
+/// Runs per scenario. More runs tighten the intervals the report prints.
+fn runs() -> usize {
+    parse_runs(std::env::var("MIXINGPAL_CRAFT_RUNS").ok().as_deref())
+}
+
+/// The 80% Wilson interval for `passes` of `total`. It stays inside 0 to 1 and
+/// is wide on few runs, which is the honest reading of a small sample.
+fn wilson80(passes: usize, total: usize) -> (f64, f64) {
+    const Z: f64 = 1.2816;
+    let (p, n) = (passes as f64 / total as f64, total as f64);
+    let denom = 1.0 + Z * Z / n;
+    let center = (p + Z * Z / (2.0 * n)) / denom;
+    let margin = Z * (p * (1.0 - p) / n + Z * Z / (4.0 * n * n)).sqrt() / denom;
+    ((center - margin).max(0.0), (center + margin).min(1.0))
+}
+
+/// How many runs took the most common read path (the sorted tool calls with
+/// their args), out of all runs.
+fn read_agreement(runs: &[Run]) -> (usize, usize) {
+    let mut paths: BTreeMap<Vec<(String, String)>, usize> = BTreeMap::new();
+    for r in runs {
+        let mut path: Vec<_> = r.calls.iter().map(|c| (c.name.clone(), c.args.to_string())).collect();
+        path.sort();
+        *paths.entry(path).or_default() += 1;
+    }
+    (paths.values().copied().max().unwrap_or(0), runs.len())
+}
+
+/// Property pairs that failed in the same run, in at least two runs, most
+/// often first. A key missing from a run's verdicts did not fail there.
+fn co_failures(runs: &[Run]) -> Vec<(String, String, usize)> {
+    let mut pairs: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for r in runs {
+        let failed: Vec<&String> = r.verdicts.iter().filter(|(_, v)| !v.0).map(|(k, _)| k).collect();
+        for (i, a) in failed.iter().enumerate() {
+            for b in &failed[i + 1..] {
+                *pairs.entry(((*a).clone(), (*b).clone())).or_default() += 1;
+            }
+        }
+    }
+    let mut pairs: Vec<_> = pairs.into_iter().filter(|(_, n)| *n >= 2).map(|((a, b), n)| (a, b, n)).collect();
+    pairs.sort_by(|x, y| y.2.cmp(&x.2));
+    pairs
+}
 
 /// One run's block in a failure report: the tools called, the answer, and
 /// the judge's verdicts.
@@ -1042,9 +1095,10 @@ fn report_line(i: usize, run: &Run) -> String {
 /// Finish every run before rejecting an invalid evaluation so the report
 /// includes all answers and judge evidence.
 async fn run_all(sc: &Scenario) -> (Vec<Run>, String) {
-    let mut runs = Vec::with_capacity(RUNS);
+    let count = runs();
+    let mut runs = Vec::with_capacity(count);
     let mut report = String::new();
-    for i in 0..RUNS {
+    for i in 0..count {
         let run = run_once(sc, None).await;
         let line = report_line(i, &run);
         println!("{}{line}", sc.question);
@@ -1071,7 +1125,7 @@ fn require_valid_evaluation(question: &str, runs: &[Run], report: &str) {
 
 #[test]
 fn an_invalid_judge_prevents_even_a_green_majority() {
-    let mut runs: Vec<Run> = (0..RUNS).map(|_| Run {
+    let mut runs: Vec<Run> = (0..3).map(|_| Run {
         answer: "one move".into(), raw_answer: "one move".into(), called: vec![], calls: vec![], context: String::new(),
         verdicts: BTreeMap::from([("one_move".into(), (true, "one intervention".into()))]),
         infra_error: None, invalid_evaluation: None, judge_report: None,
@@ -1151,7 +1205,11 @@ fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, S
     }).count();
     let total = runs.len();
     let reads = runs.iter().filter(|r| extra(r)).count();
-    let mut scores = format!("trust: {passes}/{total} runs; required reads: {reads}/{total}\n");
+    let (lo, hi) = wilson80(passes, total);
+    let mut scores = format!(
+        "trust: {passes}/{total} runs (80% interval {:.0}–{:.0}%); required reads: {reads}/{total}\n",
+        lo * 100.0, hi * 100.0
+    );
     let studio_clean = runs.iter().filter(|r| studio_words_clean(sc, r)).count();
     scores.push_str(&format!("studio words: {studio_clean}/{total} clean\n"));
     let values_ok = runs.iter().filter(|r| values_clean(r)).count();
@@ -1169,6 +1227,11 @@ fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, S
             "HUMAN REVIEW REQUIRED: {}; automated scores are provisional until reviewed.\n",
             review.join(", ")
         ));
+    }
+    let (modal, _) = read_agreement(runs);
+    scores.push_str(&format!("read paths: {modal}/{total} runs share the modal path\n"));
+    for (a, b, n) in co_failures(runs) {
+        scores.push_str(&format!("fail together: {a} + {b} {n}/{total}\n"));
     }
     for (kind, properties) in [("trust", sc.must), ("craft (report only)", sc.craft)] {
         for p in properties {
@@ -1189,7 +1252,7 @@ fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, S
 
 #[test]
 fn the_trust_majority_keeps_craft_misses_visible() {
-    let mut runs: Vec<Run> = (0..RUNS).map(|_| {
+    let mut runs: Vec<Run> = (0..3).map(|_| {
         let reply = parse_judge_reply(&json!({
             "choices": [{ "finish_reason": "stop", "message": { "content": json!({
                 "evidence_supports": { "pass": true, "reason": "claims supported" },
@@ -1214,7 +1277,7 @@ fn the_trust_majority_keeps_craft_misses_visible() {
     }).collect();
     let (passes, scores) = tally(&WHAT_NEXT, &runs, |_| true);
     assert_eq!(passes, 3);
-    assert!(scores.contains("trust: 3/3 runs; required reads: 3/3"), "{scores}");
+    assert!(scores.contains("trust: 3/3 runs (80% interval 65–100%); required reads: 3/3"), "{scores}");
     assert!(scores.contains("studio words: 3/3 clean"), "{scores}");
     assert!(scores.contains("HUMAN REVIEW REQUIRED: evidence_supports, ear_only_handed_over, conditional_move, listen_for;"), "{scores}");
     for key in ["one_move", "leave_it", "why"] {
@@ -1341,6 +1404,95 @@ fn a_bad_timeline_verdict_never_invalidates_the_run() {
 }
 
 #[test]
+fn wilson80_brackets_the_pass_rate() {
+    let (lo, hi) = wilson80(1, 3);
+    assert!((lo - 0.11).abs() < 0.005 && (hi - 0.68).abs() < 0.005, "{lo} {hi}");
+    let (lo, hi) = wilson80(3, 3);
+    assert!(lo > 0.4 && (hi - 1.0).abs() < 1e-9, "{lo} {hi}");
+    assert_eq!(wilson80(0, 3).0, 0.0);
+}
+
+#[test]
+fn parse_runs_defaults_to_three_and_rejects_garbage() {
+    assert_eq!(parse_runs(None), 3);
+    assert_eq!(parse_runs(Some("5")), 5);
+}
+
+#[test]
+#[should_panic(expected = "MIXINGPAL_CRAFT_RUNS")]
+fn parse_runs_rejects_zero() {
+    parse_runs(Some("0"));
+}
+
+#[test]
+#[should_panic(expected = "MIXINGPAL_CRAFT_RUNS")]
+fn parse_runs_rejects_a_negative() {
+    parse_runs(Some("-1"));
+}
+
+#[test]
+#[should_panic(expected = "MIXINGPAL_CRAFT_RUNS")]
+fn parse_runs_rejects_a_non_number() {
+    parse_runs(Some("abc"));
+}
+
+/// A run that made these (tool, args) calls and nothing else.
+fn run_with_calls(calls: &[(&str, Value)]) -> Run {
+    let mut run = trusted_run(&WHAT_NEXT, "Try a bass part.");
+    run.calls = calls.iter()
+        .map(|(n, a)| common::ToolCallRecord::new((*n).into(), a.clone(), json!({})))
+        .collect();
+    run
+}
+
+#[test]
+fn read_agreement_counts_the_modal_read_path() {
+    let a = [("get_arrangement", json!({})), ("get_tracks", json!({ "a": 1 }))];
+    // Same calls in another order are the same path.
+    let a_reordered = [("get_tracks", json!({ "a": 1 })), ("get_arrangement", json!({}))];
+    let b = [("get_arrangement", json!({}))];
+    let runs = [run_with_calls(&a), run_with_calls(&a_reordered), run_with_calls(&b)];
+    assert_eq!(read_agreement(&runs), (2, 3));
+    // Different args are a different path.
+    let c = [("get_arrangement", json!({})), ("get_tracks", json!({ "a": 2 }))];
+    let runs = [run_with_calls(&a), run_with_calls(&c), run_with_calls(&b)];
+    assert_eq!(read_agreement(&runs), (1, 3));
+}
+
+#[test]
+fn co_failures_lists_pairs_that_fail_together() {
+    let mut runs: Vec<Run> = (0..3).map(|_| trusted_run(&WHAT_NEXT, "Try a bass part.")).collect();
+    let fail = |run: &mut Run, key: &str| { run.verdicts.insert(key.into(), (false, "no".into())); };
+    for run in &mut runs[..2] {
+        fail(run, "one_move");
+        fail(run, "why");
+        fail(run, "timeline_supported");
+    }
+    // Failing alone, or in one run only, is not a pair; a missing verdict is not a failure.
+    fail(&mut runs[2], "leave_it");
+    fail(&mut runs[2], "why");
+    let pairs = co_failures(&runs);
+    assert_eq!(pairs, vec![
+        ("one_move".to_string(), "timeline_supported".to_string(), 2),
+        ("one_move".to_string(), "why".to_string(), 2),
+        ("timeline_supported".to_string(), "why".to_string(), 2),
+    ]);
+    let (_, scores) = tally(&WHAT_NEXT, &runs, |_| true);
+    assert!(scores.contains("read paths: 3/3 runs share the modal path"), "{scores}");
+    assert!(scores.contains("fail together: one_move + timeline_supported 2/3"), "{scores}");
+}
+
+#[test]
+fn the_trust_line_prints_its_interval() {
+    let mut runs: Vec<Run> = (0..3).map(|_| trusted_run(&WHAT_NEXT, "Try a bass part.")).collect();
+    runs[1].verdicts.insert("evidence_supports".into(), (false, "invented".into()));
+    runs[2].verdicts.insert("evidence_supports".into(), (false, "invented".into()));
+    let (passes, scores) = tally(&WHAT_NEXT, &runs, |_| true);
+    assert_eq!(passes, 1);
+    assert!(scores.contains("trust: 1/3 runs (80% interval 11–68%); required reads: 3/3"), "{scores}");
+}
+
+#[test]
 fn the_timeline_judge_sees_only_arrangement_evidence() {
     let call = |name: &str| common::ToolCallRecord::new(name.into(), json!({}), json!({ "value": [] }));
     let calls: Vec<_> = ["get_device_params", "get_arrangement", "get_clip_notes", "get_arrangement_notes", "get_device_chains"]
@@ -1383,7 +1535,7 @@ fn stance(run: &Run) -> Stance {
     }
 }
 
-/// Runs the scenario `RUNS` times like `tally`, recording each run's stance
+/// Runs the scenario `runs()` times like `tally`, recording each run's stance
 /// on the pad's chords rather than a pass/fail. A run that fails `extra`
 /// counts as `Stance::None`: it never earned a claim about the chords.
 async fn stances(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (Vec<Stance>, String) {
@@ -1396,7 +1548,7 @@ async fn passes_majority(sc: &Scenario, extra: impl Fn(&Run) -> bool) {
     let (runs, report) = run_all(sc).await;
     let (passes, scores) = tally(sc, &runs, extra);
     println!("{}\n{scores}", sc.question);
-    assert!(passes * 2 > RUNS, "trust majority failed: {scores}{report}");
+    assert!(passes * 2 > runs.len(), "trust majority failed: {scores}{report}");
 }
 
 // Scenario 1. Vox replaces Pad at the Drop; Bass has no placements.
@@ -1638,9 +1790,9 @@ async fn the_goal_report_at_the_apps_temperature() {
     let (techno, techno_report) = stances(&CHORDS_TECHNO, grounded_and_tied).await;
     println!("goal report: garage {garage:?}, techno {techno:?}");
     let decided = |arm: &[Stance]| arm.iter().filter(|s| **s != Stance::None).count();
-    let (g, t) = (decided(&garage), decided(&techno));
+    let (g, t, n) = (decided(&garage), decided(&techno), runs());
     assert!(
-        g * 2 > RUNS && t * 2 > RUNS,
-        "a majority of each arm must decide and tie the decision to the goal; garage {g}/{RUNS}, techno {t}/{RUNS}\n\ngarage: {garage:?}\ntechno: {techno:?}\n\n=== garage arm ==={garage_report}\n=== techno arm ==={techno_report}"
+        g * 2 > n && t * 2 > n,
+        "a majority of each arm must decide and tie the decision to the goal; garage {g}/{n}, techno {t}/{n}\n\ngarage: {garage:?}\ntechno: {techno:?}\n\n=== garage arm ==={garage_report}\n=== techno arm ==={techno_report}"
     );
 }
