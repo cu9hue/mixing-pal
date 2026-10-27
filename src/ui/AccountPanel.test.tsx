@@ -25,6 +25,27 @@ it("says deleting the account is permanent, marks the button as dangerous, and s
 
 const signedIn = (view: Partial<AccountView>): AccountState =>
   ({ ...account, view: { access: "active", capture: false, email: "producer@example.com", ...view } });
+const day = (time: number) => new Date(time).toLocaleDateString();
+const planLine = () => document.querySelector(".account__summary")?.firstElementChild?.textContent;
+
+it("the summary leads with the plan line, then the email", () => {
+  render(<AccountPanel account={signedIn({ subscription_status: "active", plan: "starter", remaining_micro_usd: 1_000_000, period_end: Date.UTC(2026, 10, 8) })} />);
+  const lines = document.querySelector(".account__summary")!.children;
+  expect(lines[0].textContent).toBe(`Starter · resets ${day(Date.UTC(2026, 10, 8))}`);
+  expect(lines[1].textContent).toBe("producer@example.com");
+});
+
+it("Sign out and Delete account… are quiet links beside the one Manage subscription button", () => {
+  render(<AccountPanel account={signedIn({ subscription_status: "active", plan: "starter", manage: true, remaining_micro_usd: 1_000_000 })} />);
+  const manage = screen.getByRole("button", { name: "Manage subscription" });
+  const signOut = screen.getByRole("button", { name: "Sign out" });
+  const remove = screen.getByRole("button", { name: "Delete account…" });
+  expect(manage.className).not.toContain("account__link");
+  expect(signOut.className).toContain("account__link");
+  expect(remove.className).toContain("account__link");
+  expect(signOut.parentElement).toBe(manage.parentElement);
+  expect(remove.parentElement).toBe(manage.parentElement);
+});
 
 const signedOut = (signup?: "open" | "invite"): AccountState =>
   ({ ...account, view: { access: "signed_out", capture: false, ...(signup ? { signup } : {}) } });
@@ -71,13 +92,14 @@ it("lets a trialist who ran out start her plan now", async () => {
   expect(change).toHaveBeenCalledWith(expect.objectContaining({ subscription_status: "active" }));
 });
 
-it("offers Pro to a Starter member who ran out, and only the reset date to Pro", () => {
+it("offers Pro to a Starter member who ran out, and only the plan line's reset date to Pro", () => {
   render(<AccountPanel account={signedIn({ subscription_status: "active", plan: "starter", can_ask: false, remaining_micro_usd: 100, period_end: Date.UTC(2026, 10, 20) })} />);
   expect(screen.getByRole("button", { name: "Upgrade to Pro" })).toBeTruthy();
   cleanup();
   render(<AccountPanel account={signedIn({ subscription_status: "active", plan: "pro", can_ask: false, remaining_micro_usd: 100, period_end: Date.UTC(2026, 10, 20) })} />);
   expect(screen.queryByRole("button", { name: "Upgrade to Pro" })).toBeNull();
-  expect(screen.getByText(/It resets on/)).toBeTruthy();
+  expect(planLine()).toContain(`resets ${day(Date.UTC(2026, 10, 20))}`);
+  expect(screen.queryByText(/It resets on/)).toBeNull();
 });
 
 it("warns when a payment failed, and opens the Portal from Manage subscription", async () => {
@@ -105,9 +127,10 @@ it("names the plan, a trial, and free access", () => {
   expect(screen.getByText(/Free access/)).toBeTruthy();
 });
 
-it("a comped account that ran out shows when it resets, with no button", () => {
+it("a comped account that ran out shows when it resets on the plan line, with no button", () => {
   render(<AccountPanel account={signedIn({ comp: true, can_ask: false, remaining_micro_usd: 100, period_end: Date.UTC(2026, 10, 20) })} />);
-  expect(screen.getByText(/It resets on/)).toBeTruthy();
+  expect(planLine()).toBe(`Free access · resets ${day(Date.UTC(2026, 10, 20))}`);
+  expect(screen.queryByText(/It resets on/)).toBeNull();
   expect(screen.queryByRole("button", { name: "Upgrade to Pro" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Start my plan now" })).toBeNull();
   expect(document.querySelector(".account__summary")?.textContent).not.toContain("until");
@@ -190,12 +213,13 @@ it("a start-now that opens the invoice page keeps polling, though the account it
   } finally { vi.useRealTimers(); }
 });
 
-it("a plan set to end says it ends, not that it resets", () => {
+it("a plan set to end says it ends on the plan line, not that it resets", () => {
   const end = Date.UTC(2026, 10, 20);
   const view = { subscription_status: "active", plan: "pro", can_ask: false, remaining_micro_usd: 100, period_end: end } as const;
   render(<AccountPanel account={signedIn({ ...view, cancel_at_period_end: true })} />);
-  expect(screen.getByText(`Your plan ends on ${new Date(end).toLocaleDateString()}.`, { exact: false })).toBeTruthy();
-  expect(screen.queryByText(/It resets on/)).toBeNull();
+  expect(planLine()).toBe(`Pro · ends ${day(end)}`);
+  expect(screen.queryByText(/Your plan ends on/)).toBeNull();
+  expect(screen.queryByText(/resets/)).toBeNull();
 });
 
 const active = { subscription_status: "active", plan: "starter", manage: true, remaining_micro_usd: 1_000_000, period_end: Date.UTC(2026, 10, 20) } as const;
@@ -288,6 +312,6 @@ it.each([
 it("a revoked account says so first, before the sharing choice", () => {
   render(<AccountPanel account={signedIn({ access: "revoked" })} />);
   const revoked = screen.getByText("Your access was revoked. Contact Mixing Pal.");
-  expect(document.querySelector(".account__title")?.nextElementSibling).toBe(revoked);
+  expect(document.querySelector(".account__title")?.nextElementSibling?.contains(revoked)).toBe(true);
   expect(revoked.compareDocumentPosition(screen.getByRole("checkbox")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

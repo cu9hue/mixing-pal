@@ -22,12 +22,6 @@ function dateWord(view: AccountView): string {
   return view.cancel_at_period_end ? "ends" : "resets";
 }
 
-function periodNote(view: AccountView): string | null {
-  if (!(view.comp || (view.plan && view.subscription_status === "active")) || !view.period_end) return null;
-  const date = new Date(view.period_end).toLocaleDateString();
-  return view.cancel_at_period_end ? ` Your plan ends on ${date}.` : ` It resets on ${date}.`;
-}
-
 export function AccountPanel({ account }: { account: AccountState }) {
   const id = useId();
   const [email, setEmail] = useState("");
@@ -68,6 +62,10 @@ export function AccountPanel({ account }: { account: AccountState }) {
     return () => { clearInterval(poll); clearTimeout(stop); };
   }, [opened, trip, account.refresh]);
   const problem = error ?? account.error;
+  // A member who ran out gets one way to more allowance, unless the service is paused or still checking usage.
+  const wayUp = view?.access !== "active" || view.can_ask !== false || view.service_paused || (view.reserved_micro_usd ?? 0) > 0 ? null
+    : view.subscription_status === "trialing" ? "start-now"
+    : view.subscription_status === "active" && view.plan === "starter" ? "upgrade" : null;
   const signingIn = view === null || view.access === "signed_out" || view.access === "invitation_required";
   // With billing on anyone may sign up; otherwise only an invited email can.
   const open = view?.signup === "open";
@@ -95,7 +93,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
   return (
     <section className={`account${signingIn ? " account--sign-in" : ""}`} aria-labelledby={`${id}-title`} data-tauri-drag-region="false">
       <h2 id={`${id}-title`} className="account__title">{signingIn ? "A mentor for the track you're writing." : "Account"}</h2>
-      {view?.access === "revoked" && <p>Your access was revoked. Contact Mixing Pal.</p>}
+      {view?.access === "revoked" && <div className="account__group"><p>Your access was revoked. Contact Mixing Pal.</p></div>}
       {signingIn && <p className="account__subtitle">{open ? "Sign in with your email." : "Sign in with the email your invite came to."}</p>}
       {problem && <p id={`${id}-error`} className="account__error" role="alert">{problem}</p>}
       {view === null && <>
@@ -143,39 +141,46 @@ export function AccountPanel({ account }: { account: AccountState }) {
         <button type="submit" disabled={busy || operations.install}>Join the free pilot</button>
       </form>}
       {view?.access === "plan_required" && <>
-        <p>Signed in as {view.email}.</p>
-        {/* Stripe still holds this subscription: she fixes the card in the Portal. A new plan would be a second one. */}
-        {view.subscription_status === "past_due" || view.subscription_status === "unpaid"
-          ? <p role="alert">Your payment didn't go through. Update your card in Manage subscription to get access back.</p>
-          : <PlanPicker trial={view.trial_available === true} busy={busy || operations.install} onPick={(plan) => billing("checkout", plan)} />}
+        <div className="account__group"><p>Signed in as {view.email}.</p></div>
+        <div className="account__group">
+          {/* Stripe still holds this subscription: she fixes the card in the Portal. A new plan would be a second one. */}
+          {view.subscription_status === "past_due" || view.subscription_status === "unpaid"
+            ? <p role="alert">Your payment didn't go through. Update your card in Manage subscription to get access back.</p>
+            : <PlanPicker trial={view.trial_available === true} busy={busy || operations.install} onPick={(plan) => billing("checkout", plan)} />}
+        </div>
       </>}
       {opened && <p role="status">Finish in your browser. This window updates when you come back.</p>}
       {view?.access === "active" && <>
-        <div className="account__summary">
-          <div className="account__email">{view.email}</div>
-          <div>{planLabel(view)}{(view.remaining_micro_usd ?? 0) > 0 ? "" : " · allowance used up"}
-            {view.period_end && ` · ${dateWord(view)} ${new Date(view.period_end).toLocaleDateString()}`}</div>
-          <div>${((view.remaining_micro_usd ?? 0) / 1_000_000).toFixed(2)} of model usage remains.
-          {(view.reserved_micro_usd ?? 0) > 0 && " Some allowance is held for requests being checked."}</div>
-          {view.can_ask === false && <div>{view.service_paused ? "Model access is temporarily paused." : (view.reserved_micro_usd ?? 0) > 0
-            ? "We’re checking the last request’s usage before you can ask again."
-            : <>
-              The remaining allowance cannot cover another request.
-              {periodNote(view)}
-              {view.subscription_status === "trialing" && <div className="account__actions">
-                <button className="account__primary" disabled={busy || operations.install} onClick={() => billing("start-now")}>Start my plan now</button>
-                <span>Ends your trial and charges your card today.</span>
-              </div>}
-              {view.subscription_status === "active" && view.plan === "starter" && <div className="account__actions">
-                <button className="account__primary" disabled={busy || operations.install} onClick={() => billing("upgrade")}>Upgrade to Pro</button>
-                <span>Charges the difference for the rest of this period.</span>
-              </div>}
-            </>}</div>}
+        <div className="account__group">
+          <div className="account__summary">
+            <div className="account__plan">{planLabel(view)}{(view.remaining_micro_usd ?? 0) > 0 ? "" : " · allowance used up"}
+              {view.period_end && ` · ${dateWord(view)} ${new Date(view.period_end).toLocaleDateString()}`}</div>
+            <div className="account__email">{view.email}</div>
+            <div>${((view.remaining_micro_usd ?? 0) / 1_000_000).toFixed(2)} of model usage remains.
+            {(view.reserved_micro_usd ?? 0) > 0 && " Some allowance is held for requests being checked."}</div>
+            {view.can_ask === false && <div>{view.service_paused ? "Model access is temporarily paused." : (view.reserved_micro_usd ?? 0) > 0
+              ? "We’re checking the last request’s usage before you can ask again."
+              : "The remaining allowance cannot cover another request."}</div>}
+          </div>
+        </div>
+        {(wayUp || view.subscription_status === "past_due") && <div className="account__group">
+          {wayUp === "start-now" && <>
+            <div className="account__actions">
+              <button className="account__primary" disabled={busy || operations.install} onClick={() => billing("start-now")}>Start my plan now</button>
+            </div>
+            <p className="account__caption">Ends your trial and charges your card today.</p>
+          </>}
+          {wayUp === "upgrade" && <>
+            <div className="account__actions">
+              <button className="account__primary" disabled={busy || operations.install} onClick={() => billing("upgrade")}>Upgrade to Pro</button>
+            </div>
+            <p className="account__caption">Charges the difference for the rest of this period.</p>
+          </>}
           {view.subscription_status === "past_due" && <p role="alert">Your payment didn't go through. Update your card to keep access
             {view.period_end && ` past ${new Date(view.period_end).toLocaleDateString()}`}.</p>}
-        </div>
+        </div>}
       </>}
-      {view && ["active", "expired", "revoked"].includes(view.access) && <>
+      {view && ["active", "expired", "revoked"].includes(view.access) && <div className="account__group">
         <SharingConsent
           checked={view.capture}
           disabled={busy || operations.install || (view.access !== "active" && !view.capture)}
@@ -197,24 +202,26 @@ export function AccountPanel({ account }: { account: AccountState }) {
           <button className="account__link" disabled={busy || operations.install} onClick={() => { setSharedDeleted(false); setDeletingShared(true); }}>Delete shared advice…</button>
         </div>}
         {sharedDeleted && <p role="status">Deletion requested.</p>}
-      </>}
+      </div>}
       {/* Only billing off ends a period as expired. */}
       {view?.access === "expired" && <p>Your pilot access has ended. Contact Mixing Pal to continue.</p>}
-      {view && view.access !== "signed_out" && <div className="account__actions">
-        {view.manage && <button disabled={busy || operations.install} onClick={() => billing("portal")}>Manage subscription</button>}
-        <button disabled={busy || operations.install} onClick={() => void act(async () => {
-          await invoke("account_sign_out"); account.change({ access: "signed_out", capture: false }); void account.refresh(); setCodeSent(false);
-        })}>Sign out</button>
-        <button disabled={busy || operations.install} onClick={() => setDeleting(true)}>Delete account…</button>
-      </div>}
-      {deleting && <div>
-        <p>Delete your account? This can't be undone. Your access ends, and any subscription is canceled with no refund. Everything you shared is deleted. Your set notes stay on this laptop.</p>
+      {view && view.access !== "signed_out" && <div className="account__group">
         <div className="account__actions">
-          <button className="account__danger" disabled={busy || operations.install} onClick={() => void act(async () => {
-            await invoke("account_delete"); account.change({ access: "signed_out", capture: false }); void account.refresh(); setDeleting(false);
-          })}>Delete my account</button>
-          <button ref={keep} disabled={busy || operations.install} onClick={() => setDeleting(false)}>Cancel</button>
+          {view.manage && <button disabled={busy || operations.install} onClick={() => billing("portal")}>Manage subscription</button>}
+          <button className="account__link" disabled={busy || operations.install} onClick={() => void act(async () => {
+            await invoke("account_sign_out"); account.change({ access: "signed_out", capture: false }); void account.refresh(); setCodeSent(false);
+          })}>Sign out</button>
+          <button className="account__link" disabled={busy || operations.install} onClick={() => setDeleting(true)}>Delete account…</button>
         </div>
+        {deleting && <div>
+          <p>Delete your account? This can't be undone. Your access ends, and any subscription is canceled with no refund. Everything you shared is deleted. Your set notes stay on this laptop.</p>
+          <div className="account__actions">
+            <button className="account__danger" disabled={busy || operations.install} onClick={() => void act(async () => {
+              await invoke("account_delete"); account.change({ access: "signed_out", capture: false }); void account.refresh(); setDeleting(false);
+            })}>Delete my account</button>
+            <button ref={keep} disabled={busy || operations.install} onClick={() => setDeleting(false)}>Cancel</button>
+          </div>
+        </div>}
       </div>}
       {(signingIn || problem) && <SupportContact />}
     </section>
