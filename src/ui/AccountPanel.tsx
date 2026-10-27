@@ -141,7 +141,10 @@ export function AccountPanel({ account }: { account: AccountState }) {
       </form>}
       {view?.access === "plan_required" && <>
         <p>Signed in as {view.email}.</p>
-        <PlanPicker trial={view.trial_available === true} busy={busy || operations.install} onPick={(plan) => billing("checkout", plan)} />
+        {/* Stripe still holds this subscription: she fixes the card in the Portal. A new plan would be a second one. */}
+        {view.subscription_status === "past_due" || view.subscription_status === "unpaid"
+          ? <p role="alert">Your payment didn't go through. Update your card in Manage subscription to get access back.</p>
+          : <PlanPicker trial={view.trial_available === true} busy={busy || operations.install} onPick={(plan) => billing("checkout", plan)} />}
       </>}
       {opened && <p role="status">Finish in your browser. This window updates when you come back.</p>}
       {view?.access === "active" && <>
@@ -192,7 +195,9 @@ export function AccountPanel({ account }: { account: AccountState }) {
         </div>}
         {sharedDeleted && <p role="status">Deletion requested.</p>}
       </>}
-      {(view?.access === "expired" || view?.access === "revoked") && <p>Your pilot access has ended. Contact Mixing Pal to continue.</p>}
+      {/* Only billing off ends a period as expired. */}
+      {view?.access === "expired" && <p>Your pilot access has ended. Contact Mixing Pal to continue.</p>}
+      {view?.access === "revoked" && <p>Your access was revoked. Contact Mixing Pal.</p>}
       {view && view.access !== "signed_out" && <div className="account__actions">
         {view.manage && <button disabled={busy || operations.install} onClick={() => billing("portal")}>Manage subscription</button>}
         <button disabled={busy || operations.install} onClick={() => void act(async () => {

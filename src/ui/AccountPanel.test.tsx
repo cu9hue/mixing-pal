@@ -217,3 +217,29 @@ it("leaving the panel stops the polling", async () => {
     expect(refresh).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); }
 });
+
+it("a revoked account says so, and an expired pilot keeps the pilot sentence", () => {
+  render(<AccountPanel account={signedIn({ access: "revoked" })} />);
+  expect(screen.getByText("Your access was revoked. Contact Mixing Pal.")).toBeTruthy();
+  expect(screen.queryByText(/pilot/)).toBeNull();
+  cleanup();
+  render(<AccountPanel account={signedIn({ access: "expired" })} />);
+  expect(screen.getByText("Your pilot access has ended. Contact Mixing Pal to continue.")).toBeTruthy();
+});
+
+it("a member whose subscription still exists but is unpaid is sent to fix the card, not offered a new plan", async () => {
+  vi.mocked(invoke).mockResolvedValue({ opened: true });
+  for (const status of ["past_due", "unpaid"]) {
+    render(<AccountPanel account={signedIn({ access: "plan_required", subscription_status: status, plan: "starter", manage: true, trial_available: false })} />);
+    expect(screen.queryByRole("button", { name: "Subscribe" })).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("Your payment didn't go through.");
+    cleanup();
+  }
+  render(<AccountPanel account={signedIn({ access: "plan_required", subscription_status: "past_due", plan: "starter", manage: true, trial_available: false })} />);
+  fireEvent.click(screen.getByRole("button", { name: "Manage subscription" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("account_billing", { action: "portal" }));
+  cleanup();
+  // A subscription that has ended gets the plans again.
+  render(<AccountPanel account={signedIn({ access: "plan_required", subscription_status: "canceled", plan: "starter", manage: true, trial_available: false })} />);
+  expect(screen.getAllByRole("button", { name: "Subscribe" })).toHaveLength(2);
+});
