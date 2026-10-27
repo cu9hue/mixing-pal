@@ -322,17 +322,28 @@ function parseInline(text: string): InlineNode[] {
 }
 
 // Letters and digits in any script. A term matches only where neither
-// neighbour is one, so "knee" is not marked inside "knees".
+// neighbour is one, so "knee" is not marked inside "kneecap".
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 
 /**
+ * A term as a pattern that also takes the forms the model writes it in: a
+ * space and a hyphen stand for each other, and the last word may add "s" or
+ * "es", so "Return track" finds "return tracks".
+ */
+function termPattern(term: string): string {
+  const words = term.trim().split(/[\s-]+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return `${words.join("[\\s-]+")}(?:es|s)?`;
+}
+
+/**
  * Marks the first occurrence of each term in the answer, matched
- * case-insensitively on word boundaries, longest term first so a short term
- * cannot take the words of a longer one. Walks text inside bold and italic,
+ * case-insensitively on word boundaries in any of `termPattern`'s forms,
+ * longest term first so a short term cannot take the words of a longer one.
+ * The mark keeps the prose's own text. Walks text inside bold and italic,
  * because the move is bold and often holds a term. Never code, and never
- * part of a «name». A «name» that is the whole term is marked: the tools
- * fence every device and parameter label. A term with no match stays
- * unmarked.
+ * part of a «name». A «name» that is the whole term, or its plural, is
+ * marked: the tools fence every device and parameter label. A term with no
+ * match stays unmarked.
  */
 export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[]): BlockNode[] {
   const order = terms.map((t, index) => ({ term: t.term, index })).sort((a, b) => b.term.length - a.term.length);
@@ -340,12 +351,14 @@ export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[
   for (const { term, index } of order) {
     if (term.trim() === "") continue;
     let done = false;
-    const pattern = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+    const source = termPattern(term);
+    const pattern = new RegExp(`${source}(?![\\p{L}\\p{N}])`, "giu");
+    const whole = new RegExp(`^${source}$`, "iu");
     const inline = (nodes: InlineNode[]): InlineNode[] =>
       nodes.flatMap((n): InlineNode[] => {
         if (done) return [n];
         if (n.type === "bold" || n.type === "italic") return [{ ...n, children: inline(n.children) }];
-        if (n.type === "fence" && n.name.toLowerCase() === term.toLowerCase()) {
+        if (n.type === "fence" && whole.test(n.name)) {
           done = true;
           return [{ type: "term", text: n.name, index, fence: true }];
         }
@@ -353,7 +366,7 @@ export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[
         for (const m of n.text.matchAll(pattern)) {
           const start = m.index ?? 0;
           const end = start + m[0].length;
-          if (WORD_CHAR.test(n.text[start - 1] ?? "") || WORD_CHAR.test(n.text[end] ?? "")) continue;
+          if (WORD_CHAR.test(n.text[start - 1] ?? "")) continue;
           done = true;
           const before = n.text.slice(0, start);
           const after = n.text.slice(end);

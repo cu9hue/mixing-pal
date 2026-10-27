@@ -1014,6 +1014,34 @@ fn has_words(text: &str, phrase: &str) -> bool {
     })
 }
 
+/// Where a term's match starting at `start` ends, in the forms
+/// `termPattern` in src/ui/markdown.ts allows: a space and a hyphen stand for
+/// each other, and the last word may add "es" or "s", tried in that order as
+/// the regex does. `fits` is the test the end must pass.
+fn form_end(chars: &[char], start: usize, words: &[Vec<char>], fits: impl Fn(usize) -> bool) -> Option<usize> {
+    let same = |a: char, b: char| a.to_lowercase().eq(b.to_lowercase());
+    let mut i = start;
+    for (n, word) in words.iter().enumerate() {
+        if n > 0 {
+            let gap = i;
+            while i < chars.len() && (chars[i].is_whitespace() || chars[i] == '-') {
+                i += 1;
+            }
+            if i == gap {
+                return None;
+            }
+        }
+        for &c in word {
+            if i < chars.len() && same(chars[i], c) { i += 1 } else { return None }
+        }
+    }
+    ["es", "s", ""].into_iter().find_map(|suffix| {
+        let end = i + suffix.len();
+        let spelled = end <= chars.len() && chars[i..end].iter().zip(suffix.chars()).all(|(&a, b)| same(a, b));
+        (spelled && fits(end)).then_some(end)
+    })
+}
+
 /// One stretch of the card's prose, as `parseMarkdown` would see it.
 enum Span {
     /// Words `markTerms` may mark, with the char ranges already marked.
@@ -1024,8 +1052,9 @@ enum Span {
 
 /// Which `terms` the card makes tappable in `prose`, mirroring `markTerms` in
 /// src/ui/markdown.ts: longest term first, first occurrence in reading order,
-/// whole words ignoring case, never inside code, a «name» only when it is the
-/// whole term. shared/term-vectors.json pins the two together.
+/// whole words ignoring case in any of `form_end`'s forms, never inside code,
+/// a «name» only when it is the whole term or its plural.
+/// shared/term-vectors.json pins the two together.
 pub fn tappable(prose: &str, terms: &[String]) -> Vec<String> {
     let lines: Vec<&str> = prose.lines().collect();
     let mut spans: Vec<Span> = Vec::new();
@@ -1057,37 +1086,36 @@ pub fn tappable(prose: &str, terms: &[String]) -> Vec<String> {
         i += 1;
     }
 
-    let lower = |c: char| c.to_lowercase().collect::<String>();
     let mut order: Vec<(usize, &String)> = terms.iter().enumerate().collect();
     order.sort_by_key(|(_, t)| std::cmp::Reverse(t.chars().count()));
     let mut found = vec![false; terms.len()];
     for (index, term) in order {
-        let want: Vec<char> = term.chars().collect();
-        if want.is_empty() {
+        let words: Vec<Vec<char>> =
+            term.split(|c: char| c.is_whitespace() || c == '-').filter(|w| !w.is_empty()).map(|w| w.chars().collect()).collect();
+        if words.is_empty() {
             continue;
         }
         'spans: for span in &mut spans {
             match span {
                 Span::Fence(name, marked) => {
-                    if !*marked && name.to_lowercase() == term.to_lowercase() {
+                    let name: Vec<char> = name.chars().collect();
+                    if !*marked && form_end(&name, 0, &words, |end| end == name.len()).is_some() {
                         *marked = true;
                         found[index] = true;
                         break 'spans;
                     }
                 }
                 Span::Text(chars, marked) => {
-                    let taken = |k: usize, marked: &[(usize, usize)]| marked.iter().any(|&(a, b)| k >= a && k < b);
-                    for start in 0..=chars.len().saturating_sub(want.len()) {
-                        let end = start + want.len();
-                        if end > chars.len()
-                            || (start..end).any(|k| taken(k, marked))
-                            || !chars[start..end].iter().zip(&want).all(|(&a, &b)| lower(a) == lower(b))
-                        {
+                    let taken = |k: usize| marked.iter().any(|&(a, b)| k >= a && k < b);
+                    for start in 0..chars.len() {
+                        let before = (start > 0 && !taken(start - 1)).then(|| chars[start - 1]);
+                        if taken(start) || is_word(before) {
                             continue;
                         }
-                        let before = (start > 0 && !taken(start - 1, marked)).then(|| chars[start - 1]);
-                        let after = (end < chars.len() && !taken(end, marked)).then(|| chars[end]);
-                        if !is_word(before) && !is_word(after) {
+                        let fits = |end: usize| {
+                            !(start..end).any(taken) && (end == chars.len() || taken(end) || !is_word(Some(chars[end])))
+                        };
+                        if let Some(end) = form_end(chars, start, &words, fits) {
                             marked.push((start, end));
                             found[index] = true;
                             break 'spans;

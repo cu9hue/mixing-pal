@@ -379,8 +379,18 @@ describe("markTerms", () => {
     ]);
   });
 
+  it("keeps the prose's own word form on the mark", () => {
+    expect(marked("No sends, and no gain-reduction.", "Send", "Gain reduction")[0]).toEqual({ type: "paragraph", children: [
+      { type: "text", text: "No " },
+      { type: "term", text: "sends", index: 0 },
+      { type: "text", text: ", and no " },
+      { type: "term", text: "gain-reduction", index: 1 },
+      { type: "text", text: "." },
+    ] });
+  });
+
   it("matches on word boundaries only", () => {
-    expect(marked("The knees are fine.", "knee")).toEqual(parseMarkdown("The knees are fine."));
+    expect(marked("The kneecap is fine.", "knee")).toEqual(parseMarkdown("The kneecap is fine."));
     expect(marked("A soft knee, then.", "knee")[0]).toEqual({ type: "paragraph", children: [
       { type: "text", text: "A soft " },
       { type: "term", text: "knee", index: 0 },

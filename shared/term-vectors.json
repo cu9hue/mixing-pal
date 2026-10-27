@@ -57,8 +57,8 @@
       "tappable": ["Knee", "Ratio"]
     },
     {
-      "name": "a plural or a missing word is no match",
-      "answer": "The knees are soft.\n\n```terms\nKnee: How gently the Compressor starts.\nSidechain: Another signal decides when it acts.\n```",
+      "name": "another word that starts with the term, or a missing word, is no match",
+      "answer": "The kneecap is fine.\n\n```terms\nKnee: How gently the Compressor starts.\nSidechain: Another signal decides when it acts.\n```",
       "terms": ["Knee", "Sidechain"],
       "tappable": []
     },
@@ -73,6 +73,48 @@
       "answer": "- the RATIO first\n\n| a | b |\n|---|---|\n| ratio | knee |\n\n```terms\nRatio: How hard it turns the signal down.\nKnee: How gently it starts.\n```",
       "terms": ["Ratio", "Knee"],
       "tappable": ["Ratio", "Knee"]
+    },
+    {
+      "name": "a plural in the prose matches a singular term",
+      "answer": "There are no sends on the Pad.\n\n```terms\nSend: Feeds part of a track to a return track.\n```",
+      "terms": ["Send"],
+      "tappable": ["Send"]
+    },
+    {
+      "name": "a plural goes on the last word of a term",
+      "answer": "Both return tracks are empty.\n\n```terms\nReturn track: A track that only takes sends.\n```",
+      "terms": ["Return track"],
+      "tappable": ["Return track"]
+    },
+    {
+      "name": "an es plural matches",
+      "answer": "Check the buses first.\n\n```terms\nBus: A track that several tracks feed.\n```",
+      "terms": ["Bus"],
+      "tappable": ["Bus"]
+    },
+    {
+      "name": "another ending is no match",
+      "answer": "The sender is off.\n\n```terms\nSend: Feeds part of a track to a return track.\n```",
+      "terms": ["Send"],
+      "tappable": []
+    },
+    {
+      "name": "a hyphen in the prose matches a space in the term",
+      "answer": "Watch the gain-reduction meter.\n\n```terms\nGain reduction: How far the Compressor turns the signal down.\n```",
+      "terms": ["Gain reduction"],
+      "tappable": ["Gain reduction"]
+    },
+    {
+      "name": "a space in the prose matches a hyphen in the term",
+      "answer": "Set the make up gain.\n\n```terms\nMake-up gain: Volume added back after the Compressor.\n```",
+      "terms": ["Make-up gain"],
+      "tappable": ["Make-up gain"]
+    },
+    {
+      "name": "a fenced name that is the plural of the whole term",
+      "answer": "Open «Sends» on the Vox.\n\n```terms\nSend: Feeds part of a track to a return track.\n```",
+      "terms": ["Send"],
+      "tappable": ["Send"]
     }
   ]
 }
