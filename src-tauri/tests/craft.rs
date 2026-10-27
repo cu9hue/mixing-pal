@@ -962,10 +962,11 @@ fn report_line(i: usize, run: &Run) -> String {
     let evidence = serde_json::to_string(&run.calls).unwrap();
     let defects = common::note_defects(&run.raw_answer);
     let terms = common::terms_defects(&run.raw_answer);
+    let values = common::checks::value_defects(&run.answer, &run.calls);
     format!(
         "\n--- run {i}: tools {:?}\njudge: {}\ninfra_error: {:?}\ninvalid_evaluation: {:?}\n\
          tool evidence: {evidence}\nnote defects (report only): {defects:?}\nterms defects: {terms:?}\n\
-         VISIBLE ANSWER\n{}\nRAW ANSWER\n{}\nVERDICTS\n{:#?}\n",
+         value defects (report only): {values:?}\nVISIBLE ANSWER\n{}\nRAW ANSWER\n{}\nVERDICTS\n{:#?}\n",
         run.called, run.judge_report.as_deref().unwrap_or("no reply"), run.infra_error,
         run.invalid_evaluation, run.answer, run.raw_answer, run.verdicts
     )
@@ -1066,6 +1067,12 @@ fn studio_words_clean(sc: &Scenario, run: &Run) -> bool {
     common::checks::studio_word_defects(&run.answer, &listed).is_empty()
 }
 
+/// Whether a run's visible answer states only values the tools returned.
+/// Reported, never gated.
+fn values_clean(run: &Run) -> bool {
+    common::checks::value_defects(&run.answer, &run.calls).is_empty()
+}
+
 /// Trust checks gate the automated majority; craft misses stay visible.
 fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, String) {
     require_valid_evaluation(sc.question, runs, "");
@@ -1080,6 +1087,8 @@ fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, S
     let mut scores = format!("trust: {passes}/{total} runs; required reads: {reads}/{total}\n");
     let studio_clean = runs.iter().filter(|r| studio_words_clean(sc, r)).count();
     scores.push_str(&format!("studio words: {studio_clean}/{total} clean\n"));
+    let values_ok = runs.iter().filter(|r| values_clean(r)).count();
+    scores.push_str(&format!("values: {values_ok}/{total} clean\n"));
     if sc.experience == Experience::FinishesTracks {
         let defects: Vec<_> = runs.iter().map(|r| common::terms_defects(&r.raw_answer)).collect();
         let clean = defects.iter().filter(|d| d.is_empty()).count();
@@ -1195,6 +1204,26 @@ fn the_tally_reports_studio_words_without_gating_on_them() {
     assert!(scores.contains("studio words: 2/3 clean"), "{scores}");
     let (_, scores) = tally(&DROP_FOR_A_NEWCOMER, &runs, |_| true);
     assert!(scores.contains("studio words: 1/3 clean"), "{scores}");
+}
+
+/// A trusted run that read a Compressor whose threshold is -18.0 dB.
+fn run_that_read_the_threshold(answer: &str) -> Run {
+    let result = json!({ "missing_reason": null, "value": { "params": [{ "name": "«Threshold»", "value": "«-18.0 dB»" }] } });
+    let mut run = trusted_run(&WHAT_NEXT, answer);
+    run.calls.push(common::ToolCallRecord::new("get_device_params".into(), json!({}), result));
+    run
+}
+
+#[test]
+fn the_tally_reports_stated_values_without_gating_on_them() {
+    let runs: Vec<Run> = ["Threshold is −18 dB.", "Threshold is 18 dB.", "Lower it by 3 dB."]
+        .iter().map(|a| run_that_read_the_threshold(a)).collect();
+    let (passes, scores) = tally(&WHAT_NEXT, &runs, |_| true);
+    assert_eq!(passes, 3);
+    assert!(scores.contains("values: 2/3 clean"), "{scores}");
+    let report = report_line(1, &runs[1]);
+    assert!(report.contains("value defects (report only): [\"") && report.contains("18 dB"), "{report}");
+    assert!(report_line(0, &runs[0]).contains("value defects (report only): []"));
 }
 
 #[test]
