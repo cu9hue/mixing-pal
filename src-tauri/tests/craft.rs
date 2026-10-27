@@ -520,7 +520,7 @@ const PLAIN_WORDS: Property = Property {
 // judge grades only what needs reading.
 const TERMS_LISTED: Property = Property {
     key: "terms_listed",
-    description: "Every technical term in the prose that a producer who finishes tracks in Live probably does not know (for example gain reduction, transient, sidechain) is either replaced by a plain word or listed under TERMS SHE CAN TAP. Live's own device and parameter labels (Compressor, Threshold, Ratio, Attack, Release, Output Gain), units such as dB and ms, and names from the set count as known. Each listed meaning is correct and plain: one everyday sentence on what the term changes. Quote the first unlisted term, or the first wrong or unplain meaning, in the reason.",
+    description: "Live's own device and parameter labels (for example Compressor, Threshold, Ratio, Attack, Release, Output Gain), units such as dB and ms, and names from the set are known and need no listing. Every other technical term she must act on (for example gain reduction, transient, sidechain) is either a plain word or listed under TERMS SHE CAN TAP. Each listed meaning is correct and plain: one everyday sentence on what the term changes. Quote the first unlisted term, or the first wrong or unplain meaning, in the reason.",
 };
 const GOAL_TIED: Property = Property {
     key: "goal_tied",

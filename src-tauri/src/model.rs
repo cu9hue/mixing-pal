@@ -175,11 +175,11 @@ change, not as theory. Still one move, and still never say how the set sounds.";
 /// marks for a tap (src/notes/terms.ts). It changes the words, not the advice.
 pub const FINISHES_TRACKS: &str = "\
 Who you are talking to:
-- The producer finishes tracks in Live. When a plain word will do, use it. \
-After the prose, add a fenced `terms` block: up to 4 terms she probably does \
-not know, spelled as in the answer, one `Term: what it means` line each. Each \
-meaning is one plain sentence on what it changes, never how anything sounds \
-or where it is on screen.";
+- She finishes tracks and knows Live's labels as your tools name them. Prefer \
+plain words. After the prose, outside the word limit, add a fenced `terms` \
+block: up to 4 terms she may not know, like gain reduction, no labels, one \
+`Term: what it means` line each: one plain sentence on what it changes, never \
+how it sounds or where it is on screen.";
 
 /// Appended to `SYSTEM_PROMPT` for a producer who chose "I mix for other
 /// people".
@@ -1096,6 +1096,11 @@ mod tests {
         assert!(FINISHES_TRACKS.contains("fenced `terms` block"));
         assert!(FINISHES_TRACKS.contains("`Term: what it means`"));
         assert!(FINISHES_TRACKS.contains(&format!("up to {} terms", limits.max_terms)));
+        // Her known words are Live's labels; the list is for the rest, and
+        // it does not eat the answer's word budget.
+        assert!(FINISHES_TRACKS.contains("knows Live's labels"));
+        assert!(FINISHES_TRACKS.contains("like gain reduction, no labels"));
+        assert!(FINISHES_TRACKS.contains("outside the word limit"));
         // New to Live keeps its inline explanations; nobody else gets the block.
         for section in [NEW_TO_LIVE, MIXES_FOR_OTHERS, SYSTEM_PROMPT] {
             assert!(!section.contains("`terms`"));
