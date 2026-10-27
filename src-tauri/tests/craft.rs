@@ -523,6 +523,21 @@ const GOAL_TIED: Property = Property {
     description: "Says which way the stated GOAL pushed its decision. Do not grade whether what it says about that genre, mood, or reference is true.",
 };
 
+// Provisional until the paid calibration labels them: reported, never gating.
+// `timeline_supported` is judged alone, on `timeline_evidence`.
+const TIMELINE_SUPPORTED: Property = Property {
+    key: "timeline_supported",
+    description: "Every claim about what plays where or when (track, section, bar, beat) matches the arrangement evidence. Quote the first claim that does not.",
+};
+const SETTINGS_SUPPORTED: Property = Property {
+    key: "settings_supported",
+    description: "Every stated device or mixer value matches the read, including sign and unit.",
+};
+const MOVE_PERFORMABLE: Property = Property {
+    key: "move_performable",
+    description: "The move acts on something that exists as read (a clip, a phrase, a device, a placement). A move on something the reads show does not exist fails.",
+};
+
 const JUDGE_PROMPT: &str = "\
 You grade one answer from a music-production copilot against a list of \
 properties. The copilot cannot hear the set; it reads notes and settings. \
@@ -552,6 +567,8 @@ struct Scenario {
     mentor: &'static str,
     must: &'static [Property],
     craft: &'static [Property],
+    /// Judged and reported, never gating.
+    provisional: &'static [Property],
     /// Needs a non-empty terms block. Every "I finish tracks" scenario has
     /// its terms checked; see `tally`.
     terms_required: bool,
@@ -559,7 +576,7 @@ struct Scenario {
 
 impl Scenario {
     fn properties(&self) -> Vec<Property> {
-        self.must.iter().chain(self.craft).copied().collect()
+        self.must.iter().chain(self.craft).chain(self.provisional).copied().collect()
     }
 }
 
@@ -808,7 +825,7 @@ async fn judge(
     question: &str,
     context: &str,
     answer: &str,
-    calls: &[common::ToolCallRecord],
+    calls: &[impl serde::Serialize],
     mentor: &str,
     props: &[Property],
 ) -> Result<JudgeReply, String> {
@@ -895,6 +912,50 @@ struct Run {
     judge_report: Option<String>,
 }
 
+/// The reads that show what plays where and when.
+fn timeline_evidence(calls: &[common::ToolCallRecord]) -> Vec<&common::ToolCallRecord> {
+    calls.iter().filter(|c| matches!(c.name.as_str(), "get_arrangement" | "get_arrangement_notes")).collect()
+}
+
+fn describe_reply(reply: &JudgeReply) -> String {
+    format!(
+        "model {}; finish_reason {}; reasoning_tokens {}; content: {}",
+        reply.model, reply.finish_reason,
+        reply.reasoning_tokens.map(|n| n.to_string()).unwrap_or("unreported".into()),
+        reply.content
+    )
+}
+
+/// Judges `properties` in one call, and `timeline_supported` in a second that
+/// sees only the arrangement reads. A reply that does not parse, in either
+/// call, invalidates the run. Returns the merged verdicts, the invalid
+/// reason, and the report of both replies.
+async fn judge_all(
+    sc: &Scenario,
+    context: &str,
+    answer: &str,
+    calls: &[common::ToolCallRecord],
+    properties: &[Property],
+) -> Result<(BTreeMap<String, (bool, String)>, Option<String>, String), String> {
+    let (timeline, rest): (Vec<Property>, Vec<Property>) =
+        properties.iter().partition(|p| p.key == TIMELINE_SUPPORTED.key);
+    let main = judge(sc.question, context, answer, calls, sc.mentor, &rest).await?;
+    let mut report = describe_reply(&main);
+    let mut verdicts = main.verdicts;
+    if !timeline.is_empty() {
+        let own = judge(sc.question, context, answer, &timeline_evidence(calls), sc.mentor, &timeline).await?;
+        report.push_str(&format!("\ntimeline judge: {}", describe_reply(&own)));
+        verdicts = match (verdicts, own.verdicts) {
+            (Ok(mut all), Ok(more)) => { all.extend(more); Ok(all) }
+            (Err(e), _) | (_, Err(e)) => Err(e),
+        };
+    }
+    Ok(match verdicts {
+        Ok(verdicts) => (verdicts, None, report),
+        Err(e) => (BTreeMap::new(), Some(e), report),
+    })
+}
+
 async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
     let context = context_for(sc.goal);
     let properties = sc.properties();
@@ -923,22 +984,12 @@ async fn run_once(sc: &Scenario, temperature: Option<f64>) -> Run {
         };
     }
     let judged = judged_answer(sc, &turn.answer, &turn.raw_answer);
-    match judge(sc.question, &context, &judged, &turn.calls, sc.mentor, &properties).await {
-        Ok(reply) => {
-            let judge_report = Some(format!(
-                "model {}; finish_reason {}; reasoning_tokens {}; content: {}",
-                reply.model, reply.finish_reason,
-                reply.reasoning_tokens.map(|n| n.to_string()).unwrap_or("unreported".into()),
-                reply.content
-            ));
-            let (verdicts, invalid_evaluation) = match reply.verdicts {
-                Ok(verdicts) => (verdicts, None),
-                Err(e) => (BTreeMap::new(), Some(e)),
-            };
+    match judge_all(sc, &context, &judged, &turn.calls, &properties).await {
+        Ok((verdicts, invalid_evaluation, judge_report)) => {
             Run {
                 raw_answer: turn.raw_answer,
                 answer: turn.answer, called: turn.called, calls: turn.calls, context, verdicts,
-                infra_error: None, invalid_evaluation, judge_report,
+                infra_error: None, invalid_evaluation, judge_report: Some(judge_report),
             }
         }
         Err(e) => {
@@ -1106,7 +1157,10 @@ fn tally(sc: &Scenario, runs: &[Run], extra: impl Fn(&Run) -> bool) -> (usize, S
             review.join(", ")
         ));
     }
-    for (kind, properties) in [("trust", sc.must), ("craft (report only)", sc.craft)] {
+    for (kind, properties) in [
+        ("trust", sc.must), ("craft (report only)", sc.craft),
+        ("trust (provisional, report only)", sc.provisional),
+    ] {
         for p in properties {
             let count = runs.iter().filter(|r| r.verdicts.get(p.key).is_some_and(|v| v.0)).count();
             scores.push_str(&format!("{kind} {}: {count}/{total}\n", p.key));
@@ -1128,7 +1182,10 @@ fn the_trust_majority_keeps_craft_misses_visible() {
                 "ranked": { "pass": true, "reason": "first gap explained" },
                 "why": { "pass": false, "reason": "no contrast" },
                 "listen_for": { "pass": true, "reason": "tests both changes" },
-                "leave_it": { "pass": false, "reason": "no leave-alone instruction" }
+                "leave_it": { "pass": false, "reason": "no leave-alone instruction" },
+                "timeline_supported": { "pass": true, "reason": "placements match" },
+                "settings_supported": { "pass": true, "reason": "no values stated" },
+                "move_performable": { "pass": true, "reason": "Bass track exists" }
             }).to_string() } }]
         }), &WHAT_NEXT.properties());
         Run {
@@ -1235,6 +1292,27 @@ fn the_tally_reports_stated_values_without_gating_on_them() {
 }
 
 #[test]
+fn provisional_properties_are_judged_but_never_gate() {
+    let mut run = trusted_run(&WHAT_NEXT, "Try a bass part at bar 17.");
+    run.verdicts.insert("timeline_supported".into(), (false, "Pad leaves at bar 9".into()));
+    run.verdicts.insert("settings_supported".into(), (true, "no values stated".into()));
+    let (passes, scores) = tally(&WHAT_NEXT, &[run], |_| true);
+    assert_eq!(passes, 1);
+    assert!(scores.contains("trust (provisional, report only) timeline_supported: 0/1"), "{scores}");
+    assert!(scores.contains("trust (provisional, report only) settings_supported: 1/1"), "{scores}");
+    assert!(WHAT_NEXT.properties().iter().any(|p| p.key == "move_performable"));
+}
+
+#[test]
+fn the_timeline_judge_sees_only_arrangement_evidence() {
+    let call = |name: &str| common::ToolCallRecord::new(name.into(), json!({}), json!({ "value": [] }));
+    let calls: Vec<_> = ["get_device_params", "get_arrangement", "get_clip_notes", "get_arrangement_notes", "get_device_chains"]
+        .into_iter().map(call).collect();
+    let names: Vec<&str> = timeline_evidence(&calls).iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["get_arrangement", "get_arrangement_notes"]);
+}
+
+#[test]
 fn every_i_finish_tracks_judge_sees_the_terms_she_can_tap() {
     let raw = "Watch the gain reduction.\n```move\n«Vox», none: leave it\n```\n```terms\nGain reduction: How far it turns the signal down.\n```";
     let prose = common::strip_blocks(raw, common::SHOWN);
@@ -1293,6 +1371,7 @@ const DROP_FALLS_FLAT: Scenario = Scenario {
     mentor: "For the stated GOAL, I would make the Drop an arrival. The arrangement shows Pad leaving at beat 64 (bar 17) as Vox arrives; Drums continues and Bass has no placements. Intro and Drop each have two occupied tracks. On contrast at section boundaries, I would try a new part on the empty Bass track. One move: load a bass instrument and draw a four-beat MIDI loop using A and F, the roots in the Pad notes, then repeat it over beats 64–96 (bars 17–24). Keep it out of Intro so its entrance tests that contrast; mute the new clip to undo the trial. Play from beat 60 (bar 16) and listen for whether bar 17 feels like an arrival with the bass enabled. The continuous drum placement is enough on repetition for this trial; leave it alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[SECTION_PURPOSE, NAMED_AXIS, ONE_MOVE, WHY, LISTEN_FOR, LEAVE_IT],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
     terms_required: false,
 };
 
@@ -1312,6 +1391,7 @@ const WHAT_NEXT: Scenario = Scenario {
     mentor: "For the stated GOAL, I would give the Drop a new part to mark its arrival. The arrangement shows Bass has no placements, Pad leaves at beat 64 (bar 17), Vox enters there, and Drums continues. I rank contrast first: the empty Bass track gives us a place to try an entrance. One move: load a bass instrument and draw a four-beat MIDI loop on A and F, the roots read in the Pad notes; repeat it over beats 64–96 (bars 17–24), keeping it out of Intro. Mute that clip to undo the trial. Play from beat 60 (bar 16) through beat 68 (bar 18) and listen for whether the Drop now lands. The Pad's two-chord repetition and the continuous drum placement are enough for this trial; leave both alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[ONE_MOVE, RANKED, WHY, LISTEN_FOR, LEAVE_IT],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
     terms_required: false,
 };
 
@@ -1332,6 +1412,7 @@ const PAD_TOO_BUSY: Scenario = Scenario {
     mentor: "For the stated GOAL, I would use the Pad as a repeating harmonic idea. The notes show two triad attacks in a four-beat, one-bar loop: A2/C3/E3 at clip beat 0 and F2/A2/C3 at clip beat 2, each note lasting half a beat. The arrangement repeats it over beats 0–64 (bars 1–16) and 96–128 (bars 25–32); it does not overlap Vox's placements. I find no readable density problem in those two stabs per bar. Whether the sound or release tails feel crowded is yours to hear. Leave the Pad as it is.",
     must: &[READABLE_PROBLEM, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
     terms_required: false,
 };
 
@@ -1375,6 +1456,7 @@ const MIX_OKAY: Scenario = Scenario {
     mentor: "The device chains show no devices on Pad or Bass, a Drum Rack on Drums, and a Compressor on Vox. The rack read lists Kick, Clap and Hats chains, each with a Simpler. Vox's parameter read gives a threshold of -18 dB, ratio 4:1, attack 10 ms, release 100 ms and output gain +3 dB. Those settings do not tell me the gain reduction or audible balance. Tone, loudness, masking and groove are yours to hear; I cannot judge them. The arrangement shows Bass has no placements, but that does not prove what frequencies the other tracks contain. I find no established mix problem in these reads. Leave the processing alone.",
     must: &[EAR_ONLY_HANDED_OVER, EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, CONDITIONAL_MOVE],
     craft: &[],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
     terms_required: false,
 };
 
@@ -1395,6 +1477,7 @@ const DROP_FOR_A_NEWCOMER: Scenario = Scenario {
     mentor: "For dark garage at 2am, the drop should feel like you have arrived somewhere. Right now, at bar 17 the Pad stops and the Vox starts. The Drums keep going. The Bass track has nothing on it. **Try adding a bass part that starts at the drop.** Put an instrument on the Bass track. Draw a short MIDI clip (a loop of notes Live plays for you) using A and F, the lowest notes of your Pad chords. Let it play from bar 17 to bar 24, and keep it out of the intro. If you don't like it, mute the clip. Play from bar 16 and listen: does bar 17 now feel like an arrival? The drums are fine. Leave them alone.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE, PLAIN_WORDS],
     craft: &[ONE_MOVE, WHY, LISTEN_FOR],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
     terms_required: false,
 };
 
@@ -1418,6 +1501,7 @@ const COMPRESSOR_IN_PLAIN_TERMS: Scenario = Scenario {
     mentor: "Vox has one device, a Compressor. Its parameters read Threshold -18.0 dB, Ratio 4.00 : 1, Attack 10.0 ms, Release 100 ms and Output Gain 3.0 dB. Each 4 dB the vocal goes over the Threshold comes out as 1 dB over, and Output Gain adds 3 dB of make-up gain after that. The settings do not tell me how often the vocal crosses the Threshold, so I cannot say how much gain reduction there is. Whether it sounds squashed or natural is yours to hear. I find no readable problem in these settings. Leave the Compressor as it is.\n\nTERMS SHE CAN TAP (each opens one line under the paragraph that holds it)\nMake-up gain: Volume added after the Compressor to win back what it took away.\nGain reduction: How far the Compressor is turning the signal down at a given moment.",
     must: &[EVIDENCE_SUPPORTS, NO_INVENTED_CHANGE, EAR_ONLY_HANDED_OVER, CONDITIONAL_MOVE],
     craft: &[TERMS_LISTED],
+    provisional: &[TIMELINE_SUPPORTED, SETTINGS_SUPPORTED, MOVE_PERFORMABLE],
     terms_required: true,
 };
 
@@ -1443,6 +1527,7 @@ const CHORDS_GARAGE: Scenario = Scenario {
     mentor: "",
     must: &[CHORDS_KEPT, CHORDS_CHANGED, GOAL_TIED],
     craft: &[],
+    provisional: &[],
     terms_required: false,
 };
 
@@ -1453,6 +1538,7 @@ const CHORDS_TECHNO: Scenario = Scenario {
     mentor: "",
     must: &[CHORDS_KEPT, CHORDS_CHANGED, GOAL_TIED],
     craft: &[],
+    provisional: &[],
     terms_required: false,
 };
 
