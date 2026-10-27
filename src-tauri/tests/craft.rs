@@ -1919,9 +1919,16 @@ fn parse_pairwise_reply(raw: &Value) -> Result<(Verdict, String), String> {
     Ok((verdict, reason.to_string()))
 }
 
+/// One reason, labelled with its pair, the order shown and the arm it favours,
+/// so an audit can tell which arm the reason argues for.
+fn pairwise_reason_line(pair: usize, first_arm: Arm, verdict: Verdict, reason: &str) -> String {
+    let favours = verdict_to_arm(first_arm, verdict).map_or("tie".to_string(), |arm| format!("favours {arm:?}"));
+    format!("pair {pair}, {first_arm:?} first: {favours}: {reason}")
+}
+
 /// Which of two runs better meets the scenario's trust properties. Prints the
-/// judge's reason.
-async fn pairwise(sc: &Scenario, first: &Run, second: &Run) -> Result<Verdict, String> {
+/// judge's reason. `first_arm` is the arm shown as ANSWER 1 in pair `pair`.
+async fn pairwise(sc: &Scenario, pair: usize, first_arm: Arm, first: &Run, second: &Run) -> Result<Verdict, String> {
     let shown = |n: usize, run: &Run| format!(
         "ANSWER {n}\n{}\n\nTOOL EVIDENCE FOR ANSWER {n} (in call order)\n{}",
         judged_answer(sc, &run.answer, &run.raw_answer), serde_json::to_string(&run.calls).unwrap()
@@ -1943,7 +1950,7 @@ async fn pairwise(sc: &Scenario, first: &Run, second: &Run) -> Result<Verdict, S
     let raw = post_chat(&common::judge_client(), &s, body).await
         .map_err(|e| format!("pairwise judge {} call failed: {}", s.model, judge_error(e)))?;
     let (verdict, reason) = parse_pairwise_reply(&raw)?;
-    println!("{} pairwise ({}): {verdict:?}: {reason}", sc.question, s.model);
+    println!("{} pairwise ({}): {}", sc.question, s.model, pairwise_reason_line(pair, first_arm, verdict, &reason));
     Ok(verdict)
 }
 
@@ -1986,8 +1993,11 @@ async fn compare_with_main(sc: &Scenario, extra: impl Fn(&Run) -> bool) {
     require_valid_evaluation(sc.question, &a, &report);
     require_valid_evaluation(sc.question, &b, &report);
     let mut pairs = Vec::new();
-    for (run_a, run_b) in a.iter().zip(&b) {
-        pairs.push((pairwise(sc, run_a, run_b).await, pairwise(sc, run_b, run_a).await));
+    for (i, (run_a, run_b)) in a.iter().zip(&b).enumerate() {
+        pairs.push((
+            pairwise(sc, i, Arm::A, run_a, run_b).await,
+            pairwise(sc, i, Arm::B, run_b, run_a).await,
+        ));
     }
     let (_, a_scores) = tally(sc, &a, &extra);
     let (_, b_scores) = tally(sc, &b, &extra);
@@ -2034,6 +2044,27 @@ fn pairwise_counts_a_win_only_when_both_orders_agree() {
         pair 2: A first -> A, B first -> B: tie\n\
         pair 3: A first -> tie, B first -> tie: tie\n\
         pair 4: A first -> A, B first -> invalid (invalid pairwise JSON): invalid, not counted\n");
+}
+
+#[test]
+fn a_pairwise_reason_names_the_pair_the_order_and_the_arm_it_favours() {
+    let reason = "fewer unsupported claims";
+    assert_eq!(
+        pairwise_reason_line(2, Arm::A, Verdict::First, reason),
+        "pair 2, A first: favours A: fewer unsupported claims"
+    );
+    assert_eq!(
+        pairwise_reason_line(2, Arm::B, Verdict::First, reason),
+        "pair 2, B first: favours B: fewer unsupported claims"
+    );
+    assert_eq!(
+        pairwise_reason_line(0, Arm::B, Verdict::Second, reason),
+        "pair 0, B first: favours A: fewer unsupported claims"
+    );
+    assert_eq!(
+        pairwise_reason_line(1, Arm::A, Verdict::Tie, reason),
+        "pair 1, A first: tie: fewer unsupported claims"
+    );
 }
 
 #[test]
