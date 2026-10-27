@@ -56,7 +56,7 @@
   color: var(--text);
 }
 
-.account input:not([type="checkbox"]) {
+.account input:not([type="checkbox"], [type="radio"]) {
   display: block;
   box-sizing: border-box;
   width: 100%;
@@ -184,9 +184,48 @@
   margin-top: var(--space-2);
 }
 
+/* One flat choice on the account surface: rows split by a rule, not cards. */
+.plans__choice {
+  min-width: 0;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  border: none;
+}
 
-.plans__cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
-.plans__card { display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--border, rgba(127, 127, 127, 0.35)); border-radius: 8px; }
-.plans__card h3 { margin: 0; font-size: 1em; }
-.plans__price { font-weight: 600; }
-.plans__card button { margin-top: auto; }
+.plans__choice legend {
+  margin-bottom: var(--space-2);
+  padding: 0;
+}
+
+.plans__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  min-height: var(--touch-target);
+  padding: var(--space-2) var(--space-1);
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.plans__row:last-of-type {
+  border-bottom: 1px solid var(--border);
+}
+
+.plans__row input {
+  grid-row: span 2;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.plans__name,
+.plans__price {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.plans__detail {
+  grid-column: 2 / -1;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}

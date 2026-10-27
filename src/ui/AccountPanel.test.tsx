@@ -43,18 +43,23 @@ it.each([["open", OPEN], ["invite", INVITE], [undefined, INVITE]] as const)("wor
   expect(await screen.findByText(sent)).toBeTruthy();
 });
 
-it("offers both plans with a free trial, and opens Checkout for the one she picks", async () => {
+it("offers both plans as one choice with Starter picked, and opens Checkout for the one the member picks", async () => {
   vi.mocked(invoke).mockResolvedValue({ opened: true });
   render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} />);
-  expect(screen.getAllByRole("button", { name: "Start 7-day free trial" })).toHaveLength(2);
-  fireEvent.click(screen.getAllByRole("button", { name: "Start 7-day free trial" })[1]);
+  expect(screen.getByRole("group", { name: /Pick a plan/ })).toBeTruthy();
+  expect(screen.getAllByRole("radio")).toHaveLength(2);
+  expect((screen.getByRole("radio", { name: /^Starter/ }) as HTMLInputElement).checked).toBe(true);
+  expect(screen.getAllByRole("button", { name: "Start 7-day free trial" })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("radio", { name: /^Pro/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Start 7-day free trial" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("account_billing", { action: "checkout", plan: "pro" }));
   expect(await screen.findByText(/Finish in your browser/)).toBeTruthy();
 });
 
 it("says Subscribe when no trial is left", () => {
   render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: false })} />);
-  expect(screen.getAllByRole("button", { name: "Subscribe" })).toHaveLength(2);
+  expect(screen.getAllByRole("button", { name: "Subscribe" })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "Start 7-day free trial" })).toBeNull();
 });
 
 it("lets a trialist who ran out start her plan now", async () => {
@@ -111,7 +116,7 @@ it("a comped account that ran out shows when it resets, with no button", () => {
 it("the browser note clears once the account changes", async () => {
   vi.mocked(invoke).mockResolvedValue({ opened: true });
   const { rerender } = render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} />);
-  fireEvent.click(screen.getAllByRole("button", { name: "Start 7-day free trial" })[0]);
+  fireEvent.click(screen.getByRole("button", { name: "Start 7-day free trial" }));
   expect(await screen.findByText(/Finish in your browser/)).toBeTruthy();
   rerender(<AccountPanel account={signedIn({ subscription_status: "trialing", plan: "starter", remaining_micro_usd: 1_000_000 })} />);
   await waitFor(() => expect(screen.queryByText(/Finish in your browser/)).toBeNull());
@@ -135,7 +140,7 @@ it("while the browser note shows, the account is read every 5 seconds for 2 minu
     vi.mocked(invoke).mockResolvedValue({ opened: true });
     const refresh = vi.fn(async () => {});
     render(<AccountPanel account={{ ...signedIn({ access: "plan_required", trial_available: true }), refresh }} />);
-    fireEvent.click(screen.getAllByRole("button", { name: "Start 7-day free trial" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Start 7-day free trial" }));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText(/Finish in your browser/)).toBeTruthy();
     expect(refresh).not.toHaveBeenCalled();
@@ -258,5 +263,5 @@ it("a member whose subscription still exists but is unpaid is sent to fix the ca
   cleanup();
   // A subscription that has ended gets the plans again.
   render(<AccountPanel account={signedIn({ access: "plan_required", subscription_status: "canceled", plan: "starter", manage: true, trial_available: false })} />);
-  expect(screen.getAllByRole("button", { name: "Subscribe" })).toHaveLength(2);
+  expect(screen.getAllByRole("button", { name: "Subscribe" })).toHaveLength(1);
 });
