@@ -1459,6 +1459,22 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
     ask_with(&settings(), experience(), None, f, context, question).await
 }
 
+/// The system prompt a turn runs under: the app's at a level, or a fixed
+/// text, such as main's prompt for an A/B.
+pub enum Prompt {
+    App(Experience),
+    Fixed(String),
+}
+
+impl Prompt {
+    fn body(&self, s: &Settings, messages: &[ChatMessage]) -> Result<Value, String> {
+        match self {
+            Prompt::App(experience) => build_body(s, *experience, messages),
+            Prompt::Fixed(prompt) => build_body_with(s, prompt, messages),
+        }
+    }
+}
+
 /// One question through the same loop the app runs: the tools are answered
 /// by the fake Live, and the context block rides ahead of the question as a
 /// user turn, exactly as `Conversation.tsx` sends it. A `temperature` is
@@ -1474,14 +1490,14 @@ pub async fn ask_with(
     context: &str,
     question: &str,
 ) -> Turn {
-    ask_after(s, experience, temperature, f, &[], context, question).await
+    ask_after(s, Prompt::App(experience), temperature, f, &[], context, question).await
 }
 
 /// `ask_with` after earlier turns. `history` is what `Conversation.tsx`
 /// keeps: her questions and the answers as plain text, no tool results.
 pub async fn ask_after(
     s: &Settings,
-    experience: Experience,
+    prompt: Prompt,
     temperature: Option<f64>,
     f: Value,
     history: &[ChatMessage],
@@ -1510,7 +1526,7 @@ pub async fn ask_after(
     for _ in 0..MAX_ROUND_TRIPS {
         let (completion, elapsed) = loop {
             let started = std::time::Instant::now();
-            let completion = match build_body(s, experience, &messages) {
+            let completion = match prompt.body(s, &messages) {
                 Ok(mut body) => {
                     if let Some(t) = temperature {
                         body["temperature"] = json!(t);
@@ -1549,7 +1565,7 @@ pub async fn ask_after(
             if let (true, Ok(dir), Ok(body)) = (
                 completion.text.trim().is_empty(),
                 std::env::var("MIXINGPAL_EVAL_DUMP"),
-                build_body(s, experience, &messages),
+                prompt.body(s, &messages),
             ) {
                 let name = format!("{dir}/blank-{}-{}.json", s.model.replace('/', "_"), crate_now_millis());
                 let _ = std::fs::write(name, body.to_string());

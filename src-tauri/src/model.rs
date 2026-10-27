@@ -348,6 +348,17 @@ pub fn build_body(
     experience: Experience,
     messages: &[ChatMessage],
 ) -> Result<serde_json::Value, String> {
+    let prompt = format!("{SYSTEM_PROMPT}\n\n{}", experience_section(experience));
+    build_body_with(s, &prompt, messages)
+}
+
+/// `build_body` around a given system prompt, so an eval can send another
+/// prompt, such as main's, in the app's exact body.
+pub fn build_body_with(
+    s: &Settings,
+    system_prompt: &str,
+    messages: &[ChatMessage],
+) -> Result<serde_json::Value, String> {
     // The system prompt is the backend's. A caller-supplied message playing
     // that role is refused rather than dropped, so the caller cannot believe
     // it took effect. An allowlist, not a denylist naming only "system": a
@@ -363,10 +374,9 @@ pub fn build_body(
         ));
     }
 
-    let prompt = format!("{SYSTEM_PROMPT}\n\n{}", experience_section(experience));
     let mut wire = vec![ChatMessage {
         role: "system".to_string(),
-        content: Some(prompt),
+        content: Some(system_prompt.to_string()),
         tool_calls: None,
         tool_call_id: None,
     }];
@@ -1186,6 +1196,24 @@ mod tests {
             // prompt has its own cost ceiling, a little above the prompt's.
             assert!(first(e).chars().count() <= 7300, "{e:?} pushes the prompt past 7300");
         }
+    }
+
+    #[test]
+    fn build_body_with_sends_the_given_prompt_and_keeps_the_reminder_last() {
+        let turn = |role: &str| ChatMessage {
+            role: role.into(),
+            content: Some("what is on the drums?".into()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let body = build_body_with(&Settings::default(), "another prompt", &[turn("user")]).unwrap();
+        assert_eq!(roles_of(&body), vec!["system", "user", "system"]);
+        assert_eq!(body["messages"][0]["content"], "another prompt");
+        assert_eq!(body["messages"][2]["content"], REMINDER);
+        // The app's body, prompt aside: same tools and cap.
+        let app = build_body(&Settings::default(), Experience::default(), &[turn("user")]).unwrap();
+        assert_eq!((&body["tools"], &body["max_tokens"]), (&app["tools"], &app["max_tokens"]));
+        assert!(build_body_with(&Settings::default(), "another prompt", &[turn("system")]).is_err());
     }
 
     #[test]
