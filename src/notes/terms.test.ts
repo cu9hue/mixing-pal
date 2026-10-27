@@ -1,5 +1,34 @@
 import { describe, expect, it } from "vitest";
+import shared from "../../shared/term-vectors.json";
+import { markTerms, parseMarkdown, type BlockNode, type InlineNode } from "../ui/markdown";
 import { MAX_TERMS, TERM_LINE_MAX_CHARS, termsList } from "./terms";
+
+/** The indexes `markTerms` made tappable, anywhere in the blocks. */
+function tappable(blocks: BlockNode[]): number[] {
+  const walk = (nodes: InlineNode[]): number[] => nodes.flatMap((n) =>
+    n.type === "term" ? [n.index] : n.type === "bold" || n.type === "italic" ? walk(n.children) : []);
+  return blocks.flatMap((b) =>
+    b.type === "paragraph" || b.type === "heading" ? walk(b.children)
+    : b.type === "list" ? b.items.flatMap(walk)
+    : b.type === "table" ? [...b.header, ...b.rows.flat()].flatMap(walk)
+    : []);
+}
+
+describe("the shared term vectors", () => {
+  // src-tauri/tests/common/mod.rs runs the same file: the eval must count
+  // the same terms tappable that the card marks.
+  it.each(shared.vectors)("$name", (v) => {
+    const { answer, terms } = termsList(v.answer);
+    expect(terms.map((t) => t.term)).toEqual(v.terms);
+    const marked = new Set(tappable(markTerms(parseMarkdown(answer), terms)));
+    expect(terms.filter((_, i) => marked.has(i)).map((t) => t.term)).toEqual(v.tappable);
+  });
+
+  it("agree with the card's limits", () => {
+    expect(MAX_TERMS).toBe(shared.maxTerms);
+    expect(TERM_LINE_MAX_CHARS).toBe(shared.lineMaxChars);
+  });
+});
 
 const block = (...lines: string[]) => "```terms\n" + lines.join("\n") + "\n```";
 
@@ -36,6 +65,16 @@ describe("termsList", () => {
     const lines = ["A: a.", "B: b.", "C: c.", "D: d.", "E: e."];
     expect(termsList(block(...lines)).terms.map((t) => t.term)).toEqual(["A", "B", "C", "D"]);
     expect(MAX_TERMS).toBe(4);
+  });
+
+  it("cleans markup and a list marker off a term, and a bold close off its meaning", () => {
+    const out = termsList(block("- **Knee:** How gently it starts.", "* `Ratio`: How hard.", "2. «Attack»: How fast.", "*Release*: How slowly."));
+    expect(out.terms).toEqual([
+      { term: "Knee", meaning: "How gently it starts." },
+      { term: "Ratio", meaning: "How hard." },
+      { term: "Attack", meaning: "How fast." },
+      { term: "Release", meaning: "How slowly." },
+    ]);
   });
 
   it("keeps one of two lines naming the same term", () => {

@@ -25,8 +25,9 @@ export type InlineNode =
   // apart from the model's own words.
   | { type: "fence"; name: string }
   // A word she can tap for one plain line; `index` is its place in the
-  // answer's terms. Added by `markTerms`, never by the parser.
-  | { type: "term"; text: string; index: number };
+  // answer's terms. Added by `markTerms`, never by the parser. `fence` marks
+  // a «name» that is the whole term, still shown as her name.
+  | { type: "term"; text: string; index: number; fence?: true };
 
 export type BlockNode =
   | { type: "paragraph"; children: InlineNode[] }
@@ -328,8 +329,10 @@ const WORD_CHAR = /[\p{L}\p{N}]/u;
  * Marks the first occurrence of each term in the answer, matched
  * case-insensitively on word boundaries, longest term first so a short term
  * cannot take the words of a longer one. Walks text inside bold and italic,
- * because the move is bold and often holds a term. Never code or a «name»:
- * those belong to her set. A term with no match stays unmarked.
+ * because the move is bold and often holds a term. Never code, and never
+ * part of a «name». A «name» that is the whole term is marked: the tools
+ * fence every device and parameter label. A term with no match stays
+ * unmarked.
  */
 export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[]): BlockNode[] {
   const order = terms.map((t, index) => ({ term: t.term, index })).sort((a, b) => b.term.length - a.term.length);
@@ -342,6 +345,10 @@ export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[
       nodes.flatMap((n): InlineNode[] => {
         if (done) return [n];
         if (n.type === "bold" || n.type === "italic") return [{ ...n, children: inline(n.children) }];
+        if (n.type === "fence" && n.name.toLowerCase() === term.toLowerCase()) {
+          done = true;
+          return [{ type: "term", text: n.name, index, fence: true }];
+        }
         if (n.type !== "text") return [n];
         for (const m of n.text.matchAll(pattern)) {
           const start = m.index ?? 0;

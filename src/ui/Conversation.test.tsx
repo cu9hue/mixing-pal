@@ -408,6 +408,50 @@ describe("terms she can tap", () => {
     expect(screen.queryByRole("note")).toBeNull();
   });
 
+  // WebKit on macOS does not focus a button on click, and App collapses the
+  // card on any Escape that reaches the window.
+  it("takes focus on a tap, and closes the line on Esc without collapsing the card", async () => {
+    await ask(reply);
+    const windowEscape = vi.fn();
+    window.addEventListener("keydown", windowEscape);
+    try {
+      const gain = screen.getByRole("button", { name: "gain reduction" });
+      fireEvent.click(gain);
+      expect(document.activeElement).toBe(gain);
+      fireEvent.keyDown(gain, { key: "Escape" });
+      expect(screen.queryByRole("note")).toBeNull();
+      expect(windowEscape).not.toHaveBeenCalled();
+      // With no line open, Esc still reaches the card.
+      fireEvent.keyDown(gain, { key: "Escape" });
+      expect(windowEscape).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("keydown", windowEscape);
+    }
+  });
+
+  it("makes a fenced name tappable when it is the whole term, and keeps the chip", async () => {
+    await ask("Raise «Threshold» a little.\n\n```terms\n«Threshold»: The level where the Compressor starts to act.\n```");
+    const chip = screen.getByRole("button", { name: "Threshold" });
+    expect(chip.className).toBe("card__fence card__term");
+    fireEvent.click(chip);
+    expect(screen.getByRole("note").textContent).toBe("Threshold: The level where the Compressor starts to act.");
+  });
+
+  it("restores the terms of a saved answer", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "load_thread") return {
+        exchanges: [{ question: "What is the compressor doing?", answer: "Watch the gain reduction.", error: null, turnId: "t1",
+          terms: [{ term: "Gain reduction", meaning: "How far the Compressor turns the signal down." }] }],
+        goal: "finish this track", saved_at: Math.floor(Date.now() / 1000), next_bullet: 1, note: [], outcomes: [],
+      };
+    });
+    render(<Conversation state={{ ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version }}
+      connected account={account} onTurnRunningChange={() => {}} onAnswer={() => {}} />);
+    await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+    fireEvent.click(screen.getByRole("button", { name: "gain reduction" }));
+    expect(screen.getByRole("note").textContent).toBe("Gain reduction: How far the Compressor turns the signal down.");
+  });
+
   it("renders an answer without terms as before", async () => {
     await ask("Leave the gain reduction alone.");
     expect(screen.getByText("Leave the gain reduction alone.")).toBeTruthy();

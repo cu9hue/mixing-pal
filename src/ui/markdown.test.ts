@@ -414,15 +414,25 @@ describe("markTerms", () => {
     ] });
   });
 
-  it("never marks her names or code", () => {
-    const md = "«Glue» and `Glue` stay hers. Glue here.";
+  it("never marks code or part of her name", () => {
+    const md = "«Glue Bus» and `Glue` stay hers. Glue here.";
     expect(marked(md, "Glue")[0]).toEqual({ type: "paragraph", children: [
-      { type: "fence", name: "Glue" },
+      { type: "fence", name: "Glue Bus" },
       { type: "text", text: " and " },
       { type: "code", text: "Glue" },
       { type: "text", text: " stay hers. " },
       { type: "term", text: "Glue", index: 0 },
       { type: "text", text: " here." },
+    ] });
+  });
+
+  // The tools fence every device and parameter name, so a label the model
+  // explains usually arrives as a «name». The line it opens is the model's text.
+  it("marks a fenced name that is the whole term, keeping it a fence", () => {
+    expect(marked("Raise «threshold», then the threshold.", "Threshold")[0]).toEqual({ type: "paragraph", children: [
+      { type: "text", text: "Raise " },
+      { type: "term", text: "threshold", index: 0, fence: true },
+      { type: "text", text: ", then the threshold." },
     ] });
   });
 

@@ -35,7 +35,7 @@ const MAX_HISTORY_MESSAGES = 12;
 /** What a tappable term needs from the answer that holds it. */
 interface TermControls {
   open: number | null;
-  toggle: (index: number) => void;
+  toggle: (index: number, button: HTMLButtonElement) => void;
   lineId: (index: number) => string;
 }
 
@@ -64,11 +64,13 @@ function renderInline(nodes: InlineNode[], terms?: TermControls): ReactNode {
           </span>
         );
       // A word she can tap for one plain line under its block. A button, so
-      // Enter and Space work and a screen reader hears it can open.
+      // Enter and Space work and a screen reader hears it can open. A «name»
+      // keeps its chip.
       case "term":
         return terms === undefined ? n.text : (
-          <button key={i} type="button" className="card__term" aria-expanded={terms.open === n.index}
-            aria-controls={terms.lineId(n.index)} onClick={() => terms.toggle(n.index)}>
+          <button key={i} type="button" className={n.fence ? "card__fence card__term" : "card__term"}
+            aria-expanded={terms.open === n.index} aria-controls={terms.lineId(n.index)}
+            onClick={(e) => terms.toggle(n.index, e.currentTarget)}>
             {n.text}
           </button>
         );
@@ -102,8 +104,8 @@ function renderBlocks(blocks: BlockNode[], terms?: TermControls & { list: Term[]
   return blocks.map((b, i) => {
     const open = terms?.open ?? null;
     const term = open !== null && termsIn(b).includes(open) ? terms!.list[open] : undefined;
-    // Always a Fragment, so opening a line never remounts the block and the
-    // tapped button keeps focus.
+    // Always a Fragment, so opening a line never remounts the block, and the
+    // button `toggle` focused stays in the page.
     return (
       <Fragment key={i}>
         {renderBlock(b, i, terms)}
@@ -186,19 +188,27 @@ function renderBlock(b: BlockNode, i: number, terms?: TermControls): ReactNode {
 // tick would reparse every answer of the session.
 const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
   // One open term per answer. Esc or a second tap on it closes the line.
+  // WebKit on macOS does not focus a button on click, so `toggle` does: Esc
+  // then reaches this answer's handler.
   const [open, setOpen] = useState<number | null>(null);
   const id = useId();
   const terms = x.terms?.length ? {
     list: x.terms,
     open,
-    toggle: (index: number) => setOpen((current) => (current === index ? null : index)),
+    toggle: (index: number, button: HTMLButtonElement) => {
+      button.focus();
+      setOpen((current) => (current === index ? null : index));
+    },
     lineId: (index: number) => `${id}-term-${index}`,
   } : undefined;
   return (
     <>
       {x.answer !== null && (
         <div className="card__answer selectable" data-tauri-drag-region="false"
-          onKeyDown={terms && ((e) => { if (e.key === "Escape" && open !== null) setOpen(null); })}>
+          onKeyDown={terms && ((e) => {
+            // Stopped here, or App's window listener also collapses the card.
+            if (e.key === "Escape" && open !== null) { e.stopPropagation(); setOpen(null); }
+          })}>
           {terms ? renderBlocks(markTerms(parseMarkdown(x.answer), terms.list), terms) : renderBlocks(parseMarkdown(x.answer))}
         </div>
       )}

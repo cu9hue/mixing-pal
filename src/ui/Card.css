@@ -539,10 +539,21 @@
   font: inherit;
   letter-spacing: inherit;
   color: inherit;
-  text-decoration: underline dotted var(--accent);
+  /* Longhands: Safari before 26.2 drops a multi-value shorthand. */
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--accent);
   text-decoration-thickness: 2px;
   text-underline-offset: 0.2em;
   cursor: pointer;
+}
+
+/* A «name» that is a term keeps its chip and gains the underline. */
+.card__fence.card__term {
+  background: var(--surface-overlay);
+  border-radius: 5px;
+  padding: 1px var(--space-1-5);
+  color: var(--text-muted);
 }
 
 /* The one plain line a term opens, right under the block that holds it.

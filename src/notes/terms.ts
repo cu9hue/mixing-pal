@@ -1,13 +1,18 @@
+import { lineMaxChars, maxTerms } from "../../shared/term-vectors.json";
+
 /** One term an answer explains on a tap. */
 export interface Term {
   term: string;
   meaning: string;
 }
 
-/** The prompt asks for at most four; more would mark half the answer. */
-export const MAX_TERMS = 4;
-/** One plain sentence fits well inside this. A runaway line is cut here. */
-export const TERM_LINE_MAX_CHARS = 200;
+/**
+ * Both limits live in shared/term-vectors.json, which the prompt test and the
+ * eval read too. More than four marks would cover half the answer, and one
+ * plain sentence fits well inside a line; a runaway line is cut.
+ */
+export const MAX_TERMS: number = maxTerms;
+export const TERM_LINE_MAX_CHARS: number = lineMaxChars;
 
 /**
  * The terms an answer lists for her to tap. Same rules as `moveLabel`: an
@@ -15,6 +20,12 @@ export const TERM_LINE_MAX_CHARS = 200;
  * meaning on either side of its first colon is dropped.
  */
 const BLOCK = /```terms[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?[ \t]*```/g;
+const LIST_MARKER = /^(?:[-*]|\d+\.)\s+/;
+
+/** The term without a list marker or the markup the model wraps labels in. */
+function cleanTerm(raw: string): string {
+  return raw.trim().replace(LIST_MARKER, "").replace(/^[*`«\s]+/, "").replace(/[*`»\s]+$/, "");
+}
 
 export function termsList(answer: string): { answer: string; terms: Term[] } {
   let last: string | null = null;
@@ -24,8 +35,9 @@ export function termsList(answer: string): { answer: string; terms: Term[] } {
   for (const raw of last.split(/\r?\n/)) {
     const line = Array.from(raw.trim()).slice(0, TERM_LINE_MAX_CHARS).join("");
     const colon = line.indexOf(":");
-    const term = line.slice(0, colon).trim();
-    const meaning = line.slice(colon + 1).trim();
+    const term = cleanTerm(line.slice(0, colon));
+    // "**Knee:** meaning" leaves the bold's close at the meaning's start.
+    const meaning = line.slice(colon + 1).replace(/^[*\s]+/, "").trim();
     if (colon === -1 || term === "" || meaning === "") continue;
     if (terms.some((t) => t.term.toLowerCase() === term.toLowerCase())) continue;
     terms.push({ term, meaning });

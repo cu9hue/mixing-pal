@@ -1,0 +1,78 @@
+{
+  "maxTerms": 4,
+  "lineMaxChars": 200,
+  "vectors": [
+    {
+      "name": "a longer term takes the words a shorter one needs",
+      "answer": "Watch the gain reduction.\n\n```terms\nGain: How much a signal is raised.\nGain reduction: How far the Compressor turns the signal down.\n```",
+      "terms": ["Gain", "Gain reduction"],
+      "tappable": ["Gain reduction"]
+    },
+    {
+      "name": "a shorter term finds its next occurrence after a longer one",
+      "answer": "Set the make-up gain, then the gain.\n\n```terms\nGain: How much a signal is raised.\nMake-up gain: Volume added back after the Compressor.\n```",
+      "terms": ["Gain", "Make-up gain"],
+      "tappable": ["Gain", "Make-up gain"]
+    },
+    {
+      "name": "a code span is never a term",
+      "answer": "Set `Knee` to 6 dB.\n\n```terms\nKnee: How gently the Compressor starts.\n```",
+      "terms": ["Knee"],
+      "tappable": []
+    },
+    {
+      "name": "a code block is never a term",
+      "answer": "Leave it.\n\n```\nKnee 6 dB\n```\n\n```terms\nKnee: How gently the Compressor starts.\n```",
+      "terms": ["Knee"],
+      "tappable": []
+    },
+    {
+      "name": "a bold term in the list and in the prose",
+      "answer": "**Soften the knee.**\n\n```terms\n**Knee**: How gently the Compressor starts.\n```",
+      "terms": ["Knee"],
+      "tappable": ["Knee"]
+    },
+    {
+      "name": "a bold label with the colon inside it",
+      "answer": "Soften the knee.\n\n```terms\n**Knee:** How gently the Compressor starts.\n```",
+      "terms": ["Knee"],
+      "tappable": ["Knee"]
+    },
+    {
+      "name": "a fenced name that is the whole term",
+      "answer": "Raise «Threshold» a little.\n\n```terms\n«Threshold»: The level where the Compressor starts to act.\n```",
+      "terms": ["Threshold"],
+      "tappable": ["Threshold"]
+    },
+    {
+      "name": "a fenced name that only contains the term",
+      "answer": "Leave «Glue Compressor» as it is.\n\n```terms\nGlue: Holds parts together.\n```",
+      "terms": ["Glue"],
+      "tappable": []
+    },
+    {
+      "name": "a term behind a list marker",
+      "answer": "Watch the knee and the ratio.\n\n```terms\n- Knee: How gently the Compressor starts.\n1. Ratio: How hard it turns the signal down.\n```",
+      "terms": ["Knee", "Ratio"],
+      "tappable": ["Knee", "Ratio"]
+    },
+    {
+      "name": "a plural or a missing word is no match",
+      "answer": "The knees are soft.\n\n```terms\nKnee: How gently the Compressor starts.\nSidechain: Another signal decides when it acts.\n```",
+      "terms": ["Knee", "Sidechain"],
+      "tappable": []
+    },
+    {
+      "name": "the first four terms only",
+      "answer": "Knee, ratio, attack, release, and hold.\n\n```terms\nKnee: a.\nRatio: b.\nAttack: c.\nRelease: d.\nHold: e.\n```",
+      "terms": ["Knee", "Ratio", "Attack", "Release"],
+      "tappable": ["Knee", "Ratio", "Attack", "Release"]
+    },
+    {
+      "name": "matching ignores case and takes the first occurrence in a list or table",
+      "answer": "- the RATIO first\n\n| a | b |\n|---|---|\n| ratio | knee |\n\n```terms\nRatio: How hard it turns the signal down.\nKnee: How gently it starts.\n```",
+      "terms": ["Ratio", "Knee"],
+      "tappable": ["Ratio", "Knee"]
+    }
+  ]
+}
