@@ -777,6 +777,12 @@ describe("public sign-up", () => {
     expect((await (await api("/v1/account", undefined, user.token, { modern: false })).json()).access).toBe("expired");
   });
 
+  test("health says sign-up is open with billing on, and by invite with it off", async () => {
+    expect(await (await api("/health")).json()).toEqual({ ok: true, signup: "open" });
+    expect(await (await api("/health", undefined, undefined, { env: { ...on, BILLING_ENABLED: "false" } as Env })).json())
+      .toEqual({ ok: true, signup: "invite" });
+  });
+
   test("with billing off, nothing changes for invites", async () => {
     const off = { ...on, BILLING_ENABLED: "false" } as Env;
     expect((await api("/auth/email-otp/send-verification-otp", { email: "stranger@example.com" }, undefined, { env: off })).status).toBe(200);

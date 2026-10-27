@@ -21,9 +21,11 @@ const COMPLETION_TIMEOUT: Duration = Duration::from_secs(300);
 const BILLING_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Checkout makes up to four Stripe calls of 10 s each, so billing routes wait longer than other short requests.
+/// The health read only words the sign-in screen, so it gives up sooner.
 fn request_timeout(path: &str) -> Option<Duration> {
     if path.ends_with("/completions") { None }
     else if path.starts_with("/v1/billing/") { Some(BILLING_TIMEOUT) }
+    else if path == "/health" { Some(Duration::from_secs(5)) }
     else { Some(Duration::from_secs(15)) }
 }
 
@@ -202,18 +204,29 @@ impl Proxy {
 
     pub async fn account(&self) -> Result<Value, ProxyError> {
         if cfg!(feature = "direct-provider") { return Ok(json!({ "access": "development", "capture": false })); }
-        let Some(session) = self.session()? else { return Ok(json!({ "access": "signed_out", "capture": false })); };
+        let Some(session) = self.session()? else { return Ok(self.signed_out().await); };
         if self.outbox.lock().await.pending_withdrawal {
             if let Err(error) = self.consent(false).await {
-                if error.code == "sign_in_required" { return Ok(json!({ "access": "signed_out", "capture": false })); }
+                if error.code == "sign_in_required" { return Ok(self.signed_out().await); }
                 return Err(error);
             }
         }
         match self.request(Method::GET, "/v1/account", None, Some(&session)).await {
             Ok((view, _)) => Ok(view),
-            Err(e) if e.code == "sign_in_required" => Ok(json!({ "access": "signed_out", "capture": false })),
+            Err(e) if e.code == "sign_in_required" => Ok(self.signed_out().await),
             Err(e) => Err(e),
         }
+    }
+
+    /// The signed-out view, with how sign-up works when the proxy says so. A failed read leaves that out.
+    async fn signed_out(&self) -> Value {
+        let mut view = json!({ "access": "signed_out", "capture": false });
+        if let Ok((health, _)) = self.request(Method::GET, "/health", None, None).await {
+            if let Some(signup) = health["signup"].as_str().filter(|s| ["open", "invite"].contains(s)) {
+                view["signup"] = json!(signup);
+            }
+        }
+        view
     }
 
     pub async fn send_code(&self, email: String) -> Result<(), ProxyError> {
@@ -973,10 +986,36 @@ mod tests {
         assert_eq!(fixture.proxy().account().await.unwrap()["access"], "plan_required");
     }
 
+    #[tokio::test]
+    async fn the_signed_out_view_says_how_sign_up_works() {
+        let fixture = Fixture::new().await;
+        fixture.store.clear(&fixture.proxy().credential_name).unwrap();
+        fixture.route("GET", "/health", 200, json!({ "ok": true, "signup": "open" })).await;
+        assert_eq!(fixture.proxy().account().await.unwrap(), json!({ "access": "signed_out", "capture": false, "signup": "open" }));
+        let refused = Fixture::new().await;
+        refused.route("GET", "/v1/account", 401, json!({ "error": { "code": "sign_in_required", "message": "expired" } })).await;
+        refused.route("GET", "/health", 200, json!({ "ok": true, "signup": "invite" })).await;
+        assert_eq!(refused.proxy().account().await.unwrap(), json!({ "access": "signed_out", "capture": false, "signup": "invite" }));
+    }
+
+    #[tokio::test]
+    async fn a_failed_or_odd_health_read_leaves_sign_up_out() {
+        for (status, body) in [(503, json!({ "error": { "code": "service_unavailable" } })), (200, json!({ "ok": true, "signup": "everyone" })), (200, json!({ "ok": true }))] {
+            let fixture = Fixture::new().await;
+            fixture.store.clear(&fixture.proxy().credential_name).unwrap();
+            fixture.route("GET", "/health", status, body).await;
+            assert_eq!(fixture.proxy().account().await.unwrap(), json!({ "access": "signed_out", "capture": false }));
+        }
+        let fixture = Fixture::new().await;
+        fixture.store.clear(&fixture.proxy().credential_name).unwrap();
+        assert_eq!(fixture.proxy().account().await.unwrap(), json!({ "access": "signed_out", "capture": false }));
+    }
+
     #[test]
-    fn billing_routes_wait_45_seconds_and_other_short_requests_15() {
+    fn billing_routes_wait_45_seconds_health_5_and_other_short_requests_15() {
         assert_eq!(request_timeout("/v1/billing/checkout"), Some(Duration::from_secs(45)));
         assert_eq!(request_timeout("/v1/billing/upgrade"), Some(Duration::from_secs(45)));
+        assert_eq!(request_timeout("/health"), Some(Duration::from_secs(5)));
         assert_eq!(request_timeout("/v1/account"), Some(Duration::from_secs(15)));
         assert_eq!(request_timeout("/v1/completions"), None);
     }

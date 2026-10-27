@@ -94,7 +94,8 @@ async function authRequest(request: Request, env: Env, path: string): Promise<Re
 export async function handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const receivedAt = Date.now();
   const url = new URL(request.url);
-  if (url.pathname === "/health" && request.method === "GET") return json({ ok: true });
+  // The app words its sign-in screen for open sign-up or invites.
+  if (url.pathname === "/health" && request.method === "GET") return json({ ok: true, signup: env.BILLING_ENABLED === "true" ? "open" : "invite" });
   // Before the per-IP limit: Stripe delivers renewals in bursts from a few addresses.
   if (url.pathname === "/webhooks/stripe" && request.method === "POST") return stripeWebhook(request, env);
   const release = await releaseRequest(request, env);
