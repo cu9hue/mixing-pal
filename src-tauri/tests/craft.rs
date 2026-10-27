@@ -321,6 +321,15 @@ async fn the_fake_live_serves_the_craft_fixture_in_full() {
     assert_eq!(vox["is_midi"], json!(false), "{arrangement}");
     assert_eq!(vox["start_beats"], json!(64.0), "{arrangement}");
     assert_eq!(vox["length_beats"], json!(32.0), "{arrangement}");
+    assert_eq!(vox["sections"], json!(["«Drop»"]), "{arrangement}");
+
+    // The Pad is the clip the 2026-10-27 eval put in the Drop: the read must
+    // say it ends where the Drop starts and plays again only in the Break.
+    let pad = &arrangement["value"]["tracks"][0]["clips"];
+    assert_eq!(pad[0]["end_position"], json!("17.1.1"), "{arrangement}");
+    assert_eq!(pad[0]["sections"], json!(["«Intro»"]), "{arrangement}");
+    assert_eq!(pad[1]["start_position"], json!("25.1.1"), "{arrangement}");
+    assert_eq!(pad[1]["sections"], json!(["«Break»"]), "{arrangement}");
 
     // This opens the identity bracket too: audio must be refused before
     // the MIDI note read, not time out as `too_large`.

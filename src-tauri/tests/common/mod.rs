@@ -108,6 +108,15 @@ pub fn mirror(f: &Value) -> Arc<Mutex<Coalescer>> {
             c.observe_delta(Delta { addr: addr.into(), args: vec![f["song"][key].clone()] });
         }
     }
+    // The locators in the connector's wire shape, so get_arrangement names
+    // the same sections the fixture's SECTIONS line does.
+    if let Some(cues) = f["song"]["cuePoints"].as_array() {
+        let mut args = vec![f["song"]["cuePointsTotal"].clone()];
+        for cue in cues {
+            args.extend([cue["name"].clone(), cue["time"].clone()]);
+        }
+        c.observe_delta(Delta { addr: "/live/mixingpal/get/cue_points".into(), args });
+    }
     // Each field is observed only when the fixture carries it: the honesty
     // fixture has no `volume` or `panning`, and `get_track_detail` reports
     // an absent field as absent rather than as a failed read.
