@@ -26,7 +26,8 @@
 //! main's prompt as saved in `prompt-baseline.txt` in one session. A pairwise
 //! judge reads each pair in both orders. The A/B refuses any scenario with
 //! `terms_required` and any level other than "I finish tracks", so it runs
-//! scenarios 1 to 3 only. Exact names keep scenario 6 out:
+//! scenarios 1 to 3 only. Any other value of the variable panics. Exact names
+//! keep scenario 6 out:
 //!
 //!   MIXINGPAL_EVAL_BASE_URL=... MIXINGPAL_EVAL_MODEL=... MIXINGPAL_EVAL_KEY=... \
 //!     MIXINGPAL_JUDGE_MODEL=anthropic/claude-opus-5.5 \
@@ -1221,6 +1222,19 @@ fn runs() -> usize {
     parse_runs(std::env::var("MIXINGPAL_CRAFT_RUNS").ok().as_deref())
 }
 
+fn parse_ab(raw: Option<&str>) -> bool {
+    match raw {
+        None => false,
+        Some("1") => true,
+        Some(other) => panic!("MIXINGPAL_CRAFT_AB must be unset or 1, got {other:?}"),
+    }
+}
+
+/// Whether this is an A/B run.
+fn ab_run() -> bool {
+    parse_ab(std::env::var("MIXINGPAL_CRAFT_AB").ok().as_deref())
+}
+
 /// The 80% Wilson interval for `passes` of `total`. It stays inside 0 to 1 and
 /// is wide on few runs, which is the honest reading of a small sample.
 fn wilson80(passes: usize, total: usize) -> (f64, f64) {
@@ -1663,6 +1677,30 @@ fn parse_runs_rejects_a_non_number() {
     parse_runs(Some("abc"));
 }
 
+#[test]
+fn parse_ab_is_off_when_unset_and_on_for_one() {
+    assert!(!parse_ab(None));
+    assert!(parse_ab(Some("1")));
+}
+
+#[test]
+#[should_panic(expected = "MIXINGPAL_CRAFT_AB")]
+fn parse_ab_rejects_zero() {
+    parse_ab(Some("0"));
+}
+
+#[test]
+#[should_panic(expected = "MIXINGPAL_CRAFT_AB")]
+fn parse_ab_rejects_true() {
+    parse_ab(Some("true"));
+}
+
+#[test]
+#[should_panic(expected = "MIXINGPAL_CRAFT_AB")]
+fn parse_ab_rejects_an_empty_value() {
+    parse_ab(Some(""));
+}
+
 /// A run that made these (tool, args) calls and nothing else.
 fn run_with_calls(calls: &[(&str, Value)]) -> Run {
     let mut run = trusted_run(&WHAT_NEXT, "Try a bass part.");
@@ -1772,7 +1810,7 @@ async fn stances(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (Vec<Stance>, S
 }
 
 async fn passes_majority(sc: &Scenario, extra: impl Fn(&Run) -> bool) {
-    if std::env::var("MIXINGPAL_CRAFT_AB").as_deref() == Ok("1") {
+    if ab_run() {
         return compare_with_main(sc, extra).await;
     }
     let (runs, report) = run_all(sc).await;
