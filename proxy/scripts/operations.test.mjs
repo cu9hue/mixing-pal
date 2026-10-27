@@ -108,6 +108,21 @@ test("set-budget and set-capacity send one whole number each", async () => {
   assert.match(output[0], /set-capacity requests/);
 });
 
+test("set-budget below the service's spending tells the operator to pause instead", async () => {
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token",
+    fetch: async () => Response.json({ error: { code: "budget_below_spent" } }, { status: 409 }) };
+  await assert.rejects(run(["set-budget", "1000"], connection),
+    /^Error: That amount is below what the service has already spent\. To stop the service, run npm run admin -- pause\.$/);
+});
+
+test("the production preflight states the pilot key cap apart from the billing top-ups", () => {
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  const help = spawnSync(process.execPath, [script, "help"], { encoding: "utf8" }).stdout;
+  assert.match(help, /the API key's credit cap\. For the pilot it is \$50\s+with no replenishment\./);
+  assert.doesNotMatch(help, /\$50 API key cap/);
+  assert.match(help, /set-budget to the same amount/);
+});
+
 test("resolve-without-id sends the cost and reason for every provisional row without an ID", async () => {
   const sent = [];
   const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token", fetch: async (_url, options) => {

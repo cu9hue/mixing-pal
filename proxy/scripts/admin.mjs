@@ -118,6 +118,8 @@ export async function operator(action, { origin, token, fetch: send = fetch }) {
   if (!response.ok) {
     const message = action.action === "invite" && response.status === 502
       ? "Invitation email could not be confirmed. Run the invite command again to send a new code."
+      : action.action === "set_budget" && response.status === 409
+      ? "That amount is below what the service has already spent. To stop the service, run npm run admin -- pause."
       : `Operator request failed (${response.status}).`;
     const error = new Error(message);
     error.status = response.status;

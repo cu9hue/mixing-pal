@@ -474,6 +474,21 @@ describe("metered requests", () => {
     expect(sent).toHaveLength(0);
   });
 
+  test("after set-budget to $200, recover-budget records a service total above $50", async () => {
+    const user = await joined();
+    expect((await api("/operator", { action: "set_budget", allowance_micro_usd: 200_000_000 }, env.ADMIN_TOKEN)).status).toBe(200);
+    expect((await api("/operator", { action: "replay_deletions" }, env.ADMIN_TOKEN)).status).toBe(200);
+    const recover = (member_id: string | undefined, spent_micro_usd: number) => api("/operator", {
+      action: "recover", member_id, spent_micro_usd, reason: "Verified against pre-restore records and provider billing",
+    }, env.ADMIN_TOKEN);
+    // An account's spending stays capped at $50.
+    expect((await recover(user.id, 50_000_001)).status).toBe(400);
+    expect((await recover(user.id, 0)).status).toBe(200);
+    expect((await recover(undefined, 120_000_000)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT allowance, spent, recovery_required FROM budget").first())
+      .toEqual({ allowance: 200_000_000, spent: 120_000_000, recovery_required: 0 });
+  });
+
   test("recovery refuses unresolved or decreasing spending and keeps its audit atomic", async () => {
     const user = await joined();
     reply();
@@ -1722,6 +1737,19 @@ describe("operator tools", () => {
       .toEqual([{ action: "set_budget", target: "service", detail: "60000000" }]);
     reply();
     expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+  });
+
+  test("set-budget refuses an amount below what the service has spent and reserved", async () => {
+    await env.DB.prepare("UPDATE budget SET spent = 40000000, reserved = 1000000").run();
+    const below = await api("/operator", { action: "set_budget", allowance_micro_usd: 40_999_999 }, env.ADMIN_TOKEN);
+    expect(below.status).toBe(409);
+    expect((await below.json()).error).toEqual({ code: "budget_below_spent",
+      message: "That amount is below what the service has already spent. To stop the service, use pause." });
+    expect(await env.DB.prepare("SELECT allowance FROM budget").first()).toEqual({ allowance: 50_000_000 });
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions").first())!.n).toBe(0);
+    expect((await api("/operator", { action: "set_budget", allowance_micro_usd: 41_000_000 }, env.ADMIN_TOKEN)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT allowance FROM budget").first()).toEqual({ allowance: 41_000_000 });
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions").first())!.n).toBe(1);
   });
 
   test("set-capacity sets the in-flight cap, which usage shows", async () => {

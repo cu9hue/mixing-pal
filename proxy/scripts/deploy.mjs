@@ -74,10 +74,10 @@ Then run an invited staging turn, exercise capture off/on/withdrawal/deletion,
 and rehearse rollback before inviting pilot producers or enabling production.
 
 Before enabling production: complete those staging checks and verify production
-email, provider policy and its $50 API key cap with no replenishment.
-Before billing on, raise the OpenRouter key's credit cap. Set
-npm run admin -- set-budget to the same amount, in micro-USD. With each
-top-up, raise both together.
+email, provider policy and the API key's credit cap. For the pilot it is $50
+with no replenishment. Before billing on, raise the OpenRouter key's credit
+cap and set npm run admin -- set-budget to the same amount, in micro-USD.
+With each top-up, raise both together.
 Pass MIXINGPAL_RELEASE_VERIFIED=yes to acknowledge these release checks.
 
 The recovery command sets REPORT_RECOVERY=true in Worker configuration, outside

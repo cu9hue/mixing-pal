@@ -33,8 +33,10 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     z.object({ action: z.literal("pause"), paused: z.boolean() }),
     z.object({ action: z.literal("set_budget"), allowance_micro_usd: z.number().int().positive() }),
     z.object({ action: z.literal("set_capacity"), max_in_flight: z.number().int().min(1) }),
+    // An account's spending is capped at $50; the service total grows with set_budget.
     z.object({ action: z.literal("recover"), member_id: z.string().min(1).max(100).optional(),
-      spent_micro_usd: z.number().int().min(0).max(50_000_000), reason: z.string().min(5).max(500) }),
+      spent_micro_usd: z.number().int().min(0), reason: z.string().min(5).max(500) })
+      .refine((d) => d.member_id === undefined || d.spent_micro_usd <= 50_000_000),
     z.object({ action: z.literal("export"), member_id: z.string().max(100), turn_id: z.uuid() }),
     z.object({ action: z.literal("comp"), email: z.email().transform((s) => s.toLowerCase()) }),
     z.object({ action: z.literal("uncomp"), member_id: z.string().max(100) }),
@@ -78,12 +80,21 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     FROM support_reports WHERE state = 'ready' AND mail_state IN ('pending', 'sending', 'attention') ORDER BY created_at LIMIT 100`).all()).results);
   if (data.action === "export") return exportTurn(env, data.member_id, data.turn_id);
   if (data.action === "replay_deletions") return json({ cursor: await replayDeletions(env, data.cursor) });
-  if (data.action === "set_budget" || data.action === "set_capacity") {
-    const [column, value] = data.action === "set_budget" ? ["allowance", data.allowance_micro_usd] : ["max_in_flight", data.max_in_flight];
+  if (data.action === "set_budget") {
+    // The check and the write are one statement, so a reservation that lands between them cannot slip under the new budget.
+    const [update] = await env.DB.batch([
+      env.DB.prepare("UPDATE budget SET allowance = ? WHERE id = 1 AND spent + reserved <= ?").bind(data.allowance_micro_usd, data.allowance_micro_usd),
+      env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) SELECT 'set_budget', 'service', ?, ? WHERE changes() > 0")
+        .bind(now, String(data.allowance_micro_usd)),
+    ]);
+    if (!update.meta.changes) throw new ApiError(409, "budget_below_spent", "That amount is below what the service has already spent. To stop the service, use pause.");
+    return json({ ok: true });
+  }
+  if (data.action === "set_capacity") {
     await env.DB.batch([
-      env.DB.prepare(`UPDATE budget SET ${column} = ? WHERE id = 1`).bind(value),
-      env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) VALUES (?, 'service', ?, ?)")
-        .bind(data.action, now, String(value)),
+      env.DB.prepare("UPDATE budget SET max_in_flight = ? WHERE id = 1").bind(data.max_in_flight),
+      env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) VALUES ('set_capacity', 'service', ?, ?)")
+        .bind(now, String(data.max_in_flight)),
     ]);
     return json({ ok: true });
   }
