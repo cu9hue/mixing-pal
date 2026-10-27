@@ -19,9 +19,8 @@ pub fn known_words() -> KnownWords {
         .expect("shared/known-words.json must be valid JSON")
 }
 
-/// One defect per studio word the prose uses that Live does not show and the
-/// answer did not list for her to tap. Same reading of the prose as
-/// `tappable`: whole words, any `form_end` form, never inside code or a «name».
+/// One defect per studio word the prose uses that Live does not show and the answer did not
+/// list. Reads the prose as `tappable` does: whole words, never inside code or a «name».
 pub fn studio_word_defects(prose: &str, listed_terms: &[String]) -> Vec<String> {
     let mut studio: Vec<(StudioWord, Vec<Vec<char>>)> = known_words()
         .studio

@@ -172,10 +172,8 @@ the move needs a technical term, use it and say what it means in a few words, \
 the first time only. Use no abbreviations. Give the why as what she will hear \
 change, not as theory. Still one move, and still never say how the set sounds.";
 
-/// Appended to `SYSTEM_PROMPT` for a producer who chose "I finish tracks",
-/// and for one who never chose. Inline explanations would lengthen every
-/// answer, so the terms she may not know ride in a block the card strips and
-/// marks for a tap (src/notes/terms.ts). It changes the words, not the advice.
+/// Appended to `SYSTEM_PROMPT` for a producer who chose "I finish tracks", or never chose.
+/// Inline explanations would lengthen every answer, so terms ride in a block the card marks for a tap.
 pub const FINISHES_TRACKS: &str = "\
 Who you are talking to:
 - She finishes tracks and knows Live's words. After the prose, outside the \
@@ -1182,7 +1180,6 @@ mod tests {
             .unwrap()
             .to_string();
 
-        // A producer who never chose gets the "I finish tracks" section.
         assert_eq!(first(Experience::default()), first(Experience::FinishesTracks));
         for (e, section) in [
             (Experience::NewToLive, NEW_TO_LIVE),
@@ -1210,7 +1207,6 @@ mod tests {
         assert_eq!(roles_of(&body), vec!["system", "user", "system"]);
         assert_eq!(body["messages"][0]["content"], "another prompt");
         assert_eq!(body["messages"][2]["content"], REMINDER);
-        // The app's body, prompt aside: same tools and cap.
         let app = build_body(&Settings::default(), Experience::default(), &[turn("user")]).unwrap();
         assert_eq!((&body["tools"], &body["max_tokens"]), (&app["tools"], &app["max_tokens"]));
         assert!(build_body_with(&Settings::default(), "another prompt", &[turn("system")]).is_err());

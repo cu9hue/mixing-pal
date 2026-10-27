@@ -905,9 +905,8 @@ fn tool_evidence_is_bounded_and_marks_the_missing_tail() {
     assert!(record.result["json_prefix"].as_str().unwrap().contains("🎹"));
 }
 
-/// What `Turn::answer` strips: the note and terms blocks. The move stays,
-/// because she sees it under the answer and the model reads it back as an
-/// outcome, so an injection obeyed only in the move must still be caught.
+/// What `Turn::answer` strips: the note and terms blocks. The move stays: she sees it and
+/// the model reads it back as an outcome, so an injection obeyed only in the move is caught.
 pub const SHOWN: &[&str] = &["note", "terms"];
 /// What the card's prose is once src/notes/note.ts, move.ts, and terms.ts
 /// have stripped their blocks: the text `markTerms` marks terms in.
@@ -978,12 +977,8 @@ fn clean_term_line(term: &str, meaning: &str) -> (String, String) {
     (t.to_string(), m.to_string())
 }
 
-/// The last `terms` block's lines as (term, meaning), cleaned the way the
-/// card cleans them, a repeated term dropped. Stricter than the card, which
-/// drops or cuts what it cannot use: here a malformed or overlong line is
-/// named. A block the card cannot close, unclosed or closed with fewer than
-/// three backticks, shows as raw text, so it is a trust defect. `Ok(None)`
-/// means there is no block.
+/// The last `terms` block as (term, meaning) lines, cleaned as the card does. Unlike the card,
+/// it names a malformed line, and a block the card cannot close (raw text) is a trust defect.
 pub fn terms_block(answer: &str) -> Result<Option<Vec<(String, String)>>, TermsDefect> {
     let shown = |reason: &str| TermsDefect { trust: true, reason: reason.into() };
     let reported = |reason: String| TermsDefect { trust: false, reason };
@@ -1037,10 +1032,8 @@ fn has_words(text: &str, phrase: &str) -> bool {
     })
 }
 
-/// Where a term's match starting at `start` ends, in the forms
-/// `termPattern` in src/ui/markdown.ts allows: a space and a hyphen stand for
-/// each other, and the last word may add "es" or "s", tried in that order as
-/// the regex does. `fits` is the test the end must pass.
+/// Where a term's match at `start` ends, in the forms `termPattern` in src/ui/markdown.ts
+/// allows (space = hyphen, "es" then "s" on the last word). `fits` is the test the end must pass.
 fn form_end(chars: &[char], start: usize, words: &[Vec<char>], fits: impl Fn(usize) -> bool) -> Option<usize> {
     let same = |a: char, b: char| a.to_lowercase().eq(b.to_lowercase());
     let mut i = start;
@@ -1109,10 +1102,7 @@ fn prose_spans(prose: &str) -> Vec<Span> {
 }
 
 /// Which `terms` the card makes tappable in `prose`, mirroring `markTerms` in
-/// src/ui/markdown.ts: longest term first, first occurrence in reading order,
-/// whole words ignoring case in any of `form_end`'s forms, never inside code,
-/// a «name» only when it is the whole term or its plural.
-/// shared/term-vectors.json pins the two together.
+/// src/ui/markdown.ts; shared/term-vectors.json pins the two together.
 pub fn tappable(prose: &str, terms: &[String]) -> Vec<String> {
     let mut spans = prose_spans(prose);
     let mut order: Vec<(usize, &String)> = terms.iter().enumerate().collect();
@@ -1157,9 +1147,8 @@ pub fn tappable(prose: &str, terms: &[String]) -> Vec<String> {
     terms.iter().zip(found).filter(|(_, f)| *f).map(|(t, _)| t.clone()).collect()
 }
 
-/// Verdict words `SYSTEM_PROMPT` forbids, plus three a meaning reaches for.
-/// A meaning may say a control changes the level or the tone; it may not
-/// say how the result sounds.
+/// Verdict words `SYSTEM_PROMPT` forbids, plus three a meaning reaches for. A meaning
+/// may say a control changes the level or the tone, never how the result sounds.
 pub const SOUND_WORDS: &[&str] = &["masking", "timbre", "muddy", "harsh", "punchy", "warm", "tight", "glued"];
 /// The model never sees Live's screen, so a meaning never places a control.
 /// Phrases, not words: "above the Threshold" and "left or right" are sound.
@@ -1169,9 +1158,8 @@ pub const SCREEN_PHRASES: &[&str] = &[
     "bottom right", "left-hand", "right-hand", "corner", "on screen", "onscreen", "on-screen",
 ];
 
-/// One thing wrong with an answer's terms. A `trust` defect claims a sound
-/// or shows the model's bookkeeping as code or raw text; the rest are
-/// reported.
+/// One thing wrong with an answer's terms. A `trust` defect claims a sound or shows
+/// the model's bookkeeping as code or raw text; the rest are reported.
 #[derive(Debug, PartialEq)]
 pub struct TermsDefect {
     pub trust: bool,

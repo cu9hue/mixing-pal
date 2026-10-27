@@ -571,7 +571,6 @@ mod tests {
         assert_eq!(json["exchanges"][0]["terms"][0]["term"], "Gain reduction");
         assert_eq!(json["exchanges"][0]["terms"][0]["meaning"], "How far the Compressor turns the signal down.");
         assert_eq!(load(&dir, ID, Some(PATH), 0).unwrap().unwrap(), t);
-        // An exchange without terms writes no field, as before.
         let plain = thread("q", 0);
         save(&dir, ID, Some(PATH), &plain).unwrap();
         let raw = std::fs::read_to_string(dir.join(&read_index(&dir).entries[0].file)).unwrap();

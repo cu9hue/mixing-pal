@@ -338,8 +338,7 @@ async fn the_fake_live_serves_the_craft_fixture_in_full() {
     assert_eq!(vox["length_beats"], json!(32.0), "{arrangement}");
     assert_eq!(vox["sections"], json!(["«Drop»"]), "{arrangement}");
 
-    // The Pad is the clip the 2026-10-27 eval put in the Drop: the read must
-    // say it ends where the Drop starts and plays again only in the Break.
+    // The Pad must end where the Drop starts and play again only in the Break.
     let pad = &arrangement["value"]["tracks"][0]["clips"];
     assert_eq!(pad[0]["end_position"], json!("17.1.1"), "{arrangement}");
     assert_eq!(pad[0]["sections"], json!(["«Intro»"]), "{arrangement}");
@@ -1096,7 +1095,6 @@ struct Run {
     judge_report: Option<String>,
 }
 
-/// The reads that show what plays where and when.
 fn timeline_evidence(calls: &[common::ToolCallRecord]) -> Vec<&common::ToolCallRecord> {
     calls.iter().filter(|c| matches!(c.name.as_str(), "get_arrangement" | "get_arrangement_notes")).collect()
 }
@@ -1125,10 +1123,8 @@ fn merge_verdicts(
     }
 }
 
-/// Judges `properties` in one call, and `timeline_supported` in a second that
-/// sees only the arrangement reads. Returns the merged verdicts, the reason
-/// the run is invalid, and the report of both replies. The second call is
-/// skipped once the first is invalid.
+/// Judges `properties` in one call, and `timeline_supported` in a second that sees only
+/// the arrangement reads. The second call is skipped once the first is invalid.
 async fn judge_all(
     sc: &Scenario,
     context: &str,
@@ -1230,7 +1226,6 @@ fn parse_ab(raw: Option<&str>) -> bool {
     }
 }
 
-/// Whether this is an A/B run.
 fn ab_run() -> bool {
     parse_ab(std::env::var("MIXINGPAL_CRAFT_AB").ok().as_deref())
 }
@@ -1365,10 +1360,8 @@ const HUMAN_REVIEW_PROPERTIES: &[&str] = &[
     "plain_words", "terms_listed",
 ];
 
-/// Whether a run's terms pass `sc`. At "I finish tracks" a trust defect (a
-/// sound claim, a block shown as code or raw text) fails trust, like a sound
-/// claim in the prose; the other defects are reported. A scenario with
-/// `terms_required` also needs a non-empty block.
+/// Whether a run's terms pass `sc`. At "I finish tracks" a trust defect (a sound claim, a
+/// block shown as code or raw text) fails trust; the other defects are reported.
 fn terms_pass(sc: &Scenario, run: &Run) -> bool {
     if sc.experience != Experience::FinishesTracks {
         return true;
@@ -1377,9 +1370,8 @@ fn terms_pass(sc: &Scenario, run: &Run) -> bool {
     (listed || !sc.terms_required) && !common::terms_defects(&run.raw_answer).iter().any(|d| d.trust)
 }
 
-/// Whether a run's visible answer keeps to Live's words. Reported, never gated.
-/// Only "I finish tracks" shows a terms block, so only there can a listed
-/// term excuse a studio word.
+/// Whether a run's visible answer keeps to Live's words. Reported, never gated. Only
+/// "I finish tracks" shows terms, so only there can a listed term excuse a studio word.
 fn studio_words_clean(sc: &Scenario, run: &Run) -> bool {
     let listed: Vec<String> = match common::terms_block(&run.raw_answer) {
         Ok(Some(terms)) if sc.experience == Experience::FinishesTracks => terms.into_iter().map(|(t, _)| t).collect(),
@@ -1800,9 +1792,8 @@ fn stance(run: &Run) -> Stance {
     }
 }
 
-/// Runs the scenario `runs()` times like `tally`, recording each run's stance
-/// on the pad's chords rather than a pass/fail. A run that fails `extra`
-/// counts as `Stance::None`: it never earned a claim about the chords.
+/// Runs the scenario `runs()` times like `tally`, recording each run's stance on the pad's
+/// chords. A run that fails `extra` counts as `Stance::None`: it never earned a claim.
 async fn stances(sc: &Scenario, extra: impl Fn(&Run) -> bool) -> (Vec<Stance>, String) {
     let (runs, report) = run_all(sc).await;
     let stances = runs.iter().map(|r| if extra(r) { stance(r) } else { Stance::None }).collect();

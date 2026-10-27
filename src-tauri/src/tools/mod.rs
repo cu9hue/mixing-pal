@@ -941,9 +941,8 @@ fn arrangement_payload(
     payload
 }
 
-/// The producer's locators as the SECTIONS line has them, in song order.
-/// `None` when the mirror holds no whole reply: a list cut to one datagram
-/// would file a late placement under the last locator that fit.
+/// The producer's locators as the SECTIONS line has them, in song order. `None` when the mirror
+/// holds no whole reply: a list cut to one datagram files a late placement under the wrong locator.
 fn locators(coalescer: &Mutex<Coalescer>) -> Option<Vec<(String, f64)>> {
     let args = coalescer.lock().ok()?.lookup("/live/mixingpal/get/cue_points", &[])?.args;
     let (total, pairs) = args.split_first()?;
@@ -2846,7 +2845,6 @@ mod tests {
         let six = arrangement_payload(&map(vec![clip(0.0, 3.0), clip(0.0, 4.5)]), Some((6, 8)));
         assert_eq!(six["tracks"][0]["clips"][0]["end_position"], json!("2.1.1"));
         assert_eq!(six["tracks"][0]["clips"][1]["end_position"], json!("2.4.1"));
-        // No signature, no bar labels of any kind.
         let none = arrangement_payload(&map(vec![clip(0.0, 4.0)]), None);
         assert!(none["tracks"][0]["clips"][0].get("end_position").is_none());
     }
@@ -2874,8 +2872,6 @@ mod tests {
 
     #[test]
     fn each_placement_names_the_sections_it_overlaps_as_the_sections_line_defines_them() {
-        // The 2026-10-27 eval: the Pad runs 1.1.1-17.1.1 and 25.1.1-33.1.1, and
-        // the model put it in the Drop (17-25) nine times out of eighteen.
         let clip = |index, start, length| arrangement::ArrangementClip {
             index,
             name: None,
@@ -2912,7 +2908,6 @@ mod tests {
         let mut payload = arrangement_payload(&map, None);
         add_sections(&mut payload, &locators);
         let sections = |i: usize| payload["tracks"][0]["clips"][i]["sections"].clone();
-        // Before the first locator there is no section.
         assert_eq!(sections(0), json!([]));
         // Ends exactly on the Drop locator, so it does not play in the Drop.
         // The names are producer text and arrive fenced.
@@ -2921,7 +2916,6 @@ mod tests {
         assert_eq!(sections(3), json!(["«Break»"]));
         // A hair off the grid is the sixteenth it snaps to, as on the SECTIONS line.
         assert_eq!(sections(4), json!(["«Drop»"]));
-        // The last section runs to the end of the song.
         assert_eq!(sections(5), json!(["«Drop 2»"]));
 
         let mut without = arrangement_payload(&map, None);

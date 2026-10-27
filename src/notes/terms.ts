@@ -7,18 +7,12 @@ export interface Term {
 }
 
 /**
- * Both limits live in shared/term-vectors.json, which the prompt test and the
- * eval read too. More than four marks would cover half the answer, and one
- * plain sentence fits well inside a line; a runaway line is cut.
+ * Both limits live in shared/term-vectors.json, which the prompt test and the eval read.
+ * More marks than this would cover half the answer; a runaway line is cut.
  */
 export const MAX_TERMS: number = maxTerms;
 export const TERM_LINE_MAX_CHARS: number = lineMaxChars;
 
-/**
- * The terms an answer lists for her to tap. Same rules as `moveLabel`: an
- * unclosed block is text, the last block counts. A line without a term and a
- * meaning on either side of its first colon is dropped.
- */
 const BLOCK = /```terms[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?[ \t]*```/g;
 const LIST_MARKER = /^(?:[-*]|\d+\.)\s+/;
 
@@ -27,6 +21,10 @@ function cleanTerm(raw: string): string {
   return raw.trim().replace(LIST_MARKER, "").replace(/^[*`«\s]+/, "").replace(/[*`»\s]+$/, "");
 }
 
+/**
+ * The terms an answer lists for her to tap. Same rules as `moveLabel`: an unclosed block is
+ * text, the last block counts. A line without a term and a meaning around its colon is dropped.
+ */
 export function termsList(answer: string): { answer: string; terms: Term[] } {
   let last: string | null = null;
   for (const m of answer.matchAll(BLOCK)) last = m[1] ?? "";

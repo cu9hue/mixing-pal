@@ -93,10 +93,8 @@ function termLine(index: number, terms: TermControls & { list: Term[] }): ReactN
 }
 
 /**
- * The answer's blocks. With terms, the open term's line sits directly under
- * the block that holds it, inside the card: the card clips anything that
- * floats, and the window is sized to the card. A listed term the prose does
- * not use sits in one quiet row at the end, and its line opens under that.
+ * The answer's blocks. The open term's line sits under the block that holds it, inside the
+ * card, which clips anything that floats. A listed term the prose does not use goes in a row at the end.
  */
 function renderBlocks(blocks: BlockNode[], terms?: TermControls & { list: Term[] }): ReactNode {
   const open = terms?.open ?? null;
@@ -194,9 +192,8 @@ function renderBlock(b: BlockNode, i: number, terms?: TermControls): ReactNode {
 // turn runs, and an Exchange never changes once settled: without this every
 // tick would reparse every answer of the session.
 const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
-  // One open term per answer. Esc or a second tap on it closes the line.
-  // WebKit on macOS does not focus a button on click, so `toggle` does: Esc
-  // then reaches this answer's handler.
+  // One open term per answer; Esc or a second tap closes it. `toggle` focuses its button:
+  // WebKit on macOS does not on click, and Esc must reach this answer's handler.
   const [open, setOpen] = useState<number | null>(null);
   const id = useId();
   const terms = x.terms?.length ? {

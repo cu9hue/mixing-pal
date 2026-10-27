@@ -24,9 +24,8 @@ export type InlineNode =
   // (guillemets stripped). Rendered as a chip so the producer can tell it
   // apart from the model's own words.
   | { type: "fence"; name: string }
-  // A word she can tap for one plain line; `index` is its place in the
-  // answer's terms. Added by `markTerms`, never by the parser. `fence` marks
-  // a «name» that is the whole term, still shown as her name.
+  // A word she can tap, added by `markTerms`; `index` is its place in the answer's terms.
+  // `fence` marks a «name» that is the whole term, still shown as her name.
   | { type: "term"; text: string; index: number; fence?: true };
 
 export type BlockNode =
@@ -343,9 +342,8 @@ export function termsIn(block: BlockNode): number[] {
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 
 /**
- * A term as a pattern that also takes the forms the model writes it in: a
- * space and a hyphen stand for each other, and the last word may add "s" or
- * "es", so "Return track" finds "return tracks".
+ * A term as a pattern that takes the forms the model writes it in: space and hyphen alike,
+ * and "s" or "es" on the last word, so "Return track" finds "return tracks".
  */
 function termPattern(term: string): string {
   const words = term.trim().split(/[\s-]+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -353,14 +351,8 @@ function termPattern(term: string): string {
 }
 
 /**
- * Marks the first occurrence of each term in the answer, matched
- * case-insensitively on word boundaries in any of `termPattern`'s forms,
- * longest term first so a short term cannot take the words of a longer one.
- * The mark keeps the prose's own text. Walks text inside bold and italic,
- * because the move is bold and often holds a term. Never code, and never
- * part of a «name». A «name» that is the whole term, or its plural, is
- * marked: the tools fence every device and parameter label. A term with no
- * match stays unmarked; the card lists it after the answer.
+ * Marks each term's first occurrence in any `termPattern` form, longest term first. Walks bold
+ * (the move holds terms) and italic, never code. A «name» is marked only as the whole term or its plural.
  */
 export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[]): BlockNode[] {
   const order = terms.map((t, index) => ({ term: t.term, index })).sort((a, b) => b.term.length - a.term.length);
