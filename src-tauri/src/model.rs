@@ -1159,9 +1159,9 @@ mod tests {
     }
 
     #[test]
-    fn the_craft_section_stays_under_a_third_of_the_honesty_prompt() {
-        // A cost ceiling, not taste: the prompt rides on every round trip. The words
-        // rule took the base to 6895 and the longest level to 7229; caps 7200 and 7300.
+    fn the_prompt_stays_under_its_character_ceiling() {
+        // A cost ceiling, not taste: the prompt rides on every round trip, so a
+        // new rule has to earn its place. A level's section gets a little more, below.
         let n = SYSTEM_PROMPT.chars().count();
         assert!(
             n <= 7200,
