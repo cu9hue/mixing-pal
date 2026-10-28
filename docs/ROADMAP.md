@@ -315,6 +315,20 @@ Ordered. Each item says what, why, size, and what it waits on.
     Next: measure the first click and the first kept move once usage events
     exist.
 
+19. **What she has installed.** The model sees only the devices in the open
+    set. On 2026-10-26 a pilot producer had the Span plugin installed. The
+    model did not suggest it until she put it on a track, and then it
+    advised on it. A `get_installed` tool lists the plugins and Live
+    devices she can load, so a move can use a tool she already owns. Live's
+    browser API can probably supply the list from the connector; the plugin
+    folders on disk are the other source. Spike on Live 12 first: check that
+    the browser lists third-party plugins by name, and how long a large
+    library takes to walk. The list is cold context: the app keeps it on
+    disk, refreshes it when Live starts, and the model reads it with the
+    tool only when a move needs it, never in the context block. A plugin
+    list says a lot about a person, so it leaves the machine only inside a
+    turn, and the capture consent covers it like any other tool result.
+
 ## When the waitlist says go
 
 All specced or named already. The order is fixed by the gate.
