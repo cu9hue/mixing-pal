@@ -377,6 +377,14 @@ describe("invited accounts", () => {
     expect((await again.json()).remaining_micro_usd).toBe(4999958);
   });
 
+  test("the account view carries the period's allowance, so the app can show usage as a share of it", async () => {
+    const user = await invited();
+    await api("/v1/invites/redeem", { code: user.code }, user.token);
+    await env.DB.prepare("UPDATE members SET spent = 1000000 WHERE id = ?").bind(user.id).run();
+    const view = await (await api("/v1/account", undefined, user.token)).json();
+    expect(view).toMatchObject({ allowance_micro_usd: 5_000_000, remaining_micro_usd: 4_000_000 });
+  });
+
   test("cannot redeem another email's invite", async () => {
     const alice = await invited();
     const bob = await invited("bob@example.com");

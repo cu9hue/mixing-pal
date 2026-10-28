@@ -44,6 +44,7 @@ export async function account(env: Env, id: string, modern = false): Promise<Res
   return json({ id, email: user?.email ?? "", access: !m ? (billing ? ended : "invitation_required")
     : m.revoked || m.deleted_at ? "revoked" : m.period_end <= Date.now() ? ended : "active",
     remaining_micro_usd: m ? Math.max(0, m.allowance - m.spent - m.reserved) : 0,
+    allowance_micro_usd: m?.allowance ?? 0,
     can_ask: Boolean(!servicePaused && m && !m.revoked && !m.deleted_at && m.period_end > Date.now()
       && m.allowance - m.spent - m.reserved >= RESERVATION),
     service_paused: servicePaused,

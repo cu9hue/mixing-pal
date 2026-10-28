@@ -6,6 +6,7 @@ export interface AccountView {
   id?: string;
   email?: string;
   remaining_micro_usd?: number;
+  allowance_micro_usd?: number;
   can_ask?: boolean;
   reserved_micro_usd?: number;
   service_paused?: boolean;

@@ -14,6 +14,19 @@ function planLabel(view: AccountView): string {
   return view.subscription_status === "trialing" ? `${name} · free trial` : name;
 }
 
+function usageLabel(view: AccountView): string {
+  if (view.subscription_status === "trialing") return "Trial usage";
+  return view.plan || view.comp ? "Usage this month" : "Pilot usage";
+}
+
+// Usage shows as a share of the period, never as money. Rounded up, so it reads 0% only when nothing usable is left:
+// a question holds a fixed reserve first, so a remainder below it reads 0%.
+function shareLeft(view: AccountView): number {
+  if (view.can_ask === false && !view.service_paused && !view.reserved_micro_usd) return 0;
+  const allowance = view.allowance_micro_usd ?? 0;
+  return Math.min(100, Math.ceil((view.remaining_micro_usd ?? 0) * 100 / allowance));
+}
+
 function dateWord(view: AccountView): string {
   if (view.comp) return "resets";
   if (!view.plan) return "until";
@@ -143,7 +156,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
       {view?.access === "plan_required" && <>
         <div className="account__group"><p>Signed in as {view.email}.</p></div>
         <div className="account__group">
-          {/* Stripe still holds this subscription: she fixes the card in the Portal. A new plan would be a second one. */}
+          {/* Stripe still holds this subscription: they fix the card in the Portal. A new plan would be a second one. */}
           {view.subscription_status === "past_due" || view.subscription_status === "unpaid"
             ? <p role="alert">Your payment didn't go through. Update your card in Manage subscription to get access back.</p>
             : <PlanPicker trial={view.trial_available === true} busy={busy || operations.install} onPick={(plan) => billing("checkout", plan)} />}
@@ -156,8 +169,14 @@ export function AccountPanel({ account }: { account: AccountState }) {
             <div className="account__plan">{planLabel(view)}
               {view.period_end && ` · ${dateWord(view)} ${new Date(view.period_end).toLocaleDateString()}`}</div>
             <div className="account__email">{view.email}</div>
-            <div>${((view.remaining_micro_usd ?? 0) / 1_000_000).toFixed(2)} of model usage remains.
-            {(view.reserved_micro_usd ?? 0) > 0 && " Some allowance is held for requests being checked."}</div>
+            {(view.allowance_micro_usd ?? 0) > 0 && <div className="account__usage">
+              <div className="account__usage-line"><span id={`${id}-usage`}>{usageLabel(view)}</span><span>{shareLeft(view)}% left</span></div>
+              <div className="account__meter" role="meter" aria-labelledby={`${id}-usage`} aria-valuemin={0} aria-valuemax={100}
+                aria-valuenow={shareLeft(view)} aria-valuetext={`${shareLeft(view)}% left`}>
+                <div className="account__meter-fill" style={{ width: `${shareLeft(view)}%` }} />
+              </div>
+            </div>}
+            {(view.reserved_micro_usd ?? 0) > 0 && <div>Some allowance is held for requests being checked.</div>}
             {view.can_ask === false && <div>{view.service_paused ? "Model access is temporarily paused." : (view.reserved_micro_usd ?? 0) > 0
               ? "We’re checking the last request’s usage before you can ask again."
               : "The remaining allowance cannot cover another request."}</div>}

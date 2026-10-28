@@ -125,6 +125,34 @@ it("a failed payment says how long access lasts, not when the plan resets", () =
   expect(summary).not.toContain("resets");
 });
 
+it("shows usage as a share of the month, with no money amounts", () => {
+  render(<AccountPanel account={signedIn({ subscription_status: "active", plan: "starter", remaining_micro_usd: 1_240_000, allowance_micro_usd: 2_000_000 })} />);
+  const meter = screen.getByRole("meter", { name: "Usage this month" });
+  expect(meter.getAttribute("aria-valuenow")).toBe("62");
+  expect(meter.getAttribute("aria-valuetext")).toBe("62% left");
+  expect(screen.getByText("62% left")).toBeTruthy();
+  expect(document.querySelector(".account")!.textContent).not.toContain("$");
+});
+
+it("rounds the share left up, so the bar never reads 0% while a question still fits", () => {
+  render(<AccountPanel account={signedIn({ subscription_status: "active", plan: "pro", remaining_micro_usd: 100, allowance_micro_usd: 8_000_000 })} />);
+  expect(screen.getByText("1% left")).toBeTruthy();
+});
+
+it("reads 0% left when what is left cannot cover another question", () => {
+  render(<AccountPanel account={signedIn({ subscription_status: "active", plan: "starter", can_ask: false, remaining_micro_usd: 120_000, allowance_micro_usd: 2_000_000 })} />);
+  expect(screen.getByRole("meter", { name: "Usage this month" }).getAttribute("aria-valuenow")).toBe("0");
+  expect(screen.getByText(/cannot cover another request/)).toBeTruthy();
+});
+
+it("labels the bar for a trial and for the pilot", () => {
+  render(<AccountPanel account={signedIn({ subscription_status: "trialing", plan: "starter", remaining_micro_usd: 500_000, allowance_micro_usd: 1_000_000 })} />);
+  expect(screen.getByRole("meter", { name: "Trial usage" })).toBeTruthy();
+  cleanup();
+  render(<AccountPanel account={signedIn({ remaining_micro_usd: 5_000_000, allowance_micro_usd: 5_000_000 })} />);
+  expect(screen.getByRole("meter", { name: "Pilot usage" })).toBeTruthy();
+});
+
 it("names the plan, a trial, and free access", () => {
   render(<AccountPanel account={signedIn({ subscription_status: "trialing", plan: "pro", remaining_micro_usd: 1_000_000 })} />);
   expect(screen.getByText(/Pro · free trial/)).toBeTruthy();
