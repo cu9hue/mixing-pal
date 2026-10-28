@@ -32,7 +32,7 @@ export const CARD_MAX_HEIGHT = 520;
 
 export const MODE_GEOMETRY: Record<WindowMode, Geometry> = {
   // Live's preferences cannot be taught in a 380px card, so setup is a
-  // real window. Not on top: it is a task she completes, not a companion.
+  // real window. Not on top: it is a task the producer completes, not a companion.
   setup: { width: 600, height: 680, maxHeight: null, alwaysOnTop: false, centered: true },
   // 52 square so the 34px body has room for its shadow and its unread
   // glow. The window is transparent, so any shadow that reaches past the
@@ -77,7 +77,7 @@ export type GeometryApply = {
  *
  * `centredFor` is the mode the window was last centred in. Centring is a
  * one-shot on entry: re-centring on every apply put the setup window back a
- * second after she dragged it.
+ * second after the producer dragged it.
  */
 export function geometryApply(
   view: WindowMode,
@@ -99,28 +99,28 @@ export type ModeEvent =
   | { type: "escape" }
   | { type: "chevron_closed" }
   | { type: "setup_finished" }
-  // She picked Settings… from the app menu. Hers as much as a click.
+  // The producer picked Settings… from the app menu. Theirs as much as a click.
   | { type: "settings_opened" };
 
 /**
- * The card closes only when she closes it.
+ * The card closes only when they close it.
  *
  * A `blur` event used to collapse the card whenever the window lost focus,
  * gated on the input being empty with no turn running and nothing unread.
  * It defeated the thing the app is for: reading advice while working in
  * Live. Every click into Ableton took the answer off screen, which is the
- * one moment she needs it. Escape and the header chevron are the two ways
- * out, and both are hers.
+ * one moment the producer needs it. Escape and the header chevron are the two ways
+ * out, and both are the producer's.
  *
  * This is why there is no ModeContext. Nothing else in the machine reads
- * what she was typing or whether a turn is running -- that state existed
+ * what they were typing or whether a turn is running -- that state existed
  * for the blur gate alone.
  */
 export function nextMode(mode: WindowMode, event: ModeEvent): WindowMode {
   // Setup owns the window until it finishes. A nudge or a completed answer
-  // arriving mid-setup must not yank the window out from under her -- she
-  // is in the middle of Live's preferences with a screenshot in front of
-  // her, and losing it means starting the step again.
+  // arriving mid-setup must not yank the window out from under the producer -- they
+  // are in the middle of Live's preferences with a screenshot in front of
+  // them, and losing it means starting the step again.
   if (mode === "setup") {
     return event.type === "setup_finished" ? "card" : "setup";
   }
@@ -132,7 +132,7 @@ export function nextMode(mode: WindowMode, event: ModeEvent): WindowMode {
       return mode;
     // The only event that opens the card. There were two others -- a
     // completed answer and an arriving nudge -- and both are gone. An answer
-    // she is watching needs no transition; one that lands after she pressed
+    // the producer is watching needs no transition; one that lands after they pressed
     // Escape must not reopen a window over Live; and a nudge is unprompted,
     // which makes taking the screen for it the most intrusive thing this app
     // can do. The pill's unread glow carries both instead, and it only has a

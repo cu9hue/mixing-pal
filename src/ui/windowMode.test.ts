@@ -19,14 +19,14 @@ describe("nextMode", () => {
     expect(nextMode("pill", { type: "pill_clicked" })).toBe("card");
   });
 
-  // The card opens on exactly one thing: her clicking the pill. Two events
+  // The card opens on exactly one thing: the producer clicking the pill. Two events
   // used to open it on the app's own initiative -- a completed answer and an
-  // arriving nudge -- and both were removed. An answer she is watching needs
-  // no transition, one that lands after she pressed Escape must not reopen a
+  // arriving nudge -- and both were removed. An answer the producer is watching needs
+  // no transition, one that lands after the producer pressed Escape must not reopen a
   // window over Live, and a nudge is unprompted, which makes taking the
   // screen for it the most intrusive thing this app could do. The pill's
   // unread glow carries both instead.
-  it("opens the card on nothing but her own click or her Settings pick", () => {
+  it("opens the card on nothing but the producer's own click or Settings pick", () => {
     for (const event of EVERY_EVENT) {
       if (event.type === "pill_clicked" || event.type === "settings_opened") continue;
       expect(nextMode("pill", event)).toBe("pill");
@@ -45,8 +45,8 @@ describe("nextMode", () => {
 
   // The mirror of the test above, and the one that matters most in daily
   // use. The card used to collapse on `blur`, so every click into Ableton
-  // took the answer off screen -- while she was working in Live, which is
-  // the only time the answer is worth anything. Closing the card is hers
+  // took the answer off screen -- while the producer was working in Live, which is
+  // the only time the answer is worth anything. Closing the card is the producer's
   // to do, and there are exactly two ways to do it.
   it("closes on nothing but escape or the chevron", () => {
     const closers = ["escape", "chevron_closed"];
@@ -136,7 +136,7 @@ describe("geometryApply", () => {
   });
 
   // Centring is a one-shot. Re-centring on every apply put the setup window
-  // back a second after she dragged it.
+  // back a second after the producer dragged it.
   it("does not re-centre a mode it is already in", () => {
     expect(geometryApply("setup", { view: "setup", height: 680 }, "setup")?.center).toBe(false);
   });

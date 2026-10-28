@@ -2,7 +2,7 @@ import type { Term } from "../notes/terms";
 
 /**
  * One question and what came back for it. The card shows every exchange of
- * the session, newest last; the thread is what she reads, and is separate
+ * the session, newest last; the thread is what the producer reads, and is separate
  * from the history window the model is sent.
  */
 export interface Exchange {
@@ -17,7 +17,7 @@ export interface Exchange {
   move?: string;
   /** Tracks the model read for this answer, by name at the time. */
   tracksRead?: string[];
-  /** Terms she can tap in the answer; see src/notes/terms.ts. */
+  /** Terms the producer can tap in the answer; see src/notes/terms.ts. */
   terms?: Term[];
 }
 

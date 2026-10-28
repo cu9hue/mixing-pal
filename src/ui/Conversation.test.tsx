@@ -70,7 +70,7 @@ it.each([
   expect(invoke).not.toHaveBeenCalled();
 });
 
-it.each(["add", "edit"])("keeps a rejected note %s draft until installation fails and she retries", async (action) => {
+it.each(["add", "edit"])("keeps a rejected note %s draft until installation fails and the producer retries", async (action) => {
   localStorage.setItem("copilot.notesOpen", "1");
   const busy = createBusyState();
   let rejectInstall!: (reason: Error) => void;
@@ -103,7 +103,7 @@ it.each(["add", "edit"])("keeps a rejected note %s draft until installation fail
   }));
 });
 
-it("lists what the model has read while she waits, and clears the list when the answer lands", async () => {
+it("lists what the model has read while the producer waits, and clears the list when the answer lands", async () => {
   let finishTool!: () => void;
   const toolResult = new Promise<unknown>((resolve) => { finishTool = () => resolve({ value: [] }); });
   const call = (id: string, name: string, args: object) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
@@ -155,7 +155,7 @@ async function answered(move = "«Pad», mud: cut 300 Hz") {
 }
 const strip = () => screen.queryByRole("region", { name: "How did the last move go?" });
 
-it("waits until she comes back before asking how the move went", async () => {
+it("waits until the producer comes back before asking how the move went", async () => {
   const input = await answered();
   expect(screen.getByText("Cut it.")).toBeTruthy();
   expect(strip()).toBeNull();
@@ -169,7 +169,7 @@ it("asks when the window regains focus", async () => {
   expect(strip()).toBeTruthy();
 });
 
-it("lets her skip the check-in, and does not ask again for that move", async () => {
+it("lets the producer skip the check-in, and does not ask again for that move", async () => {
   const input = await answered();
   fireEvent.focus(input);
   fireEvent.click(screen.getByRole("button", { name: "Didn't try" }));
@@ -178,7 +178,7 @@ it("lets her skip the check-in, and does not ask again for that move", async () 
   expect(strip()).toBeNull();
 });
 
-it("tucks the check-in away when she asks the next question", async () => {
+it("tucks the check-in away when the producer asks the next question", async () => {
   const input = await answered();
   fireEvent.focus(input);
   fireEvent.change(input, { target: { value: "And the drums?" } });
@@ -193,7 +193,7 @@ it("changes a rating from the answer's menu", async () => {
   expect(screen.getByRole("button", { name: "Kept it" })).toBeTruthy();
 });
 
-it("asks when she clicks into an input that already has focus", async () => {
+it("asks when the producer clicks into an input that already has focus", async () => {
   const input = await answered();
   input.focus();
   expect(strip()).toBeNull();
@@ -208,7 +208,7 @@ it("puts focus on the choices after Change how it went", async () => {
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Kept it" }));
 });
 
-it("shows one set of choices when she edits the move the check-in would ask about", async () => {
+it("shows one set of choices when the producer edits the move the check-in would ask about", async () => {
   const input = await answered();
   fireEvent.click(screen.getByRole("button", { name: "More actions" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "Change how it went" }));
@@ -269,7 +269,7 @@ describe("returning to a set", () => {
     await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
   }
 
-  it("after a break, shows a recap in place of the earlier answers until she unfolds them", async () => {
+  it("after a break, shows a recap in place of the earlier answers until the producer unfolds them", async () => {
     await open(SAVED, SAVED + 2 * 24 * 60 * 60);
     const recap = screen.getByRole("region", { name: "Last time" });
     expect(recap.textContent).toContain("2 days ago");
@@ -350,7 +350,7 @@ describe("reporting a problem", () => {
   });
 });
 
-describe("terms she can tap", () => {
+describe("terms the producer can tap", () => {
   const reply = "**Lower the Threshold.** Watch the gain reduction and the make-up gain.\n\n"
     + "```terms\nGain reduction: How far the Compressor turns the signal down.\nMake-up gain: Volume added back after the Compressor.\nSidechain: Not in the prose.\n```";
   async function ask(text: string) {

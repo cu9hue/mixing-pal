@@ -54,7 +54,7 @@ function renderInline(nodes: InlineNode[], terms?: TermControls): ReactNode {
             {n.text}
           </code>
         );
-      // A name that came from her project, not from the model. Faint and
+      // A name that came from the producer's project, not from the model. Faint and
       // muted on purpose -- it should read as "this is yours", not compete
       // with the model's own words.
       case "fence":
@@ -70,7 +70,7 @@ function renderInline(nodes: InlineNode[], terms?: TermControls): ReactNode {
 }
 
 /**
- * A word she can tap for one plain line. A button, so Enter and Space work
+ * A word the producer can tap for one plain line. A button, so Enter and Space work
  * and a screen reader hears it can open. A «name» keeps its chip.
  */
 function termButton(key: number, index: number, text: string, fence: boolean, terms: TermControls): ReactNode {
@@ -226,7 +226,7 @@ const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
 });
 
 /**
- * The whole session is on screen, newest exchange last. She reads the
+ * The whole session is on screen, newest exchange last. The producer reads the
  * thread; the model is sent `history`, a short recent window. The two are
  * different budgets and neither one caps the other.
  */
@@ -267,15 +267,15 @@ export function Conversation({
   const keyRef = useRef(key);
   keyRef.current = key;
   const [recap, setRecap] = useState<string | null>(null);
-  // After a break, what she did last time stands in for the restored
-  // exchanges, which stay folded until she asks for them.
+  // After a break, what the producer did last time stands in for the restored
+  // exchanges, which stay folded until they ask for them.
   const [lastTime, setLastTime] = useState<Recap | null>(null);
   const [folded, setFolded] = useState(0);
   const threadRef = useRef<Exchange[]>([]);
   threadRef.current = thread;
   // The set's note rides beside the thread: same key, same switch, same
   // file. The model's changes are merged deterministically after each
-  // answer; hers arrive through the Notes row.
+  // answer; the producer's arrive through the Notes row.
   const [note, setNote] = useState<Note>(emptyNote());
   const noteRef = useRef<Note>(emptyNote());
   noteRef.current = note;
@@ -284,14 +284,14 @@ export function Conversation({
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
   const outcomesRef = useRef<Outcome[]>([]);
   outcomesRef.current = outcomes;
-  // The check-in is opened by her coming back, not by the answer landing.
+  // The check-in is opened by the producer coming back, not by the answer landing.
   // Its turn is fixed once open, so rating it does not close it before the heard step.
   const [checkin, setCheckin] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const dismissed = useRef<Set<string>>(new Set());
   const target = checkinTarget(thread, outcomes, dismissed.current, busy);
   const offerCheckin = useRef<() => void>(() => {});
-  // Not while she is already editing that move from its menu: one set of choices at a time.
+  // Not while the producer is already editing that move from its menu: one set of choices at a time.
   offerCheckin.current = () => { if (target?.turnId && editing !== target.turnId) setCheckin(target.turnId); };
   useEffect(() => {
     const onFocus = () => offerCheckin.current();
@@ -303,7 +303,7 @@ export function Conversation({
     setCheckin(null);
   }
   // A save that failed, shown above the thread until one succeeds. The
-  // note is hers by hand; a write that silently failed would lose it with
+  // note is the producer's by hand; a write that silently failed would lose it with
   // the row still showing it applied.
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -418,7 +418,7 @@ export function Conversation({
   // Scroll only the answer area; scrolling ancestors can hide the controls.
   const newest = useRef<HTMLDivElement>(null);
   const scrollBody = useRef<HTMLDivElement>(null);
-  // So an example question can hand her the caret along with the words.
+  // So an example question can hand the producer the caret along with the words.
   const inputRef = useRef<HTMLInputElement>(null);
   const pinned = useRef(true);
   useEffect(() => {
@@ -500,7 +500,7 @@ export function Conversation({
         setReads((all) => [...all, { name, args, done: false }]);
       }, { turnId, record: (event) => invoke("turn_event", { turnId, event }) });
       // The model's note changes, move label, and terms ride at the end of its
-      // answer and are not part of what she reads or what the history keeps.
+      // answer and are not part of what the producer reads or what the history keeps.
       const { answer, delta } = noteDelta(out.text);
       const { answer: moved, move } = moveLabel(answer);
       const { answer: shown, terms } = termsList(moved);
@@ -598,7 +598,7 @@ export function Conversation({
           </button>
         )}
         {/* First launch, and any set with no thread yet. The questions are
-            built from her set and land on what the reads answer well. */}
+            built from the producer's set and land on what the reads answer well. */}
         {thread.length === 0 && recap === null && waiting === null && (
           <div className="card__empty">
             <div className="card__empty-line">Ask about the set you have open. Try one:</div>
@@ -687,7 +687,7 @@ export function Conversation({
           onClick={() => offerCheckin.current()}
         />
         {/* Permanent and non-dismissible. From here the app can state wrong
-            things fluently, in prose, about her music, and it cannot hear
+            things fluently, in prose, about the producer's music, and it cannot hear
             any of it. */}
         <div className="card__disclaimer">
           AI can make mistakes.

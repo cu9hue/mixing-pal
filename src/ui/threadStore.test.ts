@@ -98,7 +98,7 @@ describe("carryNote", () => {
     expect(carryNote(saved, current, false)).toEqual({ note: { bullets: saved.note, next: 4 }, carried: false });
   });
 
-  it("folds pre-identity bullets into the first set's note, keeping stored ids and hers", () => {
+  it("folds pre-identity bullets into the first set's note, keeping stored ids and the producer's bullets", () => {
     const current = addBullet(emptyNote(), "heard", "mine", true, 20);
     const out = carryNote(saved, current, true);
     expect(out.carried).toBe(true);

@@ -31,7 +31,7 @@ function trackLabel(state: SetState, track: number): string {
 }
 
 /**
- * Where she is working, from what the mirror already holds. The device is
+ * Where the producer is working, from what the mirror already holds. The device is
  * an index, because the mirror holds no device names.
  */
 function focusParts(state: SetState): string[] {
@@ -127,11 +127,11 @@ export function buildContext(
   const trimmedGoal = goal.trim();
   if (trimmedGoal !== "") lines.push(`GOAL  ${trimmedGoal}`);
 
-  // The set's outcomes, hers and the model's. Ids so a retirement can name
-  // one; ages in the recap line's words; "hers" so the model knows what it
+  // The set's outcomes, the producer's and the model's. Ids so a retirement can name
+  // one; ages in the recap line's words; "producer's" so the model knows what it
   // cannot retire. The text is fenced like every other string the model did
   // not write this turn: a bullet is the model's own paraphrase of set data,
-  // or hers, and neither is an instruction. The model adds to this through a
+  // or the producer's, and neither is an instruction. The model adds to this through a
   // fenced note block and never rewrites it; see src/notes/note.ts.
   if (note.length > 0) {
     lines.push("NOTES");
@@ -141,8 +141,8 @@ export function buildContext(
     }
   }
 
-  // What she kept and undid, rebuilt each turn from the log. Fenced: the
-  // label is the model's from an earlier turn and the heard text is hers.
+  // What the producer kept and undid, rebuilt each turn from the log. Fenced: the
+  // label is the model's from an earlier turn and the heard text is the producer's.
   const recent = recentOutcomes(outcomes, OUTCOMES_IN_VIEW);
   if (recent.length > 0) {
     lines.push("OUTCOMES  (newest first)");

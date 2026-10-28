@@ -44,7 +44,7 @@ export function rate(log: Outcome[], exchange: RatedExchange, outcome: Rating, n
   }];
 }
 
-/** Her re-tap on the highlighted choice: a wrong tap leaves no memory. */
+/** The producer's re-tap on the highlighted choice: a wrong tap leaves no memory. */
 export function clear(log: Outcome[], turnId: string): Outcome[] {
   const i = latestIndex(log, turnId);
   return i < 0 ? log : [...log.slice(0, i), ...log.slice(i + 1)];

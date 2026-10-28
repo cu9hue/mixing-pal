@@ -124,7 +124,7 @@
   border-color: var(--border-strong);
 }
 
-/* A keyboard user needs to see where she is; a border one step brighter
+/* A keyboard user needs to see where the producer is; a border one step brighter
    does not do that on this surface. */
 .advanced__input:focus-visible,
 .advanced__button:focus-visible {

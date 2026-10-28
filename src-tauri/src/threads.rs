@@ -27,7 +27,7 @@ pub struct Exchange {
     pub tracks_read: Option<Vec<String>>,
     #[serde(default, rename = "accountId", skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
-    /// The terms she can tap in the answer; threads from before them have none.
+    /// The terms the producer can tap in the answer; threads from before them have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terms: Option<Vec<Term>>,
 }
@@ -526,7 +526,7 @@ mod tests {
         }
     }
 
-    // Outcomes are the set's memory of what she kept and undid; the
+    // Outcomes are the set's memory of what the producer kept and undid; the
     // transcript goes on the prune's schedule, they do not.
     #[test]
     fn prune_keeps_outcomes_without_a_note_or_goal() {

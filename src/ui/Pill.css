@@ -2,7 +2,7 @@
  * Every state is a 34px disc in a 52px window. The failure state used to
  * carry the words "not connected" at auto width, and the 52px window cut
  * them to "ot conne": the window never grew with the pill. A red dot and
- * the tooltip say it now, and the card says it in full the moment she
+ * the tooltip say it now, and the card says it in full the moment the producer
  * opens it.
  *
  * The window is transparent, so every shadow here has to FIT inside the

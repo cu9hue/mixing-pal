@@ -1106,7 +1106,7 @@ mod tests {
         assert!(FINISHES_TRACKS.contains("fenced `terms` block"));
         assert!(FINISHES_TRACKS.contains("`Term: what it means`"));
         assert!(FINISHES_TRACKS.contains(&format!("up to {} other terms", limits.max_terms)));
-        // Her known words are Live's words; the list is for the rest, and
+        // The producer's known words are Live's words; the list is for the rest, and
         // it does not eat the answer's word budget.
         assert!(FINISHES_TRACKS.contains("knows Live's words"));
         assert!(FINISHES_TRACKS.contains("other terms they must act on"));

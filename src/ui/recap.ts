@@ -2,7 +2,7 @@ import { Note, ageWords } from "../notes/note";
 import { Rating, Outcome, recentOutcomes } from "../notes/outcomes";
 import { Exchange } from "./thread";
 
-/** Shorter than this, she still remembers; a set switch and back keeps the full thread. */
+/** Shorter than this, the producer still remembers; a set switch and back keeps the full thread. */
 export const BREAK_SECONDS = 3 * 60 * 60;
 const RATED_IN_RECAP = 3;
 const DECIDED_IN_RECAP = 2;
@@ -15,7 +15,7 @@ export interface Recap {
 }
 
 /**
- * What she did last time, rebuilt from the saved set with no model call.
+ * What the producer did last time, rebuilt from the saved set with no model call.
  * The newest move only appears once rated, so it never repeats the check-in.
  */
 export function recapFor(thread: Exchange[], outcomes: Outcome[], note: Note, savedAt: number, now: number): Recap | null {

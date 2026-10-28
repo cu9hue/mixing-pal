@@ -70,7 +70,7 @@ export function historyFrom(exchanges: Exchange[], max: number): ChatMessage[] {
  */
 /**
  * The note a set switch lands on: what the file holds, plus, when this is
- * the first identity of the session (`firstKey`), the bullets she added
+ * the first identity of the session (`firstKey`), the bullets the producer added
  * before it arrived, the way the exchanges are carried. `carried` says
  * whether anything was folded in, which is what decides a save: a carried
  * bullet with no carried exchange would otherwise live only on screen.

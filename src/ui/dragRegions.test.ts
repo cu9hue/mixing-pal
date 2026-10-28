@@ -16,7 +16,7 @@ const read = (name: string) => readFileSync(UI + name, "utf8");
  *
  * The first shell put a bare attribute on the header alone, and the goal
  * button filled that header, so the window moved only from the gaps between
- * elements. She had to hunt for the spot. The card root is now `"deep"`, and
+ * elements. The producer had to hunt for the spot. The card root is now `"deep"`, and
  * the pins below are the exceptions that make that safe.
  *
  * Source-level tripwires, like cardStaysMounted.test.ts: this repo has no
@@ -37,7 +37,7 @@ function dragValue(source: string, className: string): string | null {
   return found;
 }
 
-describe("the card drags from everywhere she is likely to grab it", () => {
+describe("the card drags from everywhere the producer is likely to grab it", () => {
   const conversation = read("Conversation.tsx");
 
   it("drags from anywhere inside the card root", () => {

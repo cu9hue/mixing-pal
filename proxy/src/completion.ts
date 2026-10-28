@@ -114,7 +114,7 @@ export async function complete(env: Env, memberId: string, input: unknown, ctx: 
   const text = answer.content;
   const toolCalls = releasedToolCalls(end);
   if (!text.trim() && toolCalls.length === 0) throw new ApiError(502, "empty_completion", "The model returned an empty reply. Please try again.");
-  // Past the budget she gets the answer without the account view; the app reads it on its next poll.
+  // Past the budget the producer gets the answer without the account view; the app reads it on its next poll.
   const view = await bounded(account(env, memberId).then((r) => r.json()), respondBy, ctx, "account_view_skipped");
   const reply = JSON.stringify({ text, tool_calls: toolCalls, turn_id: request.turn_id, request_id: id,
     capture: Boolean(turn.capture), consent_epoch: turn.consent_epoch, account: view }).split(env.OPENROUTER_KEY).join("[redacted]");

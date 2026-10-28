@@ -27,18 +27,18 @@ function now(): number {
 }
 
 /**
- * The set's own row, under the header: the goal she wrote on the left and
+ * The set's own row, under the header: the goal the producer wrote on the left and
  * a chip with the note count on the right, which opens the bullet list
  * beneath. Two things about the same set, one row. The goal used to be a
  * row of its own and the notes a disclosure line under it.
  *
  * The goal is a single-line field: it never wraps, an ellipsis cuts it in
- * display, and the input scrolls with the caret while she types. It gives
+ * display, and the input scrolls with the caret while the producer types. It gives
  * way before the chip does, and a gap keeps the ellipsis off the count.
  *
  * The row drags the window through the card's deep drag region. Tauri
  * blocks the drag on the buttons and the inputs themselves, so a click on
- * her words edits, a click on the chip opens, and a click beside them
+ * the producer's words edits, a click on the chip opens, and a click beside them
  * moves. The list opts out so its scrollbar scrolls.
  */
 export function SetRow({
@@ -67,7 +67,7 @@ export function SetRow({
   }
 
   // Opening the editor and leaving is not an edit: only a changed text
-  // makes the bullet hers and moves its time.
+  // makes the bullet the producer's and moves its time.
   function commitEdit(b: Bullet) {
     if (draft.trim() !== b.text && !onNoteChange(editBullet(note, b.id, draft, now()))) return;
     setEditing(null);

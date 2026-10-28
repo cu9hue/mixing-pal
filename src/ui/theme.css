@@ -61,7 +61,7 @@
      and a dyslexic producer picked it over the system font at this size. */
   --font-reading: "Atkinson Hyperlegible", var(--font);
 
-  /* Type, in rem so her system text size reaches the card. Five sizes,
+  /* Type, in rem so the producer's system text size reaches the card. Five sizes,
      11 to 15px at the default 16px root, which is the ladder the card
      already used; a wider ratio would reshape a 380px card that is read
      from the corner of an eye. A stylesheet never writes a size in px:

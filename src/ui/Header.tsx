@@ -5,7 +5,7 @@ import { BrandMark } from "./BrandMark";
  * to close.
  *
  * The connection is a dot with the word "Live" beside it. A dot alone
- * asked her to guess what it measured; the word says which connection,
+ * asked the producer to guess what it measured; the word says which connection,
  * the colour says whether it holds, and the title says both in a sentence.
  * The failure banner under the header carries the words on failure.
  *

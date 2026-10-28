@@ -3,7 +3,7 @@
  *
  * Below this the producer gets the verb alone: a timer on a two-second
  * answer makes a fast reply feel measured, and there is nothing to decide
- * yet. Past it she is waiting long enough to wonder whether the app has hung,
+ * yet. Past it the producer is waiting long enough to wonder whether the app has hung,
  * and the honest answer is a number.
  */
 export const SLOW_AFTER_MS = 10_000;

@@ -34,7 +34,7 @@ describe("the thread", () => {
     ]);
   });
 
-  // A failed turn keeps its place: the question she asked and what went
+  // A failed turn keeps its place: the question the producer asked and what went
   // wrong, where the answer would have been.
   it("fails the newest exchange with the error", () => {
     const thread = begin([EARLIER], "and the bass?");

@@ -21,7 +21,7 @@ export async function member(env: Env, id: string): Promise<Member | null> {
 }
 
 export async function account(env: Env, id: string): Promise<Response> {
-  // The app polls this; settling expired calls here unblocks her without waiting for cron.
+  // The app polls this; settling expired calls here unblocks the producer without waiting for cron.
   try { await settleExpired(env, Date.now()); }
   catch { console.error(JSON.stringify({ event: "account_cleanup_failed", member_id: id })); }
   const [m, user, budget, latestConsent] = await Promise.all([

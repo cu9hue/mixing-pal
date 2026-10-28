@@ -424,13 +424,13 @@ describe("markTerms", () => {
     ] });
   });
 
-  it("never marks code or part of her name", () => {
-    const md = "«Glue Bus» and `Glue` stay hers. Glue here.";
+  it("never marks code or part of the producer's name", () => {
+    const md = "«Glue Bus» and `Glue` stay theirs. Glue here.";
     expect(marked(md, "Glue")[0]).toEqual({ type: "paragraph", children: [
       { type: "fence", name: "Glue Bus" },
       { type: "text", text: " and " },
       { type: "code", text: "Glue" },
-      { type: "text", text: " stay hers. " },
+      { type: "text", text: " stay theirs. " },
       { type: "term", text: "Glue", index: 0 },
       { type: "text", text: " here." },
     ] });

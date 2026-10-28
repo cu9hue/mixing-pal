@@ -3,7 +3,7 @@ import { PillState } from "./pillState";
 
 /**
  * The collapsed window. `data-tauri-drag-region` on the body makes the
- * whole pill a drag handle -- there is no titlebar, so without it she has
+ * whole pill a drag handle -- there is no titlebar, so without it the producer has
  * no way to move the window at all.
  */
 export function Pill({ state, onClick }: { state: PillState; onClick: () => void }) {

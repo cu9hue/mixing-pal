@@ -24,8 +24,8 @@ export type InlineNode =
   // (guillemets stripped). Rendered as a chip so the producer can tell it
   // apart from the model's own words.
   | { type: "fence"; name: string }
-  // A word she can tap, added by `markTerms`; `index` is its place in the answer's terms.
-  // `fence` marks a «name» that is the whole term, still shown as her name.
+  // A word the producer can tap, added by `markTerms`; `index` is its place in the answer's terms.
+  // `fence` marks a «name» that is the whole term, still shown as their name.
   | { type: "term"; text: string; index: number; fence?: true };
 
 export type BlockNode =

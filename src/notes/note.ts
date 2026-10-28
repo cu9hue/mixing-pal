@@ -1,11 +1,11 @@
 /**
  * A set's note: a short list of outcome bullets the model reads before it
- * answers and may extend by a delta or two per answer, and that she can
+ * answers and may extend by a delta or two per answer, and that the producer can
  * edit. Never a paragraph, never rewritten: the second brain's Context
  * Collapse note is why. Every change is a small edit this module applies
  * deterministically, growth is bounded by de-duplication and a cap, and a
- * bullet she has touched is hers: the model cannot retire it, and the cap
- * takes the model's bullets before it takes hers.
+ * bullet the producer has touched is the producer's: the model cannot retire it, and the cap
+ * takes the model's bullets before it takes the producer's.
  */
 
 export type BulletKind = "move" | "heard" | "decided";
@@ -16,7 +16,7 @@ export interface Bullet {
   id: string;
   kind: BulletKind;
   text: string;
-  /** Seconds since the epoch: added, or last edited by her. */
+  /** Seconds since the epoch: added, or last edited by the producer. */
   at: number;
   hers: boolean;
 }
@@ -63,7 +63,7 @@ const ID = /^b\d+$/;
 const MAX_CHANGES_PER_ANSWER = 2;
 
 /**
- * Splits a model answer into the text she reads and the note changes it
+ * Splits a model answer into the text the producer reads and the note changes it
  * carried. Never throws. An unclosed block is text. Every block is
  * stripped; only the last one's lines count, since the model is told to
  * write one.
@@ -94,9 +94,9 @@ function isKind(s: string): s is BulletKind {
 }
 
 /**
- * One bullet in, unless its normalised text is already there. Hers or the
+ * One bullet in, unless its normalised text is already there. The producer's or the
  * model's, by `hers`. Recording something the model already wrote is a
- * touch: a duplicate her add promotes that bullet to hers, keeping its id,
+ * touch: a duplicate add by the producer promotes that bullet to the producer's, keeping its id,
  * kind, text, and `at`.
  */
 function addBulletUncapped(note: Note, kind: BulletKind, text: string, hers: boolean, now: number): Note {
@@ -140,9 +140,9 @@ export function mergeNote(note: Note, delta: NoteDelta, now: number): Note {
 
 /**
  * Drops bullets until the note fits: the oldest model bullet first, and
- * only when none is left, the oldest of hers. The cap is on the whole note,
+ * only when none is left, the oldest of the producer's. The cap is on the whole note,
  * or it is no cap; and it never takes a bullet this change just added
- * (`before` holds the ids that existed first), so a note that is all hers
+ * (`before` holds the ids that existed first), so a note that is all the producer's
  * still hears the model's next add rather than dropping it on arrival.
  */
 function capped(note: Note, before: Set<string>): Note {
@@ -164,7 +164,7 @@ function oldestIndex(bullets: Bullet[], eligible: (b: Bullet) => boolean): numbe
   return oldest;
 }
 
-/** Her edit: the text changes, the bullet becomes hers, and its time moves. */
+/** The producer's edit: the text changes, the bullet becomes the producer's, and its time moves. */
 export function editBullet(note: Note, id: string, text: string, now: number): Note {
   const clean = Array.from(text.trim()).slice(0, BULLET_MAX_CHARS).join("");
   if (clean === "") return deleteBullet(note, id);
@@ -174,7 +174,7 @@ export function editBullet(note: Note, id: string, text: string, now: number): N
   };
 }
 
-/** Her delete removes any bullet, hers or the model's. */
+/** The producer's delete removes any bullet, the producer's or the model's. */
 export function deleteBullet(note: Note, id: string): Note {
   return { ...note, bullets: note.bullets.filter((b) => b.id !== id) };
 }

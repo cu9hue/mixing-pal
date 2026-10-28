@@ -63,7 +63,7 @@ export function Card({
 
   // One drag mechanism for the whole card: everything inside drags the
   // window, except buttons, inputs, and summaries (Tauri blocks those
-  // itself), the answer and error text she may want to select, and the
+  // itself), the answer and error text the producer may want to select, and the
   // scrollable body's own box, so the scrollbar thumb still scrolls. Each
   // exchange opts back in. See dragRegions.test.ts.
   return (

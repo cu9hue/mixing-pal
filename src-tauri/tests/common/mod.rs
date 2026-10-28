@@ -905,7 +905,7 @@ fn tool_evidence_is_bounded_and_marks_the_missing_tail() {
     assert!(record.result["json_prefix"].as_str().unwrap().contains("🎹"));
 }
 
-/// What `Turn::answer` strips: the note and terms blocks. The move stays: she sees it and
+/// What `Turn::answer` strips: the note and terms blocks. The move stays: the producer sees it and
 /// the model reads it back as an outcome, so an injection obeyed only in the move is caught.
 pub const SHOWN: &[&str] = &["note", "terms"];
 /// What the card's prose is once src/notes/note.ts, move.ts, and terms.ts
@@ -913,7 +913,7 @@ pub const SHOWN: &[&str] = &["note", "terms"];
 pub const CARD_PROSE: &[&str] = &["note", "move", "terms"];
 
 /// The answer with every closed fenced block of the given kinds removed.
-/// The judge and the wording assertions score what she sees.
+/// The judge and the wording assertions score what the producer sees.
 pub fn strip_blocks(answer: &str, kinds: &[&str]) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut block_start = None;
@@ -1210,7 +1210,7 @@ pub fn terms_defects(answer: &str) -> Vec<TermsDefect> {
             form_end(&spelled, 0, &words, |end| end == spelled.len()).is_some()
         };
         if known.iter().any(is_known) {
-            found(false, format!("{term:?} is a known word; listing it spends a tap she does not need"));
+            found(false, format!("{term:?} is a known word; listing it spends a tap the producer does not need"));
         }
         if let Some(w) = SOUND_WORDS.iter().find(|w| has_words(meaning, w)) {
             found(true, format!("the meaning of {term:?} says how it sounds: {w:?}"));
@@ -1243,7 +1243,7 @@ fn stripping_the_blocks_leaves_what_she_reads() {
     let bare = "Keep it.\n```\nnote\n+ move try it\n```";
     assert_eq!(strip_blocks(bare, SHOWN), bare);
     assert_eq!(strip_blocks("Keep it.\r\n```note\r\n+ decided keep\r\n```", SHOWN), "Keep it.");
-    // She sees the move under the answer, and the model reads it back as an
+    // The producer sees the move under the answer, and the model reads it back as an
     // outcome, so the honesty evals keep it. The card's prose has none.
     let move_block = "```move\n«Pad», mud: cut\n```";
     let all = format!("Cut it.\n{move_block}\n```terms\nLow cut: Removes the lows.\n```\n```note\n+ move a\n```");
@@ -1512,7 +1512,7 @@ pub async fn ask_with(
 }
 
 /// `ask_with` after earlier turns. `history` is what `Conversation.tsx`
-/// keeps: her questions and the answers as plain text, no tool results.
+/// keeps: the producer's questions and the answers as plain text, no tool results.
 pub async fn ask_after(
     s: &Settings,
     prompt: Prompt,
