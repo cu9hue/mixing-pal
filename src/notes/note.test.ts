@@ -97,7 +97,7 @@ describe("normalise", () => {
 });
 
 describe("mergeNote", () => {
-  it("adds model bullets with fresh ids and hers false", () => {
+  it("adds model bullets with fresh ids, none the producer's", () => {
     const n = mergeNote(emptyNote(), { adds: [{ kind: "move", text: "a" }], retires: [] }, NOW);
     expect(n.bullets).toEqual([{ id: "b0", kind: "move", text: "a", at: NOW, hers: false }]);
     expect(n.next).toBe(1);
@@ -118,25 +118,25 @@ describe("mergeNote", () => {
     expect(n.bullets.map((b) => b.text)).toEqual(["b"]);
   });
 
-  it("refuses to retire hers", () => {
+  it("refuses to retire the producer's bullets", () => {
     const hers = addBullet(emptyNote(), "heard", "mine", true, NOW);
     const n = mergeNote(hers, { adds: [], retires: ["b0"] }, NOW);
     expect(n.bullets).toHaveLength(1);
   });
 
-  it("caps at NOTE_MAX_BULLETS by dropping the oldest model bullet before hers", () => {
-    let n = addBullet(emptyNote(), "decided", "hers first", true, NOW - 10 * DAY);
+  it("caps at NOTE_MAX_BULLETS by dropping the oldest model bullet before the producer's", () => {
+    let n = addBullet(emptyNote(), "decided", "theirs first", true, NOW - 10 * DAY);
     for (let i = 0; i < NOTE_MAX_BULLETS; i++) n = addBullet(n, "move", `m${i}`, false, NOW - (NOTE_MAX_BULLETS - i) * DAY);
     n = mergeNote(n, { adds: [{ kind: "move", text: "newest" }], retires: [] }, NOW);
     expect(n.bullets).toHaveLength(NOTE_MAX_BULLETS);
-    expect(n.bullets[0].text).toBe("hers first");
+    expect(n.bullets[0].text).toBe("theirs first");
     expect(n.bullets.some((b) => b.text === "m0")).toBe(false);
     expect(n.bullets[n.bullets.length - 1].text).toBe("newest");
   });
 
-  // A note that is all hers must still hear the model: the cap takes the
-  // oldest of hers rather than the bullet that just arrived.
-  it("when every bullet is hers, a model add stays and the oldest hers goes", () => {
+  // A note that is all the producer's must still hear the model: the cap takes the
+  // oldest of the producer's rather than the bullet that just arrived.
+  it("when every bullet is the producer's, a model add stays and the oldest of them goes", () => {
     let n = emptyNote();
     for (let i = 0; i < NOTE_MAX_BULLETS; i++) n = addBullet(n, "decided", `h${i}`, true, NOW - (NOTE_MAX_BULLETS - i) * DAY);
     n = mergeNote(n, { adds: [{ kind: "move", text: "newest" }], retires: [] }, NOW);
@@ -168,16 +168,16 @@ describe("addBullet", () => {
     expect(n.bullets[0].text.endsWith("🔥")).toBe(true);
   });
 
-  it("caps at NOTE_MAX_BULLETS, keeping hers and dropping the oldest model bullet", () => {
+  it("caps at NOTE_MAX_BULLETS, keeping the producer's and dropping the oldest model bullet", () => {
     let n = emptyNote();
     for (let i = 0; i < NOTE_MAX_BULLETS; i++) n = addBullet(n, "move", `m${i}`, false, NOW - (NOTE_MAX_BULLETS - i) * DAY);
-    n = addBullet(n, "heard", "hers", true, NOW);
+    n = addBullet(n, "heard", "theirs", true, NOW);
     expect(n.bullets).toHaveLength(NOTE_MAX_BULLETS);
-    expect(n.bullets.some((b) => b.text === "hers")).toBe(true);
+    expect(n.bullets.some((b) => b.text === "theirs")).toBe(true);
     expect(n.bullets.some((b) => b.text === "m0")).toBe(false);
   });
 
-  it("her add to a note that is all hers drops the oldest of hers, not the new one", () => {
+  it("an add by the producer to a note of their own bullets drops their oldest, not the new one", () => {
     let n = emptyNote();
     for (let i = 0; i < NOTE_MAX_BULLETS; i++) n = addBullet(n, "decided", `h${i}`, true, NOW - (NOTE_MAX_BULLETS - i) * DAY);
     n = addBullet(n, "heard", "newest", true, NOW);
@@ -190,7 +190,7 @@ describe("addBullet", () => {
     expect(BULLET_MAX_CHARS).toBe(MAX_FENCED_LEN);
   });
 
-  it("a her add that duplicates a model bullet promotes it to hers, keeping id, kind, text, and at", () => {
+  it("an add by the producer that duplicates a model bullet promotes it to the producer's, keeping id, kind, text, and at", () => {
     let n = addBullet(emptyNote(), "move", "high-pass the pad", false, NOW);
     n = addBullet(n, "move", "High-pass the pad.", true, NOW + 5);
     expect(n.bullets).toEqual([{ id: "b0", kind: "move", text: "high-pass the pad", at: NOW, hers: true }]);
@@ -203,29 +203,29 @@ describe("addBullet", () => {
   });
 });
 
-describe("her edits", () => {
-  it("her edit marks the bullet hers and moves its time", () => {
+describe("the producer's edits", () => {
+  it("the producer's edit marks the bullet the producer's and moves its time", () => {
     const n = editBullet(noteWith("a"), "b0", "a, revised", NOW + 5);
     expect(n.bullets[0]).toEqual({ id: "b0", kind: "move", text: "a, revised", at: NOW + 5, hers: true });
   });
 
-  it("her edit splits on code points, not UTF-16 units, so a trailing surrogate pair survives the cap", () => {
+  it("the producer's edit splits on code points, not UTF-16 units, so a trailing surrogate pair survives the cap", () => {
     const n = editBullet(noteWith("a"), "b0", "a".repeat(BULLET_MAX_CHARS - 1) + "🔥", NOW + 5);
     expect(Array.from(n.bullets[0].text)).toHaveLength(BULLET_MAX_CHARS);
     expect(n.bullets[0].text.endsWith("🔥")).toBe(true);
   });
 
-  it("her edit with emptied text deletes the bullet", () => {
+  it("the producer's edit with emptied text deletes the bullet", () => {
     const n = editBullet(noteWith("a"), "b0", "   ", NOW + 5);
     expect(n.bullets).toEqual([]);
   });
 
-  it("her delete removes any bullet", () => {
+  it("the producer's delete removes any bullet", () => {
     const hers = addBullet(emptyNote(), "heard", "mine", true, NOW);
     expect(deleteBullet(hers, "b0").bullets).toEqual([]);
   });
 
-  it("her add is hers and de-duplicated too", () => {
+  it("the producer's add is theirs and de-duplicated too", () => {
     let n = addBullet(emptyNote(), "move", "a", true, NOW);
     n = addBullet(n, "move", "A.", true, NOW);
     expect(n.bullets).toHaveLength(1);

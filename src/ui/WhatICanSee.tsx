@@ -28,9 +28,9 @@ function saveExpanded(expanded: boolean): void {
 /**
  * Everything Live already shows, in the one place it earns its keep.
  *
- * The producer does not need a worse copy of her own track list while she
- * works. She does need to be able to check that this app is really reading
- * her set when an answer looks wrong -- and that is what this is for.
+ * The producer does not need a worse copy of the producer's own track list while they
+ * work. They do need to be able to check that this app is really reading
+ * their set when an answer looks wrong -- and that is what this is for.
  * Collapsed by default, and it stays that way.
  */
 export function WhatICanSee({ state }: { state: SetState }) {

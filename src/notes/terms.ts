@@ -22,7 +22,7 @@ function cleanTerm(raw: string): string {
 }
 
 /**
- * The terms an answer lists for her to tap. Same rules as `moveLabel`: an unclosed block is
+ * The terms an answer lists for the producer to tap. Same rules as `moveLabel`: an unclosed block is
  * text, the last block counts. A line without a term and a meaning around its colon is dropped.
  */
 export function termsList(answer: string): { answer: string; terms: Term[] } {

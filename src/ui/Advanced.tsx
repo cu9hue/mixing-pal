@@ -70,7 +70,7 @@ export function Advanced({
     try {
       await invoke("install_connector", { userLibrary: null });
       // Live reads Remote Scripts once, at startup, so the copy alone
-      // changes nothing she can see.
+      // changes nothing the producer can see.
       setConnectorNote("Reinstalled. Quit Live and open it again.");
       invoke<ConnectorView>("connector_status").then(setConnector).catch(() => {});
     } catch (e) {
@@ -127,7 +127,7 @@ export function Advanced({
             <input
               type="radio"
               name="experience"
-              // Before she chooses, answers use the default level.
+              // Before the producer chooses, answers use the default level.
               checked={(experience.experience ?? "finishes_tracks") === option.value}
               disabled={operations.install}
               onChange={() => void experience.choose(option.value)}

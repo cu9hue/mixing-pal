@@ -18,7 +18,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
   const [deleting, setDeleting] = useState(false);
   const [deletingShared, setDeletingShared] = useState(false);
   const keep = useRef<HTMLButtonElement>(null);
-  // The confirmation opens below the fold of a scrolling panel; bring it to her, on Cancel.
+  // The confirmation opens below the fold of a scrolling panel; bring it to the producer, on Cancel.
   useEffect(() => {
     if (!deleting) return;
     keep.current?.scrollIntoView?.({ block: "nearest" });

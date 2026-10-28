@@ -91,7 +91,7 @@ class SetIdentityHandler(AbletonOSCHandler):
         except Exception as e:
             # ERROR, unsuppressed: after_read has already latched the write
             # attempt, so this can happen at most once in this handler's
-            # lifetime, and a failed write to her set should stand out in
+            # lifetime, and a failed write to the producer's set should stand out in
             # the connector log. manager.py also forwards it to the app as
             # /live/error, which the app drops today; the producer sees
             # only "no stored id", so the log is the record.

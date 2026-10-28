@@ -20,7 +20,7 @@
   min-height: var(--card-max-height, 520px);
 }
 
-/* The card stays mounted while she is looking at the pill or at setup, so
+/* The card stays mounted while the producer is looking at the pill or at setup, so
    the conversation and its history survive the collapse. display:none also
    keeps it out of the scrollHeight that drives the window height. */
 .card-slot--hidden {
@@ -90,9 +90,9 @@
 }
 
 /* The set's row: the goal on the left, the notes chip on the right. The
-   goal reads as a field she owns, not as the window's title: a label, her
-   words, and a pencil that says it is editable. Her words stay dim because
-   she wrote them; she needs to see that they are there, not read them
+   goal reads as a field the producer owns, not as the window's title: a label, their
+   words, and a pencil that says it is editable. Their words stay dim because
+   they wrote them; they need to see that they are there, not read them
    back. The border sits on the block, so the open list stays inside it. */
 .set-row {
   border-bottom: 1px solid var(--border);
@@ -450,7 +450,7 @@
 }
 
 /* The largest and lightest text in the app. Everything the app measured is
-   dimmer and smaller than this -- that contrast is how she can tell what
+   dimmer and smaller than this -- that contrast is how the producer can tell what
    was read from what was generated. Generous line and paragraph spacing
    helps a dyslexic reader find the next line and the next idea. */
 .card__answer {
@@ -530,7 +530,7 @@
   color: var(--text-muted);
 }
 
-/* A term she can tap reads as part of the sentence: same type and colour,
+/* A term the producer can tap reads as part of the sentence: same type and colour,
    marked only by a dotted accent underline. */
 .card__term {
   border: none;
@@ -732,7 +732,7 @@
   margin-bottom: var(--space-1);
 }
 
-/* The model's words until she touches them. */
+/* The model's words until the producer touches them. */
 .notes__bullet--model {
   color: var(--text-muted);
 }

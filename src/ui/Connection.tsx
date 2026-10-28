@@ -4,7 +4,7 @@ import wireVersion from "../../shared/wire-version.json";
 // The name Live shows in the Control Surface list. Read from the manifest
 // that Rust's connector::folder() reads, because this banner is the
 // recovery path: it used to say "Mixing Pal", the product name, while
-// Live listed "MixingPal", so it sent her looking for an entry that was
+// Live listed "MixingPal", so it sent the producer looking for an entry that was
 // not there.
 import connector from "../../shared/connector.json";
 import { SetupStep } from "../setup/step";

@@ -122,8 +122,8 @@ the producer used it. Put the move in bold. Stay under about 120 words unless \
 asked for more.
 
 What a good answer is:
-- Words: every word she must act on is Live's own word (a label or name Live \
-shows, as your tools name it), a name from her set, or explained. Never use \
+- Words: every word the producer must act on is Live's own word (a label or \
+name Live shows, as your tools name it), a name from their set, or explained. Never use \
 studio words Live does not show, such as bus, aux, fader or channel strip; use \
 Live's word.
 - A track is judged on a few axes. Readable from notes and settings: energy \
@@ -144,15 +144,15 @@ side.
 notice. The producer is the ear.
 - Say what is enough: name the axes that are fine and say to leave them. If \
 nothing is wrong on a readable axis, say so and stop. Never invent a change.
-- NOTES are this set's outcomes: moves she tried, what she heard, what she \
+- NOTES are this set's outcomes: moves they tried, what they heard, what they \
 decided; read them before answering. When an answer settles one, end with a \
-fenced `note` block: `+ move <axis: the move>`, `+ heard <what her ear \
+fenced `note` block: `+ move <axis: the move>`, `+ heard <what their ear \
 reported>`, `+ decided <the call>`, or `- <id>` to retire a bullet that no \
 longer holds. One block, one line per change, at most two changes. Never \
-restate or rewrite the notes; never add advice she has not tried.
+restate or rewrite the notes; never add advice they have not tried.
 - An answer with a move ends with a fenced `move` block: `<track>, \
 <problem>: <the move>`.
-- OUTCOMES: moves she kept or undid, and what she heard. Build on a kept \
+- OUTCOMES: moves they kept or undid, and what they heard. Build on a kept \
 move; never re-suggest it. An undo judged the set as it was: re-offer it \
 for the same problem only if the set or the GOAL changed, and say it was \
 undone and what changed.
@@ -169,17 +169,17 @@ pub const NEW_TO_LIVE: &str = "\
 Who you are talking to:
 - The producer is new to Live and to production. Use everyday words. When \
 the move needs a technical term, use it and say what it means in a few words, \
-the first time only. Use no abbreviations. Give the why as what she will hear \
+the first time only. Use no abbreviations. Give the why as what they will hear \
 change, not as theory. Still one move, and still never say how the set sounds.";
 
 /// Appended to `SYSTEM_PROMPT` for a producer who chose "I finish tracks", or never chose.
 /// Inline explanations would lengthen every answer, so terms ride in a block the card marks for a tap.
 pub const FINISHES_TRACKS: &str = "\
 Who you are talking to:
-- She finishes tracks and knows Live's words. After the prose, outside the \
-word limit, add a fenced `terms` block: up to 4 other terms she must act on, \
-one `Term: what it means` line each: one plain sentence on what it changes, \
-never how it sounds or where it is on screen.";
+- The producer finishes tracks and knows Live's words. After the prose, \
+outside the word limit, add a fenced `terms` block: up to 4 other terms they \
+must act on, one `Term: what it means` line each: one plain sentence on what \
+it changes, never how it sounds or where it is on screen.";
 
 /// Appended to `SYSTEM_PROMPT` for a producer who chose "I mix for other
 /// people".
@@ -1106,10 +1106,10 @@ mod tests {
         assert!(FINISHES_TRACKS.contains("fenced `terms` block"));
         assert!(FINISHES_TRACKS.contains("`Term: what it means`"));
         assert!(FINISHES_TRACKS.contains(&format!("up to {} other terms", limits.max_terms)));
-        // Her known words are Live's words; the list is for the rest, and
+        // The producer's known words are Live's words; the list is for the rest, and
         // it does not eat the answer's word budget.
         assert!(FINISHES_TRACKS.contains("knows Live's words"));
-        assert!(FINISHES_TRACKS.contains("other terms she must act on"));
+        assert!(FINISHES_TRACKS.contains("other terms they must act on"));
         assert!(FINISHES_TRACKS.contains("outside the word limit"));
         // New to Live keeps its inline explanations; nobody else gets the block.
         for section in [NEW_TO_LIVE, MIXES_FOR_OTHERS, SYSTEM_PROMPT] {
@@ -1151,7 +1151,7 @@ mod tests {
     #[test]
     fn the_prompt_asks_for_a_move_block_and_treats_an_undo_as_evidence() {
         assert!(SYSTEM_PROMPT.contains("fenced `move` block"));
-        assert!(SYSTEM_PROMPT.contains("OUTCOMES: moves she kept or undid"));
+        assert!(SYSTEM_PROMPT.contains("OUTCOMES: moves they kept or undid"));
         assert!(SYSTEM_PROMPT.contains("Build on a kept move"));
         assert!(SYSTEM_PROMPT.contains("re-offer it for the same problem only if the set or the GOAL changed"));
     }

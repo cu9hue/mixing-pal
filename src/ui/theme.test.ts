@@ -148,7 +148,7 @@ describe("text contrast", () => {
 });
 
 /**
- * Type and spacing come from theme.css, so her system text size reaches
+ * Type and spacing come from theme.css, so the producer's system text size reaches
  * the card and the rhythm is one scale. A literal px size or gap in a
  * stylesheet is a hole in that: it neither resizes nor follows a retune.
  * Borders (1px) and zero are not spacing.
@@ -174,7 +174,7 @@ describe("type and spacing tokens", () => {
 });
 
 /**
- * The reading font is for the model's answer, the long text she reads. The
+ * The reading font is for the model's answer, the long text the producer reads. The
  * rest of the card stays in the system font. Bundled, so it works offline.
  */
 describe("the reading font", () => {

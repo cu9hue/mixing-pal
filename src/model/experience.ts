@@ -11,7 +11,7 @@ export const EXPERIENCES: { value: Experience; label: string; hint: string }[] =
   { value: "mixes_for_others", label: "I mix for other people", hint: "Mixing is my job. Keep it technical." },
 ];
 
-/** `undefined` while Rust has not answered; `null` until she has chosen. */
+/** `undefined` while Rust has not answered; `null` until the producer has chosen. */
 export function useExperience(busy: BusyState) {
   const [experience, setExperience] = useState<Experience | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);

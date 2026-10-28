@@ -57,7 +57,7 @@ describe("setLine", () => {
     );
   });
 
-  // The one place she can see that a thread for this set will not follow a
+  // The one place the producer can see that a thread for this set will not follow a
   // rename: the id is the path, or there is none.
   it("says when the set has no stored id", () => {
     expect(

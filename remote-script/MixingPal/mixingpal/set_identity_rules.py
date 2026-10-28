@@ -74,7 +74,7 @@ def after_read(state, current, generate):
     this handler's lifetime, no second one is ever attempted, whether the
     first raised or read back without a valid id. A write that took needs
     no second attempt -- the next read finds the id -- and a write that
-    failed would otherwise be retried once a second, forever, against her
+    failed would otherwise be retried once a second, forever, against the producer
     open set. The next attempt waits for the next set load, which is a new
     handler with a fresh state.
     """

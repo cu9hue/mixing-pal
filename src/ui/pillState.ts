@@ -11,8 +11,8 @@ export interface PillInput {
  * cases are not mutually exclusive.
  *
  * Disconnected wins outright, for the same reason bind_failed pre-empts
- * every other banner in Connection.tsx: an unread answer she cannot follow
- * up on, or a turn that is about to fail, is not the thing she needs to
+ * every other banner in Connection.tsx: an unread answer the producer cannot follow
+ * up on, or a turn that is about to fail, is not the thing they need to
  * know. Thinking beats unread because an in-flight turn is the most recent
  * thing that happened, and completing it re-raises unread anyway.
  */

@@ -23,7 +23,7 @@ describe("recapFor", () => {
     expect(recapFor([], [], emptyNote(), SAVED, SAVED + DAY)).toBeNull();
   });
 
-  it("names when, and the last question she asked", () => {
+  it("names when, and the last question the producer asked", () => {
     const recap = recapFor([ask("first"), ask("What should I work on next?")], [], emptyNote(), SAVED, SAVED + 2 * DAY);
     expect(recap).toEqual({ when: "2 days ago", asked: "What should I work on next?", rated: [], decided: [] });
   });
@@ -32,7 +32,7 @@ describe("recapFor", () => {
     expect(recapFor([ask("q")], [], emptyNote(), SAVED, SAVED + BREAK_SECONDS)?.when).toBe("earlier today");
   });
 
-  it("lists the newest three rated moves, each at its latest rating, with what she heard", () => {
+  it("lists the newest three rated moves, each at its latest rating, with what the producer heard", () => {
     const log = [
       rated("a", "kept", 1), rated("b", "kept", 2), rated("c", "undone", 3, "too pumpy"),
       rated("d", "kept", 4, "tighter"), rated("b", "undone", 5),

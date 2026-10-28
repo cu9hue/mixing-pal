@@ -3,9 +3,9 @@ import { SetState } from "../live/model";
 /**
  * What the producer sees while the model is fetching something.
  *
- * The rule is that this names her music, never our code. `reading Pad
- * Wide…` tells her the model is looking at the thing she just asked
- * about; `reading get_track_detail({"track":1})…` tells her she is using
+ * The rule is that this names the producer's music, never our code. `reading Pad
+ * Wide…` tells the producer the model is looking at the thing they just asked
+ * about; `reading get_track_detail({"track":1})…` tells the producer they are using
  * a debugger. The raw calls are still available in the trace pane, which
  * is where a debugger belongs.
  *

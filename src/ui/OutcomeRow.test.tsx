@@ -95,7 +95,7 @@ it("shares the heard text even when it is saved before the first share returns",
   expect(screen.queryByText("Couldn't share this outcome.")).toBeNull();
 });
 
-it("saves typed heard text when she clicks away", () => {
+it("saves typed heard text when the producer clicks away", () => {
   render(<Harness />);
   fireEvent.click(kept());
   const field = screen.getByLabelText("What did you hear?");
