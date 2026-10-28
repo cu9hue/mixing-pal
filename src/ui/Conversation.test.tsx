@@ -349,3 +349,154 @@ describe("reporting a problem", () => {
     expect(onReport).toHaveBeenCalledWith({ origin: "error", exchange: expect.objectContaining({ question: "How is the pad?" }) });
   });
 });
+
+describe("terms she can tap", () => {
+  const reply = "**Lower the Threshold.** Watch the gain reduction and the make-up gain.\n\n"
+    + "```terms\nGain reduction: How far the Compressor turns the signal down.\nMake-up gain: Volume added back after the Compressor.\nSidechain: Not in the prose.\n```";
+  async function ask(text: string) {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "load_thread") return { exchanges: [], goal: "finish this track", saved_at: 1, next_bullet: 1, note: [] };
+      if (command === "model_complete") return { text };
+    });
+    render(<Conversation state={{ ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version }}
+      connected account={account} onTurnRunningChange={() => {}} onAnswer={() => {}} />);
+    await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+    const input = screen.getByLabelText("Ask about the set");
+    fireEvent.change(input, { target: { value: "What is the compressor doing?" } });
+    await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  it("marks each listed term in the prose and hides the block", async () => {
+    await ask(reply);
+    const gain = screen.getByRole("button", { name: "gain reduction" });
+    expect(gain.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("button", { name: "make-up gain" })).toBeTruthy();
+    // Listed but not in the prose: in the row at the end, not in the text.
+    expect(screen.getByRole("button", { name: "Sidechain" }).closest("p")?.textContent).toBe("Terms: Sidechain");
+    expect(screen.queryByText(/```terms/)).toBeNull();
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("save_thread", expect.objectContaining({
+      exchanges: [expect.objectContaining({
+        answer: "**Lower the Threshold.** Watch the gain reduction and the make-up gain.",
+        terms: expect.arrayContaining([{ term: "Gain reduction", meaning: "How far the Compressor turns the signal down." }]),
+      })],
+    }));
+  });
+
+  it("opens one plain line under the paragraph, one at a time, and closes it on Esc or a second tap", async () => {
+    await ask(reply);
+    const gain = screen.getByRole("button", { name: "gain reduction" });
+    const makeUp = screen.getByRole("button", { name: "make-up gain" });
+    fireEvent.click(gain);
+    const line = screen.getByRole("note");
+    expect(line.textContent).toBe("Gain reduction: How far the Compressor turns the signal down.");
+    expect(line.querySelector("strong")?.textContent).toBe("Gain reduction");
+    expect(gain.getAttribute("aria-expanded")).toBe("true");
+    expect(gain.getAttribute("aria-controls")).toBe(line.id);
+    expect(gain.closest("p")?.nextElementSibling).toBe(line);
+
+    fireEvent.click(makeUp);
+    expect(screen.getAllByRole("note")).toHaveLength(1);
+    expect(screen.getByRole("note").textContent).toBe("Make-up gain: Volume added back after the Compressor.");
+    expect(gain.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.keyDown(makeUp, { key: "Escape" });
+    expect(screen.queryByRole("note")).toBeNull();
+
+    fireEvent.click(gain);
+    fireEvent.click(gain);
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  // WebKit on macOS does not focus a button on click, and App collapses the
+  // card on any Escape that reaches the window.
+  it("takes focus on a tap, and closes the line on Esc without collapsing the card", async () => {
+    await ask(reply);
+    const windowEscape = vi.fn();
+    window.addEventListener("keydown", windowEscape);
+    try {
+      const gain = screen.getByRole("button", { name: "gain reduction" });
+      fireEvent.click(gain);
+      expect(document.activeElement).toBe(gain);
+      fireEvent.keyDown(gain, { key: "Escape" });
+      expect(screen.queryByRole("note")).toBeNull();
+      expect(windowEscape).not.toHaveBeenCalled();
+      // With no line open, Esc still reaches the card.
+      fireEvent.keyDown(gain, { key: "Escape" });
+      expect(windowEscape).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("keydown", windowEscape);
+    }
+  });
+
+  it("makes a fenced name tappable when it is the whole term, and keeps the chip", async () => {
+    await ask("Raise «Threshold» a little.\n\n```terms\n«Threshold»: The level where the Compressor starts to act.\n```");
+    const chip = screen.getByRole("button", { name: "Threshold" });
+    expect(chip.className).toBe("card__fence card__term");
+    fireEvent.click(chip);
+    expect(screen.getByRole("note").textContent).toBe("Threshold: The level where the Compressor starts to act.");
+  });
+
+  it("restores the terms of a saved answer", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "load_thread") return {
+        exchanges: [{ question: "What is the compressor doing?", answer: "Watch the gain reduction.", error: null, turnId: "t1",
+          terms: [{ term: "Gain reduction", meaning: "How far the Compressor turns the signal down." }] }],
+        goal: "finish this track", saved_at: Math.floor(Date.now() / 1000), next_bullet: 1, note: [], outcomes: [],
+      };
+    });
+    render(<Conversation state={{ ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version }}
+      connected account={account} onTurnRunningChange={() => {}} onAnswer={() => {}} />);
+    await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+    fireEvent.click(screen.getByRole("button", { name: "gain reduction" }));
+    expect(screen.getByRole("note").textContent).toBe("Gain reduction: How far the Compressor turns the signal down.");
+  });
+
+  it("puts a term the prose does not use in a row at the end, and opens its line under that row", async () => {
+    const text = "Watch the knee.\n\n```terms\nKnee: How gently it starts.\nSidechain: Another signal decides when it acts.\n```";
+    await ask(text);
+    const knee = screen.getByRole("button", { name: "knee" });
+    const sidechain = screen.getByRole("button", { name: "Sidechain" });
+    const row = sidechain.closest("p")!;
+    expect(row.textContent).toBe("Terms: Sidechain");
+    expect(knee.closest("p")).not.toBe(row);
+
+    const windowEscape = vi.fn();
+    window.addEventListener("keydown", windowEscape);
+    try {
+      fireEvent.click(sidechain);
+      expect(document.activeElement).toBe(sidechain);
+      expect(sidechain.getAttribute("aria-expanded")).toBe("true");
+      const line = screen.getByRole("note");
+      expect(line.textContent).toBe("Sidechain: Another signal decides when it acts.");
+      expect(sidechain.getAttribute("aria-controls")).toBe(line.id);
+      expect(row.nextElementSibling).toBe(line);
+
+      fireEvent.click(knee);
+      expect(screen.getAllByRole("note")).toHaveLength(1);
+      expect(sidechain.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(sidechain);
+      fireEvent.keyDown(sidechain, { key: "Escape" });
+      expect(screen.queryByRole("note")).toBeNull();
+      expect(windowEscape).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", windowEscape);
+    }
+  });
+
+  it("shows no row when every term is in the prose", async () => {
+    await ask("Watch the knee.\n\n```terms\nKnee: How gently it starts.\n```");
+    expect(screen.getByRole("button", { name: "knee" })).toBeTruthy();
+    expect(screen.queryByText(/^Terms:/)).toBeNull();
+  });
+
+  it("renders an answer without terms as before", async () => {
+    await ask("Leave the gain reduction alone.");
+    expect(screen.getByText("Leave the gain reduction alone.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "gain reduction" })).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("save_thread", expect.objectContaining({
+      exchanges: [expect.not.objectContaining({ terms: expect.anything() })],
+    }));
+  });
+});

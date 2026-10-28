@@ -162,6 +162,23 @@ Ordered. Each item says what, why, size, and what it waits on.
    prompt and model fixed while collecting outcomes from real production
    sessions, where the producer can say whether the suggestions helped.
 
+   Extended the harness on 2026-10-27. Provisional properties are split into
+   timeline, settings, move target (`move_performable`) and whether the move
+   acts where the question points (`move_on_question`). Code checks now
+   catch values with their sign, studio words and read coverage. Reports
+   print 80% intervals, read agreement and the properties that fail
+   together. Scenarios one to four can run as a same-session A/B against
+   main's prompt, with a pairwise judge that judges each pair in both
+   orders. Scenarios six and seven, and the goal report, cannot. Draft
+   calibration labels for the new properties wait for the owner to confirm
+   them. Paid calibration and the A/B come next, under these rules. A
+   property can gate once it has at least 5 owner-confirmed labels and the
+   judge agrees with at least 80% of them. For the A/B, run scenarios one to
+   three with 5 pairs each. Ship the prompt if it trails main's by at
+   most 1 pass per scenario and at most 2 across all 15. Do not ship if it
+   trails by 3 or more across 15. In between, run 5 more pairs on the
+   scenario that differs and apply the same rule.
+
 7. **Default model and latency.** Done 2026-09-11. `tests/latency.rs` runs
    one two-tool question five times against the model the environment
    names and asserts a median turn under a minute, a non-empty answer, and
@@ -189,8 +206,14 @@ Ordered. Each item says what, why, size, and what it waits on.
    evals have not run yet. Setup's last step asks "How do you work in
    Live?": New to Live, I finish tracks, or I mix for other people. Settings
    can change the answer. The answer is stored in `preferences.json`, and
-   it adds a short section to the system prompt. "I finish tracks" adds
-   nothing, so a producer who never chose gets the same prompt as before.
+   it adds a short section to the system prompt. "I finish tracks" first
+   added nothing, and a pilot producer at that level found the answers too
+   clever. Since 2026-10-26 every level names devices and parameters as
+   Live shows them. At "I finish tracks" the answer lists up to four terms
+   she may not know; the card underlines each one and opens one plain line
+   under it on a tap. Terms the prose does not use are listed in a `Terms:`
+   row after the answer, so she can still tap them. Craft scenario seven
+   checks that list.
    The level changes the words, not the advice. Every level also got
    shorter answers: short sentences, plain words, the move in bold, and
    about 120 words. The answer text is set in Atkinson Hyperlegible at

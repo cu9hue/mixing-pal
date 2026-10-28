@@ -122,6 +122,10 @@ the producer used it. Put the move in bold. Stay under about 120 words unless \
 asked for more.
 
 What a good answer is:
+- Words: every word she must act on is Live's own word (a label or name Live \
+shows, as your tools name it), a name from her set, or explained. Never use \
+studio words Live does not show, such as bus, aux, fader or channel strip; use \
+Live's word.
 - A track is judged on a few axes. Readable from notes and settings: energy \
 contour across sections; contrast at section boundaries; density and space \
 (how much plays at once, in which registers); repetition against variation; \
@@ -168,19 +172,28 @@ the move needs a technical term, use it and say what it means in a few words, \
 the first time only. Use no abbreviations. Give the why as what she will hear \
 change, not as theory. Still one move, and still never say how the set sounds.";
 
+/// Appended to `SYSTEM_PROMPT` for a producer who chose "I finish tracks", or never chose.
+/// Inline explanations would lengthen every answer, so terms ride in a block the card marks for a tap.
+pub const FINISHES_TRACKS: &str = "\
+Who you are talking to:
+- She finishes tracks and knows Live's words. After the prose, outside the \
+word limit, add a fenced `terms` block: up to 4 other terms she must act on, \
+one `Term: what it means` line each: one plain sentence on what it changes, \
+never how it sounds or where it is on screen.";
+
 /// Appended to `SYSTEM_PROMPT` for a producer who chose "I mix for other
-/// people". "I finish tracks" appends nothing.
+/// people".
 pub const MIXES_FOR_OTHERS: &str = "\
 Who you are talking to:
 - The producer mixes for other people. Use standard terms and abbreviations \
 without explaining them. Skip the basics. Give exact values where you have \
 them.";
 
-fn experience_section(experience: Experience) -> Option<&'static str> {
+fn experience_section(experience: Experience) -> &'static str {
     match experience {
-        Experience::NewToLive => Some(NEW_TO_LIVE),
-        Experience::FinishesTracks => None,
-        Experience::MixesForOthers => Some(MIXES_FOR_OTHERS),
+        Experience::NewToLive => NEW_TO_LIVE,
+        Experience::FinishesTracks => FINISHES_TRACKS,
+        Experience::MixesForOthers => MIXES_FOR_OTHERS,
     }
 }
 
@@ -333,6 +346,17 @@ pub fn build_body(
     experience: Experience,
     messages: &[ChatMessage],
 ) -> Result<serde_json::Value, String> {
+    let prompt = format!("{SYSTEM_PROMPT}\n\n{}", experience_section(experience));
+    build_body_with(s, &prompt, messages)
+}
+
+/// `build_body` around a given system prompt, so an eval can send another
+/// prompt, such as main's, in the app's exact body.
+pub fn build_body_with(
+    s: &Settings,
+    system_prompt: &str,
+    messages: &[ChatMessage],
+) -> Result<serde_json::Value, String> {
     // The system prompt is the backend's. A caller-supplied message playing
     // that role is refused rather than dropped, so the caller cannot believe
     // it took effect. An allowlist, not a denylist naming only "system": a
@@ -348,13 +372,9 @@ pub fn build_body(
         ));
     }
 
-    let prompt = match experience_section(experience) {
-        Some(section) => format!("{SYSTEM_PROMPT}\n\n{section}"),
-        None => SYSTEM_PROMPT.to_string(),
-    };
     let mut wire = vec![ChatMessage {
         role: "system".to_string(),
-        content: Some(prompt),
+        content: Some(system_prompt.to_string()),
         tool_calls: None,
         tool_call_id: None,
     }];
@@ -642,7 +662,7 @@ mod tests {
 
         let body = sent_body(&server).await;
         assert_eq!(body["messages"][0]["role"], "system");
-        assert_eq!(body["messages"][0]["content"], SYSTEM_PROMPT);
+        assert_eq!(body["messages"][0]["content"], format!("{SYSTEM_PROMPT}\n\n{FINISHES_TRACKS}"));
         assert_eq!(body["messages"][1]["content"], "hi");
         assert_eq!(body["model"], "test/model");
         assert_eq!(
@@ -1067,6 +1087,52 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_names_devices_as_live_does() {
+        // Live's own names are the words every level can look up.
+        assert!(SYSTEM_PROMPT.contains("a label or name Live shows"));
+        assert!(SYSTEM_PROMPT.contains("as your tools name it"));
+    }
+
+    #[test]
+    fn i_finish_tracks_lists_terms_to_tap_instead_of_explaining_them_inline() {
+        // shared/term-vectors.json pins the block's parsing in the card and
+        // the eval; the prompt's cap is the one it holds.
+        #[derive(Deserialize)]
+        struct Limits {
+            #[serde(rename = "maxTerms")]
+            max_terms: usize,
+        }
+        let limits: Limits = serde_json::from_str(include_str!("../../shared/term-vectors.json")).unwrap();
+        assert!(FINISHES_TRACKS.contains("fenced `terms` block"));
+        assert!(FINISHES_TRACKS.contains("`Term: what it means`"));
+        assert!(FINISHES_TRACKS.contains(&format!("up to {} other terms", limits.max_terms)));
+        // Her known words are Live's words; the list is for the rest, and
+        // it does not eat the answer's word budget.
+        assert!(FINISHES_TRACKS.contains("knows Live's words"));
+        assert!(FINISHES_TRACKS.contains("other terms she must act on"));
+        assert!(FINISHES_TRACKS.contains("outside the word limit"));
+        // New to Live keeps its inline explanations; nobody else gets the block.
+        for section in [NEW_TO_LIVE, MIXES_FOR_OTHERS, SYSTEM_PROMPT] {
+            assert!(!section.contains("`terms`"));
+        }
+    }
+
+    #[test]
+    fn one_words_rule_sits_above_the_levels() {
+        #[derive(Deserialize)]
+        struct Limits {
+            #[serde(rename = "maxTerms")]
+            max_terms: usize,
+        }
+        let limits: Limits = serde_json::from_str(include_str!("../../shared/term-vectors.json")).unwrap();
+        assert!(SYSTEM_PROMPT.contains("Live's own word"));
+        assert!(SYSTEM_PROMPT.contains("bus, aux, fader or channel strip"));
+        assert!(!FINISHES_TRACKS.contains("Prefer plain words"));
+        assert!(!FINISHES_TRACKS.contains("no labels"));
+        assert!(FINISHES_TRACKS.contains(&format!("up to {} other terms", limits.max_terms)));
+    }
+
+    #[test]
     fn the_prompt_makes_a_choice_question_a_choice() {
         // Three real runs of the goal eval on 2026-09-03 showed the model
         // hedging a keep-or-change question with a move from the other side.
@@ -1091,14 +1157,13 @@ mod tests {
     }
 
     #[test]
-    fn the_craft_section_stays_under_a_third_of_the_honesty_prompt() {
-        // 5213 characters before the craft section, measured 2026-09-02.
-        // The ceiling sits about a third above that. The prompt rides on
-        // every round trip, so this is a cost ceiling, not taste.
+    fn the_prompt_stays_under_its_character_ceiling() {
+        // A cost ceiling, not taste: the prompt rides on every round trip, so a
+        // new rule has to earn its place. A level's section gets a little more, below.
         let n = SYSTEM_PROMPT.chars().count();
         assert!(
-            n <= 7000,
-            "the prompt is {n} characters; the ceiling is 7000"
+            n <= 7200,
+            "the prompt is {n} characters; the ceiling is 7200"
         );
     }
 
@@ -1115,18 +1180,36 @@ mod tests {
             .unwrap()
             .to_string();
 
-        // A producer who never chose gets `SYSTEM_PROMPT`, byte for byte.
-        assert_eq!(first(Experience::FinishesTracks), SYSTEM_PROMPT);
+        assert_eq!(first(Experience::default()), first(Experience::FinishesTracks));
         for (e, section) in [
             (Experience::NewToLive, NEW_TO_LIVE),
+            (Experience::FinishesTracks, FINISHES_TRACKS),
             (Experience::MixesForOthers, MIXES_FOR_OTHERS),
         ] {
             let body = build_body(&Settings::default(), e, &turn).unwrap();
             assert_eq!(roles_of(&body), vec!["system", "user", "system"]);
             assert_eq!(first(e), format!("{SYSTEM_PROMPT}\n\n{section}"));
-            // The same cost ceiling the prompt alone answers to.
-            assert!(first(e).chars().count() <= 7000, "{e:?} pushes the prompt past 7000");
+            // A level's section rides on every round trip too, so the joined
+            // prompt has its own cost ceiling, a little above the prompt's.
+            assert!(first(e).chars().count() <= 7300, "{e:?} pushes the prompt past 7300");
         }
+    }
+
+    #[test]
+    fn build_body_with_sends_the_given_prompt_and_keeps_the_reminder_last() {
+        let turn = |role: &str| ChatMessage {
+            role: role.into(),
+            content: Some("what is on the drums?".into()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let body = build_body_with(&Settings::default(), "another prompt", &[turn("user")]).unwrap();
+        assert_eq!(roles_of(&body), vec!["system", "user", "system"]);
+        assert_eq!(body["messages"][0]["content"], "another prompt");
+        assert_eq!(body["messages"][2]["content"], REMINDER);
+        let app = build_body(&Settings::default(), Experience::default(), &[turn("user")]).unwrap();
+        assert_eq!((&body["tools"], &body["max_tokens"]), (&app["tools"], &app["max_tokens"]));
+        assert!(build_body_with(&Settings::default(), "another prompt", &[turn("system")]).is_err());
     }
 
     #[test]

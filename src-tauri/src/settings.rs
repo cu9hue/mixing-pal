@@ -227,8 +227,7 @@ pub fn save_update_channel(dir: &Path, channel: crate::updates::Channel) -> std:
 #[serde(rename_all = "snake_case")]
 pub enum Experience {
     NewToLive,
-    /// Adds nothing to `SYSTEM_PROMPT`, so a producer who never chose gets
-    /// the base prompt.
+    /// A producer who never chose gets this level's prompt section.
     #[default]
     FinishesTracks,
     MixesForOthers,

@@ -1,0 +1,10 @@
+{
+  "known": ["track", "clip", "scene", "send", "return", "group", "warp", "device", "rack", "chain", "arrangement", "session", "locator", "loop", "automation", "envelope", "MIDI", "audio", "Main"],
+  "studio": [
+    { "word": "bus", "live": "group or return" },
+    { "word": "aux", "live": "send or return" },
+    { "word": "fader", "live": "volume" },
+    { "word": "channel strip", "live": "track" },
+    { "word": "master bus", "live": "Main" }
+  ]
+}

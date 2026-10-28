@@ -246,7 +246,7 @@ async fn a_follow_up_reads_the_timeline_again_instead_of_trusting_an_old_answer(
             msg("assistant", "«Vox» has one clip, «Take 3». It comes in at bar 9 and plays through bar 16."),
         ];
         let turn = common::ask_after(
-            &common::settings(), common::experience(), None, fixture(), &history,
+            &common::settings(), common::Prompt::App(common::experience()), None, fixture(), &history,
             &common::context("eval-context.txt"),
             "where does the vox come in again? I want a riser in the bar before it.",
         ).await;
@@ -269,7 +269,7 @@ fn oneshot() -> Value {
 async fn ask_oneshot(history: &[ChatMessage], question: &str) -> Turn {
     common::ask_after(
         &common::settings(),
-        common::experience(),
+        common::Prompt::App(common::experience()),
         None,
         oneshot(),
         history,

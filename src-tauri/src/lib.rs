@@ -49,8 +49,8 @@ pub mod bench_api {
 pub mod eval_api {
     pub use crate::deltas::{Coalescer, Delta};
     pub use crate::model::{
-        build_body, complete, complete_with_body, post_chat, ChatMessage, Completion, ToolCall,
-        MODEL_CONNECT_TIMEOUT, MODEL_TIMEOUT, REMINDER, SYSTEM_PROMPT,
+        build_body, build_body_with, complete, complete_with_body, post_chat, ChatMessage,
+        Completion, ToolCall, MODEL_CONNECT_TIMEOUT, MODEL_TIMEOUT, REMINDER, SYSTEM_PROMPT,
     };
     pub use crate::osc::query::LiveQuery;
     pub use crate::osc::requests::RequestTable;

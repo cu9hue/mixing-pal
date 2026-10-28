@@ -160,7 +160,7 @@ fn declared_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement",
-                "description": "Every track's arrangement placements: for each clip, its index, start_beats, length_beats, muted state, MIDI type, and its name when it has one. These are beats, never bar counts. A placement is audible only when muted is false; is_midi false means it is audio and has no MIDI notes. Each track carries its name when known. When the current time signature is known, each clip also has start_position, one-based bar.beat.sixteenth as Live shows it, and length_bars, and each track has first_unmuted_start, the start_position of its earliest unmuted placement in the returned scope. Use these when speaking about bars, never start_beats (in 4/4, start_beats 32 is 9.1.1). A loop_region is present when the clip loops, audio or MIDI: a MIDI clip's source notes repeat in that region through the clip's length_beats, so an absent note after one loop is not silence. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; placements are read in bounded pages per track. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. An empty list means no placements in the returned scope; check missing, changed, truncated and next_clip_index before claiming the whole timeline is empty. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a MIDI clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated. For a section question, supply start_beats and end_beats to filter overlapping placements before the 512-placement output cap. To recover a truncated track, request its track index with next_clip_index as clip_offset; retain the same range. Group tracks have no direct placements; their child tracks carry them.",
+                "description": "Every track's arrangement placements: for each clip, its index, start_beats, length_beats, muted state, MIDI type, and its name when it has one. These are beats, never bar counts. A placement is audible only when muted is false; is_midi false means it is audio and has no MIDI notes. Each track carries its name when known. When the current time signature is known, each clip also has start_position, one-based bar.beat.sixteenth as Live shows it, end_position, the first position after the clip (16 bars from 1.1.1 end at 17.1.1), and length_bars, and each track has first_unmuted_start, the start_position of its earliest unmuted placement in the returned scope. Use these when speaking about bars, never start_beats (in 4/4, start_beats 32 is 9.1.1). When the set has locators, each clip has sections: the sections of the SECTIONS line it overlaps, in song order, a section running from its locator to the next and the last to the song's end. A clip that ends on a locator does not play in the section that locator starts; an empty list means the clip ends before the first locator; sections is absent when the locator list did not fit one reply. Base every claim about which section a clip plays in on sections and end_position; never add length_bars to start_position yourself. A loop_region is present when the clip loops, audio or MIDI: a MIDI clip's source notes repeat in that region through the clip's length_beats, so an absent note after one loop is not silence. When the current time signature is known, a looping clip also has repeats_every_bars, the loop's length in bars: loop_region is in beats, so [0, 4] in 4/4 is a 1-bar loop. A clip with no name field is unnamed, which is normal on the timeline - Live shows a derived label there and most producers never name an arrangement clip, so position is usually what identifies a clip rather than its name. Queried from Live at call time; placements are read in bounded pages per track. The context block's SECTIONS line names the producer's locators and their positions, but says nothing about what plays in them - this is how to find out. An empty list means no placements in the returned scope; check missing, changed, truncated and next_clip_index before claiming the whole timeline is empty. Session-view clips are not covered; use get_clips for those, and their slot indices are different numbers from these. Use the index reported here with get_arrangement_notes to read a MIDI clip's notes. Tracks that did not answer are listed separately under missing, and a track whose timeline was too long to read in full is marked truncated. For a section question, supply start_beats and end_beats to filter overlapping placements before the 512-placement output cap. To recover a truncated track, request its track index with next_clip_index as clip_offset; retain the same range. Group tracks have no direct placements; their child tracks carry them.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -177,7 +177,7 @@ fn declared_tools() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_arrangement_notes",
-                "description": "The MIDI notes of one arrangement-view clip. view says which list notes is. With view played, notes lists what sounds, in song order: a source note appears once per loop pass, with timeline_position where it sounds in the song, clip_position where it lives in the clip, and pass, the loop pass it belongs to. When the clip loops, loop says so in words, such as \"a 1-bar loop of 4 notes played 2 times, bars 2-3\": say that when you describe the part. count is how many notes sound; source_notes is how many the clip holds, the number the producer sees in the clip editor. Describe the part by what plays: a 1-bar loop of four notes stretched over two bars is eight notes, four in each bar. Edits happen in the clip: deleting or moving a source note changes every pass. Give edit instructions by clip_position, and use timeline_position to say where a note sounds. To change one pass only, the producer must first consolidate or split the clip; say so. Muted source notes do not sound and must be excluded from rhythm or harmony claims; they are listed once under muted_notes. Supply start_beats and end_beats, song beats as in get_arrangement, to list only the notes that start sounding inside that range; a note held into the range from before it is not listed. When more than 256 notes would be listed, the clip is muted, or its notes cannot be placed, view is source and view_reason says why; a partial read or a note_offset above 0 also returns the source view, and a partial read leaves out source_notes. notes then lists each source note once: start is absolute source beat time as shown in Live's clip editor, and timeline_position is where the note first sounds in the song. Playback starts at the start marker and wraps from the loop end to the loop start, so a note before the marker can first sound on the second pass; a note with no timeline_position never sounds in this placement. A note with mute true does not sound. A looping clip repeats every repeats_every_beats (repeats_every_bars) until length_beats ends: loop_passes counts the passes through the loop in this placement, and loop_pass_starts gives where each pass begins in the song. Never call the portion after one loop silent. duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with probability below 1 plays on only that share of passes; one at 0 never plays and is not listed as sounding. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes start_position, one-based bar.beat.sixteenth, and length_bars. loop_region and note_range are in the clip's own source time, like clip_position, not song time. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. If its notes change during the read, the result is missing with clip_changed: read again once the clip is stable. An audio clip returns missing_reason not_midi_clip. In the source view, output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging. pre_midi_effects lists the top-level MIDI effects that are on, such as Scale, Chord or Arpeggiator, ahead of the track's instrument: they change the notes before they sound, so these are the notes the clip sends, before those effects. MIDI effects inside a Rack are not checked; open the Rack with get_rack_contents. pre_midi_effects_unread means the chain could not be read to check.",
+                "description": "The MIDI notes of one arrangement-view clip. view says which list notes is. With view played, notes lists what sounds, in song order: a source note appears once per loop pass, with timeline_position where it sounds in the song, clip_position where it lives in the clip, and pass, the loop pass it belongs to. When the clip loops, loop says so in words, such as \"a 1-bar loop of 4 notes played 2 times, bars 2-3\": say that when you describe the part. count is how many notes sound; source_notes is how many the clip holds, the number the producer sees in the clip editor. Describe the part by what plays: a 1-bar loop of four notes stretched over two bars is eight notes, four in each bar. Edits happen in the clip: deleting or moving a source note changes every pass. Give edit instructions by clip_position, and use timeline_position to say where a note sounds. To change one pass only, the producer must first consolidate or split the clip; say so. Muted source notes do not sound and must be excluded from rhythm or harmony claims; they are listed once under muted_notes. Supply start_beats and end_beats, song beats as in get_arrangement, to list only the notes that start sounding inside that range; a note held into the range from before it is not listed. When more than 256 notes would be listed, the clip is muted, or its notes cannot be placed, view is source and view_reason says why; a partial read or a note_offset above 0 also returns the source view, and a partial read leaves out source_notes. notes then lists each source note once: start is absolute source beat time as shown in Live's clip editor, and timeline_position is where the note first sounds in the song. Playback starts at the start marker and wraps from the loop end to the loop start, so a note before the marker can first sound on the second pass; a note with no timeline_position never sounds in this placement. A note with mute true does not sound. A looping clip repeats every repeats_every_beats (repeats_every_bars) until length_beats ends: loop_passes counts the passes through the loop in this placement, and loop_pass_starts gives where each pass begins in the song. Never call the portion after one loop silent. duration is in quarter-note beats. source_start_beats is the playback start marker. note_range covers the markers and enabled loop and can include inactive source notes; only notes inside loop_region repeat. When the current signature is known, use clip_position (source) or timeline_position (song) in producer-facing instructions: one-based bar.beat.sixteenth as Live displays it, the beat digit counting the signature's denominator unit. A +/- beats remainder is how far the note sits off the sixteenth grid: microtiming, a triplet, or swing, not a rounding error. duration_notation names a duration that is a plain note value. note is Ableton Live's displayed pitch label and is authoritative: octave labels vary between applications, so do not derive a different octave from pitch. A note with probability below 1 plays on only that share of passes; one at 0 never plays and is not listed as sounding. Queried from Live at call time and fetched in pages. The result includes start_beats and length_beats, which are beats, never bar counts; when the current signature is known it also includes start_position, one-based bar.beat.sixteenth, end_position, the first position after the clip, and length_bars. loop_region and note_range are in the clip's own source time, like clip_position, not song time. The index comes from get_arrangement and is that clip's position on the track's timeline - it is NOT a session slot index, and get_clip_notes will not accept it. The read is bracketed by an identity check: if the clip at that index changed while it was being read, which happens when a clip is added earlier in the timeline, the notes are refused rather than returned under the wrong clip's name. If its notes change during the read, the result is missing with clip_changed: read again once the clip is stable. An audio clip returns missing_reason not_midi_clip. In the source view, output is paged at 1024 source notes. If next_note_offset is present, call again with that note_offset. Keep the clip unchanged between calls; source read errors remain separate from output paging. pre_midi_effects lists the top-level MIDI effects that are on, such as Scale, Chord or Arpeggiator, ahead of the track's instrument: they change the notes before they sound, so these are the notes the clip sends, before those effects. MIDI effects inside a Rack are not checked; open the Rack with get_rack_contents. pre_midi_effects_unread means the chain could not be read to check.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -926,7 +926,14 @@ fn arrangement_payload(
             if let Some(position) = musical_position(start, &grid) {
                 clip["start_position"] = json!(position);
             }
+            if let Some(position) = musical_position(start + length, &grid) {
+                clip["end_position"] = json!(position);
+            }
             clip["length_bars"] = json!(length / beats_per_bar);
+            let loop_beats = clip["loop_region"]["end_beats"].as_f64().zip(clip["loop_region"]["start_beats"].as_f64());
+            if let Some((end, start)) = loop_beats {
+                clip["repeats_every_bars"] = json!((end - start) / beats_per_bar);
+            }
             if clip["muted"] == json!(false) && first_audible.is_none_or(|first| start < first) {
                 first_audible = Some(start);
             }
@@ -936,6 +943,54 @@ fn arrangement_payload(
         }
     }
     payload
+}
+
+/// The producer's locators as the SECTIONS line has them, in song order. `None` when the mirror
+/// holds no whole reply: a list cut to one datagram files a late placement under the wrong locator.
+fn locators(coalescer: &Mutex<Coalescer>) -> Option<Vec<(String, f64)>> {
+    let args = coalescer.lock().ok()?.lookup("/live/mixingpal/get/cue_points", &[])?.args;
+    let (total, pairs) = args.split_first()?;
+    let mut locators = pairs
+        .chunks(2)
+        .map(|pair| match pair {
+            [name, time] => Some((name.as_str()?.to_owned(), time.as_f64()?)),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if total.as_u64()? != locators.len() as u64 {
+        return None;
+    }
+    locators.sort_by(|a, b| a.1.total_cmp(&b.1));
+    Some(locators)
+}
+
+/// Gives each placement the fenced names of the sections it overlaps, in song
+/// order. A section runs from its locator to the next, the last to the end.
+fn add_sections(payload: &mut serde_json::Value, locators: &[(String, f64)]) {
+    if locators.is_empty() {
+        return;
+    }
+    // Sixteenths, as the SECTIONS line snaps its bars, so a clip that ends a
+    // hair past a locator does not play in that locator's section.
+    let snap = |beat: f64| (beat * 4.0).round();
+    let Some(tracks) = payload["tracks"].as_array_mut() else {
+        return;
+    };
+    for clip in tracks.iter_mut().filter_map(|t| t["clips"].as_array_mut()).flatten() {
+        let (Some(start), Some(length)) = (clip["start_beats"].as_f64(), clip["length_beats"].as_f64()) else {
+            continue;
+        };
+        let sections: Vec<String> = locators
+            .iter()
+            .enumerate()
+            .filter(|(i, (_, from))| {
+                let to = locators.get(i + 1).map_or(f64::INFINITY, |(_, to)| *to);
+                snap(start).max(snap(*from)) < snap(start + length).min(snap(to))
+            })
+            .map(|(_, (name, _))| fence::fence(name))
+            .collect();
+        clip["sections"] = json!(sections);
+    }
 }
 
 /// MIDI effects ahead of the track's first instrument change the notes a clip
@@ -984,6 +1039,9 @@ fn add_bar_timing(
     payload["bar_positions_assume_current_signature"] = json!(true);
     if let Some(position) = musical_position(start_beats, &grid) {
         payload["start_position"] = json!(position);
+    }
+    if let Some(position) = musical_position(start_beats + length_beats, &grid) {
+        payload["end_position"] = json!(position);
     }
     payload["length_bars"] = json!(length_beats / beats_per_bar);
 }
@@ -1574,6 +1632,9 @@ pub async fn execute(ctx: &ToolContext, name: &str, args: &serde_json::Value) ->
                 reasons.push(reason);
             }
             let mut payload = arrangement_payload(&map, time_signature(&ctx.coalescer));
+            if let Some(locators) = locators(&ctx.coalescer) {
+                add_sections(&mut payload, &locators);
+            }
             if let Some(tracks) = payload["tracks"].as_array_mut() {
                 for t in tracks {
                     let name = t["track"].as_i64().and_then(|i| track_identity(&ctx.coalescer, i));
@@ -2692,6 +2753,11 @@ mod tests {
         assert!(description_of("get_arrangement_notes").contains("timeline_position"));
         assert!(description_of("get_arrangement").contains("first_unmuted_start"));
         assert!(description_of("get_arrangement").contains("start_position"));
+        for name in ["get_arrangement", "get_arrangement_notes"] {
+            assert!(description_of(name).contains("end_position, the first position after the clip"), "{name}");
+        }
+        assert!(description_of("get_arrangement").contains("sections"));
+        assert!(description_of("get_arrangement").contains("never add length_bars to start_position"));
     }
 
     #[test]
@@ -2735,6 +2801,7 @@ mod tests {
         let track = &payload["tracks"][0];
         assert_eq!(track["clips"][0]["start_position"], json!("1.1.1"));
         assert_eq!(track["clips"][1]["start_position"], json!("9.2.1"));
+        assert_eq!(track["clips"][1]["end_position"], json!("10.2.1"));
         assert_eq!(track["clips"][1]["length_bars"], json!(1.0));
         assert!(track["clips"][1].get("bar_start").is_none());
         assert_eq!(track["first_unmuted_start"], json!("9.2.1"));
@@ -2746,8 +2813,173 @@ mod tests {
         let mut payload = json!({});
         add_bar_timing(&mut payload, 33.0, 8.0, Some((4, 4)));
         assert_eq!(payload["start_position"], json!("9.2.1"));
+        assert_eq!(payload["end_position"], json!("11.2.1"));
         assert_eq!(payload["length_bars"], json!(2.0));
         assert!(payload.get("bar_start").is_none());
+    }
+
+    #[test]
+    fn arrangement_end_position_is_the_first_position_after_the_clip_in_any_signature() {
+        // The same meaning as a loop_region's end_position: 16 bars from 1.1.1
+        // end at 17.1.1, so "ends where the Drop starts" is a string match.
+        let clip = |start, length| arrangement::ArrangementClip {
+            index: 0,
+            name: None,
+            start,
+            length,
+            muted: false,
+            is_midi: true,
+            loop_region: None,
+        };
+        let map = |clips| arrangement::ArrangementMap {
+            tracks: vec![arrangement::TrackArrangement {
+                track: 0,
+                clips,
+                truncated: false,
+                next_clip_index: None,
+                changed: false,
+            }],
+            missing: vec![],
+            changed: vec![],
+        };
+        let four = arrangement_payload(&map(vec![clip(0.0, 64.0), clip(96.0, 32.0)]), Some((4, 4)));
+        assert_eq!(four["tracks"][0]["clips"][0]["end_position"], json!("17.1.1"));
+        assert_eq!(four["tracks"][0]["clips"][1]["end_position"], json!("33.1.1"));
+        // 6/8: a bar is 3 quarter notes and the beat digit counts eighths.
+        let six = arrangement_payload(&map(vec![clip(0.0, 3.0), clip(0.0, 4.5)]), Some((6, 8)));
+        assert_eq!(six["tracks"][0]["clips"][0]["end_position"], json!("2.1.1"));
+        assert_eq!(six["tracks"][0]["clips"][1]["end_position"], json!("2.4.1"));
+        let none = arrangement_payload(&map(vec![clip(0.0, 4.0)]), None);
+        assert!(none["tracks"][0]["clips"][0].get("end_position").is_none());
+    }
+
+    #[test]
+    fn a_looping_placement_says_how_many_bars_its_loop_is() {
+        // A loop_region of [0, 4] read as bars became "a four-bar loop" in two eval answers.
+        let looping = arrangement::ArrangementClip {
+            index: 0,
+            name: None,
+            start: 0.0,
+            length: 64.0,
+            muted: false,
+            is_midi: true,
+            loop_region: Some(arrangement::LoopRegion { start_beats: 0.0, end_beats: 4.0 }),
+        };
+        let plain = arrangement::ArrangementClip { loop_region: None, ..looping.clone() };
+        let map = |clips| arrangement::ArrangementMap {
+            tracks: vec![arrangement::TrackArrangement {
+                track: 0,
+                clips,
+                truncated: false,
+                next_clip_index: None,
+                changed: false,
+            }],
+            missing: vec![],
+            changed: vec![],
+        };
+        let four = arrangement_payload(&map(vec![looping.clone(), plain]), Some((4, 4)));
+        assert_eq!(four["tracks"][0]["clips"][0]["repeats_every_bars"], json!(1.0));
+        assert!(four["tracks"][0]["clips"][1].get("repeats_every_bars").is_none());
+        let six = arrangement_payload(&map(vec![looping.clone()]), Some((6, 8)));
+        assert_eq!(six["tracks"][0]["clips"][0]["repeats_every_bars"], json!(4.0 / 3.0));
+        let none = arrangement_payload(&map(vec![looping]), None);
+        assert!(none["tracks"][0]["clips"][0].get("repeats_every_bars").is_none());
+        assert!(description_of("get_arrangement").contains("repeats_every_bars, the loop's length in bars"));
+    }
+
+    fn cue_points_mirror(args: Vec<serde_json::Value>) -> Mutex<Coalescer> {
+        let mut c = Coalescer::new();
+        c.observe_delta(Delta { addr: "/live/mixingpal/get/cue_points".to_string(), args });
+        Mutex::new(c)
+    }
+
+    #[test]
+    fn locators_are_read_from_the_mirror_in_song_order_and_only_when_whole() {
+        let unsorted = cue_points_mirror(vec![json!(2), json!("Drop"), json!(64.0), json!("Intro"), json!(0.0)]);
+        assert_eq!(
+            locators(&unsorted),
+            Some(vec![("Intro".to_string(), 0.0), ("Drop".to_string(), 64.0)])
+        );
+        assert_eq!(locators(&cue_points_mirror(vec![json!(0)])), Some(vec![]));
+        // A reply cut to one datagram: a late placement would land in the last
+        // locator that fit, so no sections rather than wrong ones.
+        assert_eq!(locators(&cue_points_mirror(vec![json!(3), json!("Intro"), json!(0.0)])), None);
+        assert_eq!(locators(&cue_points_mirror(vec![json!(1), json!("Intro")])), None);
+        assert_eq!(locators(&Mutex::new(Coalescer::new())), None);
+    }
+
+    #[test]
+    fn each_placement_names_the_sections_it_overlaps_as_the_sections_line_defines_them() {
+        let clip = |index, start, length| arrangement::ArrangementClip {
+            index,
+            name: None,
+            start,
+            length,
+            muted: false,
+            is_midi: true,
+            loop_region: None,
+        };
+        let map = arrangement::ArrangementMap {
+            tracks: vec![arrangement::TrackArrangement {
+                track: 0,
+                clips: vec![
+                    clip(0, 0.0, 8.0),
+                    clip(1, 16.0, 48.0),
+                    clip(2, 56.0, 16.0),
+                    clip(3, 96.0, 32.0),
+                    clip(4, 63.98, 32.02),
+                    clip(5, 150.0, 10.0),
+                ],
+                truncated: false,
+                next_clip_index: None,
+                changed: false,
+            }],
+            missing: vec![],
+            changed: vec![],
+        };
+        let locators = [
+            ("Intro\n«x»".to_string(), 16.0),
+            ("Drop".to_string(), 64.0),
+            ("Break".to_string(), 96.0),
+            ("Drop 2".to_string(), 128.0),
+        ];
+        let mut payload = arrangement_payload(&map, None);
+        add_sections(&mut payload, &locators);
+        let sections = |i: usize| payload["tracks"][0]["clips"][i]["sections"].clone();
+        assert_eq!(sections(0), json!([]));
+        // Ends exactly on the Drop locator, so it does not play in the Drop.
+        // The names are producer text and arrive fenced.
+        assert_eq!(sections(1), json!(["«Intro x»"]));
+        assert_eq!(sections(2), json!(["«Intro x»", "«Drop»"]));
+        assert_eq!(sections(3), json!(["«Break»"]));
+        // A hair off the grid is the sixteenth it snaps to, as on the SECTIONS line.
+        assert_eq!(sections(4), json!(["«Drop»"]));
+        assert_eq!(sections(5), json!(["«Drop 2»"]));
+
+        let mut without = arrangement_payload(&map, None);
+        add_sections(&mut without, &[]);
+        assert!(without["tracks"][0]["clips"][0].get("sections").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_arrangement_reads_sections_from_the_mirrored_locators() {
+        let q = arrangement::tests::fake_live(arrangement::tests::FakeLive {
+            timelines: vec![vec![("".into(), 0.0, 64.0), ("".into(), 96.0, 128.0)]],
+            ..Default::default()
+        }).await;
+        let mut mirror = mirror_with_tracks(1);
+        mirror.observe_delta(Delta {
+            addr: "/live/mixingpal/get/cue_points".to_string(),
+            args: vec![json!(3), json!("Intro"), json!(0.0), json!("Drop"), json!(64.0), json!("Break"), json!(96.0)],
+        });
+        let ctx = ToolContext {
+            coalescer: Arc::new(Mutex::new(mirror)),
+            query: Arc::new(Mutex::new(Some(q))),
+        };
+        let r = execute(&ctx, "get_arrangement", &json!({})).await;
+        assert_eq!(r.missing_reason, None);
+        assert_eq!(r.value["tracks"][0]["clips"][0]["sections"], json!(["«Intro»"]));
+        assert_eq!(r.value["tracks"][0]["clips"][1]["sections"], json!(["«Break»"]));
     }
 
     #[tokio::test]

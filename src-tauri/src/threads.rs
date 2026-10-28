@@ -27,6 +27,17 @@ pub struct Exchange {
     pub tracks_read: Option<Vec<String>>,
     #[serde(default, rename = "accountId", skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+    /// The terms she can tap in the answer; threads from before them have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms: Option<Vec<Term>>,
+}
+
+/// One term an answer explains on a tap; the same shape as the frontend's
+/// `Term` in `src/notes/terms.ts`. Rust stores it and never reads it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Term {
+    pub term: String,
+    pub meaning: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -292,6 +303,7 @@ mod tests {
                 move_label: None,
                 tracks_read: None,
                 account_id: None,
+                terms: None,
             }],
             saved_at,
             goal: None,
@@ -499,6 +511,7 @@ mod tests {
         assert_eq!(t.next_bullet, 0);
         assert_eq!(t.outcomes, vec![]);
         assert_eq!(t.exchanges[0].move_label, None);
+        assert_eq!(t.exchanges[0].terms, None);
     }
 
     fn outcome(turn: &str) -> Outcome {
@@ -542,6 +555,26 @@ mod tests {
         assert_eq!(json["outcomes"][0]["turnId"], "t1");
         assert_eq!(json["outcomes"][0]["move"], "«Pad», mud: cut 300 Hz");
         assert_eq!(load(&dir, ID, Some(PATH), 0).unwrap().unwrap(), t);
+    }
+
+    #[test]
+    fn an_exchanges_terms_round_trip_in_the_frontends_shape() {
+        let dir = scratch();
+        let mut t = thread("q", 0);
+        t.exchanges[0].terms = Some(vec![Term {
+            term: "Gain reduction".into(),
+            meaning: "How far the Compressor turns the signal down.".into(),
+        }]);
+        save(&dir, ID, Some(PATH), &t).unwrap();
+        let raw = std::fs::read_to_string(dir.join(&read_index(&dir).entries[0].file)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(json["exchanges"][0]["terms"][0]["term"], "Gain reduction");
+        assert_eq!(json["exchanges"][0]["terms"][0]["meaning"], "How far the Compressor turns the signal down.");
+        assert_eq!(load(&dir, ID, Some(PATH), 0).unwrap().unwrap(), t);
+        let plain = thread("q", 0);
+        save(&dir, ID, Some(PATH), &plain).unwrap();
+        let raw = std::fs::read_to_string(dir.join(&read_index(&dir).entries[0].file)).unwrap();
+        assert!(!raw.contains("terms"));
     }
 
     #[test]
