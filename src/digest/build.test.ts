@@ -189,7 +189,7 @@ describe("buildContext", () => {
     expect(notes).toBeGreaterThan(goal);
     // Fenced like set data: guillemets inside a bullet are stripped, not nested.
     expect(out).toContain("- [b1] move  «low end: high-pass Pad Wide near 180 Hz»  (2 days ago)");
-    expect(out).toContain("- [b2] heard  «the sub still masks the kick»  (today, hers)");
+    expect(out).toContain("- [b2] heard  «the sub still masks the kick»  (today, producer's)");
   });
 
   it("says nothing about outcomes when there are none", () => {

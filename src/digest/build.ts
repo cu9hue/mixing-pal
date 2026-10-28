@@ -136,8 +136,8 @@ export function buildContext(
   if (note.length > 0) {
     lines.push("NOTES");
     for (const b of note) {
-      const hers = b.hers ? ", hers" : "";
-      lines.push(`- [${b.id}] ${b.kind}  ${fence(b.text)}  (${ageWords(b.at, now)}${hers})`);
+      const theirs = b.hers ? ", producer's" : "";
+      lines.push(`- [${b.id}] ${b.kind}  ${fence(b.text)}  (${ageWords(b.at, now)}${theirs})`);
     }
   }
 
