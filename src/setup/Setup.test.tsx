@@ -44,7 +44,7 @@ describe("setup", () => {
     expect(render("sharing").match(/class="setup__tick/g)).toHaveLength(4);
   });
 
-  it("asks how she works on the connected screen, with no separate Got it", () => {
+  it("asks how the producer works on the connected screen, with no separate Got it", () => {
     const html = render("connected");
     expect(html).toContain("I can see <b>3 tracks</b>: Pad, Drums, Vox…");
     expect(html).toContain("I read your settings: devices, faders, routing and notes. I can&#x27;t hear your audio");
@@ -53,7 +53,7 @@ describe("setup", () => {
     expect(html).not.toContain("Got it");
   });
 
-  it("keeps her on the connected screen with the error when saving the level fails", () => {
+  it("keeps the producer on the connected screen with the error when saving the level fails", () => {
     const html = render("connected", { experience: { ...experience, error: "Couldn't save that." } });
     expect(html).toContain("Couldn&#x27;t save that.");
     expect(html).toContain("How do you work in Live?");

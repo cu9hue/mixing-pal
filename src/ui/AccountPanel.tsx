@@ -49,7 +49,7 @@ export function AccountPanel({ account, onboarding = false }: { account: Account
   const [deleting, setDeleting] = useState(false);
   const [deletingShared, setDeletingShared] = useState(false);
   const keep = useRef<HTMLButtonElement>(null);
-  // The confirmation opens below the fold of a scrolling panel; bring it to her, on Cancel.
+  // The confirmation opens below the fold of a scrolling panel; bring it to the producer, on Cancel.
   useEffect(() => {
     if (!deleting) return;
     keep.current?.scrollIntoView?.({ block: "nearest" });
@@ -57,7 +57,7 @@ export function AccountPanel({ account, onboarding = false }: { account: Account
   }, [deleting]);
   const [sharedDeleted, setSharedDeleted] = useState(false);
   const [opened, setOpened] = useState(false);
-  // Back from the browser with nothing changed yet: she finished and Stripe is still telling us, or she gave up.
+  // Back from the browser with nothing changed yet: the producer finished and Stripe is still telling us, or they gave up.
   const [back, setBack] = useState(false);
   // Each trip to the browser restarts the polling window.
   const [trip, setTrip] = useState(0);

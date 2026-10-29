@@ -17,14 +17,14 @@ describe("currentStep", () => {
     expect(currentStep(DONE)).toBe("done");
   });
 
-  // The connected screen asks how she works; the choice is what finishes setup.
-  it("shows the connected screen until she picks a level, then finishes", () => {
+  // The connected screen asks how the producer works; the choice is what finishes setup.
+  it("shows the connected screen until the producer picks a level, then finishes", () => {
     expect(currentStep({ ...DONE, experienceChosen: false })).toBe("connected");
     expect(currentStep(DONE)).toBe("done");
   });
 
   // Choosing in Settings while setup is open ends setup too: both read App's state.
-  it("finishes once a level exists, wherever she chose it", () => {
+  it("finishes once a level exists, wherever the producer chose it", () => {
     expect(currentStep({ ...DONE, experienceChosen: true })).toBe("done");
   });
 
@@ -66,13 +66,13 @@ describe("currentStep", () => {
     expect(currentStep({ ...DONE, connectorCurrent: false })).toBe("install");
   });
 
-  it("asks her to open Live when it is not running", () => {
+  it("asks the producer to open Live when it is not running", () => {
     expect(
       currentStep({ ...DONE, liveRunning: false, deltasArriving: false }),
     ).toBe("open_live");
   });
 
-  it("asks her to select the Control Surface when Live is up but silent", () => {
+  it("asks the producer to select the Control Surface when Live is up but silent", () => {
     expect(
       currentStep({ ...DONE, deltasArriving: false }),
     ).toBe("control_surface");
@@ -99,7 +99,7 @@ describe("currentStep", () => {
     expect(currentStep({ ...DONE, hasAccount: false })).toBe("account");
   });
 
-  // The whole point of deriving rather than storing. She uninstalls the
+  // The whole point of deriving rather than storing. The producer uninstalls the
   // connector months later; setup must reopen at install, not at done.
   it("reopens at install when a finished setup is later broken", () => {
     expect(currentStep({ ...DONE, connectorInstalled: false })).toBe("install");
@@ -138,7 +138,7 @@ describe("needsSetup", () => {
     expect(needsSetup({ ...READY, connectorInstalled: false, setupDone: false })).toBe(true);
   });
 
-  it("opens when she has never finished setup", () => {
+  it("opens when the producer has never finished setup", () => {
     expect(needsSetup({ ...READY, setupDone: false })).toBe(true);
   });
 
@@ -156,7 +156,7 @@ describe("needsSetup", () => {
     expect(needsSetup({ ...READY, connectorInstalled: null, setupDone: false })).toBe(false);
   });
 
-  // Setup must never reopen the 600x680 window on top of her work.
+  // Setup must never reopen the 600x680 window on top of the producer's work.
   it("does not reopen setup when Live goes quiet", () => {
     // Quitting Live, or five seconds of lost traffic, is a card-level
     // state: the not_connected banner and the pill's disconnected state.

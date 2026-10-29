@@ -105,7 +105,7 @@ it("tells a member with no trial left that the plan starts today", () => {
   expect(screen.getByText("Your card is charged when you subscribe. Cancel any time. Prices exclude tax where it applies.")).toBeTruthy();
 });
 
-it("once she is back from the browser with nothing changed, the note says what to do either way", async () => {
+it("once the producer is back from the browser with nothing changed, the note says what to do either way", async () => {
   vi.mocked(invoke).mockResolvedValue({ opened: true });
   render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} />);
   fireEvent.click(screen.getByRole("button", { name: "Start 7-day free trial" }));

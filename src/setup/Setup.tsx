@@ -39,8 +39,8 @@ export function Setup({
   trackCount: number;
   trackNames: string[];
   onFactsChanged: () => void;
-  /** Present only when she opened setup from a banner rather than because
-      first run is unfinished. Then this is her way back to the card. */
+  /** Present only when the producer opened setup from a banner rather than because
+      first run is unfinished. Then this is their way back to the card. */
   onExit?: () => void;
 }) {
   const here = TICK[step];

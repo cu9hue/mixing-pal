@@ -113,7 +113,7 @@ describe("applying Stripe state", () => {
   const upgraded = () => subscription({ status: "active", member: "m1", price: "price_pro", start, end,
     latest_invoice: { id: "in_2", billing_reason: "subscription_update", created: t } });
 
-  test("an upgrade at the period's midpoint adds half of Pro's extra allowance, keeps what she spent, and a replay changes nothing", async () => {
+  test("an upgrade at the period's midpoint adds half of Pro's extra allowance, keeps what the producer spent, and a replay changes nothing", async () => {
     await customer();
     await apply(subscription({ status: "active", member: "m1", start, end }), now);
     await env.DB.prepare("UPDATE members SET spent = 1500000 WHERE id = 'm1'").run();
@@ -758,7 +758,7 @@ describe("the Stripe webhook", () => {
   });
 });
 
-test("the return page tells her to go back to the app", async () => {
+test("the return page tells the producer to go back to the app", async () => {
   const done = await api("/billing/done");
   expect(done.headers.get("Content-Type")).toContain("text/html");
   expect(await done.text()).toContain("You can close this tab and go back to Mixing Pal.");
@@ -1188,7 +1188,7 @@ describe("billing routes", () => {
     expect((await api("/v1/billing/start-now", {}, user.token)).status).toBe(409);
   });
 
-  test("an upgrade swaps the price with an immediate prorated charge and keeps what she spent", async () => {
+  test("an upgrade swaps the price with an immediate prorated charge and keeps what the producer spent", async () => {
     const user = await signedIn();
     await customer(user.id);
     // One fixed period end: a different end would read as a renewal and reset spending.

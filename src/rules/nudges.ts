@@ -13,7 +13,7 @@ export interface NudgeState {
   current: Nudge | null;
   /** When a nudge was last raised. null means none ever has been. */
   lastFiredAt: number | null;
-  /** Ids she has dismissed this session. Never re-raised. */
+  /** Ids the producer has dismissed this session. Never re-raised. */
   dismissed: string[];
 }
 

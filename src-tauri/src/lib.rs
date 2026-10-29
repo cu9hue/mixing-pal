@@ -49,8 +49,8 @@ pub mod bench_api {
 pub mod eval_api {
     pub use crate::deltas::{Coalescer, Delta};
     pub use crate::model::{
-        build_body, complete, complete_with_body, post_chat, ChatMessage, Completion, ToolCall,
-        MODEL_CONNECT_TIMEOUT, MODEL_TIMEOUT, REMINDER, SYSTEM_PROMPT,
+        build_body, build_body_with, complete, complete_with_body, post_chat, ChatMessage,
+        Completion, ToolCall, MODEL_CONNECT_TIMEOUT, MODEL_TIMEOUT, REMINDER, SYSTEM_PROMPT,
     };
     pub use crate::osc::query::LiveQuery;
     pub use crate::osc::requests::RequestTable;
@@ -1005,7 +1005,7 @@ fn clear_trace(state: tauri::State<Arc<Mutex<Trace>>>) {
 /// kept whole: it carries the Edit menu, without which ⌘C and ⌘V do
 /// nothing in a text field.
 const SETTINGS_MENU_ID: &str = "settings";
-/// Emitted to the window when she picks Settings…; App opens the pane.
+/// Emitted to the window when the producer picks Settings…; App opens the pane.
 const SETTINGS_EVENT: &str = "menu://settings";
 
 fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -2384,7 +2384,7 @@ mod tests {
         // A connector older than wire 12 logs an unknown address at ERROR
         // and forwards it to the app as /live/error, once per poll. At one
         // poll a second that would fill its log and our error stream until
-        // she reinstalls, so nothing goes out until the handshake says 12+.
+        // the producer reinstalls, so nothing goes out until the handshake says 12+.
         let listener = OscSocket::bind_to(0, 0).await.unwrap();
         let poll_socket = OscSocket::bind_to(0, listener.local_port()).await.unwrap();
         let table = Mutex::new(RequestTable::new());

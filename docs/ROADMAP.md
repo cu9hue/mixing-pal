@@ -65,8 +65,8 @@ the advice vertical.
   for a limit the model may not have, and it would constrain a stronger
   model as much as it helps a weaker one.
 - **The user owns whether it worked.** The model cannot hear. The outcome
-  signal comes back from her ear, so every move ends with what to listen
-  for, and the per-set notes exist to record what she heard. Without that
+  signal comes back from the producer's ear, so every move ends with what to listen
+  for, and the per-set notes exist to record what they heard. Without that
   record there is no outcome to converge on.
 
 One corollary for anything that accumulates: it needs a deletion story from
@@ -105,7 +105,7 @@ Ordered. Each item says what, why, size, and what it waits on.
    thread. The model reads them after the goal and may add or retire at most
    two per answer through a fenced `note` block the app merges
    deterministically: exact de-duplication, a cap of twelve that takes the
-   model's bullets before hers, and nothing she has touched is ever retired.
+   model's bullets before the producer's, and nothing the producer has touched is ever retired.
    The note outlives the transcript's 30-day prune. Never a summary and never
    rewritten, on the second brain's evidence that rewriting collapses.
 
@@ -162,6 +162,23 @@ Ordered. Each item says what, why, size, and what it waits on.
    prompt and model fixed while collecting outcomes from real production
    sessions, where the producer can say whether the suggestions helped.
 
+   Extended the harness on 2026-10-27. Provisional properties are split into
+   timeline, settings, move target (`move_performable`) and whether the move
+   acts where the question points (`move_on_question`). Code checks now
+   catch values with their sign, studio words and read coverage. Reports
+   print 80% intervals, read agreement and the properties that fail
+   together. Scenarios one to four can run as a same-session A/B against
+   main's prompt, with a pairwise judge that judges each pair in both
+   orders. Scenarios six and seven, and the goal report, cannot. Draft
+   calibration labels for the new properties wait for the owner to confirm
+   them. Paid calibration and the A/B come next, under these rules. A
+   property can gate once it has at least 5 owner-confirmed labels and the
+   judge agrees with at least 80% of them. For the A/B, run scenarios one to
+   three with 5 pairs each. Ship the prompt if it trails main's by at
+   most 1 pass per scenario and at most 2 across all 15. Do not ship if it
+   trails by 3 or more across 15. In between, run 5 more pairs on the
+   scenario that differs and apply the same rule.
+
 7. **Default model and latency.** Done 2026-09-11. `tests/latency.rs` runs
    one two-tool question five times against the model the environment
    names and asserts a median turn under a minute, a non-empty answer, and
@@ -180,7 +197,7 @@ Ordered. Each item says what, why, size, and what it waits on.
 
    `minimax/minimax-m3` is the default when the model field is blank. The
    model timeout stays at 180 s: the default's slowest single round trip
-   was 2.6 s, the bound is there for a slower model she types herself, and
+   was 2.6 s, the bound is there for a slower model the producer types themselves, and
    60 s is the bound that cut off a real turn on 2026-09-02. Re-run the
    target when the default changes. Item 6's craft evals are re-opened
    against it next: scenarios one to four first.
@@ -189,8 +206,14 @@ Ordered. Each item says what, why, size, and what it waits on.
    evals have not run yet. Setup's last step asks "How do you work in
    Live?": New to Live, I finish tracks, or I mix for other people. Settings
    can change the answer. The answer is stored in `preferences.json`, and
-   it adds a short section to the system prompt. "I finish tracks" adds
-   nothing, so a producer who never chose gets the same prompt as before.
+   it adds a short section to the system prompt. "I finish tracks" first
+   added nothing, and a pilot producer at that level found the answers too
+   clever. Since 2026-10-26 every level names devices and parameters as
+   Live shows them. At "I finish tracks" the answer lists up to four terms
+   the producer may not know; the card underlines each one and opens one plain line
+   under it on a tap. Terms the prose does not use are listed in a `Terms:`
+   row after the answer, so they can still tap them. Craft scenario seven
+   checks that list.
    The level changes the words, not the advice. Every level also got
    shorter answers: short sentences, plain words, the move in bold, and
    about 120 words. The answer text is set in Atkinson Hyperlegible at
@@ -213,9 +236,9 @@ Ordered. Each item says what, why, size, and what it waits on.
     the point. This is a prompt change, so it needs a craft property and a
     run of the craft evals before it ships.
 
-11. **Recap on return.** Built 2026-10-08. When she reopens a set after a
-    break of 3 hours or more, the card opens on a "Last time" recap: her
-    last question, the newest three rated moves with what she heard, and the
+11. **Recap on return.** Built 2026-10-08. When the producer reopens a set after a
+    break of 3 hours or more, the card opens on a "Last time" recap: their
+    last question, the newest three rated moves with what they heard, and the
     newest two decided notes. The earlier answers fold behind "Show N
     earlier answers". It is built from the saved thread, outcome log and
     notes, so it costs no model call. The check-in from #66 keeps asking
@@ -273,7 +296,7 @@ Ordered. Each item says what, why, size, and what it waits on.
     the newest six. Next: a `get_history` tool that searches the log and the
     transcripts younger than 30 days by keyword (track names, frequencies),
     automatic injection of past outcomes for the track in focus, and a list
-    of outcomes in the Notes panel where she can remove one.
+    of outcomes in the Notes panel where the producer can remove one.
 
 17. **No lockout from the token flow.** Built 2026-10-06. Model calls stream
     from OpenRouter, and the proxy saves the generation id from the response
@@ -291,6 +314,20 @@ Ordered. Each item says what, why, size, and what it waits on.
     for a sound judgement. Three eval scenarios cover these questions.
     Next: measure the first click and the first kept move once usage events
     exist.
+
+19. **What the producer has installed.** The model sees only the devices in the open
+    set. On 2026-10-26 a pilot producer had the Span plugin installed. The
+    model did not suggest it until the producer put it on a track, and then it
+    advised on it. A `get_installed` tool lists the plugins and Live
+    devices the producer can load, so a move can use a tool the producer already owns. Live's
+    browser API can probably supply the list from the connector; the plugin
+    folders on disk are the other source. Spike on Live 12 first: check that
+    the browser lists third-party plugins by name, and how long a large
+    library takes to walk. The list is cold context: the app keeps it on
+    disk, refreshes it when Live starts, and the model reads it with the
+    tool only when a move needs it, never in the context block. A plugin
+    list says a lot about a person, so it leaves the machine only inside a
+    turn, and the capture consent covers it like any other tool result.
 
 ## When the waitlist says go
 
@@ -311,7 +348,7 @@ All specced or named already. The order is fixed by the gate.
    Live in production; item 12 records the model it serves.
 
    Split telemetry ownership at this boundary. The app records what the
-   producer explicitly says she tried, heard, kept or undid. The proxy links
+   producer explicitly says the producer tried, heard, kept or undid. The proxy links
    consented questions, relevant set context, tool arguments/results, raw
    answers, versions, costs, timings and errors under a turn ID. The eval
    harness replays reviewed examples against a held-out set. Keep producer
@@ -395,7 +432,7 @@ design of its own, recorded here.
 
 Audio analysis moved off this list on 2026-09-05. It is not off the table; it
 is the expensive layer, and the settings-only version ships first. Build it when
-the settings-only advice has a producer using it and the questions she asks are
+the settings-only advice has a producer using it and the questions the producer asks are
 the ones only a listener can answer. Until then the app says it cannot hear,
 because it cannot.
 
@@ -410,10 +447,10 @@ sample statistics. Two steps, in order:
    warping, devices and the fader. On an M4 Pro, a 3-minute stereo file at
    44.1 kHz takes 0.95 s cold, two at once 1.0 s, and the longest region
    allowed (5 minutes at 192 kHz) 4.3 s.
-2. **A bounce she picks.** Loudness and band balance per section, aligned to
+2. **A bounce the producer picks.** Loudness and band balance per section, aligned to
    the locators. It is the only honest route to questions such as "is the low
    end too thin?".
 
-Both read files only Live names or she chooses, keep everything local, and
+Both read files only Live names or the producer chooses, keep everything local, and
 send no analysed audio through the proxy. Live's own meters stay out of what
 the model sees: a coarse meter invites "it is too loud".

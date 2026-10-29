@@ -170,7 +170,7 @@ describe("buildContext", () => {
     expect(buildContext(setWith({}), "")).not.toContain("NOTES");
   });
 
-  it("lists the note after the goal with ids, kinds, ages, and hers", () => {
+  it("lists the note after the goal with ids, kinds, ages, and the producer's", () => {
     const now = 1_000_000;
     const day = 24 * 60 * 60;
     const out = buildContext(
@@ -189,7 +189,7 @@ describe("buildContext", () => {
     expect(notes).toBeGreaterThan(goal);
     // Fenced like set data: guillemets inside a bullet are stripped, not nested.
     expect(out).toContain("- [b1] move  «low end: high-pass Pad Wide near 180 Hz»  (2 days ago)");
-    expect(out).toContain("- [b2] heard  «the sub still masks the kick»  (today, hers)");
+    expect(out).toContain("- [b2] heard  «the sub still masks the kick»  (today, producer's)");
   });
 
   it("says nothing about outcomes when there are none", () => {
@@ -218,7 +218,7 @@ describe("buildContext", () => {
   });
 });
 
-// "This part" and "this sound" are where she is looking, and the app mirrors
+// "This part" and "this sound" are where the producer is looking, and the app mirrors
 // both already; without them the model guesses which section or device.
 describe("the focus line", () => {
   const focused = {
@@ -232,7 +232,7 @@ describe("the focus line", () => {
     selectedSlot: { track: 2, scene: 3 },
   };
 
-  it("says where she is working: the loop brace, the selected device and slot", () => {
+  it("says where the producer is working: the loop brace, the selected device and slot", () => {
     expect(buildContext(focused, "")).toContain(
       "FOCUS  loop brace bars 17–24 · selected device 1 on «Pad» · selected Session slot 3 on «Pad»",
     );

@@ -227,8 +227,7 @@ pub fn save_update_channel(dir: &Path, channel: crate::updates::Channel) -> std:
 #[serde(rename_all = "snake_case")]
 pub enum Experience {
     NewToLive,
-    /// Adds nothing to `SYSTEM_PROMPT`, so a producer who never chose gets
-    /// the base prompt.
+    /// A producer who never chose gets this level's prompt section.
     #[default]
     FinishesTracks,
     MixesForOthers,
@@ -247,7 +246,7 @@ pub fn load_experience(dir: &Path) -> Option<Experience> {
 }
 pub fn save_experience(dir: &Path, experience: Experience) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    // Setup never asks again, so a torn file would silently drop her choice.
+    // Setup never asks again, so a torn file would silently drop the producer's choice.
     crate::threads::write_atomically(
         &dir.join(PREFERENCES_FILE),
         &serde_json::json!({"experience": experience}).to_string(),

@@ -32,7 +32,7 @@ describe("offer", () => {
 
   // Otherwise the same true observation reappears every two seconds for the
   // rest of the session, which is how a helpful nudge becomes an enemy.
-  it("never re-raises a nudge she dismissed, however long it has been", () => {
+  it("never re-raises a nudge the producer dismissed, however long it has been", () => {
     const shown = offer(EMPTY_NUDGE_STATE, NUDGE, T0);
     const dismissed = dismiss(shown, NUDGE.id);
     expect(offer(dismissed, NUDGE, T0 + COOLDOWN_MS * 10).current).toBeNull();
@@ -40,7 +40,7 @@ describe("offer", () => {
 
   // offer() runs on every state change, so a nudge on screen is re-offered
   // constantly. If any of those re-offers moved lastFiredAt, the cooldown
-  // would stretch for as long as she left the nudge up. Asserting .current
+  // would stretch for as long as the producer left the nudge up. Asserting .current
   // alone cannot see that — the clock has to be measured.
   it("re-offering a nudge already on screen does not restart its cooldown", () => {
     const shown = offer(EMPTY_NUDGE_STATE, NUDGE, T0);

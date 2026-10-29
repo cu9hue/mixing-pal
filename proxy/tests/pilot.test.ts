@@ -837,7 +837,7 @@ describe("never refused because an earlier call went wrong", () => {
     replies.push({ raw: new Response(
       'data: {"id":"g","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c","type":"function","function":{"name":"get_mixer","arguments":"{"}}]},"finish_reason":null}],"usage":{"cost":0.003,"prompt_tokens":1,"completion_tokens":1}}\n\n',
       { headers: { "Content-Type": "text/event-stream" } }) } as never);
-    // The stream ends without a finish reason: a truncation, so she is told it was interrupted.
+    // The stream ends without a finish reason: a truncation, so the producer is told it was interrupted.
     expect((await api("/v1/completions", question(), user.token)).status).toBe(504);
     expect((await env.DB.prepare("SELECT spent FROM members WHERE id = ?").bind(user.id).first())!.spent).toBe(3000);
     expect(await env.DB.prepare("SELECT provisional, cost, error_code FROM requests").first())
@@ -1566,7 +1566,7 @@ describe("account eligibility", () => {
     expect(view).toMatchObject({ can_ask: true, reserved_micro_usd: 0 });
   });
 
-  test("another member's expired call stops holding the global budget, without her polling or cron", async () => {
+  test("another member's expired call stops holding the global budget, without the producer polling or cron", async () => {
     const a = await joined("a@example.com");
     const b = await joined("b@example.com");
     await env.DB.prepare("UPDATE budget SET allowance = ?").bind(RESERVATION + 1000).run();

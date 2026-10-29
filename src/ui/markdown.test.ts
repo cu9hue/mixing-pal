@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseMarkdown, type BlockNode, type InlineNode } from "./markdown";
+import { markTerms, parseMarkdown, type BlockNode, type InlineNode } from "./markdown";
 
 function paragraph(md: string): InlineNode[] {
   const blocks = parseMarkdown(md);
@@ -363,5 +363,111 @@ describe("loose lists", () => {
   it("ends the list on a two-line gap", () => {
     const blocks = parseMarkdown("1. one\n\n\n1. two");
     expect(blocks).toHaveLength(2);
+  });
+});
+
+describe("markTerms", () => {
+  const terms = (...names: string[]) => names.map((term) => ({ term, meaning: `${term} means this.` }));
+  const marked = (md: string, ...names: string[]) => markTerms(parseMarkdown(md), terms(...names));
+
+  it("marks the first occurrence, case-insensitively, and keeps the prose's spelling", () => {
+    expect(marked("Gain reduction is low. More gain reduction later.", "gain reduction")).toEqual([
+      { type: "paragraph", children: [
+        { type: "term", text: "Gain reduction", index: 0 },
+        { type: "text", text: " is low. More gain reduction later." },
+      ] },
+    ]);
+  });
+
+  it("keeps the prose's own word form on the mark", () => {
+    expect(marked("No sends, and no gain-reduction.", "Send", "Gain reduction")[0]).toEqual({ type: "paragraph", children: [
+      { type: "text", text: "No " },
+      { type: "term", text: "sends", index: 0 },
+      { type: "text", text: ", and no " },
+      { type: "term", text: "gain-reduction", index: 1 },
+      { type: "text", text: "." },
+    ] });
+  });
+
+  it("matches on word boundaries only", () => {
+    expect(marked("The kneecap is fine.", "knee")).toEqual(parseMarkdown("The kneecap is fine."));
+    expect(marked("A soft knee, then.", "knee")[0]).toEqual({ type: "paragraph", children: [
+      { type: "text", text: "A soft " },
+      { type: "term", text: "knee", index: 0 },
+      { type: "text", text: ", then." },
+    ] });
+  });
+
+  it("gives a longer term its words before a shorter one inside it", () => {
+    expect(marked("Set the make-up gain, then the gain.", "gain", "make-up gain")[0]).toEqual({ type: "paragraph", children: [
+      { type: "text", text: "Set the " },
+      { type: "term", text: "make-up gain", index: 1 },
+      { type: "text", text: ", then the " },
+      { type: "term", text: "gain", index: 0 },
+      { type: "text", text: "." },
+    ] });
+  });
+
+  it("marks a term inside the bold move and inside italic", () => {
+    expect(marked("**Lower the threshold.** *Watch the knee.*", "threshold", "knee")[0]).toEqual({ type: "paragraph", children: [
+      { type: "bold", children: [
+        { type: "text", text: "Lower the " },
+        { type: "term", text: "threshold", index: 0 },
+        { type: "text", text: "." },
+      ] },
+      { type: "text", text: " " },
+      { type: "italic", children: [
+        { type: "text", text: "Watch the " },
+        { type: "term", text: "knee", index: 1 },
+        { type: "text", text: "." },
+      ] },
+    ] });
+  });
+
+  it("never marks code or part of the producer's name", () => {
+    const md = "«Glue Bus» and `Glue` stay theirs. Glue here.";
+    expect(marked(md, "Glue")[0]).toEqual({ type: "paragraph", children: [
+      { type: "fence", name: "Glue Bus" },
+      { type: "text", text: " and " },
+      { type: "code", text: "Glue" },
+      { type: "text", text: " stay theirs. " },
+      { type: "term", text: "Glue", index: 0 },
+      { type: "text", text: " here." },
+    ] });
+  });
+
+  // The tools fence every device and parameter name, so a label the model
+  // explains usually arrives as a «name». The line it opens is the model's text.
+  it("marks a fenced name that is the whole term, keeping it a fence", () => {
+    expect(marked("Raise «threshold», then the threshold.", "Threshold")[0]).toEqual({ type: "paragraph", children: [
+      { type: "text", text: "Raise " },
+      { type: "term", text: "threshold", index: 0, fence: true },
+      { type: "text", text: ", then the threshold." },
+    ] });
+  });
+
+  it("marks terms in later blocks, lists, and tables, first occurrence across the answer", () => {
+    const blocks = marked("No term here.\n\n- the ratio\n\n| a | b |\n|---|---|\n| ratio | knee |", "ratio", "knee");
+    expect(blocks[1]).toEqual({ type: "list", ordered: false, items: [[
+      { type: "text", text: "the " },
+      { type: "term", text: "ratio", index: 0 },
+    ]] });
+    expect(blocks[2]).toMatchObject({ type: "table", rows: [[
+      [{ type: "text", text: "ratio" }],
+      [{ type: "term", text: "knee", index: 1 }],
+    ]] });
+  });
+
+  it("leaves the blocks as they are when a term has no match", () => {
+    expect(marked("Leave it.", "sidechain")).toEqual(parseMarkdown("Leave it."));
+    expect(marked("Leave it.")).toEqual(parseMarkdown("Leave it."));
+  });
+
+  it("treats a term's punctuation literally", () => {
+    expect(marked("Use a 4:1 ratio (1:4 is not one).", "4:1")[0]).toEqual({ type: "paragraph", children: [
+      { type: "text", text: "Use a " },
+      { type: "term", text: "4:1", index: 0 },
+      { type: "text", text: " ratio (1:4 is not one)." },
+    ] });
   });
 });

@@ -17,7 +17,7 @@
   position: relative;
 }
 
-/* The ⋯ follows the question's text, where she is already reading. */
+/* The ⋯ follows the question's text, where the producer is already reading. */
 .card__question-row {
   position: relative;
   display: flex;

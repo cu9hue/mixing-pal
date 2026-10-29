@@ -19,7 +19,7 @@ fn overlap_area(a: Rect, b: Rect) -> i64 {
 
 /// Where to actually put a window that would like to be at `desired`.
 ///
-/// The failure this exists to prevent: she docks the card on an external
+/// The failure this exists to prevent: the producer docks the card on an external
 /// display, unplugs it, and reopens the app. The remembered position is on
 /// a monitor that no longer exists, the window renders off-screen, and
 /// because it is frameless there is no titlebar to drag it back with. The
@@ -64,7 +64,7 @@ use tauri::{LogicalSize, Manager, PhysicalPosition};
 /// cannot see: putting the window somewhere a human can actually reach it.
 ///
 /// `center` is a one-shot, sent when the frontend enters a centred mode.
-/// Centring on every call re-centred the setup window a second after she
+/// Centring on every call re-centred the setup window a second after the producer
 /// dragged it, because the frontend re-renders on a 1s staleness tick.
 #[tauri::command]
 pub fn set_window_mode(
@@ -91,7 +91,7 @@ pub fn set_window_mode(
         return Ok(());
     }
 
-    // Keep the pill and the card wherever she last dragged them, but never
+    // Keep the pill and the card wherever the producer last dragged them, but never
     // outside a screen that currently exists.
     let Ok(current) = window.outer_position() else {
         return Ok(());
@@ -186,9 +186,9 @@ mod tests {
 
     #[test]
     fn a_position_on_a_monitor_that_is_gone_lands_on_the_one_that_is_left() {
-        // Remembered from a session with the external display attached; she
+        // Remembered from a session with the external display attached; the producer
         // is now on the laptop alone. Without this the card is invisible and
-        // she has no titlebar to drag it back with.
+        // they have no titlebar to drag it back with.
         let desired = Rect { x: 3000, y: 400, width: 320, height: 480 };
         assert_eq!(clamp_to_visible(desired, &[LAPTOP]), (1120, 400));
     }

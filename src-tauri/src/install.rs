@@ -132,7 +132,7 @@ fn connector_source(app: &tauri::AppHandle) -> PathBuf {
 /// Copies the connector into the User Library.
 ///
 /// `user_library` overrides the default path, for the producer who moved
-/// hers. The frontend sends null unless she typed one.
+/// theirs. The frontend sends null unless the producer typed one.
 #[tauri::command]
 pub fn install_connector(
     app: tauri::AppHandle,
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn a_missing_user_library_is_reported_rather_than_created() {
         // The spec's own words: creating the directory ourselves would
-        // install into somewhere Live never reads, and she would be left
+        // install into somewhere Live never reads, and the producer would be left
         // selecting a Control Surface entry that is not there. The install
         // command turns this None into the pick-a-folder error.
         let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());

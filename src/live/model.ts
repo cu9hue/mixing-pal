@@ -36,7 +36,7 @@ export interface SetState {
   setId: string | null;
   setName: string | null;
   setPath: string | null;
-  /// The arrangement loop brace, in beats: where she is working, when on.
+  /// The arrangement loop brace, in beats: where the producer is working, when on.
   loop: boolean | null;
   loopStart: number | null;
   loopLength: number | null;

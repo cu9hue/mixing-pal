@@ -23,7 +23,10 @@ export type InlineNode =
   // The producer-controlled name a set-derived string was fenced with
   // (guillemets stripped). Rendered as a chip so the producer can tell it
   // apart from the model's own words.
-  | { type: "fence"; name: string };
+  | { type: "fence"; name: string }
+  // A word the producer can tap, added by `markTerms`; `index` is its place in the answer's terms.
+  // `fence` marks a «name» that is the whole term, still shown as their name.
+  | { type: "term"; text: string; index: number; fence?: true };
 
 export type BlockNode =
   | { type: "paragraph"; children: InlineNode[] }
@@ -315,4 +318,92 @@ function parseInline(text: string): InlineNode[] {
 
   flush();
   return nodes;
+}
+
+/** The indexes of the terms `markTerms` marked anywhere in one block. */
+export function termsIn(block: BlockNode): number[] {
+  const walk = (nodes: InlineNode[]): number[] => nodes.flatMap((n) =>
+    n.type === "term" ? [n.index] : n.type === "bold" || n.type === "italic" ? walk(n.children) : []);
+  switch (block.type) {
+    case "paragraph":
+    case "heading":
+      return walk(block.children);
+    case "list":
+      return block.items.flatMap(walk);
+    case "table":
+      return [...block.header, ...block.rows.flat()].flatMap(walk);
+    case "code_block":
+      return [];
+  }
+}
+
+// Letters and digits in any script. A term matches only where neither
+// neighbour is one, so "knee" is not marked inside "kneecap".
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+/**
+ * A term as a pattern that takes the forms the model writes it in: space and hyphen alike,
+ * and "s", "es", "ing" or "ed" on the last word, so "Mute" finds "muting" and "Pan" "panning".
+ */
+function termPattern(term: string): string {
+  const words = term.trim().split(/[\s-]+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const last = words.pop() ?? "";
+  const ending = last.length > 1 && /e$/i.test(last)
+    ? `${last.slice(0, -1)}(?:es|ed|ing|e)`
+    : `${last}(?:es|s|${last.slice(-1)}?(?:ing|ed))?`;
+  return [...words, ending].join("[\\s-]+");
+}
+
+/**
+ * Marks each term's first occurrence in any `termPattern` form, longest term first. Walks bold
+ * (the move holds terms) and italic, never code. A «name» is marked only as the whole term in one of its forms.
+ */
+export function markTerms(blocks: BlockNode[], terms: readonly { term: string }[]): BlockNode[] {
+  const order = terms.map((t, index) => ({ term: t.term, index })).sort((a, b) => b.term.length - a.term.length);
+  let out = blocks;
+  for (const { term, index } of order) {
+    if (term.trim() === "") continue;
+    let done = false;
+    const source = termPattern(term);
+    const pattern = new RegExp(`${source}(?![\\p{L}\\p{N}])`, "giu");
+    const whole = new RegExp(`^${source}$`, "iu");
+    const inline = (nodes: InlineNode[]): InlineNode[] =>
+      nodes.flatMap((n): InlineNode[] => {
+        if (done) return [n];
+        if (n.type === "bold" || n.type === "italic") return [{ ...n, children: inline(n.children) }];
+        if (n.type === "fence" && whole.test(n.name)) {
+          done = true;
+          return [{ type: "term", text: n.name, index, fence: true }];
+        }
+        if (n.type !== "text") return [n];
+        for (const m of n.text.matchAll(pattern)) {
+          const start = m.index ?? 0;
+          const end = start + m[0].length;
+          if (WORD_CHAR.test(n.text[start - 1] ?? "")) continue;
+          done = true;
+          const before = n.text.slice(0, start);
+          const after = n.text.slice(end);
+          return [
+            ...(before === "" ? [] : [{ type: "text" as const, text: before }]),
+            { type: "term" as const, text: m[0], index },
+            ...(after === "" ? [] : [{ type: "text" as const, text: after }]),
+          ];
+        }
+        return [n];
+      });
+    out = out.map((b): BlockNode => {
+      switch (b.type) {
+        case "paragraph":
+        case "heading":
+          return { ...b, children: inline(b.children) };
+        case "list":
+          return { ...b, items: b.items.map(inline) };
+        case "table":
+          return { ...b, header: b.header.map(inline), rows: b.rows.map((r) => r.map(inline)) };
+        case "code_block":
+          return b;
+      }
+    });
+  }
+  return out;
 }

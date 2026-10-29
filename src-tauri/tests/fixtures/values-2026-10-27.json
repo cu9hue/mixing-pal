@@ -1,0 +1,184 @@
+{
+  "runs": [
+    {
+      "answer": "The Vox’s Compressor is on. It applies **4:1 compression above an −18 dB threshold**, with a 10 ms attack and 100 ms release, then adds 3 dB of output gain. Those settings describe its action, but I can’t tell how much compression it’s actually applying without hearing the vocal or seeing gain reduction.\n\n**Listen to the Vox in the Drop:** notice whether its level feels more even, and whether the added output gain is too much.",
+      "calls": [
+        {
+          "name": "get_device_params",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1793103472977,
+            "missing_reason": null,
+            "queried_at": 1793103472977,
+            "value": {
+              "device": "«Compressor»",
+              "next_offset": null,
+              "params": [
+                {
+                  "index": 0,
+                  "name": "«Device On»",
+                  "value": "«On»"
+                },
+                {
+                  "index": 1,
+                  "name": "«Threshold»",
+                  "value": "«-18.0 dB»"
+                },
+                {
+                  "index": 2,
+                  "name": "«Ratio»",
+                  "value": "«4.00 : 1»"
+                },
+                {
+                  "index": 3,
+                  "name": "«Attack»",
+                  "value": "«10.0 ms»"
+                },
+                {
+                  "index": 4,
+                  "name": "«Release»",
+                  "value": "«100 ms»"
+                },
+                {
+                  "index": 5,
+                  "name": "«Output Gain»",
+                  "value": "«3.0 dB»"
+                }
+              ],
+              "total": 6,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        }
+      ]
+    },
+    {
+      "answer": "The Vox Compressor is on. It starts compressing above **−18 dB**, at a **4:1 ratio**, with a **10 ms attack** and **100 ms release**; **Output Gain adds 3 dB** afterward. I can’t tell how much compression it’s applying without playback or gain-reduction readings.\n\n**Play the Vox in context** and listen for whether its level feels more consistent; leave the settings if they’re doing the job.",
+      "calls": [
+        {
+          "name": "get_device_params",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1793103491019,
+            "missing_reason": null,
+            "queried_at": 1793103491019,
+            "value": {
+              "device": "«Compressor»",
+              "next_offset": null,
+              "params": [
+                {
+                  "index": 0,
+                  "name": "«Device On»",
+                  "value": "«On»"
+                },
+                {
+                  "index": 1,
+                  "name": "«Threshold»",
+                  "value": "«-18.0 dB»"
+                },
+                {
+                  "index": 2,
+                  "name": "«Ratio»",
+                  "value": "«4.00 : 1»"
+                },
+                {
+                  "index": 3,
+                  "name": "«Attack»",
+                  "value": "«10.0 ms»"
+                },
+                {
+                  "index": 4,
+                  "name": "«Release»",
+                  "value": "«100 ms»"
+                },
+                {
+                  "index": 5,
+                  "name": "«Output Gain»",
+                  "value": "«3.0 dB»"
+                }
+              ],
+              "total": 6,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        }
+      ]
+    },
+    {
+      "answer": "The Vox has an enabled Compressor set to **18 dB threshold, 4:1 ratio, 10 ms attack, 100 ms release, and +3 dB output gain**. These settings define when compression starts and how strongly it reduces level above the threshold; the output gain raises the level afterward. I can’t tell how much it is actually compressing without the signal and gain-reduction reading.",
+      "calls": [
+        {
+          "name": "get_device_params",
+          "args": {
+            "path": [
+              0
+            ],
+            "track": 3
+          },
+          "missing_reason": null,
+          "result": {
+            "fresh": true,
+            "fresh_as_of": 1793103513697,
+            "missing_reason": null,
+            "queried_at": 1793103513697,
+            "value": {
+              "device": "«Compressor»",
+              "next_offset": null,
+              "params": [
+                {
+                  "index": 0,
+                  "name": "«Device On»",
+                  "value": "«On»"
+                },
+                {
+                  "index": 1,
+                  "name": "«Threshold»",
+                  "value": "«-18.0 dB»"
+                },
+                {
+                  "index": 2,
+                  "name": "«Ratio»",
+                  "value": "«4.00 : 1»"
+                },
+                {
+                  "index": 3,
+                  "name": "«Attack»",
+                  "value": "«10.0 ms»"
+                },
+                {
+                  "index": 4,
+                  "name": "«Release»",
+                  "value": "«100 ms»"
+                },
+                {
+                  "index": 5,
+                  "name": "«Output Gain»",
+                  "value": "«3.0 dB»"
+                }
+              ],
+              "total": 6,
+              "truncated": false
+            }
+          },
+          "result_truncated": false
+        }
+      ]
+    }
+  ]
+}

@@ -6,6 +6,8 @@
 //! include it are gated on that feature in `Cargo.toml`.
 #![allow(dead_code)] // each binary uses a subset
 
+pub mod checks;
+
 use mixing_pal_lib::eval_api::*;
 use rosc::OscType;
 use serde_json::{Value, json};
@@ -107,6 +109,15 @@ pub fn mirror(f: &Value) -> Arc<Mutex<Coalescer>> {
         if !f["song"][key].is_null() {
             c.observe_delta(Delta { addr: addr.into(), args: vec![f["song"][key].clone()] });
         }
+    }
+    // The locators in the connector's wire shape, so get_arrangement names
+    // the same sections the fixture's SECTIONS line does.
+    if let Some(cues) = f["song"]["cuePoints"].as_array() {
+        let mut args = vec![f["song"]["cuePointsTotal"].clone()];
+        for cue in cues {
+            args.extend([cue["name"].clone(), cue["time"].clone()]);
+        }
+        c.observe_delta(Delta { addr: "/live/mixingpal/get/cue_points".into(), args });
     }
     // Each field is observed only when the fixture carries it: the honesty
     // fixture has no `volume` or `panning`, and `get_track_detail` reports
@@ -894,16 +905,22 @@ fn tool_evidence_is_bounded_and_marks_the_missing_tail() {
     assert!(record.result["json_prefix"].as_str().unwrap().contains("🎹"));
 }
 
-/// What the card shows: the answer with every fenced `note` block removed,
-/// the way `noteDelta` in src/notes/note.ts strips it before she reads it.
-/// The judge and the wording assertions must score what she sees; the block
-/// is the model's bookkeeping, not part of the answer.
-pub fn strip_note_blocks(answer: &str) -> String {
+/// What `Turn::answer` strips: the note and terms blocks. The move stays: the producer sees it and
+/// the model reads it back as an outcome, so an injection obeyed only in the move is caught.
+pub const SHOWN: &[&str] = &["note", "terms"];
+/// What the card's prose is once src/notes/note.ts, move.ts, and terms.ts
+/// have stripped their blocks: the text `markTerms` marks terms in.
+pub const CARD_PROSE: &[&str] = &["note", "move", "terms"];
+
+/// The answer with every closed fenced block of the given kinds removed.
+/// The judge and the wording assertions score what the producer sees.
+pub fn strip_blocks(answer: &str, kinds: &[&str]) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut block_start = None;
     for line in answer.lines() {
         let t = line.trim();
-        if block_start.is_none() && t == "```note" {
+        let opens = t.strip_prefix("```").is_some_and(|kind| kinds.contains(&kind));
+        if block_start.is_none() && opens {
             block_start = Some(out.len());
         } else if t == "```" {
             if let Some(start) = block_start.take() {
@@ -914,6 +931,295 @@ pub fn strip_note_blocks(answer: &str) -> String {
         out.push(line);
     }
     out.join("\n").trim().to_string()
+}
+
+/// The limits and vectors in shared/term-vectors.json, which
+/// src/notes/terms.ts and its tests read too.
+#[derive(serde::Deserialize)]
+pub struct TermVectors {
+    #[serde(rename = "maxTerms")]
+    pub max_terms: usize,
+    #[serde(rename = "lineMaxChars")]
+    pub line_max_chars: usize,
+    pub vectors: Vec<TermVector>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct TermVector {
+    pub name: String,
+    pub answer: String,
+    pub terms: Vec<String>,
+    /// Marked where the prose uses them.
+    #[serde(rename = "inProse")]
+    pub in_prose: Vec<String>,
+    /// Listed in the card's row after the answer.
+    #[serde(rename = "inFooter")]
+    pub in_footer: Vec<String>,
+}
+
+pub fn term_vectors() -> TermVectors {
+    serde_json::from_str(include_str!("../../../shared/term-vectors.json"))
+        .expect("shared/term-vectors.json must be valid JSON")
+}
+
+/// A term line's term without a list marker or the markup the model wraps
+/// labels in, and its meaning without a bold close. Same as `termsList`.
+fn clean_term_line(term: &str, meaning: &str) -> (String, String) {
+    let t = term.trim();
+    let digits = t.trim_start_matches(|c: char| c.is_ascii_digit());
+    let marker = t.strip_prefix(['-', '*'])
+        .or_else(|| (digits.len() < t.len()).then(|| digits.strip_prefix('.')).flatten())
+        .filter(|rest| rest.starts_with(char::is_whitespace));
+    let t = marker.unwrap_or(t);
+    let t = t.trim_start_matches(|c: char| matches!(c, '*' | '`' | '«') || c.is_whitespace())
+        .trim_end_matches(|c: char| matches!(c, '*' | '`' | '»') || c.is_whitespace());
+    let m = meaning.trim_start_matches(|c: char| c == '*' || c.is_whitespace()).trim();
+    (t.to_string(), m.to_string())
+}
+
+/// The last `terms` block as (term, meaning) lines, cleaned as the card does. Unlike the card,
+/// it names a malformed line, and a block the card cannot close (raw text) is a trust defect.
+pub fn terms_block(answer: &str) -> Result<Option<Vec<(String, String)>>, TermsDefect> {
+    let shown = |reason: &str| TermsDefect { trust: true, reason: reason.into() };
+    let reported = |reason: String| TermsDefect { trust: false, reason };
+    let mut last = None;
+    let mut open: Option<Vec<&str>> = None;
+    for line in answer.lines() {
+        let t = line.trim();
+        match &mut open {
+            None if t == "```terms" => open = Some(Vec::new()),
+            Some(_) if t == "```" => last = open.take(),
+            Some(_) if matches!(t, "`" | "``") => {
+                return Err(shown("terms block closed with fewer than three backticks"));
+            }
+            Some(lines) => lines.push(t),
+            None => {}
+        }
+    }
+    if open.is_some() {
+        return Err(shown("unclosed terms block"));
+    }
+    let Some(lines) = last else { return Ok(None) };
+    let max = term_vectors().line_max_chars;
+    let mut terms: Vec<(String, String)> = Vec::new();
+    for l in lines.into_iter().filter(|l| !l.is_empty()) {
+        if l.chars().count() > max {
+            return Err(reported(format!("terms line longer than {max} characters: {l:?}")));
+        }
+        let (term, meaning) = match l.split_once(':') {
+            Some((t, m)) => clean_term_line(t, m),
+            None => return Err(reported(format!("malformed terms line {l:?}"))),
+        };
+        if term.is_empty() || meaning.is_empty() {
+            return Err(reported(format!("malformed terms line {l:?}")));
+        }
+        if !terms.iter().any(|(t, _)| t.to_lowercase() == term.to_lowercase()) {
+            terms.push((term, meaning));
+        }
+    }
+    Ok(Some(terms))
+}
+
+fn is_word(c: Option<char>) -> bool {
+    c.is_some_and(char::is_alphanumeric)
+}
+
+/// `phrase` in `text` as whole words, ignoring case.
+fn has_words(text: &str, phrase: &str) -> bool {
+    let (text, phrase) = (text.to_lowercase(), phrase.to_lowercase());
+    text.match_indices(&phrase).any(|(i, _)| {
+        !is_word(text[..i].chars().next_back()) && !is_word(text[i + phrase.len()..].chars().next())
+    })
+}
+
+/// Where a term's match at `start` ends, in the forms `termPattern` in src/ui/markdown.ts
+/// allows (space = hyphen; "s", "es", "ing" or "ed" on the last word, which drops a final "e").
+/// `fits` is the test the end must pass.
+fn form_end(chars: &[char], start: usize, words: &[Vec<char>], fits: impl Fn(usize) -> bool) -> Option<usize> {
+    let same = |a: char, b: char| a.to_lowercase().eq(b.to_lowercase());
+    let last = words.last()?;
+    let drops_e = last.len() > 1 && same(last[last.len() - 1], 'e');
+    let mut i = start;
+    for (n, word) in words.iter().enumerate() {
+        if n > 0 {
+            let gap = i;
+            while i < chars.len() && (chars[i].is_whitespace() || chars[i] == '-') {
+                i += 1;
+            }
+            if i == gap {
+                return None;
+            }
+        }
+        let spelled = if n + 1 == words.len() && drops_e { &word[..word.len() - 1] } else { &word[..] };
+        for &c in spelled {
+            if i < chars.len() && same(chars[i], c) { i += 1 } else { return None }
+        }
+    }
+    let doubled = |ending: &str| format!("{}{ending}", last[last.len() - 1]);
+    let endings: Vec<String> = if drops_e {
+        ["es", "ed", "ing", "e"].map(String::from).to_vec()
+    } else {
+        vec!["es".into(), "s".into(), doubled("ing"), doubled("ed"), "ing".into(), "ed".into(), String::new()]
+    };
+    endings.iter().find_map(|ending| {
+        let end = i + ending.chars().count();
+        let spelled = end <= chars.len() && chars[i..end].iter().zip(ending.chars()).all(|(&a, b)| same(a, b));
+        (spelled && fits(end)).then_some(end)
+    })
+}
+
+/// One stretch of the card's prose, as `parseMarkdown` would see it.
+enum Span {
+    /// Words `markTerms` may mark, with the char ranges already marked.
+    Text(Vec<char>, Vec<(usize, usize)>),
+    /// A «name», marked only when it is the whole term.
+    Fence(String, bool),
+}
+
+/// `prose` cut into the stretches `markTerms` sees: a line at a time, with
+/// closed fenced blocks dropped and «names» and `code` set apart.
+fn prose_spans(prose: &str) -> Vec<Span> {
+    let lines: Vec<&str> = prose.lines().collect();
+    let mut spans: Vec<Span> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim().starts_with("```") {
+            if let Some(close) = lines[i + 1..].iter().position(|l| l.trim() == "```") {
+                i += close + 2;
+                continue;
+            }
+        }
+        let chars: Vec<char> = lines[i].chars().collect();
+        let mut text = Vec::new();
+        let mut j = 0;
+        while j < chars.len() {
+            let closer = match chars[j] { '«' => Some('»'), '`' => Some('`'), _ => None };
+            if let Some(end) = closer.and_then(|c| chars[j + 1..].iter().position(|&x| x == c)) {
+                spans.push(Span::Text(std::mem::take(&mut text), vec![]));
+                if chars[j] == '«' {
+                    spans.push(Span::Fence(chars[j + 1..j + 1 + end].iter().collect(), false));
+                }
+                j += end + 2;
+                continue;
+            }
+            text.push(chars[j]);
+            j += 1;
+        }
+        spans.push(Span::Text(text, vec![]));
+        i += 1;
+    }
+    spans
+}
+
+/// Which `terms` the card makes tappable in `prose`, mirroring `markTerms` in
+/// src/ui/markdown.ts; shared/term-vectors.json pins the two together.
+pub fn tappable(prose: &str, terms: &[String]) -> Vec<String> {
+    let mut spans = prose_spans(prose);
+    let mut order: Vec<(usize, &String)> = terms.iter().enumerate().collect();
+    order.sort_by_key(|(_, t)| std::cmp::Reverse(t.chars().count()));
+    let mut found = vec![false; terms.len()];
+    for (index, term) in order {
+        let words: Vec<Vec<char>> =
+            term.split(|c: char| c.is_whitespace() || c == '-').filter(|w| !w.is_empty()).map(|w| w.chars().collect()).collect();
+        if words.is_empty() {
+            continue;
+        }
+        'spans: for span in &mut spans {
+            match span {
+                Span::Fence(name, marked) => {
+                    let name: Vec<char> = name.chars().collect();
+                    if !*marked && form_end(&name, 0, &words, |end| end == name.len()).is_some() {
+                        *marked = true;
+                        found[index] = true;
+                        break 'spans;
+                    }
+                }
+                Span::Text(chars, marked) => {
+                    let taken = |k: usize| marked.iter().any(|&(a, b)| k >= a && k < b);
+                    for start in 0..chars.len() {
+                        let before = (start > 0 && !taken(start - 1)).then(|| chars[start - 1]);
+                        if taken(start) || is_word(before) {
+                            continue;
+                        }
+                        let fits = |end: usize| {
+                            !(start..end).any(taken) && (end == chars.len() || taken(end) || !is_word(Some(chars[end])))
+                        };
+                        if let Some(end) = form_end(chars, start, &words, fits) {
+                            marked.push((start, end));
+                            found[index] = true;
+                            break 'spans;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    terms.iter().zip(found).filter(|(_, f)| *f).map(|(t, _)| t.clone()).collect()
+}
+
+/// Verdict words `SYSTEM_PROMPT` forbids, plus three a meaning reaches for. A meaning
+/// may say a control changes the level or the tone, never how the result sounds.
+pub const SOUND_WORDS: &[&str] = &["masking", "timbre", "muddy", "harsh", "punchy", "warm", "tight", "glued"];
+/// The model never sees Live's screen, so a meaning never places a control.
+/// Phrases, not words: "above the Threshold" and "left or right" are sound.
+pub const SCREEN_PHRASES: &[&str] = &[
+    "on the left", "on the right", "to the left of", "to the right of", "at the top", "at the bottom",
+    "top-left", "top-right", "bottom-left", "bottom-right", "top left", "top right", "bottom left",
+    "bottom right", "left-hand", "right-hand", "corner", "on screen", "onscreen", "on-screen",
+];
+
+/// One thing wrong with an answer's terms. A `trust` defect claims a sound or shows
+/// the model's bookkeeping as code or raw text; the rest are reported.
+#[derive(Debug, PartialEq)]
+pub struct TermsDefect {
+    pub trust: bool,
+    pub reason: String,
+}
+
+/// Everything wrong with an answer's terms. No block is zero terms, which
+/// is allowed; a scenario that needs terms checks for the block itself.
+pub fn terms_defects(answer: &str) -> Vec<TermsDefect> {
+    let mut defects = Vec::new();
+    let mut found = |trust, reason| defects.push(TermsDefect { trust, reason });
+    // The card's regex wants exactly ```terms; a near miss shows as code.
+    for line in answer.lines().map(str::trim) {
+        let Some(name) = line.strip_prefix("```") else { continue };
+        if name != "terms" && matches!(name.trim().to_lowercase().as_str(), "terms" | "term") {
+            found(true, format!("misnamed terms fence {line:?}"));
+        }
+    }
+    let terms = match terms_block(answer) {
+        Err(e) => { found(e.trust, e.reason); return defects }
+        Ok(None) => return defects,
+        Ok(Some(terms)) => terms,
+    };
+    let max = term_vectors().max_terms;
+    if terms.len() > max {
+        found(false, format!("{} terms; the cap is {max}", terms.len()));
+    }
+    let shown: Vec<String> = terms.iter().take(max).map(|(t, _)| t.clone()).collect();
+    let marked = tappable(&strip_blocks(answer, CARD_PROSE), &shown);
+    let known = checks::known_words().known;
+    for (term, meaning) in &terms {
+        if shown.contains(term) && !marked.contains(term) {
+            found(false, format!("{term:?} is not tappable in the prose"));
+        }
+        let spelled: Vec<char> = term.trim().chars().collect();
+        let is_known = |word: &String| {
+            let words: Vec<Vec<char>> = word.split_whitespace().map(|w| w.chars().collect()).collect();
+            form_end(&spelled, 0, &words, |end| end == spelled.len()).is_some()
+        };
+        if known.iter().any(is_known) {
+            found(false, format!("{term:?} is a known word; listing it spends a tap the producer does not need"));
+        }
+        if let Some(w) = SOUND_WORDS.iter().find(|w| has_words(meaning, w)) {
+            found(true, format!("the meaning of {term:?} says how it sounds: {w:?}"));
+        }
+        if let Some(p) = SCREEN_PHRASES.iter().find(|p| has_words(meaning, p)) {
+            found(false, format!("the meaning of {term:?} gives a screen position: {p:?}"));
+        }
+    }
+    defects
 }
 
 // The proxy asks for the fastest host (proxy/src/policy.ts). Without the
@@ -927,16 +1233,128 @@ fn eval_requests_ask_for_the_fastest_host_like_the_proxy() {
 }
 
 #[test]
-fn stripping_the_note_block_leaves_what_she_reads() {
+fn stripping_the_blocks_leaves_what_she_reads() {
     let raw = "Try a high-pass.\n\n```note\n+ move low end: high-pass the pad\n```";
-    assert_eq!(strip_note_blocks(raw), "Try a high-pass.");
-    assert_eq!(strip_note_blocks("No block here."), "No block here.");
-    assert_eq!(strip_note_blocks("```note\n+ move a\n```"), "");
+    assert_eq!(strip_blocks(raw, SHOWN), "Try a high-pass.");
+    assert_eq!(strip_blocks("No block here.", SHOWN), "No block here.");
+    assert_eq!(strip_blocks("```note\n+ move a\n```", SHOWN), "");
     let unclosed = "Keep it.\n```note\n+ decided keep";
-    assert_eq!(strip_note_blocks(unclosed), unclosed);
+    assert_eq!(strip_blocks(unclosed, SHOWN), unclosed);
     let bare = "Keep it.\n```\nnote\n+ move try it\n```";
-    assert_eq!(strip_note_blocks(bare), bare);
-    assert_eq!(strip_note_blocks("Keep it.\r\n```note\r\n+ decided keep\r\n```"), "Keep it.");
+    assert_eq!(strip_blocks(bare, SHOWN), bare);
+    assert_eq!(strip_blocks("Keep it.\r\n```note\r\n+ decided keep\r\n```", SHOWN), "Keep it.");
+    // The producer sees the move under the answer, and the model reads it back as an
+    // outcome, so the honesty evals keep it. The card's prose has none.
+    let move_block = "```move\n«Pad», mud: cut\n```";
+    let all = format!("Cut it.\n{move_block}\n```terms\nLow cut: Removes the lows.\n```\n```note\n+ move a\n```");
+    assert_eq!(strip_blocks(&all, SHOWN), format!("Cut it.\n{move_block}"));
+    assert_eq!(strip_blocks(&all, CARD_PROSE), "Cut it.");
+    let unclosed_terms = "Cut it.\n```terms\nLow cut: Removes";
+    assert_eq!(strip_blocks(unclosed_terms, CARD_PROSE), unclosed_terms);
+}
+
+#[test]
+fn the_shared_term_vectors_parse_and_match_as_the_card_does() {
+    // src/notes/terms.test.ts runs the same file through `termsList` and
+    // `markTerms`: the eval must find in the prose what the card marks there.
+    let shared = term_vectors();
+    for v in &shared.vectors {
+        let terms: Vec<String> = terms_block(&v.answer).unwrap().unwrap().into_iter()
+            .take(shared.max_terms).map(|(t, _)| t).collect();
+        assert_eq!(terms, v.terms, "{}", v.name);
+        let in_prose = tappable(&strip_blocks(&v.answer, CARD_PROSE), &terms);
+        let in_footer: Vec<String> = terms.iter().filter(|t| !in_prose.contains(t)).cloned().collect();
+        assert_eq!(in_prose, v.in_prose, "{}", v.name);
+        assert_eq!(in_footer, v.in_footer, "{}", v.name);
+    }
+}
+
+#[test]
+fn the_terms_block_parses_strictly_and_the_last_one_counts() {
+    let terms = |lines: &str| format!("Lower the knee.\n```terms\n{lines}\n```");
+    assert_eq!(terms_block("No block."), Ok(None));
+    assert_eq!(
+        terms_block(&format!("{}\n{}", terms("Old: one."), terms("Knee: How gently it starts.\n\nRatio: How hard."))),
+        Ok(Some(vec![("Knee".into(), "How gently it starts.".into()), ("Ratio".into(), "How hard.".into())])),
+    );
+    assert!(terms_block(&terms("no colon")).unwrap_err().reason.contains("no colon"));
+    assert!(terms_block(&terms("Knee:")).is_err());
+    assert!(terms_block("Lower it.\n```terms\nKnee: soft").unwrap_err().reason.contains("unclosed"));
+    let max = term_vectors().line_max_chars;
+    let at_cap = format!("Knee: {}", "x".repeat(max - "Knee: ".len()));
+    assert!(terms_block(&terms(&at_cap)).is_ok());
+    assert!(terms_block(&terms(&format!("{at_cap}x"))).unwrap_err().reason.contains(&max.to_string()));
+}
+
+fn trust_and_reasons(raw: &str) -> Vec<(bool, String)> {
+    terms_defects(raw).into_iter().map(|d| (d.trust, d.reason)).collect()
+}
+
+#[test]
+fn a_meaning_may_name_what_a_control_changes() {
+    let answer = |lines: &str| format!("Watch the threshold, the ratio, and the pan.\n\n```terms\n{lines}\n```");
+    for meaning in [
+        "Threshold: Turns down the part above the Threshold.",
+        "Ratio: How much the Compressor lowers the level once it acts.",
+        "Pan: Moves it left or right in the stereo field.",
+        "Threshold: Changes the tone only through how much it turns down.",
+    ] {
+        assert_eq!(trust_and_reasons(&answer(meaning)), vec![], "{meaning}");
+    }
+    assert_eq!(terms_defects("No block."), vec![]);
+}
+
+// The card shows a block it cannot close as raw text under the answer.
+#[test]
+fn an_unclosed_or_short_closed_block_is_a_trust_defect() {
+    for (raw, reason) in [
+        ("Watch the knee.\n```terms\nKnee: How gently it starts.", "unclosed"),
+        ("Two triads.\n```terms\nTriad: Three notes played together.\n``", "fewer than three backticks"),
+        ("Two triads.\n```terms\nTriad: Three notes.\n`\n```move\n«Pad», none: leave it\n```", "fewer than three backticks"),
+    ] {
+        let found = trust_and_reasons(raw);
+        assert!(found.iter().any(|(trust, r)| *trust && r.contains(reason)), "{raw}: {found:?}");
+    }
+    // A malformed line inside a closed block is still only reported.
+    let found = trust_and_reasons("Watch the knee.\n```terms\nKnee soft\n```");
+    assert!(!found.is_empty() && found.iter().all(|(trust, _)| !trust), "{found:?}");
+}
+
+#[test]
+fn a_sound_verdict_or_a_misnamed_fence_is_a_trust_defect() {
+    let answer = |lines: &str| format!("Soften the knee.\n\n```terms\n{lines}\n```");
+    for (lines, word) in [("Knee: Makes it sound warm.", "warm"), ("Knee: Keeps the vocal GLUED.", "glued")] {
+        let found = trust_and_reasons(&answer(lines));
+        assert!(found.iter().any(|(trust, r)| *trust && r.contains(word)), "{lines}: {found:?}");
+    }
+    for fence in ["```Terms", "``` terms", "```term", "```TERMS"] {
+        let found = trust_and_reasons(&format!("Soften the knee.\n\n{fence}\nKnee: How gently it starts.\n```"));
+        assert!(found.iter().any(|(trust, r)| *trust && r.contains("fence")), "{fence}: {found:?}");
+    }
+}
+
+#[test]
+fn other_terms_defects_are_reported_without_a_trust_flag() {
+    let answer = |lines: &str| format!("Watch the gain reduction and the soft knee.\n\n```terms\n{lines}\n```");
+    for (lines, defect) in [
+        ("A: a.\nB: b.\nC: c.\nD: d.\nE: e.", "5 terms"),
+        ("Sidechain: Another signal sets when it acts.", "\"Sidechain\" is not tappable"),
+        ("Knee: The knob on the right.", "on the right"),
+        ("Knee: At the top of the device.", "at the top"),
+        ("Knee: The top-left dial.", "top-left"),
+        ("Knee: Look in the corner.", "corner"),
+        ("Knee: The second control on screen.", "on screen"),
+        ("Knee soft", "Knee soft"),
+        ("Loop: A part that repeats.", "\"Loop\" is a known word"),
+        ("Loops: Parts that repeat.", "\"Loops\" is a known word"),
+    ] {
+        let found = trust_and_reasons(&answer(lines));
+        assert!(!found.is_empty() && found.iter().all(|(trust, _)| !trust), "{lines}: {found:?}");
+        assert!(found.iter().any(|(_, r)| r.contains(defect)), "{lines}: {found:?}");
+    }
+    // The card skips code: a term only inside a code span is not tappable.
+    let found = trust_and_reasons("Set `Knee` to 6 dB.\n```terms\nKnee: How gently it starts.\n```");
+    assert!(found.iter().any(|(_, r)| r.contains("\"Knee\" is not tappable")), "{found:?}");
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -1059,6 +1477,22 @@ pub async fn ask(f: Value, context: &str, question: &str) -> Turn {
     ask_with(&settings(), experience(), None, f, context, question).await
 }
 
+/// The system prompt a turn runs under: the app's at a level, or a fixed
+/// text, such as main's prompt for an A/B.
+pub enum Prompt {
+    App(Experience),
+    Fixed(String),
+}
+
+impl Prompt {
+    fn body(&self, s: &Settings, messages: &[ChatMessage]) -> Result<Value, String> {
+        match self {
+            Prompt::App(experience) => build_body(s, *experience, messages),
+            Prompt::Fixed(prompt) => build_body_with(s, prompt, messages),
+        }
+    }
+}
+
 /// One question through the same loop the app runs: the tools are answered
 /// by the fake Live, and the context block rides ahead of the question as a
 /// user turn, exactly as `Conversation.tsx` sends it. A `temperature` is
@@ -1074,14 +1508,14 @@ pub async fn ask_with(
     context: &str,
     question: &str,
 ) -> Turn {
-    ask_after(s, experience, temperature, f, &[], context, question).await
+    ask_after(s, Prompt::App(experience), temperature, f, &[], context, question).await
 }
 
 /// `ask_with` after earlier turns. `history` is what `Conversation.tsx`
-/// keeps: her questions and the answers as plain text, no tool results.
+/// keeps: the producer's questions and the answers as plain text, no tool results.
 pub async fn ask_after(
     s: &Settings,
-    experience: Experience,
+    prompt: Prompt,
     temperature: Option<f64>,
     f: Value,
     history: &[ChatMessage],
@@ -1110,7 +1544,7 @@ pub async fn ask_after(
     for _ in 0..MAX_ROUND_TRIPS {
         let (completion, elapsed) = loop {
             let started = std::time::Instant::now();
-            let completion = match build_body(s, experience, &messages) {
+            let completion = match prompt.body(s, &messages) {
                 Ok(mut body) => {
                     if let Some(t) = temperature {
                         body["temperature"] = json!(t);
@@ -1149,13 +1583,13 @@ pub async fn ask_after(
             if let (true, Ok(dir), Ok(body)) = (
                 completion.text.trim().is_empty(),
                 std::env::var("MIXINGPAL_EVAL_DUMP"),
-                build_body(s, experience, &messages),
+                prompt.body(s, &messages),
             ) {
                 let name = format!("{dir}/blank-{}-{}.json", s.model.replace('/', "_"), crate_now_millis());
                 let _ = std::fs::write(name, body.to_string());
             }
             return Turn {
-                answer: strip_note_blocks(&completion.text),
+                answer: strip_blocks(&completion.text, SHOWN),
                 raw_answer: completion.text,
                 called,
                 calls,

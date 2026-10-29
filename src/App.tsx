@@ -30,7 +30,7 @@ export default function App() {
   const [turnRunning, setTurnRunning] = useState(false);
   const [unread, setUnread] = useState(false);
   // Settings… from the app menu. The pane replaces the card's content and
-  // opens the card if she picked it from the pill.
+  // opens the card if the producer picked it from the pill.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsOpenRef = useRef(false);
   settingsOpenRef.current = settingsOpen;
@@ -81,7 +81,7 @@ export default function App() {
   const [connectorInstalled, setConnectorInstalled] = useState<boolean | null>(null);
   const [liveRunning, setLiveRunning] = useState(false);
   const [setupDone, setSetupDone] = useState(loadSetupDone);
-  // Set only when she asks for a setup screen from a banner. The window
+  // Set only when the producer asks for a setup screen from a banner. The window
   // then opens on that screen whatever the derivation thinks, and clearing
   // it is the only way out -- so every path that sets it has one.
   const [wireCopied, setWireCopied] = useState(false);
@@ -145,7 +145,7 @@ export default function App() {
     if (setupNeeded && forcedStep === null && step === "done") finishSetup();
   }, [setupNeeded, forcedStep, step, finishSetup]);
 
-  // Polled only while setup is on screen. Once she is past it there is
+  // Polled only while setup is on screen. Once the producer is past it there is
   // nothing to decide, and a process scan every two seconds forever is a
   // cost with no buyer.
   useEffect(() => {
@@ -159,8 +159,8 @@ export default function App() {
     return () => clearInterval(id);
   }, [setupOpen, refreshConnector]);
 
-  // She opened the Control Surface step from the "not connected" banner.
-  // Traffic arriving is exactly the thing she went there to fix, so the
+  // The producer opened the Control Surface step from the "not connected" banner.
+  // Traffic arriving is exactly the thing they went there to fix, so the
   // screen has done its job and the card comes back on its own.
   useEffect(() => {
     if (forcedStep === "control_surface" && connected) setForcedStep(null);
@@ -177,7 +177,7 @@ export default function App() {
   // from someone mid-take is the most intrusive thing this app could do. It
   // announces itself with the pill's glow instead, which means it MUST set
   // unread -- without this a nudge arriving while the card is shut is
-  // completely silent until she happens to open it.
+  // completely silent until the producer happens to open it.
   //
   // viewRef rather than a `view` dependency: this must fire when a nudge
   // arrives, not every time the view changes while one is still on screen.
@@ -187,7 +187,7 @@ export default function App() {
     if (nudge !== null && viewRef.current !== "card") setUnread(true);
   }, [nudge]);
 
-  // Nothing is unread while she is looking at it. Without this the first
+  // Nothing is unread while the producer is looking at it. Without this the first
   // answer left `unread` true forever, and the blur rule -- which requires
   // !unread -- never collapsed the card again.
   useEffect(() => {
@@ -254,7 +254,7 @@ export default function App() {
   // The dependencies are load-bearing. The 1s staleness tick re-renders
   // this component for the life of the process; an unconditional apply
   // called set_window_mode on every one of those ticks, which re-centred
-  // the setup window a second after she dragged it and enumerated her
+  // the setup window a second after the producer dragged it and enumerated their
   // monitors once a second forever.
   const centredFor = useRef<WindowMode | null>(null);
   useLayoutEffect(() => {
@@ -288,16 +288,16 @@ export default function App() {
           onFactsChanged={() => {
             refreshConnector();
             setWireCopied(connectorInstalled === true);
-            // She came here from a banner to reinstall. The install is
+            // The producer came here from a banner to reinstall. The install is
             // done, so the force is spent -- otherwise this screen would
-            // be the only thing she could ever see again.
+            // be the only thing they could ever see again.
             setForcedStep(null);
           }}
           onExit={forcedStep !== null ? () => setForcedStep(null) : undefined}
         />
       )}
       {/* Mounted whether or not it is showing. The conversation lives in
-          here: the thread she reads and the history the model is sent both
+          here: the thread the producer reads and the history the model is sent both
           survive a collapse to the pill only if the component does. */}
       <div className={view === "card" ? undefined : "card-slot--hidden"}>
         <Card
@@ -313,7 +313,7 @@ export default function App() {
           onDismissNudge={(id) => setNudges((n) => dismiss(n, id))}
           onTurnRunningChange={setTurnRunning}
           onAnswer={() => {
-            // Unread only if she was not watching it arrive. The card is not
+            // Unread only if the producer was not watching it arrive. The card is not
             // reopened either way -- see nextMode's pill_clicked comment.
             if (view !== "card") setUnread(true);
           }}

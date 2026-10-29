@@ -31,7 +31,7 @@ function nameList(names: string[]): string {
  * timeline reads are one line, and a track read twice is named once. A line
  * is in the present tense until every read in it has finished. If any read
  * in a group names no track the line drops the names: a list that left one
- * out would claim less than the model read. Like progressLabel, it names her
+ * out would claim less than the model read. Like progressLabel, it names the producer
  * music and never a tool.
  */
 export function readingLog(reads: Read[], state: SetState): LogLine[] {

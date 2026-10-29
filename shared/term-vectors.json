@@ -1,0 +1,160 @@
+{
+  "maxTerms": 4,
+  "lineMaxChars": 200,
+  "vectors": [
+    {
+      "name": "a longer term takes the words a shorter one needs",
+      "answer": "Watch the gain reduction.\n\n```terms\nGain: How much a signal is raised.\nGain reduction: How far the Compressor turns the signal down.\n```",
+      "terms": ["Gain", "Gain reduction"],
+      "inProse": ["Gain reduction"],
+      "inFooter": ["Gain"]
+    },
+    {
+      "name": "a shorter term finds its next occurrence after a longer one",
+      "answer": "Set the make-up gain, then the gain.\n\n```terms\nGain: How much a signal is raised.\nMake-up gain: Volume added back after the Compressor.\n```",
+      "terms": ["Gain", "Make-up gain"],
+      "inProse": ["Gain", "Make-up gain"],
+      "inFooter": []
+    },
+    {
+      "name": "a code span is never a term",
+      "answer": "Set `Knee` to 6 dB.\n\n```terms\nKnee: How gently the Compressor starts.\n```",
+      "terms": ["Knee"],
+      "inProse": [],
+      "inFooter": ["Knee"]
+    },
+    {
+      "name": "a code block is never a term",
+      "answer": "Leave it.\n\n```\nKnee 6 dB\n```\n\n```terms\nKnee: How gently the Compressor starts.\n```",
+      "terms": ["Knee"],
+      "inProse": [],
+      "inFooter": ["Knee"]
+    },
+    {
+      "name": "a bold term in the list and in the prose",
+      "answer": "**Soften the knee.**\n\n```terms\n**Knee**: How gently the Compressor starts.\n```",
+      "terms": ["Knee"],
+      "inProse": ["Knee"],
+      "inFooter": []
+    },
+    {
+      "name": "a bold label with the colon inside it",
+      "answer": "Soften the knee.\n\n```terms\n**Knee:** How gently the Compressor starts.\n```",
+      "terms": ["Knee"],
+      "inProse": ["Knee"],
+      "inFooter": []
+    },
+    {
+      "name": "a fenced name that is the whole term",
+      "answer": "Raise «Threshold» a little.\n\n```terms\n«Threshold»: The level where the Compressor starts to act.\n```",
+      "terms": ["Threshold"],
+      "inProse": ["Threshold"],
+      "inFooter": []
+    },
+    {
+      "name": "a fenced name that only contains the term",
+      "answer": "Leave «Glue Compressor» as it is.\n\n```terms\nGlue: Holds parts together.\n```",
+      "terms": ["Glue"],
+      "inProse": [],
+      "inFooter": ["Glue"]
+    },
+    {
+      "name": "a term behind a list marker",
+      "answer": "Watch the knee and the ratio.\n\n```terms\n- Knee: How gently the Compressor starts.\n1. Ratio: How hard it turns the signal down.\n```",
+      "terms": ["Knee", "Ratio"],
+      "inProse": ["Knee", "Ratio"],
+      "inFooter": []
+    },
+    {
+      "name": "another word that starts with the term, or a missing word, is no match",
+      "answer": "The kneecap is fine.\n\n```terms\nKnee: How gently the Compressor starts.\nSidechain: Another signal decides when it acts.\n```",
+      "terms": ["Knee", "Sidechain"],
+      "inProse": [],
+      "inFooter": ["Knee", "Sidechain"]
+    },
+    {
+      "name": "the first four terms only",
+      "answer": "Knee, ratio, attack, release, and hold.\n\n```terms\nKnee: a.\nRatio: b.\nAttack: c.\nRelease: d.\nHold: e.\n```",
+      "terms": ["Knee", "Ratio", "Attack", "Release"],
+      "inProse": ["Knee", "Ratio", "Attack", "Release"],
+      "inFooter": []
+    },
+    {
+      "name": "matching ignores case and takes the first occurrence in a list or table",
+      "answer": "- the RATIO first\n\n| a | b |\n|---|---|\n| ratio | knee |\n\n```terms\nRatio: How hard it turns the signal down.\nKnee: How gently it starts.\n```",
+      "terms": ["Ratio", "Knee"],
+      "inProse": ["Ratio", "Knee"],
+      "inFooter": []
+    },
+    {
+      "name": "a plural in the prose matches a singular term",
+      "answer": "There are no sends on the Pad.\n\n```terms\nSend: Feeds part of a track to a return track.\n```",
+      "terms": ["Send"],
+      "inProse": ["Send"],
+      "inFooter": []
+    },
+    {
+      "name": "a plural goes on the last word of a term",
+      "answer": "Both return tracks are empty.\n\n```terms\nReturn track: A track that only takes sends.\n```",
+      "terms": ["Return track"],
+      "inProse": ["Return track"],
+      "inFooter": []
+    },
+    {
+      "name": "an es plural matches",
+      "answer": "Check the buses first.\n\n```terms\nBus: A track that several tracks feed.\n```",
+      "terms": ["Bus"],
+      "inProse": ["Bus"],
+      "inFooter": []
+    },
+    {
+      "name": "an ing or ed form matches, dropping a final e",
+      "answer": "Try muting the second chord in the looped bar.\n\n```terms\nMute: Stops a note from playing without deleting it.\nLoop: A part that repeats.\n```",
+      "terms": ["Mute", "Loop"],
+      "inProse": ["Mute", "Loop"],
+      "inFooter": []
+    },
+    {
+      "name": "an ing form may double the last letter",
+      "answer": "Try panning the hats.\n\n```terms\nPan: Moves a track between the left and right speakers.\n```",
+      "terms": ["Pan"],
+      "inProse": ["Pan"],
+      "inFooter": []
+    },
+    {
+      "name": "a term without its final e is no match",
+      "answer": "Keep the mutable part.\n\n```terms\nMute: Stops a note from playing without deleting it.\n```",
+      "terms": ["Mute"],
+      "inProse": [],
+      "inFooter": ["Mute"]
+    },
+    {
+      "name": "another ending is no match",
+      "answer": "The sender is off.\n\n```terms\nSend: Feeds part of a track to a return track.\n```",
+      "terms": ["Send"],
+      "inProse": [],
+      "inFooter": ["Send"]
+    },
+    {
+      "name": "a hyphen in the prose matches a space in the term",
+      "answer": "Watch the gain-reduction meter.\n\n```terms\nGain reduction: How far the Compressor turns the signal down.\n```",
+      "terms": ["Gain reduction"],
+      "inProse": ["Gain reduction"],
+      "inFooter": []
+    },
+    {
+      "name": "a space in the prose matches a hyphen in the term",
+      "answer": "Set the make up gain.\n\n```terms\nMake-up gain: Volume added back after the Compressor.\n```",
+      "terms": ["Make-up gain"],
+      "inProse": ["Make-up gain"],
+      "inFooter": []
+    },
+    {
+      "name": "a fenced name that is the plural of the whole term",
+      "answer": "Open «Sends» on the Vox.\n\n```terms\nSend: Feeds part of a track to a return track.\n```",
+      "terms": ["Send"],
+      "inProse": ["Send"],
+      "inFooter": []
+    }
+  ]
+}

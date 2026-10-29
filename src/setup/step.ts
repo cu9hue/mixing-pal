@@ -18,7 +18,7 @@ export interface SetupFacts {
   hasAccount: boolean;
   /** A plan, a trial, or pilot access. */
   hasAccess: boolean;
-  /** Whether she answered the current sharing question, either way. */
+  /** Whether the producer answered the current sharing question, either way. */
   sharingChosen: boolean;
   /** False while Rust has not answered, so the question shows rather than
       setup finishing early. */
@@ -28,9 +28,9 @@ export interface SetupFacts {
 /**
  * Which step to show, derived fresh every time.
  *
- * Nothing here is stored. A stored step index is wrong the moment she
- * uninstalls the connector, moves her User Library, or opens the app on a
- * machine where setup was already done -- and each of those leaves her
+ * Nothing here is stored. A stored step index is wrong the moment the producer
+ * uninstalls the connector, moves their User Library, or opens the app on a
+ * machine where setup was already done -- and each of those leaves them
  * looking at a finished setup for an app that does not work.
  *
  * The order is a sequence of gates: each one must be satisfied before the
@@ -51,10 +51,10 @@ export function currentStep(facts: SetupFacts): SetupStep {
     return facts.liveRunning ? "control_surface" : "open_live";
   }
 
-  // The connected screen asks how she works. A level, chosen there or in
-  // Settings, moves her on.
+  // The connected screen asks how the producer works. A level, chosen there or in
+  // Settings, moves the producer on.
   if (!facts.experienceChosen) return "connected";
-  // The plan comes after the app has shown it can read her set. Sharing
+  // The plan comes after the app has shown it can read the set. Sharing
   // comes after the plan: consent is stored on the member, and a member
   // exists only once there is access.
   if (!facts.hasAccess) return "plan";

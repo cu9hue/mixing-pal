@@ -49,7 +49,7 @@ describe("starter questions", () => {
     expect(starterQuestions(set(["Pad", "Drums"], { selectedTrack: 7 }))[1]).toBe("What's on the Pad chain, and what would you try?");
   });
 
-  it("keep a long or unusual name as she typed it", () => {
+  it("keep a long or unusual name as the producer typed it", () => {
     expect(starterQuestions(set(["Pad (old) v2 FINAL"], { selectedTrack: 0 }))[1])
       .toBe("What's on the Pad (old) v2 FINAL chain, and what would you try?");
   });

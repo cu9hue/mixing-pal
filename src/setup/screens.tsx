@@ -29,8 +29,8 @@ export function InstallScreen({
       onInstalled();
     } catch (e) {
       setError(String(e));
-      // The one failure she can actually fix herself: we looked in the
-      // usual place and her library is somewhere else.
+      // The one failure the producer can actually fix themselves: we looked in the
+      // usual place and their library is somewhere else.
       setAskingForLibrary(true);
     } finally {
       setBusy(false);
@@ -136,14 +136,14 @@ export function ConnectedScreen({
       </p>
       {/* Required copy, not decoration. The product is called Mixing Pal
           and it cannot hear audio; this is the one screen that says so
-          before she forms an expectation it cannot meet. Do not shorten
+          before the producer forms an expectation it cannot meet. Do not shorten
           this, and do not move it into fine print. */}
       <p className="setup__body">
         I read your settings: devices, faders, routing and notes. I can't hear your audio,
         so I'll never tell you something sounds muddy. I'll tell you what's set to what,
         and what that usually means.
       </p>
-      {/* Picking a level is how she moves on; it finishes setup. */}
+      {/* Picking a level is how the producer moves on; it finishes setup. */}
       <h2 className="setup__question">How do you work in Live?</h2>
       <p className="setup__body">This sets which words I use. You can change it later in Settings.</p>
       <div className="setup__choices">

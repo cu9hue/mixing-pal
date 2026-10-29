@@ -2,7 +2,7 @@ import { ReportTarget } from "../model/reports";
 import { useBusyState, beginMutation } from "../model/updates";
 import { wireReady } from "../setup/step";
 import wireVersion from "../../shared/wire-version.json";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AccountState, canAsk, errorMessage } from "../model/account";
 import { checkinTarget } from "./checkin";
@@ -13,7 +13,7 @@ import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
 import { tauriProvider, tauriTools } from "../model/provider";
 import { buildContext } from "../digest/build";
-import { BlockNode, InlineNode, parseMarkdown } from "./markdown";
+import { BlockNode, InlineNode, markTerms, parseMarkdown, termsIn } from "./markdown";
 import { Read, readingLog } from "./readingLog";
 import { waitingLabel } from "./waitingLabel";
 import { Exchange, begin, complete, fail } from "./thread";
@@ -21,6 +21,7 @@ import { loadThread, saveThread } from "../model/threads";
 import { SWITCH_HOLD_MS, ThreadKey, carryNote, classify, historyFrom, keyFor, recapLine } from "./threadStore";
 import { Note, emptyNote, mergeNote, noteDelta } from "../notes/note";
 import { moveLabel } from "../notes/move";
+import { Term, termsList } from "../notes/terms";
 import { Outcome, withTrackRead } from "../notes/outcomes";
 import { SetRow } from "./SetRow";
 import { starterQuestions } from "./examples";
@@ -31,22 +32,29 @@ import { RecapView } from "./RecapView";
 
 const MAX_HISTORY_MESSAGES = 12;
 
-function renderInline(nodes: InlineNode[]): ReactNode {
+/** What a tappable term needs from the answer that holds it. */
+interface TermControls {
+  open: number | null;
+  toggle: (index: number, button: HTMLButtonElement) => void;
+  lineId: (index: number) => string;
+}
+
+function renderInline(nodes: InlineNode[], terms?: TermControls): ReactNode {
   return nodes.map((n, i) => {
     switch (n.type) {
       case "text":
         return n.text;
       case "bold":
-        return <strong key={i}>{renderInline(n.children)}</strong>;
+        return <strong key={i}>{renderInline(n.children, terms)}</strong>;
       case "italic":
-        return <em key={i}>{renderInline(n.children)}</em>;
+        return <em key={i}>{renderInline(n.children, terms)}</em>;
       case "code":
         return (
           <code key={i} className="card__code">
             {n.text}
           </code>
         );
-      // A name that came from her project, not from the model. Faint and
+      // A name that came from the producer's project, not from the model. Faint and
       // muted on purpose -- it should read as "this is yours", not compete
       // with the model's own words.
       case "fence":
@@ -55,85 +63,157 @@ function renderInline(nodes: InlineNode[]): ReactNode {
             {n.name}
           </span>
         );
+      case "term":
+        return terms === undefined ? n.text : termButton(i, n.index, n.text, n.fence === true, terms);
     }
   });
 }
 
-function renderBlocks(blocks: BlockNode[]): ReactNode {
-  return blocks.map((b, i) => {
-    switch (b.type) {
-      case "paragraph":
-        return (
-          <p key={i} className="card__paragraph">
-            {renderInline(b.children)}
-          </p>
-        );
-      // Rendered as an emphasised line, never large type: this is a narrow
-      // always-on-top pane, not a document.
-      case "heading":
-        return (
-          <div key={i} className="card__subhead">
-            {renderInline(b.children)}
-          </div>
-        );
-      case "list":
-        return b.ordered ? (
-          <ol key={i} className="card__list">
-            {b.items.map((item, j) => (
-              <li key={j}>{renderInline(item)}</li>
-            ))}
-          </ol>
-        ) : (
-          <ul key={i} className="card__list">
-            {b.items.map((item, j) => (
-              <li key={j}>{renderInline(item)}</li>
-            ))}
-          </ul>
-        );
-      case "code_block":
-        return (
-          <pre key={i} className="card__code-block">
-            {b.text}
-          </pre>
-        );
-      // Cells wrap first; past a floor per cell the wrapper scrolls sideways
-      // instead, so a wide table never breaks the card's width.
-      case "table":
-        return (
-          <div key={i} className="card__table-wrap">
-            <table className="card__table">
-              <thead>
-                <tr>
-                  {b.header.map((cell, j) => (
-                    <th key={j}>{renderInline(cell)}</th>
+/**
+ * A word the producer can tap for one plain line. A button, so Enter and Space work
+ * and a screen reader hears it can open. A «name» keeps its chip.
+ */
+function termButton(key: number, index: number, text: string, fence: boolean, terms: TermControls): ReactNode {
+  return (
+    <button key={key} type="button" className={fence ? "card__fence card__term" : "card__term"}
+      aria-expanded={terms.open === index} aria-controls={terms.lineId(index)}
+      onClick={(e) => terms.toggle(index, e.currentTarget)}>
+      {text}
+    </button>
+  );
+}
+
+function termLine(index: number, terms: TermControls & { list: Term[] }): ReactNode {
+  const term = terms.list[index];
+  return (
+    <p id={terms.lineId(index)} role="note" className="card__term-line">
+      <strong>{term.term}</strong>: {term.meaning}
+    </p>
+  );
+}
+
+/**
+ * The answer's blocks. The open term's line sits under the block that holds it, inside the
+ * card, which clips anything that floats. A listed term the prose does not use goes in a row at the end.
+ */
+function renderBlocks(blocks: BlockNode[], terms?: TermControls & { list: Term[] }): ReactNode {
+  const open = terms?.open ?? null;
+  // Always Fragments, so opening a line never remounts a block, and the
+  // button `toggle` focused stays in the page.
+  const body = blocks.map((b, i) => (
+    <Fragment key={i}>
+      {renderBlock(b, i, terms)}
+      {open !== null && termsIn(b).includes(open) && termLine(open, terms!)}
+    </Fragment>
+  ));
+  if (terms === undefined) return body;
+  const inProse = new Set(blocks.flatMap(termsIn));
+  const rest = terms.list.map((_, index) => index).filter((index) => !inProse.has(index));
+  if (rest.length === 0) return body;
+  return (
+    <>
+      {body}
+      <p className="card__terms-row">
+        <span className="card__terms-label">Terms:</span>
+        {rest.map((index) => (
+          <Fragment key={index}>{" "}{termButton(index, index, terms.list[index].term, false, terms)}</Fragment>
+        ))}
+      </p>
+      {open !== null && rest.includes(open) && termLine(open, terms)}
+    </>
+  );
+}
+
+function renderBlock(b: BlockNode, i: number, terms?: TermControls): ReactNode {
+  switch (b.type) {
+    case "paragraph":
+      return (
+        <p key={i} className="card__paragraph">
+          {renderInline(b.children, terms)}
+        </p>
+      );
+    // Rendered as an emphasised line, never large type: this is a narrow
+    // always-on-top pane, not a document.
+    case "heading":
+      return (
+        <div key={i} className="card__subhead">
+          {renderInline(b.children, terms)}
+        </div>
+      );
+    case "list":
+      return b.ordered ? (
+        <ol key={i} className="card__list">
+          {b.items.map((item, j) => (
+            <li key={j}>{renderInline(item, terms)}</li>
+          ))}
+        </ol>
+      ) : (
+        <ul key={i} className="card__list">
+          {b.items.map((item, j) => (
+            <li key={j}>{renderInline(item, terms)}</li>
+          ))}
+        </ul>
+      );
+    case "code_block":
+      return (
+        <pre key={i} className="card__code-block">
+          {b.text}
+        </pre>
+      );
+    // Cells wrap first; past a floor per cell the wrapper scrolls sideways
+    // instead, so a wide table never breaks the card's width.
+    case "table":
+      return (
+        <div key={i} className="card__table-wrap">
+          <table className="card__table">
+            <thead>
+              <tr>
+                {b.header.map((cell, j) => (
+                  <th key={j}>{renderInline(cell, terms)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {b.rows.map((row, r) => (
+                <tr key={r}>
+                  {row.map((cell, j) => (
+                    <td key={j}>{renderInline(cell, terms)}</td>
                   ))}
                 </tr>
-              </thead>
-              <tbody>
-                {b.rows.map((row, r) => (
-                  <tr key={r}>
-                    {row.map((cell, j) => (
-                      <td key={j}>{renderInline(cell)}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-    }
-  });
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+  }
 }
 
 // Memoised because the component below re-renders once a second while a
 // turn runs, and an Exchange never changes once settled: without this every
 // tick would reparse every answer of the session.
 const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
+  // One open term per answer; Esc or a second tap closes it. `toggle` focuses its button:
+  // WebKit on macOS does not on click, and Esc must reach this answer's handler.
+  const [open, setOpen] = useState<number | null>(null);
+  const id = useId();
+  const terms = x.terms?.length ? {
+    list: x.terms,
+    open,
+    toggle: (index: number, button: HTMLButtonElement) => {
+      button.focus();
+      setOpen((current) => (current === index ? null : index));
+    },
+    lineId: (index: number) => `${id}-term-${index}`,
+  } : undefined;
   return (
     <>
       {x.answer !== null && (
-        <div className="card__answer selectable" data-tauri-drag-region="false">
-          {renderBlocks(parseMarkdown(x.answer))}
+        <div className="card__answer selectable" data-tauri-drag-region="false"
+          onKeyDown={terms && ((e) => {
+            // Stopped here, or App's window listener also collapses the card.
+            if (e.key === "Escape" && open !== null) { e.stopPropagation(); setOpen(null); }
+          })}>
+          {terms ? renderBlocks(markTerms(parseMarkdown(x.answer), terms.list), terms) : renderBlocks(parseMarkdown(x.answer))}
         </div>
       )}
       {x.error !== null && (
@@ -146,7 +226,7 @@ const ExchangeView = memo(function ExchangeView({ x }: { x: Exchange }) {
 });
 
 /**
- * The whole session is on screen, newest exchange last. She reads the
+ * The whole session is on screen, newest exchange last. The producer reads the
  * thread; the model is sent `history`, a short recent window. The two are
  * different budgets and neither one caps the other.
  */
@@ -190,15 +270,15 @@ export function Conversation({
   const keyRef = useRef(key);
   keyRef.current = key;
   const [recap, setRecap] = useState<string | null>(null);
-  // After a break, what she did last time stands in for the restored
-  // exchanges, which stay folded until she asks for them.
+  // After a break, what the producer did last time stands in for the restored
+  // exchanges, which stay folded until they ask for them.
   const [lastTime, setLastTime] = useState<Recap | null>(null);
   const [folded, setFolded] = useState(0);
   const threadRef = useRef<Exchange[]>([]);
   threadRef.current = thread;
   // The set's note rides beside the thread: same key, same switch, same
   // file. The model's changes are merged deterministically after each
-  // answer; hers arrive through the Notes row.
+  // answer; the producer's arrive through the Notes row.
   const [note, setNote] = useState<Note>(emptyNote());
   const noteRef = useRef<Note>(emptyNote());
   noteRef.current = note;
@@ -207,14 +287,14 @@ export function Conversation({
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
   const outcomesRef = useRef<Outcome[]>([]);
   outcomesRef.current = outcomes;
-  // The check-in is opened by her coming back, not by the answer landing.
+  // The check-in is opened by the producer coming back, not by the answer landing.
   // Its turn is fixed once open, so rating it does not close it before the heard step.
   const [checkin, setCheckin] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const dismissed = useRef<Set<string>>(new Set());
   const target = checkinTarget(thread, outcomes, dismissed.current, busy);
   const offerCheckin = useRef<() => void>(() => {});
-  // Not while she is already editing that move from its menu: one set of choices at a time.
+  // Not while the producer is already editing that move from its menu: one set of choices at a time.
   offerCheckin.current = () => { if (target?.turnId && editing !== target.turnId) setCheckin(target.turnId); };
   useEffect(() => {
     const onFocus = () => offerCheckin.current();
@@ -226,7 +306,7 @@ export function Conversation({
     setCheckin(null);
   }
   // A save that failed, shown above the thread until one succeeds. The
-  // note is hers by hand; a write that silently failed would lose it with
+  // note is the producer's by hand; a write that silently failed would lose it with
   // the row still showing it applied.
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -341,7 +421,7 @@ export function Conversation({
   // Scroll only the answer area; scrolling ancestors can hide the controls.
   const newest = useRef<HTMLDivElement>(null);
   const scrollBody = useRef<HTMLDivElement>(null);
-  // So an example question can hand her the caret along with the words.
+  // So an example question can hand the producer the caret along with the words.
   const inputRef = useRef<HTMLInputElement>(null);
   const pinned = useRef(true);
   useEffect(() => {
@@ -422,17 +502,20 @@ export function Conversation({
         tracksRead = withTrackRead(tracksRead, args, state);
         setReads((all) => [...all, { name, args, done: false }]);
       }, { turnId, record: (event) => invoke("turn_event", { turnId, event }) });
-      // The model's note changes and move label ride at the end of its answer
-      // and are not part of what she reads or what the history keeps.
+      // The model's note changes, move label, and terms ride at the end of its
+      // answer and are not part of what the producer reads or what the history keeps.
       const { answer, delta } = noteDelta(out.text);
-      const { answer: shown, move } = moveLabel(answer);
+      const { answer: moved, move } = moveLabel(answer);
+      const { answer: shown, terms } = termsList(moved);
       const mergedNote = mergeNote(noteRef.current, delta, Math.floor(Date.now() / 1000));
       setNote(mergedNote);
       setHistory((h) => [
         ...h,
         { role: "assistant" as const, content: shown },
       ].slice(-MAX_HISTORY_MESSAGES));
-      const settled = complete(threadRef.current, shown, move === null ? { tracksRead } : { move, tracksRead });
+      const settled = complete(threadRef.current, shown, {
+        tracksRead, ...(move === null ? {} : { move }), ...(terms.length === 0 ? {} : { terms }),
+      });
       setThread(settled);
       persist(askedUnder, settled, mergedNote);
       onAnswer();
@@ -521,7 +604,7 @@ export function Conversation({
           </button>
         )}
         {/* First launch, and any set with no thread yet. The questions are
-            built from her set and land on what the reads answer well. */}
+            built from the producer's set and land on what the reads answer well. */}
         {thread.length === 0 && recap === null && waiting === null && (
           <div className="card__empty">
             <div className="card__empty-line">Ask about the set you have open. Try one:</div>
@@ -611,7 +694,7 @@ export function Conversation({
           onClick={() => offerCheckin.current()}
         />
         {/* Permanent and non-dismissible. From here the app can state wrong
-            things fluently, in prose, about her music, and it cannot hear
+            things fluently, in prose, about the producer's music, and it cannot hear
             any of it. */}
         <div className="card__disclaimer">
           AI can make mistakes.

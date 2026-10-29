@@ -10,7 +10,7 @@ function realName(name: string | null | undefined): string | null {
 
 /**
  * Three questions about the open set, each answerable from reads rather than by ear.
- * A click fills the input and leaves the send to her.
+ * A click fills the input and leaves the send to the producer.
  */
 export function starterQuestions(state: SetState): string[] {
   const cues = [...state.cuePoints].sort((a, b) => a.time - b.time);

@@ -20,7 +20,7 @@
   min-height: var(--card-max-height, 520px);
 }
 
-/* The card stays mounted while she is looking at the pill or at setup, so
+/* The card stays mounted while the producer is looking at the pill or at setup, so
    the conversation and its history survive the collapse. display:none also
    keeps it out of the scrollHeight that drives the window height. */
 .card-slot--hidden {
@@ -90,9 +90,9 @@
 }
 
 /* The set's row: the goal on the left, the notes chip on the right. The
-   goal reads as a field she owns, not as the window's title: a label, her
-   words, and a pencil that says it is editable. Her words stay dim because
-   she wrote them; she needs to see that they are there, not read them
+   goal reads as a field the producer owns, not as the window's title: a label, their
+   words, and a pencil that says it is editable. Their words stay dim because
+   they wrote them; they need to see that they are there, not read them
    back. The border sits on the block, so the open list stays inside it. */
 .set-row {
   border-bottom: 1px solid var(--border);
@@ -272,7 +272,8 @@
 .notes__delete:focus-visible,
 .notes__kind-pick:focus-visible,
 .notes__input:focus-visible,
-.card__example:focus-visible {
+.card__example:focus-visible,
+.card__term:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -449,7 +450,7 @@
 }
 
 /* The largest and lightest text in the app. Everything the app measured is
-   dimmer and smaller than this -- that contrast is how she can tell what
+   dimmer and smaller than this -- that contrast is how the producer can tell what
    was read from what was generated. Generous line and paragraph spacing
    helps a dyslexic reader find the next line and the next idea. */
 .card__answer {
@@ -527,6 +528,62 @@
   border-radius: 5px;
   padding: 1px var(--space-1-5);
   color: var(--text-muted);
+}
+
+/* A term the producer can tap reads as part of the sentence: same type and colour,
+   marked only by a dotted accent underline. */
+.card__term {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  /* Longhands: Safari before 26.2 drops a multi-value shorthand. */
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+/* A «name» that is a term keeps its chip and gains the underline. */
+.card__fence.card__term {
+  background: var(--surface-overlay);
+  border-radius: 5px;
+  padding: 1px var(--space-1-5);
+  color: var(--text-muted);
+}
+
+/* Listed terms the prose does not use: one quiet row after the answer. */
+.card__terms-row {
+  margin: 0 0 1.1em;
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+}
+
+.card__terms-row:last-child {
+  margin-bottom: 0;
+}
+
+/* The one plain line a term opens, right under the block that holds it.
+   The block gives up its gap so the line reads as part of it. */
+:is(.card__paragraph, .card__subhead, .card__list, .card__table-wrap, .card__terms-row):has(+ .card__term-line) {
+  margin-bottom: var(--space-1);
+}
+
+.card__term-line {
+  margin: 0 0 1.1em;
+  padding-left: var(--space-2-5);
+  border-left: 2px solid var(--accent);
+  font-size: var(--text-lg);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.card__term-line:last-child {
+  margin-bottom: 0;
 }
 
 /* What the model has read this turn, above the waiting line. Smaller and
@@ -687,7 +744,7 @@
   margin-bottom: var(--space-1);
 }
 
-/* The model's words until she touches them. */
+/* The model's words until the producer touches them. */
 .notes__bullet--model {
   color: var(--text-muted);
 }
