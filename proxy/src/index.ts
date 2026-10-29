@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { account, consent, rateLimit, redeem } from "./account";
+import { acceptTerms, account, consent, rateLimit, redeem } from "./account";
 import { admin } from "./admin";
 import { auth, authenticate, CODE_LIFETIME_MINUTES } from "./auth";
 import { deleteAccount, deleteShared, deleteTurn, event, feedback } from "./capture";
@@ -124,6 +124,7 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   if (route === "GET /v1/account") return account(env, memberId, modern);
   if (route === "POST /v1/invites/redeem") return redeem(env, memberId, await readJson(request, 4096), modern);
   if (route === "PUT /v1/consent") return consent(env, memberId, await readJson(request, 4096), modern);
+  if (route === "POST /v1/terms") return acceptTerms(env, memberId, modern);
   if (route === "POST /v1/billing/checkout") return checkout(env, memberId, await readJson(request, 4096));
   if (route === "POST /v1/billing/portal") return portal(env, memberId);
   if (route === "POST /v1/billing/start-now") return startNow(env, memberId, modern);

@@ -23,8 +23,9 @@ it("says deleting the account is permanent, marks the button as dangerous, and s
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
 });
 
+// Signed-in views have agreed to the Terms unless a test says otherwise; the plan step asks only when they have not.
 const signedIn = (view: Partial<AccountView>): AccountState =>
-  ({ ...account, view: { access: "active", capture: false, email: "producer@example.com", ...view } });
+  ({ ...account, view: { access: "active", capture: false, email: "producer@example.com", terms_accepted: true, ...view } });
 const day = (time: number) => new Date(time).toLocaleDateString();
 const planLine = () => document.querySelector(".account__summary")?.firstElementChild?.textContent;
 
@@ -61,6 +62,7 @@ it.each([["open", OPEN], ["invite", INVITE], [undefined, OPEN]] as const)("words
   const email = screen.getByLabelText("Email");
   expect(email.getAttribute("placeholder")).toBe(placeholder);
   fireEvent.change(email, { target: { value: "producer@example.com" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: /I agree to the/ }));
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(await screen.findByText(sent)).toBeTruthy();
 });
@@ -69,6 +71,7 @@ it("says when the code expires and where else to look, and resends without clear
   vi.mocked(invoke).mockReset().mockResolvedValue(null);
   render(<AccountPanel account={signedOut("open")} />);
   fireEvent.change(screen.getByLabelText("Email"), { target: { value: "producer@example.com" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: /I agree to the/ }));
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(await screen.findByText("It expires in 15 minutes. Not there? Check your spam folder.")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Resend code" }));
@@ -79,6 +82,56 @@ it("says when the code expires and where else to look, and resends without clear
   fireEvent.click(screen.getByRole("button", { name: "Use another email" }));
   expect((screen.getByLabelText("Email") as HTMLInputElement).disabled).toBe(false);
   expect(screen.queryByLabelText("Six-digit sign-in code")).toBeNull();
+});
+
+it("keeps Continue off until the producer agrees to the Terms, and opens each page from its link", () => {
+  vi.mocked(invoke).mockReset().mockResolvedValue(null);
+  render(<AccountPanel account={signedOut("open")} />);
+  fireEvent.change(screen.getByLabelText("Email"), { target: { value: "producer@example.com" } });
+  const agree = screen.getByRole("checkbox", { name: "I agree to the Terms and the Privacy Policy." }) as HTMLInputElement;
+  expect(agree.checked).toBe(false);
+  expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Terms" }));
+  fireEvent.click(screen.getByRole("button", { name: "Privacy Policy" }));
+  expect(vi.mocked(invoke).mock.calls).toEqual([["open_legal", { page: "terms" }], ["open_legal", { page: "privacy" }]]);
+  // Opening a page is not agreeing to it.
+  expect(agree.checked).toBe(false);
+  fireEvent.click(agree);
+  expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it("records the Terms right after sign-in, and shows the account that comes back", async () => {
+  const signedInView = { access: "plan_required", capture: false, terms_accepted: false } as AccountView;
+  const accepted = { ...signedInView, terms_accepted: true };
+  vi.mocked(invoke).mockReset().mockImplementation(async (cmd) =>
+    cmd === "account_sign_in" ? signedInView : cmd === "account_accept_terms" ? accepted : null);
+  const change = vi.fn();
+  render(<AccountPanel account={{ ...signedOut("open"), change }} />);
+  fireEvent.change(screen.getByLabelText("Email"), { target: { value: "producer@example.com" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: /I agree to the/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(await screen.findByLabelText("Six-digit sign-in code"), { target: { value: "123456" } });
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await waitFor(() => expect(change).toHaveBeenLastCalledWith(accepted));
+  expect(vi.mocked(invoke).mock.calls.map(([cmd]) => cmd)).toEqual(["account_send_code", "account_sign_in", "account_accept_terms"]);
+});
+
+it("asks on the plan step when the account has not agreed, and records it before Checkout", async () => {
+  vi.mocked(invoke).mockReset().mockImplementation(async (cmd) =>
+    cmd === "account_accept_terms" ? { access: "plan_required", capture: false, trial_available: true, terms_accepted: true } : { opened: true });
+  render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true, terms_accepted: false })} />);
+  const start = screen.getByRole("button", { name: "Start 7-day free trial" }) as HTMLButtonElement;
+  expect(start.disabled).toBe(true);
+  fireEvent.click(screen.getByRole("checkbox", { name: "I agree to the Terms and the Privacy Policy." }));
+  fireEvent.click(start);
+  expect(await screen.findByText(/Finish in your browser/)).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls).toEqual([["account_accept_terms"], ["account_billing", { action: "checkout", plan: "starter" }]]);
+});
+
+it("does not ask again on the plan step once the account has agreed", () => {
+  render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} />);
+  expect(screen.queryByRole("checkbox", { name: /I agree to the/ })).toBeNull();
+  expect((screen.getByRole("button", { name: "Start 7-day free trial" }) as HTMLButtonElement).disabled).toBe(false);
 });
 
 it("titles the plan step as a choice and keeps account deletion out of first-run setup", () => {

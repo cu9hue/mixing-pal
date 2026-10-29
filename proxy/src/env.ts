@@ -20,6 +20,8 @@ export interface Env {
 
 export const DAY = 86_400_000;
 export const CAPTURE_VERSION = "quality-2026-09-17";
+// The Terms and Privacy Policy at mixingpal.com. A new version asks every account again before its next Checkout.
+export const TERMS_VERSION = "terms-2026-10-29";
 export const MAX_BODY = 1_048_576;
 // A 4,000-character report can need six bytes per character when JSON-escaped.
 export const MAX_FEEDBACK_BODY = 32 * 1024;

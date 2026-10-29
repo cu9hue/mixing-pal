@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ApiError, Env, json, readText } from "./env";
-import { account, member } from "./account";
+import { account, member, termsAccepted } from "./account";
 import { ALLOWANCE, BILLABLE, COMP_ALLOWANCE, COMP_PERIOD, LIVE, PAST_DUE_GRACE, Plan, TRIAL_ALLOWANCE, TRIAL_DAYS, planFor, priceFor } from "./plans";
 import { stripe, verifySignature } from "./stripe";
 
@@ -434,6 +434,8 @@ export async function checkout(env: Env, memberId: string, input: unknown, now =
   if (existing && (!synced || synced.billable)) return portalUrl(env, existing);
   // A pilot period still running would mix its spending into the plan's allowance.
   if (m && m.period_end > now) throw new ApiError(409, "access_active", "Your current access hasn't ended yet.");
+  // A new subscription needs the current Terms first. Checked before any customer is made at Stripe.
+  if (!await termsAccepted(env, memberId)) throw new ApiError(409, "terms_required", "Agree to the Terms and the Privacy Policy to continue.");
   let row = existing;
   // Past the Portal, the row's customer has nothing billable. A deleted one can still list its subscriptions.
   if (!row || synced?.gone || await customerGone(env, row.stripe_customer_id)) {

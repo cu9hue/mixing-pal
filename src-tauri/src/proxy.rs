@@ -272,6 +272,11 @@ impl Proxy {
         Ok(self.request(Method::POST, "/v1/invites/redeem", Some(json!({ "code": code })), Some(&session)).await?.0)
     }
 
+    pub async fn accept_terms(&self) -> Result<Value, ProxyError> {
+        let session = self.required_session()?;
+        Ok(self.request(Method::POST, "/v1/terms", Some(json!({})), Some(&session)).await?.0)
+    }
+
     pub async fn billing(&self, action: &str, plan: Option<&str>) -> Result<Value, ProxyError> {
         let session = self.required_session()?;
         let body = plan.map_or_else(|| json!({}), |plan| json!({ "plan": plan }));

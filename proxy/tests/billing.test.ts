@@ -2,7 +2,7 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import worker from "../src/index";
 import { deleteAccount, replayDeletions } from "../src/capture";
-import { DAY, Env } from "../src/env";
+import { DAY, Env, TERMS_VERSION } from "../src/env";
 import { maintain } from "../src/maintenance";
 import { StripeSubscription, applySubscription, cancelAndRefund, cancelForDeletion, readStamp, renewals, syncSubscription } from "../src/subscriptions";
 import { StripeCall, StripeRoutes, missing, paramsOf, sign, stubNetwork, subscription } from "./stripe-fixtures";
@@ -23,11 +23,14 @@ async function api(path: string, body?: unknown, token?: string, opts: { method?
   }), (opts.env ?? on) as never, createExecutionContext());
 }
 
-async function signedIn(email = "producer@example.com") {
+/** The app records the Terms right after sign-in, so a signed-in test account has accepted them unless `terms` is false. */
+async function signedIn(email = "producer@example.com", { terms = true } = {}) {
   expect((await api("/auth/email-otp/send-verification-otp", { email })).status).toBe(200);
   const signed = await api("/auth/sign-in/email-otp", { email, otp });
   expect(signed.status, await signed.clone().text()).toBe(200);
-  return { token: signed.headers.get("set-auth-token")!, id: ((await signed.json()) as { user: { id: string } }).user.id };
+  const token = signed.headers.get("set-auth-token")!;
+  if (terms) expect((await api("/v1/terms", {}, token)).status).toBe(200);
+  return { token, id: ((await signed.json()) as { user: { id: string } }).user.id };
 }
 
 // Each test-side read stamp is newer than the one before it, and older than any stamp the code under test takes.
@@ -872,6 +875,35 @@ describe("billing routes", () => {
       "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel", payment_method_collection: "always",
       "automatic_tax[enabled]": "true", "customer_update[address]": "auto", success_url: "http://localhost:8787/billing/done",
       cancel_url: "http://localhost:8787/billing/done?state=canceled" });
+  });
+
+  test("checkout is refused until the account accepts the Terms, and Stripe is not called", async () => {
+    const user = await signedIn("producer@example.com", { terms: false });
+    const response = await api("/v1/billing/checkout", { plan: "pro" }, user.token);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "terms_required" } });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("accepting the Terms records the current version and the time, and the account shows it", async () => {
+    const user = await signedIn("producer@example.com", { terms: false });
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ terms_accepted: false });
+    const from = Date.now();
+    const accepted = await api("/v1/terms", {}, user.token);
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({ access: "plan_required", terms_accepted: true });
+    const row = await env.DB.prepare("SELECT version, accepted_at FROM terms_acceptances WHERE member_id = ?").bind(user.id)
+      .first<{ version: string; accepted_at: number }>();
+    expect(row?.version).toBe(TERMS_VERSION);
+    expect(row!.accepted_at).toBeGreaterThanOrEqual(from);
+    expect((await api("/v1/billing/checkout", { plan: "pro" }, user.token)).status).toBe(200);
+  });
+
+  test("an acceptance of an older Terms version does not count", async () => {
+    const user = await signedIn("producer@example.com", { terms: false });
+    await env.DB.prepare("INSERT INTO terms_acceptances(member_id, version, accepted_at) VALUES (?, 'terms-2000-01-01', 0)").bind(user.id).run();
+    expect(await (await api("/v1/account", undefined, user.token)).json()).toMatchObject({ terms_accepted: false });
+    expect((await api("/v1/billing/checkout", { plan: "pro" }, user.token)).status).toBe(409);
   });
 
   test("a second checkout reuses the customer", async () => {

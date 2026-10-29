@@ -269,6 +269,8 @@ await page.goto('http://127.0.0.1:1423');
 await page.getByLabel('Email',{exact:true}).waitFor();
 await page.screenshot({path:`${artifacts}/sign-in.png`});
 await page.getByLabel('Email',{exact:true}).fill('invited@example.com');
+assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true,'Continue waits for the Terms box');
+await page.getByRole('checkbox',{name:'I agree to the Terms and the Privacy Policy.'}).check();
 await page.getByRole('button',{name:'Continue',exact:true}).click();
 const signInButton=page.getByRole('button',{name:'Sign in',exact:true});
 const [signInBox,resendBox,otherBox]=await Promise.all([signInButton.boundingBox(),
@@ -398,6 +400,7 @@ const setup=page.locator('.setup');
 await setup.getByLabel('Email',{exact:true}).waitFor();
 await page.screenshot({path:`${artifacts}/fresh-sign-in.png`});
 await setup.getByLabel('Email',{exact:true}).fill('invited@example.com');
+await setup.getByRole('checkbox',{name:'I agree to the Terms and the Privacy Policy.'}).check();
 await setup.getByRole('button',{name:'Continue',exact:true}).click();
 await setup.getByLabel('Six-digit sign-in code').fill('123456');
 await setup.getByRole('button',{name:'Sign in',exact:true}).click();

@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AccountState, AccountView, errorMessage } from "../model/account";
 import { SharingConsent } from "./SharingConsent";
 import { PlanPicker } from "./PlanPicker";
+import { TermsAgreement } from "./TermsAgreement";
 import "./AccountPanel.css";
 
 function planLabel(view: AccountView): string {
@@ -43,6 +44,7 @@ export function AccountPanel({ account, onboarding = false }: { account: Account
   const [invite, setInvite] = useState("");
   const [codeSent, setCodeSent] = useState(false);
   const [resent, setResent] = useState(false);
+  const [agreed, setAgreed] = useState(false);
   const operations = useBusyState();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +108,8 @@ export function AccountPanel({ account, onboarding = false }: { account: Account
 
   function billing(action: "checkout" | "portal" | "start-now" | "upgrade", plan?: "starter" | "pro") {
     void act(async () => {
+      // The plan step's box stands for the Terms here. Checkout refuses an account that has not agreed, so record it first.
+      if (action === "checkout" && view?.terms_accepted !== true) account.change(await invoke<AccountView>("account_accept_terms"));
       const reply = await invoke<AccountView | { opened: true }>("account_billing", plan ? { action, plan } : { action });
       if (!("opened" in reply)) { account.change(reply); return; }
       // Start-now and upgrade change the account before the invoice page opens. Read it first, so the note starts from that view.
@@ -139,6 +143,8 @@ export function AccountPanel({ account, onboarding = false }: { account: Account
             const next = await invoke<AccountView>("account_sign_in", { email: email.trim(), code });
             account.change(next);
             setCode("");
+            // The box was ticked before Continue. A failed record leaves the plan step to ask again.
+            if (next.terms_accepted === false) account.change(await invoke<AccountView>("account_accept_terms"));
           }
         });
       }}>
@@ -147,6 +153,7 @@ export function AccountPanel({ account, onboarding = false }: { account: Account
           placeholder={open ? "Enter your email" : "Enter the email from your invitation"}
           disabled={busy || operations.install || codeSent} onChange={(e) => setEmail(e.target.value)}
           aria-describedby={problem ? `${id}-error` : undefined} />
+        {!codeSent && <TermsAgreement checked={agreed} disabled={busy || operations.install} onChange={setAgreed} />}
         {codeSent && <>
           <p>{open ? `We sent a six-digit code to ${email.trim()}.` : "If your email has an invitation, your code is on its way."}</p>
           <p className="account__caption">It expires in 15 minutes. Not there? Check your spam folder.</p>
@@ -156,7 +163,8 @@ export function AccountPanel({ account, onboarding = false }: { account: Account
             aria-invalid={Boolean(error)} aria-describedby={problem ? `${id}-error` : undefined} />
         </>}
         <div className="account__actions">
-          <button className="account__primary" type="submit" disabled={busy || operations.install}>{busy ? "Please wait…" : codeSent ? "Sign in" : "Continue"}</button>
+          <button className="account__primary" type="submit" disabled={busy || operations.install || (!codeSent && !agreed)}>
+            {busy ? "Please wait…" : codeSent ? "Sign in" : "Continue"}</button>
         </div>
         {codeSent && <div className="account__code-links">
           <button className="account__link" type="button" disabled={busy || operations.install} onClick={() => void act(async () => {
@@ -183,7 +191,8 @@ export function AccountPanel({ account, onboarding = false }: { account: Account
         <div className="account__group">
           {unpaid
             ? <p role="alert">Your payment didn't go through. Update your card in Manage subscription to get access back.</p>
-            : <PlanPicker trial={view.trial_available === true} busy={busy || operations.install} onPick={(plan) => billing("checkout", plan)} />}
+            : <PlanPicker trial={view.trial_available === true} terms={view.terms_accepted !== true} busy={busy || operations.install}
+              onPick={(plan) => billing("checkout", plan)} />}
         </div>
       </>}
       {opened && <p role="status">{back ? "If you finished, this updates in a few seconds. If not, you can try again."

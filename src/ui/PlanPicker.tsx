@@ -1,13 +1,17 @@
 import { useId, useState } from "react";
+import { TermsAgreement } from "./TermsAgreement";
 
 const PLANS = [
   { key: "starter", name: "Starter", price: "$8 a month", detail: "For a few sessions a week" },
   { key: "pro", name: "Pro", price: "$20 a month", detail: "Four times Starter's usage" },
 ] as const;
 
-export function PlanPicker({ trial, busy, onPick }: { trial: boolean; busy: boolean; onPick: (plan: "starter" | "pro") => void }) {
+/** `terms` asks for agreement to the Terms first, for an account that signed in before it was asked or since they changed. */
+export function PlanPicker({ trial, terms = false, busy, onPick }:
+  { trial: boolean; terms?: boolean; busy: boolean; onPick: (plan: "starter" | "pro") => void }) {
   const name = useId();
   const [plan, setPlan] = useState<"starter" | "pro">("starter");
+  const [agreed, setAgreed] = useState(false);
   return (
     <div className="plans">
       <fieldset className="plans__choice">
@@ -26,8 +30,9 @@ export function PlanPicker({ trial, busy, onPick }: { trial: boolean; busy: bool
         ? "You add a card now. Nothing is charged until the trial ends, and you can cancel before then. "
           + "The trial includes the same usage on either plan. Prices exclude tax where it applies."
         : "Your card is charged when you subscribe. Cancel any time. Prices exclude tax where it applies."}</p>
+      {terms && <TermsAgreement checked={agreed} disabled={busy} onChange={setAgreed} />}
       <div className="account__actions">
-        <button className="account__primary" disabled={busy} onClick={() => onPick(plan)}>
+        <button className="account__primary" disabled={busy || (terms && !agreed)} onClick={() => onPick(plan)}>
           {trial ? "Start 7-day free trial" : "Subscribe"}
         </button>
       </div>

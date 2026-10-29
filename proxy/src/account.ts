@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ApiError, CAPTURE_VERSION, DAY, Env, hash, json } from "./env";
+import { ApiError, CAPTURE_VERSION, DAY, Env, TERMS_VERSION, hash, json } from "./env";
 import { settleExpired } from "./ledger";
 import { RESERVATION } from "./policy";
 
@@ -25,7 +25,7 @@ export async function account(env: Env, id: string, modern = false): Promise<Res
   // The app polls this; settling expired calls here unblocks the producer without waiting for cron.
   try { await settleExpired(env, Date.now()); }
   catch { console.error(JSON.stringify({ event: "account_cleanup_failed", member_id: id })); }
-  const [m, user, budget, latestConsent, sub] = await Promise.all([
+  const [m, user, budget, latestConsent, sub, terms] = await Promise.all([
     member(env, id),
     env.DB.prepare('SELECT email FROM "user" WHERE id = ?').bind(id).first<{ email: string }>(),
     env.DB.prepare("SELECT paused, recovery_required, allowance, spent, reserved FROM budget")
@@ -34,6 +34,7 @@ export async function account(env: Env, id: string, modern = false): Promise<Res
       .bind(id).first<{ version: string; enabled: number }>(),
     env.DB.prepare("SELECT plan, status, cancel_at_period_end, trial_used FROM subscriptions WHERE member_id = ?")
       .bind(id).first<{ plan: string | null; status: string; cancel_at_period_end: number; trial_used: number }>(),
+    termsAccepted(env, id),
   ]);
   const budgetShort = !budget || budget.allowance - budget.spent - budget.reserved < RESERVATION;
   const servicePaused = env.INFERENCE_ENABLED !== "true" || !env.OPENROUTER_KEY || !budget || budgetShort
@@ -55,7 +56,19 @@ export async function account(env: Env, id: string, modern = false): Promise<Res
     plan: sub?.plan ?? null, subscription_status: sub && sub.status !== "none" ? sub.status : null,
     cancel_at_period_end: sub?.cancel_at_period_end === 1, comp: m?.comp === 1,
     trial_available: !m && sub?.trial_used !== 1, manage: Boolean(sub && sub.status !== "none"),
-    consent_version: CAPTURE_VERSION, training: false });
+    consent_version: CAPTURE_VERSION, terms_accepted: terms, training: false });
+}
+
+export async function termsAccepted(env: Env, id: string): Promise<boolean> {
+  return Boolean(await env.DB.prepare("SELECT 1 FROM terms_acceptances WHERE member_id = ? AND version = ? LIMIT 1")
+    .bind(id, TERMS_VERSION).first());
+}
+
+/** Records that this account agreed to the current Terms. The app sends it right after sign-in, or from the plan step. */
+export async function acceptTerms(env: Env, id: string, modern = false): Promise<Response> {
+  await env.DB.prepare("INSERT INTO terms_acceptances(member_id, version, accepted_at) VALUES (?, ?, ?)")
+    .bind(id, TERMS_VERSION, Date.now()).run();
+  return account(env, id, modern);
 }
 
 export async function redeem(env: Env, id: string, input: unknown, modern = false): Promise<Response> {

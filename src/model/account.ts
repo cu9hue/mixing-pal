@@ -21,6 +21,8 @@ export interface AccountView {
   comp?: boolean;
   trial_available?: boolean;
   manage?: boolean;
+  /** Whether this account agreed to the current Terms and Privacy Policy. */
+  terms_accepted?: boolean;
   /** Only on a signed-out view: whether anyone may sign up, or only invited emails. */
   signup?: "open" | "invite";
 }
