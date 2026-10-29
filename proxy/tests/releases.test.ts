@@ -50,6 +50,21 @@ test("unavailable downloads and invalid channels do not offer a release", async 
   expect((await get("/v1/updates/beta")).status).toBe(404);
 });
 
+// A visitor clicks Download on the website; a JSON error would be a dead end.
+test("an unavailable download shows a page a person can read, with a way back to the site", async () => {
+  await env.RELEASES.put("channels/stable.json", JSON.stringify({ paused: true, release }));
+  const download = await get("/v1/downloads/stable/macos");
+  expect(download.status).toBe(503);
+  expect(download.headers.get("content-type")).toContain("text/html");
+  const page = await download.text();
+  expect(page).toContain("This download isn't available right now.");
+  expect(page).toContain("Try again in a few minutes, or email hello@mixingpal.com.");
+  expect(page).toContain('href="https://mixingpal.com/"');
+  await env.RELEASES.put("channels/stable.json", " ".repeat(32769));
+  expect((await get("/v1/downloads/stable/macos")).headers.get("content-type")).toContain("text/html");
+  expect((await get("/v1/updates/stable")).headers.get("content-type")).toContain("application/json");
+});
+
 test("bad artifact paths and oversized manifests fail closed", async () => {
   await env.RELEASES.put("channels/stable.json", JSON.stringify({ paused: false, release: { ...release, installer: { ...release.installer, key: "https://evil.test/file.dmg" } } }));
   expect((await get("/v1/downloads/stable/macos")).status).toBe(503);

@@ -761,7 +761,7 @@ describe("the Stripe webhook", () => {
 test("the return page tells her to go back to the app", async () => {
   const done = await api("/billing/done");
   expect(done.headers.get("Content-Type")).toContain("text/html");
-  expect(await done.text()).toContain("Go back to Mixing Pal.");
+  expect(await done.text()).toContain("You can close this tab and go back to Mixing Pal.");
   expect(await (await api("/billing/done?state=canceled")).text()).toContain("Nothing was charged.");
 });
 

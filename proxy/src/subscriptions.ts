@@ -367,7 +367,7 @@ export function billingDone(url: URL): Response {
   const heading = DONE[url.searchParams.get("state") ?? ""] ?? "You're in.";
   return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Mixing Pal</title>
 <body style="font:16px system-ui;margin:20vh auto;max-width:28rem;padding:0 1rem;text-align:center">
-<h1 style="font-size:1.4rem">${heading}</h1><p>Go back to Mixing Pal.</p></body>`,
+<h1 style="font-size:1.4rem">${heading}</h1><p>You can close this tab and go back to Mixing Pal.</p></body>`,
     { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 }
 
