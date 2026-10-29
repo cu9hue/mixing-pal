@@ -176,6 +176,13 @@
   margin-top: var(--space-3);
 }
 
+/* Resend and change email are minor actions under the one Sign in button. */
+.account__code-links {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-4);
+}
+
 .account__error {
   color: var(--error-label);
   overflow-wrap: anywhere;

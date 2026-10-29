@@ -11,7 +11,7 @@ export function PlanPicker({ trial, busy, onPick }: { trial: boolean; busy: bool
   return (
     <div className="plans">
       <fieldset className="plans__choice">
-        <legend>{trial ? "Pick a plan. Both start with a 7-day free trial. Cancel before it ends and you pay nothing." : "Pick a plan to continue."}</legend>
+        <legend>{trial ? "Pick a plan. Both start with a 7-day free trial." : "Pick a plan. It starts today."}</legend>
         {PLANS.map((p) => (
           <label className="plans__row" key={p.key}>
             <input type="radio" name={name} value={p.key} checked={plan === p.key} onChange={() => setPlan(p.key)} />
@@ -21,6 +21,11 @@ export function PlanPicker({ trial, busy, onPick }: { trial: boolean; busy: bool
           </label>
         ))}
       </fieldset>
+      {/* Checkout asks for a card next; saying so here keeps "free" from reading as a trick. */}
+      <p className="account__caption">{trial
+        ? "You add a card now. Nothing is charged until the trial ends, and you can cancel before then. "
+          + "The trial includes the same usage on either plan. Prices exclude tax where it applies."
+        : "Your card is charged when you subscribe. Cancel any time. Prices exclude tax where it applies."}</p>
       <div className="account__actions">
         <button className="account__primary" disabled={busy} onClick={() => onPick(plan)}>
           {trial ? "Start 7-day free trial" : "Subscribe"}

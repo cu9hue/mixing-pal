@@ -96,6 +96,7 @@ export function Card({
       <div className={`card__conversation${connected ? "" : " card__conversation--hidden"}`}>
         <Conversation
           account={account}
+          onOpenSettings={onOpenSettings}
           onReport={openReport}
           connected={connected}
           state={state}

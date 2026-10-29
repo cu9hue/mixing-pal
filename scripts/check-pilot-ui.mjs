@@ -271,10 +271,10 @@ await page.screenshot({path:`${artifacts}/sign-in.png`});
 await page.getByLabel('Email',{exact:true}).fill('invited@example.com');
 await page.getByRole('button',{name:'Continue',exact:true}).click();
 const signInButton=page.getByRole('button',{name:'Sign in',exact:true});
-const resendButton=page.getByRole('button',{name:'Use another email or resend',exact:true});
-const [signInBox,resendBox]=await Promise.all([signInButton.boundingBox(),resendButton.boundingBox()]);
-assert.ok(signInBox&&resendBox,'sign-in actions should be visible');
-assert.equal(Math.round(signInBox.width),Math.round(resendBox.width),'sign-in actions should share a width');
+const [signInBox,resendBox,otherBox]=await Promise.all([signInButton.boundingBox(),
+  page.getByRole('button',{name:'Resend code',exact:true}).boundingBox(),page.getByRole('button',{name:'Use another email',exact:true}).boundingBox()]);
+assert.ok(signInBox&&resendBox&&otherBox,'sign-in actions should be visible');
+assert.ok(resendBox.y>signInBox.y+signInBox.height-1&&Math.abs(resendBox.y-otherBox.y)<2,'resend and change email sit side by side under Sign in');
 await page.screenshot({path:`${artifacts}/sign-in-code.png`});
 await page.getByLabel('Six-digit sign-in code').fill('123456');
 await page.getByRole('button',{name:'Sign in',exact:true}).click();
@@ -403,16 +403,18 @@ await setup.getByLabel('Six-digit sign-in code').fill('123456');
 await setup.getByRole('button',{name:'Sign in',exact:true}).click();
 await setup.getByLabel('Invitation code').fill('example-invite-code');
 await setup.getByRole('button',{name:'Join the free pilot'}).click();
-await setup.getByText('Step 2 of 4',{exact:true}).waitFor();
-await page.screenshot({path:`${artifacts}/fresh-sharing.png`});
-await setup.getByRole('button',{name:/^Don't share/}).click();
-assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_consent').at(-1).args.enabled),false);
 await setup.getByText('How do you work in Live?',{exact:true}).waitFor();
+await setup.getByText('Step 3 of 4',{exact:true}).waitFor();
 await page.screenshot({path:`${artifacts}/fresh-experience.png`});
-// Choosing in Settings must end the setup step too: both read App's state.
+// Choosing in Settings must move setup on too: both read App's state.
 await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.getByLabel('New to Live').check();
 await page.getByRole('button',{name:'Done',exact:true}).click();
+// Sharing comes last: consent is stored on the member, which exists once there is access.
+await setup.getByText('Step 4 of 4',{exact:true}).waitFor();
+await page.screenshot({path:`${artifacts}/fresh-sharing.png`});
+await setup.getByRole('button',{name:/^Don't share/}).click();
+assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_consent').at(-1).args.enabled),false);
 await page.locator('.card__main').waitFor({state:'visible'});
 assert.equal(await page.evaluate(()=>window.experience),'new_to_live','setup saves the chosen level');
 assert.equal(await page.locator('.setup').count(),0,'install setup ends before the set goal');
@@ -426,7 +428,7 @@ await page.goto('http://127.0.0.1:1423?access='+access);
 const ended=access==='revoked'?'Your access was revoked. Contact Mixing Pal.':'Your pilot access has ended. Contact Mixing Pal to continue.';
 // A revoked member sees the account panel on the card; an expired pilot keeps chat.
 if(access==='revoked')await page.locator('.card__account').getByText(ended).waitFor();
-else await page.getByText('Check your account access in Settings.').waitFor();
+else await page.getByText('Check your account access.').waitFor();
 await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.locator('.card__settings').getByText(ended).waitFor();
 const sharing=page.locator('.card__settings').getByLabel('Share advice and outcomes to help improve Mixing Pal');
@@ -442,7 +444,7 @@ await page.clock.install();
 for(const state of ['held','paused']) {
 await page.goto('http://127.0.0.1:1423?'+state);
 await page.getByLabel('Ask about the set',{exact:true}).waitFor();
-await page.getByText(state==='held'?'Checking the last request’s usage. Please wait.':'Model access is temporarily paused.').waitFor();
+await page.getByText(state==='held'?'Checking the last request’s usage. Please wait.':'Model access is paused on our side. Try again later.').waitFor();
 assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),false);
 await page.evaluate(()=>{window.account={...window.account,can_ask:true,reserved_micro_usd:0,service_paused:false};window.requests=[];});
 await page.clock.fastForward(31000);

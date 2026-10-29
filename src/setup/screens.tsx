@@ -40,7 +40,7 @@ export function InstallScreen({
 
   return (
     <>
-      <div className="setup__label">Step 3 of 4</div>
+      <div className="setup__label">Step 2 of 4</div>
       <h1 className="setup__title">Add Mixing Pal to Live.</h1>
       <p className="setup__body">
         It's a small connector that goes in your Ableton User Library. Nothing else on
@@ -68,7 +68,7 @@ export function InstallScreen({
 export function OpenLiveScreen() {
   return (
     <>
-      <div className="setup__label">Step 3 of 4</div>
+      <div className="setup__label">Step 2 of 4</div>
       <h1 className="setup__title">Now open Ableton Live.</h1>
       <p className="setup__body">
         Live only looks for new connectors when it starts. If Live is open, quit it
@@ -85,7 +85,7 @@ export function OpenLiveScreen() {
 export function ControlSurfaceScreen({ folder }: { folder: string }) {
   return (
     <>
-      <div className="setup__label">Step 3 of 4</div>
+      <div className="setup__label">Step 2 of 4</div>
       <h1 className="setup__title">Turn it on in Live.</h1>
       <p className="setup__body">
         Open Live's <b>Settings → Link, Tempo &amp; MIDI</b> (called{" "}
@@ -123,7 +123,7 @@ export function ConnectedScreen({
   const named = trackNames.filter((n) => n.trim() !== "").slice(0, 4);
   return (
     <>
-      <div className="setup__label">Step 4 of 4</div>
+      <div className="setup__label">Step 3 of 4</div>
       <h1 className="setup__title">
         <span className="setup__ok-dot" />
         Connected.
@@ -184,7 +184,7 @@ export function SharingScreen({ account }: { account: AccountState }) {
 
   return (
     <>
-      <div className="setup__label">Step 2 of 4</div>
+      <div className="setup__label">Step 4 of 4</div>
       <h1 className="setup__title">Help make my advice better?</h1>
       <p className="setup__body">
         If you share, a person on our team reads your questions, what I read in your set, my

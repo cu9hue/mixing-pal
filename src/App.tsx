@@ -110,7 +110,8 @@ export default function App() {
     connectorCopied: wireCopied,
     liveRunning,
     deltasArriving: wireReady(connected, state.scriptVersion, wireVersion.version),
-    hasAccount: account.view?.access === "active" || account.view?.access === "development",
+    hasAccount: account.view != null && !["signed_out", "invitation_required"].includes(account.view.access),
+    hasAccess: account.view?.access === "active" || account.view?.access === "development",
     sharingChosen: account.view?.access === "development" || account.view?.sharing_chosen === true,
     experienceChosen: experience.experience != null,
   };

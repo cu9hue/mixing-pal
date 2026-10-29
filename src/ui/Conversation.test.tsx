@@ -39,11 +39,28 @@ it("keeps the chat visible during a pause and enables its draft when service res
   await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
   const input = screen.getByLabelText("Ask about the set") as HTMLInputElement;
   expect(input.disabled).toBe(true);
-  expect(screen.getByRole("status").textContent).toBe("Model access is temporarily paused.");
+  expect(screen.getByRole("status").textContent).toBe("Model access is paused on our side. Try again later.");
+  expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
   current = { ...current, view: { ...current.view!, can_ask: true, service_paused: false } };
   mounted.rerender(conversation());
   expect(input.disabled).toBe(false);
-  expect(screen.queryByText("Model access is temporarily paused.")).toBeNull();
+  expect(screen.queryByText("Model access is paused on our side. Try again later.")).toBeNull();
+});
+
+it.each([
+  [{ subscription_status: "trialing", plan: "starter" }, "Your trial usage is used up."],
+  [{ subscription_status: "active", plan: "starter" }, "This month's usage is used up."],
+  [{}, "Your pilot usage is used up."],
+] as const)("when usage runs out, says so and opens Settings from the line itself", async (sub, line) => {
+  vi.mocked(invoke).mockResolvedValue({ exchanges: [], goal: "finish this track", saved_at: 1, next_bullet: 1, note: [] });
+  const onOpenSettings = vi.fn();
+  const used: AccountState = { ...account, view: { access: "active", capture: false, can_ask: false, remaining_micro_usd: 100, ...sub } };
+  render(<Conversation state={{ ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version }}
+    connected account={used} onTurnRunningChange={() => {}} onAnswer={() => {}} onOpenSettings={onOpenSettings} />);
+  await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+  expect(screen.getByRole("status").textContent).toBe(`${line} Open Settings`);
+  fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+  expect(onOpenSettings).toHaveBeenCalledTimes(1);
 });
 
 it.each([

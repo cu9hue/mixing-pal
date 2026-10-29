@@ -35,12 +35,14 @@ function dateWord(view: AccountView): string {
   return view.cancel_at_period_end ? "ends" : "resets";
 }
 
-export function AccountPanel({ account }: { account: AccountState }) {
+/** `onboarding` is first-run setup, where deleting the account is not a step; Settings keeps it. */
+export function AccountPanel({ account, onboarding = false }: { account: AccountState; onboarding?: boolean }) {
   const id = useId();
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [invite, setInvite] = useState("");
   const [codeSent, setCodeSent] = useState(false);
+  const [resent, setResent] = useState(false);
   const operations = useBusyState();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +57,8 @@ export function AccountPanel({ account }: { account: AccountState }) {
   }, [deleting]);
   const [sharedDeleted, setSharedDeleted] = useState(false);
   const [opened, setOpened] = useState(false);
+  // Back from the browser with nothing changed yet: she finished and Stripe is still telling us, or she gave up.
+  const [back, setBack] = useState(false);
   // Each trip to the browser restarts the polling window.
   const [trip, setTrip] = useState(0);
   const view = account.view;
@@ -74,14 +78,23 @@ export function AccountPanel({ account }: { account: AccountState }) {
     const stop = setTimeout(() => setOpened(false), 120_000);
     return () => { clearInterval(poll); clearTimeout(stop); };
   }, [opened, trip, account.refresh]);
+  useEffect(() => {
+    if (!opened) return;
+    const onFocus = () => setBack(true);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [opened, trip]);
   const problem = error ?? account.error;
   // A member who ran out gets one way to more allowance, unless the service is paused or still checking usage.
   const wayUp = view?.access !== "active" || view.can_ask !== false || view.service_paused || (view.reserved_micro_usd ?? 0) > 0 ? null
     : view.subscription_status === "trialing" ? "start-now"
     : view.subscription_status === "active" && view.plan === "starter" ? "upgrade" : null;
+  // Stripe still holds this subscription: they fix the card in the Portal. A new plan would be a second one.
+  const unpaid = view?.subscription_status === "past_due" || view?.subscription_status === "unpaid";
   const signingIn = view === null || view.access === "signed_out" || view.access === "invitation_required";
-  // With billing on anyone may sign up; otherwise only an invited email can.
-  const open = view?.signup === "open";
+  // With billing on anyone may sign up; otherwise only an invited email can. A failed read of which
+  // it is reads as open: an invited user can still sign in, and a public one is not told to find an invite.
+  const open = view?.signup !== "invite";
 
   async function act(action: () => Promise<void>) {
     if (!beginMutation(operations, "accountMutation")) return;
@@ -97,6 +110,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
       if (!("opened" in reply)) { account.change(reply); return; }
       // Start-now and upgrade change the account before the invoice page opens. Read it first, so the note starts from that view.
       if (action === "start-now" || action === "upgrade") await account.refresh();
+      setBack(false);
       setOpened(true);
       setTrip((n) => n + 1);
     });
@@ -105,7 +119,8 @@ export function AccountPanel({ account }: { account: AccountState }) {
   if (view?.access === "development") return null;
   return (
     <section className={`account${signingIn ? " account--sign-in" : ""}`} aria-labelledby={`${id}-title`} data-tauri-drag-region="false">
-      <h2 id={`${id}-title`} className="account__title">{signingIn ? "A mentor for the track you're writing." : "Account"}</h2>
+      <h2 id={`${id}-title`} className="account__title">{signingIn ? "A mentor for the track you're writing."
+        : view?.access === "plan_required" && !unpaid ? "Choose your plan" : "Account"}</h2>
       {view?.access === "revoked" && <div className="account__group"><p>Your access was revoked. Contact Mixing Pal.</p></div>}
       {signingIn && <p className="account__subtitle">{open ? "Sign in with your email." : "Sign in with the email your invite came to."}</p>}
       {problem && <p id={`${id}-error`} className="account__error" role="alert">{problem}</p>}
@@ -119,6 +134,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
           if (!codeSent) {
             await invoke("account_send_code", { email: email.trim() });
             setCodeSent(true);
+            setResent(false);
           } else {
             const next = await invoke<AccountView>("account_sign_in", { email: email.trim(), code });
             account.change(next);
@@ -132,7 +148,8 @@ export function AccountPanel({ account }: { account: AccountState }) {
           disabled={busy || operations.install || codeSent} onChange={(e) => setEmail(e.target.value)}
           aria-describedby={problem ? `${id}-error` : undefined} />
         {codeSent && <>
-          <p>{open ? "If this email can sign in, your code is on its way." : "If your email has an invitation, your code is on its way."}</p>
+          <p>{open ? `We sent a six-digit code to ${email.trim()}.` : "If your email has an invitation, your code is on its way."}</p>
+          <p className="account__caption">It expires in 15 minutes. Not there? Check your spam folder.</p>
           <label htmlFor={`${id}-code`}>Six-digit sign-in code</label>
           <input id={`${id}-code`} autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}"
             maxLength={6} required value={code} autoFocus disabled={busy || operations.install} onChange={(e) => setCode(e.target.value)}
@@ -140,8 +157,16 @@ export function AccountPanel({ account }: { account: AccountState }) {
         </>}
         <div className="account__actions">
           <button className="account__primary" type="submit" disabled={busy || operations.install}>{busy ? "Please wait…" : codeSent ? "Sign in" : "Continue"}</button>
-          {codeSent && <button className="account__secondary" type="button" disabled={busy || operations.install} onClick={() => { setCodeSent(false); setCode(""); }}>Use another email or resend</button>}
         </div>
+        {codeSent && <div className="account__code-links">
+          <button className="account__link" type="button" disabled={busy || operations.install} onClick={() => void act(async () => {
+            await invoke("account_send_code", { email: email.trim() });
+            setResent(true);
+          })}>Resend code</button>
+          <button className="account__link" type="button" disabled={busy || operations.install}
+            onClick={() => { setCodeSent(false); setCode(""); setResent(false); }}>Use another email</button>
+        </div>}
+        {resent && <p role="status">Sent again.</p>}
       </form>}
       {view?.access === "invitation_required" && <form onSubmit={(e) => {
         e.preventDefault();
@@ -156,13 +181,13 @@ export function AccountPanel({ account }: { account: AccountState }) {
       {view?.access === "plan_required" && <>
         <div className="account__group"><p>Signed in as {view.email}.</p></div>
         <div className="account__group">
-          {/* Stripe still holds this subscription: they fix the card in the Portal. A new plan would be a second one. */}
-          {view.subscription_status === "past_due" || view.subscription_status === "unpaid"
+          {unpaid
             ? <p role="alert">Your payment didn't go through. Update your card in Manage subscription to get access back.</p>
             : <PlanPicker trial={view.trial_available === true} busy={busy || operations.install} onPick={(plan) => billing("checkout", plan)} />}
         </div>
       </>}
-      {opened && <p role="status">Finish in your browser. This window updates when you come back.</p>}
+      {opened && <p role="status">{back ? "If you finished, this updates in a few seconds. If not, you can try again."
+        : "Finish in your browser. This window updates when you come back."}</p>}
       {view?.access === "active" && <>
         <div className="account__group">
           <div className="account__summary">
@@ -177,7 +202,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
               </div>
             </div>}
             {(view.reserved_micro_usd ?? 0) > 0 && <div>Some allowance is held for requests being checked.</div>}
-            {view.can_ask === false && <div>{view.service_paused ? "Model access is temporarily paused." : (view.reserved_micro_usd ?? 0) > 0
+            {view.can_ask === false && <div>{view.service_paused ? "Model access is paused on our side. Try again later." : (view.reserved_micro_usd ?? 0) > 0
               ? "We’re checking the last request’s usage before you can ask again."
               : "The remaining allowance cannot cover another request."}</div>}
           </div>
@@ -230,7 +255,7 @@ export function AccountPanel({ account }: { account: AccountState }) {
           <button className="account__link" disabled={busy || operations.install} onClick={() => void act(async () => {
             await invoke("account_sign_out"); account.change({ access: "signed_out", capture: false }); void account.refresh(); setCodeSent(false);
           })}>Sign out</button>
-          <button className="account__link" disabled={busy || operations.install} onClick={() => setDeleting(true)}>Delete account…</button>
+          {!onboarding && <button className="account__link" disabled={busy || operations.install} onClick={() => setDeleting(true)}>Delete account…</button>}
         </div>
         {deleting && <div>
           <p>Delete your account? This can't be undone. Your access ends, and any subscription is canceled with no refund. Everything you shared is deleted. Your set notes stay on this laptop.</p>

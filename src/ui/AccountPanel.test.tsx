@@ -49,11 +49,12 @@ it("Sign out and Delete account… are quiet links beside the one Manage subscri
 
 const signedOut = (signup?: "open" | "invite"): AccountState =>
   ({ ...account, view: { access: "signed_out", capture: false, ...(signup ? { signup } : {}) } });
-const OPEN = ["Sign in with your email.", "Enter your email", "If this email can sign in, your code is on its way."];
+const OPEN = ["Sign in with your email.", "Enter your email", "We sent a six-digit code to producer@example.com."];
 const INVITE = ["Sign in with the email your invite came to.", "Enter the email from your invitation",
   "If your email has an invitation, your code is on its way."];
 
-it.each([["open", OPEN], ["invite", INVITE], [undefined, INVITE]] as const)("words sign-in for %s sign-up", async (signup, [subtitle, placeholder, sent]) => {
+// A failed read of how sign-up works must not tell a public user they need an invitation.
+it.each([["open", OPEN], ["invite", INVITE], [undefined, OPEN]] as const)("words sign-in for %s sign-up", async (signup, [subtitle, placeholder, sent]) => {
   vi.mocked(invoke).mockResolvedValue(null);
   render(<AccountPanel account={signedOut(signup)} />);
   expect(screen.getByText(subtitle)).toBeTruthy();
@@ -62,6 +63,63 @@ it.each([["open", OPEN], ["invite", INVITE], [undefined, INVITE]] as const)("wor
   fireEvent.change(email, { target: { value: "producer@example.com" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(await screen.findByText(sent)).toBeTruthy();
+});
+
+it("says when the code expires and where else to look, and resends without clearing the form", async () => {
+  vi.mocked(invoke).mockReset().mockResolvedValue(null);
+  render(<AccountPanel account={signedOut("open")} />);
+  fireEvent.change(screen.getByLabelText("Email"), { target: { value: "producer@example.com" } });
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(await screen.findByText("It expires in 15 minutes. Not there? Check your spam folder.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Resend code" }));
+  expect(await screen.findByText("Sent again.")).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "account_send_code"))
+    .toEqual([["account_send_code", { email: "producer@example.com" }], ["account_send_code", { email: "producer@example.com" }]]);
+  expect(screen.getByLabelText("Six-digit sign-in code")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Use another email" }));
+  expect((screen.getByLabelText("Email") as HTMLInputElement).disabled).toBe(false);
+  expect(screen.queryByLabelText("Six-digit sign-in code")).toBeNull();
+});
+
+it("titles the plan step as a choice and keeps account deletion out of first-run setup", () => {
+  const { rerender } = render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} onboarding />);
+  expect(screen.getByRole("heading", { name: "Choose your plan" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Delete account…" })).toBeNull();
+  rerender(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} />);
+  expect(screen.getByRole("button", { name: "Delete account…" })).toBeTruthy();
+  rerender(<AccountPanel account={signedIn({ subscription_status: "active", plan: "starter", remaining_micro_usd: 1_000_000 })} />);
+  expect(screen.getByRole("heading", { name: "Account" })).toBeTruthy();
+});
+
+it("says up front that the trial takes a card, charges nothing until it ends, and gives the same usage on either plan", () => {
+  render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} />);
+  expect(screen.getByRole("group", { name: "Pick a plan. Both start with a 7-day free trial." })).toBeTruthy();
+  expect(screen.getByText("You add a card now. Nothing is charged until the trial ends, and you can cancel before then. "
+    + "The trial includes the same usage on either plan. Prices exclude tax where it applies.")).toBeTruthy();
+});
+
+it("tells a member with no trial left that the plan starts today", () => {
+  render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: false })} />);
+  expect(screen.getByRole("group", { name: "Pick a plan. It starts today." })).toBeTruthy();
+  expect(screen.getByText("Your card is charged when you subscribe. Cancel any time. Prices exclude tax where it applies.")).toBeTruthy();
+});
+
+it("once she is back from the browser with nothing changed, the note says what to do either way", async () => {
+  vi.mocked(invoke).mockResolvedValue({ opened: true });
+  render(<AccountPanel account={signedIn({ access: "plan_required", trial_available: true })} />);
+  fireEvent.click(screen.getByRole("button", { name: "Start 7-day free trial" }));
+  expect(await screen.findByText(/Finish in your browser/)).toBeTruthy();
+  fireEvent.focus(window);
+  expect(await screen.findByText("If you finished, this updates in a few seconds. If not, you can try again.")).toBeTruthy();
+  expect(screen.queryByText(/Finish in your browser/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Start 7-day free trial" }));
+  expect(await screen.findByText(/Finish in your browser/)).toBeTruthy();
+});
+
+it("says a pause is on our side", () => {
+  render(<AccountPanel account={signedIn({ can_ask: false, service_paused: true, remaining_micro_usd: 1_000_000, allowance_micro_usd: 2_000_000 })} />);
+  expect(screen.getByText("Model access is paused on our side. Try again later.")).toBeTruthy();
 });
 
 it("offers both plans as one choice with Starter picked, and opens Checkout for the one the member picks", async () => {

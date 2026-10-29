@@ -67,10 +67,10 @@ The existing CSS variables remain the source of truth. This React app does not u
 
 ## Interaction rules
 
-- The only entry sequence is sign in, connect Ableton, optionally name the Live set's goal in the card, then chat. One action starts chatting with or without a goal; each set keeps that choice with its conversation.
+- The only entry sequence is sign in, connect Ableton, choose a plan, answer the sharing question, optionally name the Live set's goal in the card, then chat. The plan comes after the connected screen, so a new user sees the app read their set before Checkout asks for a card. One action starts chatting with or without a goal; each set keeps that choice with its conversation.
 - Signed-out views omit Live status, chat, goals, notes, and data summaries.
-- Sign-in centers “A mentor for the track you're writing.” above “Sign in with the email your invite came to.” Its field label stays left aligned. The exact invitation-email placeholder remains in the field. `--accent` provides the acid-green action and focus ring.
-- With billing on, the sign-in subtitle reads “Sign in with your email.” and the placeholder “Enter your email”.
+- Sign-in centers “A mentor for the track you're writing.” above “Sign in with your email.” Its field label stays left aligned, and the placeholder reads “Enter your email”. `--accent` provides the acid-green action and focus ring.
+- Only when the proxy reports invite-only sign-up does the subtitle read “Sign in with the email your invite came to.”, with the invitation-email placeholder. A failed read keeps the open wording.
 - Prompt ideas are 44px minimum-height buttons. They fill the composer but never send a request.
 - An answer's feedback stays out of the way: nothing sits under a fresh answer, a rated one gets one muted result line, and a ⋯ menu right after each question holds “Change how it went” and “Report a problem”. Reporting is never only in a menu: the footer's one line always reads “AI can make mistakes. Report a problem”, which reports the newest answer when there is one, and a failed answer shows “Report this” right under it. The check-in “How did the last move go?” appears flat in the footer above the composer only when she comes back, never as a card, and never blocks the composer.
 - After a break of 3 hours or more, a set reopens on a flat “Last time” recap: her last question, the newest three rated moves with what she heard, and the newest two decided notes. It stands in for the earlier answers, which unfold from “Show N earlier answers”. It never repeats the move the check-in asks about. × hides it until the next break. A shorter break shows the full thread.

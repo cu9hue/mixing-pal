@@ -4,6 +4,7 @@ export type SetupStep =
   | "control_surface"
   | "connected"
   | "account"
+  | "plan"
   | "sharing"
   | "done";
 
@@ -13,7 +14,10 @@ export interface SetupFacts {
   connectorCopied?: boolean;
   liveRunning: boolean;
   deltasArriving: boolean;
+  /** Signed in, with or without a plan. */
   hasAccount: boolean;
+  /** A plan, a trial, or pilot access. */
+  hasAccess: boolean;
   /** Whether she answered the current sharing question, either way. */
   sharingChosen: boolean;
   /** False while Rust has not answered, so the question shows rather than
@@ -36,7 +40,6 @@ export interface SetupFacts {
 export function currentStep(facts: SetupFacts): SetupStep {
   // Sign-in comes first because it does not depend on Live.
   if (!facts.hasAccount) return "account";
-  if (!facts.sharingChosen) return "sharing";
 
   if (facts.connectorCopied && (!facts.connectorCurrent || !facts.deltasArriving)) return "open_live";
   if (!facts.connectorInstalled || !facts.connectorCurrent) return "install";
@@ -49,8 +52,13 @@ export function currentStep(facts: SetupFacts): SetupStep {
   }
 
   // The connected screen asks how she works. A level, chosen there or in
-  // Settings, finishes setup.
+  // Settings, moves her on.
   if (!facts.experienceChosen) return "connected";
+  // The plan comes after the app has shown it can read her set. Sharing
+  // comes after the plan: consent is stored on the member, and a member
+  // exists only once there is access.
+  if (!facts.hasAccess) return "plan";
+  if (!facts.sharingChosen) return "sharing";
   return "done";
 }
 
