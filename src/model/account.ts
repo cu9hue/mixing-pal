@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface AccountView {
-  access: "signed_out" | "invitation_required" | "active" | "expired" | "revoked" | "development";
+  access: "signed_out" | "invitation_required" | "plan_required" | "active" | "expired" | "revoked" | "development";
   id?: string;
   email?: string;
   remaining_micro_usd?: number;
+  allowance_micro_usd?: number;
   can_ask?: boolean;
   reserved_micro_usd?: number;
   service_paused?: boolean;
@@ -14,6 +15,16 @@ export interface AccountView {
   consent_epoch?: number;
   sharing_chosen?: boolean;
   consent_version?: string;
+  plan?: "starter" | "pro" | null;
+  subscription_status?: string | null;
+  cancel_at_period_end?: boolean;
+  comp?: boolean;
+  trial_available?: boolean;
+  manage?: boolean;
+  /** Whether this account agreed to the current Terms and Privacy Policy. */
+  terms_accepted?: boolean;
+  /** Only on a signed-out view: whether anyone may sign up, or only invited emails. */
+  signup?: "open" | "invite";
 }
 
 export function errorMessage(error: unknown): string {
@@ -47,6 +58,14 @@ export function useAccount() {
   }, [observe]);
   const change = useCallback((next: AccountView) => { generation.current++; setView(next); setError(null); }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+  // Checkout and the Portal finish in the browser; coming back to the app is the signal to look again.
+  const signedIn = view !== null && view.access !== "signed_out" && view.access !== "development";
+  useEffect(() => {
+    if (!signedIn) return;
+    const onFocus = () => { void refresh(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [signedIn, refresh]);
   const waiting = view?.access === "active" && ((view.reserved_micro_usd ?? 0) > 0 || view.service_paused);
   useEffect(() => {
     if (!waiting) return;

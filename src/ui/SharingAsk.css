@@ -1,0 +1,8 @@
+/* Flat in the footer where the check-in was, with the same spacing: no card inside the card. */
+.sharing-ask {
+  margin: 0 0 var(--space-2-5);
+}
+
+.sharing-ask__body {
+  margin: 0 0 var(--space-2);
+}

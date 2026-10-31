@@ -46,17 +46,75 @@
   margin: var(--space-2) 0;
 }
 
+/* The panel's blocks: status, the action, sharing, account actions. Each
+   block holds its children's margins, so blocks sit exactly --space-4 apart. */
+.account__group {
+  display: flow-root;
+}
+
+.account__group > :first-child {
+  margin-top: 0;
+}
+
+.account__group > :last-child {
+  margin-bottom: 0;
+}
+
+.account__group ~ .account__group {
+  margin-top: var(--space-4);
+}
+
 .account__summary {
   display: grid;
   gap: var(--space-1);
   color: var(--text-secondary);
 }
 
-.account__email {
+.account__plan {
   color: var(--text);
+  font-weight: 600;
 }
 
-.account input:not([type="checkbox"]) {
+.account__email {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.account__usage {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.account__usage-line {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* Neutral, not a status colour: the bar reports, it does not warn. */
+.account__meter {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  box-shadow: inset 0 0 0 1px var(--border);
+  overflow: hidden;
+}
+
+.account__meter-fill {
+  height: 100%;
+  background: var(--text-muted);
+}
+
+.account .account__caption {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.account input:not([type="checkbox"], [type="radio"]) {
   display: block;
   box-sizing: border-box;
   width: 100%;
@@ -108,6 +166,7 @@
 .account__actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
@@ -115,6 +174,13 @@
 .account__sign-in-form .account__actions {
   display: block;
   margin-top: var(--space-3);
+}
+
+/* Resend and change email are minor actions under the one Sign in button. */
+.account__code-links {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-4);
 }
 
 .account__error {
@@ -153,6 +219,11 @@
   border-bottom: none;
 }
 
+/* The card's last row needs room from the window edge. */
+.card__account--solo .account {
+  padding-bottom: var(--space-5);
+}
+
 /* Settings keeps account content aligned with its section, not nested in a panel. */
 .advanced__body > .account {
   padding: 0 0 var(--space-5);
@@ -184,3 +255,76 @@
   margin-top: var(--space-2);
 }
 
+.account .account__actions .account__link {
+  margin-top: 0;
+}
+
+/* Two links side by side need more air than the row's gap, or they read as one phrase. */
+.account .account__actions .account__link + .account__link {
+  margin-left: var(--space-2);
+}
+
+/* One flat choice on the account surface: rows split by a rule, not cards. */
+.plans__choice {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.plans__choice legend {
+  margin-bottom: var(--space-3);
+  padding: 0;
+}
+
+.plans .account__actions {
+  margin-top: var(--space-3);
+}
+
+.plans__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  min-height: var(--touch-target);
+  padding: var(--space-2) var(--space-1);
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.plans__row:last-of-type {
+  border-bottom: 1px solid var(--border);
+}
+
+.plans__row input {
+  grid-row: span 2;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.plans__name,
+.plans__price {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.plans__detail {
+  grid-column: 2 / -1;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* The agreement box, with its two links inline in the sentence. */
+.account .account__terms {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target);
+  margin-top: var(--space-3);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.account .account__terms input { accent-color: var(--accent); margin: 0; }
+.account .account__terms .account__link { margin-top: 0; font: inherit; }
+.account .report__hint .account__link { margin-top: 0; font: inherit; }

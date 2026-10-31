@@ -5,13 +5,14 @@ import { SetupStep } from "./step";
 import { AccountState } from "../model/account";
 import { ExperienceState } from "../model/experience";
 
-const account = (access: "signed_out" | "invitation_required" | "active"): AccountState => ({
-  view: { access, capture: false, email: "producer@example.com" },
+type Access = "signed_out" | "invitation_required" | "plan_required" | "active";
+const account = (access: Access): AccountState => ({
+  view: { access, capture: false, email: "producer@example.com", trial_available: true },
   error: null, refresh: async () => {}, change: () => {}, observe: () => () => {},
 });
 const experience: ExperienceState = { experience: null, error: null, choose: async () => {} };
 
-function render(step: SetupStep, opts: { access?: "signed_out" | "invitation_required" | "active"; experience?: ExperienceState } = {}) {
+function render(step: SetupStep, opts: { access?: Access; experience?: ExperienceState } = {}) {
   return renderToStaticMarkup(
     <Setup account={account(opts.access ?? "active")} experience={opts.experience ?? experience} step={step}
       folder="MixingPal" trackCount={3} trackNames={["Pad", "Drums", "Vox"]} onFactsChanged={() => {}} />,
@@ -20,10 +21,19 @@ function render(step: SetupStep, opts: { access?: "signed_out" | "invitation_req
 
 describe("setup", () => {
   it.each([
-    ["account", "Step 1 of 4"], ["sharing", "Step 2 of 4"], ["install", "Step 3 of 4"],
-    ["open_live", "Step 3 of 4"], ["control_surface", "Step 3 of 4"], ["connected", "Step 4 of 4"],
+    ["account", "Step 1 of 4"], ["install", "Step 2 of 4"], ["open_live", "Step 2 of 4"],
+    ["control_surface", "Step 2 of 4"], ["connected", "Step 3 of 4"], ["plan", "Step 4 of 4"],
   ] as const)("labels %s as %s", (step, label) => {
-    expect(render(step, { access: step === "account" ? "signed_out" : "active" })).toContain(`>${label}</div>`);
+    const access = step === "account" ? "signed_out" : step === "plan" ? "plan_required" : "active";
+    expect(render(step, { access })).toContain(`>${label}</div>`);
+  });
+
+  it("shows the plan choice with no way to delete the account from first-run setup", () => {
+    const html = render("plan", { access: "plan_required" });
+    expect(html).toContain("Choose your plan");
+    expect(html).toContain("Start 7-day free trial");
+    expect(html).toContain("Sign out");
+    expect(html).not.toContain("Delete account");
   });
 
   it("counts the invite code as part of step 1", () => {
@@ -31,7 +41,7 @@ describe("setup", () => {
   });
 
   it("draws four ticks", () => {
-    expect(render("sharing").match(/class="setup__tick/g)).toHaveLength(4);
+    expect(render("plan", { access: "plan_required" }).match(/class="setup__tick/g)).toHaveLength(4);
   });
 
   it("asks how the producer works on the connected screen, with no separate Got it", () => {
@@ -51,9 +61,8 @@ describe("setup", () => {
 
   it("uses the new copy on every screen it changed", () => {
     expect(render("account", { access: "signed_out" })).toContain("A mentor for the track you&#x27;re writing.");
-    expect(render("account", { access: "signed_out" })).toContain("Sign in with the email your invite came to.");
+    expect(render("account", { access: "signed_out" })).toContain("Sign in with your email.");
     expect(render("account", { access: "invitation_required" })).toContain("Enter the invite code from your email.");
-    expect(render("sharing")).toContain("Help make my advice better?");
     expect(render("install")).toContain("Add Mixing Pal to Live.");
     expect(render("install")).toContain(">Install the connector</button>");
     expect(render("control_surface")).toContain("Waiting for Live to connect…");

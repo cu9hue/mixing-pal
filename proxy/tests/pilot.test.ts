@@ -152,7 +152,7 @@ beforeEach(async () => {
     ...(retention ? [env.DB.prepare(retention.sql)] : []),
   ]);
   await env.DB.prepare(`UPDATE budget SET spent = 0, reserved = 0, loss = 0, allowance = 50000000,
-    paused = 0, recovery_required = 0, capture_bytes = 0, capture_allowance = 4000000000`).run();
+    paused = 0, recovery_required = 0, capture_bytes = 0, capture_allowance = 4000000000, max_in_flight = 20`).run();
   const objects = await env.CAPTURE.list();
   await Promise.all(objects.objects.map((o) => env.CAPTURE.delete(o.key)));
 });
@@ -377,6 +377,14 @@ describe("invited accounts", () => {
     expect((await again.json()).remaining_micro_usd).toBe(4999958);
   });
 
+  test("the account view carries the period's allowance, so the app can show usage as a share of it", async () => {
+    const user = await invited();
+    await api("/v1/invites/redeem", { code: user.code }, user.token);
+    await env.DB.prepare("UPDATE members SET spent = 1000000 WHERE id = ?").bind(user.id).run();
+    const view = await (await api("/v1/account", undefined, user.token)).json();
+    expect(view).toMatchObject({ allowance_micro_usd: 5_000_000, remaining_micro_usd: 4_000_000 });
+  });
+
   test("cannot redeem another email's invite", async () => {
     const alice = await invited();
     const bob = await invited("bob@example.com");
@@ -474,6 +482,21 @@ describe("metered requests", () => {
     expect(sent).toHaveLength(0);
   });
 
+  test("after set-budget to $200, recover-budget records a service total above $50", async () => {
+    const user = await joined();
+    expect((await api("/operator", { action: "set_budget", allowance_micro_usd: 200_000_000 }, env.ADMIN_TOKEN)).status).toBe(200);
+    expect((await api("/operator", { action: "replay_deletions" }, env.ADMIN_TOKEN)).status).toBe(200);
+    const recover = (member_id: string | undefined, spent_micro_usd: number) => api("/operator", {
+      action: "recover", member_id, spent_micro_usd, reason: "Verified against pre-restore records and provider billing",
+    }, env.ADMIN_TOKEN);
+    // An account's spending stays capped at $50.
+    expect((await recover(user.id, 50_000_001)).status).toBe(400);
+    expect((await recover(user.id, 0)).status).toBe(200);
+    expect((await recover(undefined, 120_000_000)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT allowance, spent, recovery_required FROM budget").first())
+      .toEqual({ allowance: 200_000_000, spent: 120_000_000, recovery_required: 0 });
+  });
+
   test("recovery refuses unresolved or decreasing spending and keeps its audit atomic", async () => {
     const user = await joined();
     reply();
@@ -495,17 +518,20 @@ describe("metered requests", () => {
     expect((await recover(1000)).status).toBe(200);
   });
 
-  test("five live calls refuse a sixth; five dead calls do not", async () => {
+  test("at set-capacity 3, three live calls refuse a fourth as busy; three dead calls do not", async () => {
+    expect((await api("/operator", { action: "set_capacity", max_in_flight: 3 }, env.ADMIN_TOKEN)).status).toBe(200);
     const holds: (() => void)[] = [];
     const pending = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 3; i++) {
       const user = await joined(`producer-${i}@example.com`);
       replies.push({ hold: new Promise<void>((r) => holds.push(r)) } as never);
       pending.push(api("/v1/completions", question(), user.token));
     }
-    await vi.waitFor(() => expect(sent).toHaveLength(5));
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
     const waiting = await joined("waiting@example.com");
-    expect((await api("/v1/completions", question(), waiting.token)).status).toBe(429);
+    const busy = await api("/v1/completions", question(), waiting.token);
+    expect(busy.status).toBe(429);
+    expect((await busy.json()).error.code).toBe("busy");
     await env.DB.prepare("UPDATE requests SET lease_until = 1 WHERE status = 'dispatched'").run();
     reply();
     expect((await api("/v1/completions", question(), waiting.token)).status).toBe(200);
@@ -714,9 +740,14 @@ describe("metered requests", () => {
   test("declines exhausted or revoked accounts before an upstream generation", async () => {
     const user = await joined();
     await env.DB.prepare("UPDATE members SET allowance = 0 WHERE id = ?").bind(user.id).run();
-    expect((await api("/v1/completions", question(), user.token)).status).toBe(402);
+    const exhausted = await api("/v1/completions", question(), user.token);
+    expect(exhausted.status).toBe(402);
+    // The same words hold for a pilot member and a paying one.
+    expect((await exhausted.json()).error.message).toBe("This period's allowance is used up.");
     await env.DB.prepare("UPDATE members SET revoked = 1 WHERE id = ?").bind(user.id).run();
-    expect((await api("/v1/completions", question(), user.token)).status).toBe(403);
+    const denied = await api("/v1/completions", question(), user.token);
+    expect(denied.status).toBe(403);
+    expect((await denied.json()).error.message).toBe("Your access has ended or was revoked.");
     expect(sent).toHaveLength(0);
   });
 
@@ -1426,6 +1457,21 @@ describe("capture and deletion", () => {
 });
 
 describe("admission", () => {
+  test("a new app whose period ends mid-turn gets plan_required in the reply's account view", async () => {
+    const user = await joined();
+    let release!: () => void;
+    replies.push({ hold: new Promise<void>((r) => { release = r; }) } as never);
+    const pending = worker.fetch(new Request("http://localhost:8787/v1/completions", { method: "POST",
+      headers: { "Content-Type": "application/json", "cf-connecting-ip": "127.0.0.1", Authorization: `Bearer ${user.token}`,
+        "Mixing-Pal-Version": "0.3.0" }, body: JSON.stringify(question()) }), { ...env, BILLING_ENABLED: "true" }, createExecutionContext());
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await env.DB.prepare("UPDATE members SET period_end = ? WHERE id = ?").bind(Date.now() - 1000, user.id).run();
+    release();
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { account: { access: string } }).account.access).toBe("plan_required");
+  });
+
   test("a new turn supersedes the member's running turn and is admitted while the old call is live", async () => {
     const user = await joined();
     const first = question();
@@ -1485,12 +1531,14 @@ describe("admission", () => {
     expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM turns WHERE status = 'superseded'").first())!.n).toBeLessThanOrEqual(1);
   });
 
-  test("global budget exhaustion is reported as a pause", async () => {
+  test("global budget exhaustion is reported as a pause, and each refusal is logged for the operator", async () => {
     const user = await joined();
     await env.DB.prepare("UPDATE budget SET allowance = spent").run();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const response = await api("/v1/completions", question(), user.token);
     expect(response.status).toBe(503);
     expect((await response.json()).error.code).toBe("service_paused");
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual({ event: "budget_exhausted" });
   });
 
   test("the model deadline shrinks by the time spent before admission", () => {
@@ -1674,6 +1722,19 @@ describe("maintenance billing", () => {
     expect(logged.mock.calls.map(([line]) => JSON.parse(String(line))))
       .toContainEqual(expect.objectContaining({ event: "provisional_usage", count: 0, loss: 5, paused: 1 }));
   });
+  test("a sweep warns when fewer than 20 reservations of service budget remain, and is quiet at 20", async () => {
+    const budgetEvents = (logged: { mock: { calls: unknown[][] } }) => logged.mock.calls.map(([line]) => JSON.parse(String(line)))
+      .filter((line) => String(line.event).startsWith("budget_"));
+    await env.DB.prepare("UPDATE budget SET spent = 1000000, reserved = ?").bind(RESERVATION).run();
+    await env.DB.prepare("UPDATE budget SET allowance = spent + reserved + ?").bind(20 * RESERVATION).run();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await maintain(env);
+    expect(budgetEvents(logged)).toEqual([]);
+    logged.mockClear();
+    await env.DB.prepare("UPDATE budget SET allowance = allowance - 1").run();
+    await maintain(env);
+    expect(budgetEvents(logged)).toEqual([{ event: "budget_low", remaining_micro_usd: 20 * RESERVATION - 1 }]);
+  });
 });
 
 describe("operator tools", () => {
@@ -1683,6 +1744,52 @@ describe("operator tools", () => {
     const usage = await (await api("/operator", { action: "usage" }, env.ADMIN_TOKEN)).json();
     expect(usage.pending[0]).toMatchObject({ provisional: 1, cost: RESERVATION, reserved: RESERVATION });
     expect(usage.conflicts).toEqual([]);
+  });
+
+  test("set-budget raises the service budget and leaves spending alone", async () => {
+    const user = await joined();
+    await env.DB.prepare("UPDATE budget SET spent = 40000000, allowance = 40000000").run();
+    const refused = await api("/v1/completions", question(), user.token);
+    expect(refused.status).toBe(503);
+    expect(sent).toHaveLength(0);
+    for (const bad of [0, -1, 1.5, "60000000", null]) {
+      const response = await api("/operator", { action: "set_budget", allowance_micro_usd: bad }, env.ADMIN_TOKEN);
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.message).toBe("The request has invalid fields.");
+    }
+    const set = await api("/operator", { action: "set_budget", allowance_micro_usd: 60_000_000 }, env.ADMIN_TOKEN);
+    expect(set.status).toBe(200);
+    expect(await env.DB.prepare("SELECT allowance, spent, reserved, paused FROM budget").first())
+      .toEqual({ allowance: 60_000_000, spent: 40_000_000, reserved: 0, paused: 0 });
+    expect((await env.DB.prepare("SELECT action, target, detail FROM operator_actions").all()).results)
+      .toEqual([{ action: "set_budget", target: "service", detail: "60000000" }]);
+    reply();
+    expect((await api("/v1/completions", question(), user.token)).status).toBe(200);
+  });
+
+  test("set-budget refuses an amount below what the service has spent and reserved", async () => {
+    await env.DB.prepare("UPDATE budget SET spent = 40000000, reserved = 1000000").run();
+    const below = await api("/operator", { action: "set_budget", allowance_micro_usd: 40_999_999 }, env.ADMIN_TOKEN);
+    expect(below.status).toBe(409);
+    expect((await below.json()).error).toEqual({ code: "budget_below_spent",
+      message: "That amount is below what the service has already spent. To stop the service, use pause." });
+    expect(await env.DB.prepare("SELECT allowance FROM budget").first()).toEqual({ allowance: 50_000_000 });
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions").first())!.n).toBe(0);
+    expect((await api("/operator", { action: "set_budget", allowance_micro_usd: 41_000_000 }, env.ADMIN_TOKEN)).status).toBe(200);
+    expect(await env.DB.prepare("SELECT allowance, spent, reserved, paused FROM budget").first())
+      .toEqual({ allowance: 41_000_000, spent: 40_000_000, reserved: 1_000_000, paused: 0 });
+    expect((await env.DB.prepare("SELECT COUNT(*) AS n FROM operator_actions").first())!.n).toBe(1);
+  });
+
+  test("set-capacity sets the in-flight cap, which usage shows", async () => {
+    expect((await (await api("/operator", { action: "usage" }, env.ADMIN_TOKEN)).json()).budget.max_in_flight).toBe(20);
+    for (const bad of [0, -1, 2.5, "3"]) {
+      expect((await api("/operator", { action: "set_capacity", max_in_flight: bad }, env.ADMIN_TOKEN)).status).toBe(400);
+    }
+    expect((await api("/operator", { action: "set_capacity", max_in_flight: 30 }, env.ADMIN_TOKEN)).status).toBe(200);
+    expect((await (await api("/operator", { action: "usage" }, env.ADMIN_TOKEN)).json()).budget.max_in_flight).toBe(30);
+    expect((await env.DB.prepare("SELECT action, target, detail FROM operator_actions").all()).results)
+      .toEqual([{ action: "set_capacity", target: "service", detail: "30" }]);
   });
 
   test("resolve twice reports already_final and books nothing", async () => {

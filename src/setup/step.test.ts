@@ -7,7 +7,7 @@ const DONE: SetupFacts = {
   liveRunning: true,
   deltasArriving: true,
   hasAccount: true,
-  sharingChosen: true,
+  hasAccess: true,
   experienceChosen: true,
 };
 
@@ -35,20 +35,25 @@ describe("currentStep", () => {
         liveRunning: false,
         deltasArriving: false,
         hasAccount: false,
-        sharingChosen: false,
+        hasAccess: false,
         experienceChosen: false,
       }),
     ).toBe("account");
   });
 
-  // Right after sign-in, before Live, so the question is never skipped by a
-  // connector that is already installed.
-  it("asks about sharing once signed in and before setting up Live", () => {
-    expect(currentStep({ ...DONE, sharingChosen: false })).toBe("sharing");
-    expect(
-      currentStep({ ...DONE, sharingChosen: false, connectorInstalled: false, deltasArriving: false }),
-    ).toBe("sharing");
-    expect(currentStep({ ...DONE, sharingChosen: false, hasAccount: false })).toBe("account");
+  // A new user sees the app read their set before they are asked for a card.
+  it("asks for a plan only after the set is connected and a level is chosen", () => {
+    expect(currentStep({ ...DONE, hasAccess: false })).toBe("plan");
+    expect(currentStep({ ...DONE, hasAccess: false, experienceChosen: false })).toBe("connected");
+    expect(currentStep({ ...DONE, hasAccess: false, connectorInstalled: false, deltasArriving: false })).toBe("install");
+    expect(currentStep({ ...DONE, hasAccess: false, hasAccount: false })).toBe("account");
+  });
+
+  // Sharing is asked in the chat after the first rated move, so setup ends at the plan.
+  it("finishes once there is access, with no sharing step", () => {
+    expect(currentStep({ ...DONE, hasAccess: false })).toBe("plan");
+    expect(currentStep(DONE)).toBe("done");
+    expect(currentStep({ ...DONE, sharingChosen: false } as SetupFacts)).toBe("done");
   });
 
   // The app updated and the part inside Live did not. Reinstalling is the

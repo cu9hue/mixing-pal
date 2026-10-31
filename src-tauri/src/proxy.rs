@@ -18,6 +18,16 @@ const MAX_OUTBOX: usize = 20 * MAX_EVENT;
 const OUTBOX_AGE: u64 = 24 * 60 * 60 * 1000;
 /// At least the proxy's `RESPONSE_BUDGET` plus 15 s for the network, so the proxy's own error arrives first.
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(300);
+const BILLING_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Checkout makes up to four Stripe calls of 10 s each, so billing routes wait longer than other short requests.
+/// The health read only words the sign-in screen, so it gives up sooner.
+fn request_timeout(path: &str) -> Option<Duration> {
+    if path.ends_with("/completions") { None }
+    else if path.starts_with("/v1/billing/") { Some(BILLING_TIMEOUT) }
+    else if path == "/health" { Some(Duration::from_secs(5)) }
+    else { Some(Duration::from_secs(15)) }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxyError {
@@ -167,8 +177,9 @@ impl Proxy {
     }
 
     async fn request(&self, method: Method, path: &str, body: Option<Value>, session: Option<&Session>) -> Result<(Value, Option<String>), ProxyError> {
-        let mut builder = self.client.request(method, format!("{}{path}", self.origin));
-        if !path.ends_with("/completions") { builder = builder.timeout(Duration::from_secs(15)); }
+        // The proxy shows plan choices only to apps that name a version; older ones read "expired".
+        let mut builder = self.client.request(method, format!("{}{path}", self.origin)).header("Mixing-Pal-Version", env!("CARGO_PKG_VERSION"));
+        if let Some(timeout) = request_timeout(path) { builder = builder.timeout(timeout); }
         if let Some(s) = session { builder = builder.bearer_auth(&s.token); }
         if let Some(value) = body { builder = builder.json(&value); }
         let mut response = builder.send().await.map_err(|_| ProxyError::new("connection_failed", "Could not reach Mixing Pal. Check your connection and try again."))?;
@@ -193,18 +204,29 @@ impl Proxy {
 
     pub async fn account(&self) -> Result<Value, ProxyError> {
         if cfg!(feature = "direct-provider") { return Ok(json!({ "access": "development", "capture": false })); }
-        let Some(session) = self.session()? else { return Ok(json!({ "access": "signed_out", "capture": false })); };
+        let Some(session) = self.session()? else { return Ok(self.signed_out().await); };
         if self.outbox.lock().await.pending_withdrawal {
             if let Err(error) = self.consent(false).await {
-                if error.code == "sign_in_required" { return Ok(json!({ "access": "signed_out", "capture": false })); }
+                if error.code == "sign_in_required" { return Ok(self.signed_out().await); }
                 return Err(error);
             }
         }
         match self.request(Method::GET, "/v1/account", None, Some(&session)).await {
             Ok((view, _)) => Ok(view),
-            Err(e) if e.code == "sign_in_required" => Ok(json!({ "access": "signed_out", "capture": false })),
+            Err(e) if e.code == "sign_in_required" => Ok(self.signed_out().await),
             Err(e) => Err(e),
         }
+    }
+
+    /// The signed-out view, with how sign-up works when the proxy says so. A failed read leaves that out.
+    async fn signed_out(&self) -> Value {
+        let mut view = json!({ "access": "signed_out", "capture": false });
+        if let Ok((health, _)) = self.request(Method::GET, "/health", None, None).await {
+            if let Some(signup) = health["signup"].as_str().filter(|s| ["open", "invite"].contains(s)) {
+                view["signup"] = json!(signup);
+            }
+        }
+        view
     }
 
     pub async fn send_code(&self, email: String) -> Result<(), ProxyError> {
@@ -248,6 +270,17 @@ impl Proxy {
     pub async fn redeem(&self, code: String) -> Result<Value, ProxyError> {
         let session = self.required_session()?;
         Ok(self.request(Method::POST, "/v1/invites/redeem", Some(json!({ "code": code })), Some(&session)).await?.0)
+    }
+
+    pub async fn accept_terms(&self) -> Result<Value, ProxyError> {
+        let session = self.required_session()?;
+        Ok(self.request(Method::POST, "/v1/terms", Some(json!({})), Some(&session)).await?.0)
+    }
+
+    pub async fn billing(&self, action: &str, plan: Option<&str>) -> Result<Value, ProxyError> {
+        let session = self.required_session()?;
+        let body = plan.map_or_else(|| json!({}), |plan| json!({ "plan": plan }));
+        Ok(self.request(Method::POST, &format!("/v1/billing/{action}"), Some(body), Some(&session)).await?.0)
     }
 
     pub async fn sign_out(&self) -> Result<(), ProxyError> {
@@ -946,5 +979,61 @@ mod tests {
         assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
         proxy.flush().await.unwrap();
         assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn every_request_names_the_app_version() {
+        let fixture = Fixture::new().await;
+        Mock::given(method("GET")).and(path("/v1/account"))
+            .and(wiremock::matchers::header("mixing-pal-version", env!("CARGO_PKG_VERSION")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "access": "plan_required", "capture": false })))
+            .mount(&fixture.server).await;
+        assert_eq!(fixture.proxy().account().await.unwrap()["access"], "plan_required");
+    }
+
+    #[tokio::test]
+    async fn the_signed_out_view_says_how_sign_up_works() {
+        let fixture = Fixture::new().await;
+        fixture.store.clear(&fixture.proxy().credential_name).unwrap();
+        fixture.route("GET", "/health", 200, json!({ "ok": true, "signup": "open" })).await;
+        assert_eq!(fixture.proxy().account().await.unwrap(), json!({ "access": "signed_out", "capture": false, "signup": "open" }));
+        let refused = Fixture::new().await;
+        refused.route("GET", "/v1/account", 401, json!({ "error": { "code": "sign_in_required", "message": "expired" } })).await;
+        refused.route("GET", "/health", 200, json!({ "ok": true, "signup": "invite" })).await;
+        assert_eq!(refused.proxy().account().await.unwrap(), json!({ "access": "signed_out", "capture": false, "signup": "invite" }));
+    }
+
+    #[tokio::test]
+    async fn a_failed_or_odd_health_read_leaves_sign_up_out() {
+        for (status, body) in [(503, json!({ "error": { "code": "service_unavailable" } })), (200, json!({ "ok": true, "signup": "everyone" })), (200, json!({ "ok": true }))] {
+            let fixture = Fixture::new().await;
+            fixture.store.clear(&fixture.proxy().credential_name).unwrap();
+            fixture.route("GET", "/health", status, body).await;
+            assert_eq!(fixture.proxy().account().await.unwrap(), json!({ "access": "signed_out", "capture": false }));
+        }
+        let fixture = Fixture::new().await;
+        fixture.store.clear(&fixture.proxy().credential_name).unwrap();
+        assert_eq!(fixture.proxy().account().await.unwrap(), json!({ "access": "signed_out", "capture": false }));
+    }
+
+    #[test]
+    fn billing_routes_wait_45_seconds_health_5_and_other_short_requests_15() {
+        assert_eq!(request_timeout("/v1/billing/checkout"), Some(Duration::from_secs(45)));
+        assert_eq!(request_timeout("/v1/billing/upgrade"), Some(Duration::from_secs(45)));
+        assert_eq!(request_timeout("/health"), Some(Duration::from_secs(5)));
+        assert_eq!(request_timeout("/v1/account"), Some(Duration::from_secs(15)));
+        assert_eq!(request_timeout("/v1/completions"), None);
+    }
+
+    #[tokio::test]
+    async fn billing_posts_the_plan_with_the_session() {
+        let fixture = Fixture::new().await;
+        Mock::given(method("POST")).and(path("/v1/billing/checkout"))
+            .and(wiremock::matchers::header("authorization", "Bearer private-session"))
+            .and(wiremock::matchers::body_json(json!({ "plan": "pro" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "url": "https://checkout.stripe.com/c/pay/cs_1" })))
+            .mount(&fixture.server).await;
+        let reply = fixture.proxy().billing("checkout", Some("pro")).await.unwrap();
+        assert_eq!(reply["url"], "https://checkout.stripe.com/c/pay/cs_1");
     }
 }

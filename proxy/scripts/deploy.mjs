@@ -30,9 +30,46 @@ come from Wrangler login or CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN.
 
 secrets reads AUTH_SECRET (at least 32 random characters), RESEND_KEY,
 OPENROUTER_KEY and ADMIN_TOKEN. Keep independent values for staging/production.
+secrets also sends STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET when both are set.
+deploy, enable and recovery need MIXINGPAL_BILLING=on|off. Every deploy sends the stage's Stripe
+price IDs from billing-prices.json; on needs both. Commit the IDs there before turning billing on.
+Deploy and enable with on also need STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in the environment.
+Off restores invites; existing subscribers keep working.
 Configure the sending domain signin@mixingpal.com in Resend first. The auth
 secret must stay stable across deployments; rotating it revokes sessions and
 changes request fingerprints. Deploy never prints secret values.
+
+Stripe setup (before billing on), in the mode of the stage's key: test for
+staging, live for production.
+Webhook endpoint: <API_ORIGIN>/webhooks/stripe, with Snapshot payloads, not
+Thin, and API version 2026-09-30.endive. Events: customer.subscription.created,
+customer.subscription.updated, customer.subscription.deleted, invoice.paid.
+Its signing secret is STRIPE_WEBHOOK_SECRET.
+Customer Portal: a default configuration in each mode. Plan switching off.
+Members change plan by upgrading in the app, or by canceling at period end and
+subscribing again. Quantity changes off. Cancellations take effect at period
+end.
+Tax and prices: Stripe Tax active, with an origin address. Both prices monthly,
+with tax_behavior=exclusive. Each stage's prices come from the same mode as
+that stage's key.
+Never change a plan's price ID in billing-prices.json while anyone subscribes
+on it. Existing subscriptions stay on the old price, and the proxy would stop
+recognizing them. A new price needs a code change that maps both IDs.
+Payments: the proxy restricts Checkout to cards in code. In test mode, confirm
+that Checkout still shows Apple Pay and Google Pay. Link should not show. If a
+wallet is missing, enable it under Payment methods before billing on.
+Set the invoice payment methods (Settings, Invoices) to cards only. Start now,
+Upgrade and Stripe's failed-payment emails use Stripe's invoice page, which
+ignores Checkout's card-only setting.
+Set the subscription retry schedule to end within 7 days, then cancel. This
+matches the app's 7-day grace.
+Disputes: in each mode, set Settings, Billing, "Manage disputed payments" to
+cancel the subscription immediately without prorating.
+Refunds: when refunding a subscription payment from the Dashboard, also cancel
+the subscription. A refund alone leaves access and renewals running.
+Recovery: after a D1 restore, billing-sync every member with a subscription;
+see the restore sequence in npm run admin -- help. During a rollback that
+pauses inference for more than a day, pause payment collection in Stripe.
 
 Before enabling staging: verify sign-in delivery, provider prices and strict
 ZDR routing, disable OpenRouter input/output logging and content use, and set
@@ -44,14 +81,19 @@ Then run an invited staging turn, exercise capture off/on/withdrawal/deletion,
 and rehearse rollback before inviting pilot producers or enabling production.
 
 Before enabling production: complete those staging checks and verify production
-email, provider policy and its $50 API key cap with no replenishment.
+email, provider policy and the API key's credit cap. For the pilot it is $50
+with no replenishment. Before billing on, raise the OpenRouter key's credit
+cap and set npm run admin -- set-budget to the same amount, in micro-USD.
+With each top-up, raise both together.
 Pass MIXINGPAL_RELEASE_VERIFIED=yes to acknowledge these release checks.
 
 The recovery command sets REPORT_RECOVERY=true in Worker configuration, outside
 D1. Keep it enabled through every deletion replay page and spending recovery.
 See npm run admin -- help for the restore sequence.
 
-Rollback changes only the Worker version; never reverse ledger migrations.
+A rollback restores that version's code, BILLING_ENABLED, price IDs and secrets.
+Rolling back past a billing-off deploy turns billing back on. Redeploy forward
+with MIXINGPAL_BILLING=off if needed. Never reverse ledger migrations.
 A Worker older than the latest ledger migration cannot admit calls. To roll
 back, pause inference (npm run admin -- pause), then deploy the previous
 version. Keep inference paused until you deploy a fixed Worker forward. On the
@@ -63,15 +105,20 @@ with a debug desktop build. Public release builds always use api.mixingpal.com.
 Internal developer transport: npm run tauri -- dev --features direct-provider.
 `;
 
-export function configuration(base, stage, databaseId, enabled = false, reportRecovery = false) {
+export function configuration(base, stage, databaseId, enabled = false, reportRecovery = false, billingOn = false, prices = {}) {
   if (!["staging", "production"].includes(stage)) throw new Error("Choose staging or production.");
   if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(databaseId ?? "")) throw new Error("Set MIXINGPAL_D1_ID to this stage's D1 UUID.");
   const host = stage === "production" ? "api.mixingpal.com" : "api-staging.mixingpal.com";
   const captureBucket = `mixing-pal-${stage}-capture`;
   const releaseBucket = `mixing-pal-${stage}-releases`;
   if (captureBucket === releaseBucket) throw new Error("Release and capture buckets must be distinct.");
+  const { starter = "", pro = "" } = prices[stage] ?? {};
+  if (billingOn && !(/^price_\w+$/.test(starter) && /^price_\w+$/.test(pro))) {
+    throw new Error(`Billing on needs both Stripe price IDs for ${stage} in billing-prices.json.`);
+  }
   return { ...base, name: `mixing-pal-${stage}`, routes: [{ pattern: host, custom_domain: true }],
     vars: { ...base.vars, API_ORIGIN: `https://${host}`, INFERENCE_ENABLED: String(enabled), REPORT_RECOVERY: String(reportRecovery),
+      BILLING_ENABLED: String(billingOn), STRIPE_PRICE_STARTER: starter, STRIPE_PRICE_PRO: pro,
       DOWNLOADS_ORIGIN: stage === "production" ? "https://downloads.mixingpal.com" : "https://downloads-staging.mixingpal.com" },
     d1_databases: [{ binding: "DB", database_name: `mixing-pal-${stage}`, database_id: databaseId, migrations_dir: "migrations" }],
     r2_buckets: [{ binding: "CAPTURE", bucket_name: captureBucket }, { binding: "RELEASES", bucket_name: releaseBucket }] };
@@ -98,7 +145,19 @@ export async function run(args) {
     if (process.env[check] !== "yes") throw new Error(`Complete the ${stage} checks shown by help and set ${check}=yes before enable.`);
   }
   const base = JSON.parse(await readFile("wrangler.jsonc", "utf8"));
-  const config = configuration(base, stage, process.env.MIXINGPAL_D1_ID, command === "enable", command === "recovery");
+  // Every deploy rebuilds the vars, so billing is always stated, never inherited.
+  if (["deploy", "enable", "recovery"].includes(command) && !["on", "off"].includes(process.env.MIXINGPAL_BILLING ?? "")) {
+    throw new Error("Set MIXINGPAL_BILLING=on or off for this deploy.");
+  }
+  // Not recovery: it uploads no secrets, and the check would make an operator export the live key.
+  if (["deploy", "enable"].includes(command) && process.env.MIXINGPAL_BILLING === "on"
+    && !(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET)) {
+    throw new Error("Billing on needs both Stripe secrets. Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in the environment.");
+  }
+  // Committed, so a deploy can never blank the IDs that live subscriptions are matched by.
+  const prices = JSON.parse(await readFile(new URL("../billing-prices.json", import.meta.url), "utf8"));
+  const config = configuration(base, stage, process.env.MIXINGPAL_D1_ID, command === "enable", command === "recovery",
+    process.env.MIXINGPAL_BILLING === "on", prices);
   const file = `.deploy-${stage}.json`;
   await writeFile(file, JSON.stringify(config, null, 2), { mode: 0o600 });
   if (command === "configure") { console.log(file); return; }
@@ -107,7 +166,11 @@ export async function run(args) {
   if (command === "secrets") {
     const names = ["AUTH_SECRET", "RESEND_KEY", "OPENROUTER_KEY", "ADMIN_TOKEN"];
     if (names.some((name) => !process.env[name]) || process.env.AUTH_SECRET.length < 32) throw new Error("Set all four service secrets; AUTH_SECRET needs at least 32 characters.");
-    wrangler(["secret", "bulk", "--config", file], JSON.stringify(Object.fromEntries(names.map((name) => [name, process.env[name]]))));
+    const stripeNames = ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"];
+    const stripeSet = stripeNames.filter((name) => process.env[name]);
+    if (stripeSet.length === 1) throw new Error("Set both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET, or neither.");
+    const all = [...names, ...stripeSet];
+    wrangler(["secret", "bulk", "--config", file], JSON.stringify(Object.fromEntries(all.map((name) => [name, process.env[name]]))));
     return;
   }
   if (command === "rollback") {

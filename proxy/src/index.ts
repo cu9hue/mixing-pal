@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { account, consent, rateLimit, redeem } from "./account";
+import { acceptTerms, account, consent, rateLimit, redeem } from "./account";
 import { admin } from "./admin";
 import { auth, authenticate, CODE_LIFETIME_MINUTES } from "./auth";
 import { deleteAccount, deleteShared, deleteTurn, event, feedback } from "./capture";
@@ -9,6 +9,7 @@ import { maintain } from "./maintenance";
 import { notifyReport } from "./report-email";
 import { submitReport, reportReceipt, deleteReport, requireReportAccess, MAX_REPORT_BODY } from "./reports";
 import { releaseRequest } from "./releases";
+import { billingDone, checkout, portal, startNow, stripeWebhook, upgrade } from "./subscriptions";
 
 // Better Auth's code-check failures, told apart so the producer knows what to do next.
 const SIGN_IN_FAILURES: Record<string, [string, string]> = {
@@ -31,10 +32,23 @@ async function authRequest(request: Request, env: Env, path: string): Promise<Re
     const raw = await readJson(request, 4096);
     const input = z.object({ email: z.email().transform((s) => s.toLowerCase()), otp: z.string().regex(/^\d{6}$/).optional() }).parse(raw);
     await rateLimit(env, `email:${await privateHash(env.AUTH_SECRET, input.email)}`, path.includes("send-verification") ? 3 : 10, 60_000);
-    const eligible = await env.DB.prepare(`SELECT 1 FROM invites WHERE email = ? AND expires_at > ? AND redeemed_by IS NULL
-      UNION SELECT 1 FROM "user" u JOIN members m ON u.id = m.id
-      WHERE lower(u.email) = ? AND m.deleted_at IS NULL LIMIT 1`)
-      .bind(input.email, Date.now(), input.email).first();
+    const billing = env.BILLING_ENABLED === "true";
+    if (billing && path.includes("send-verification")) {
+      // Anyone may sign up, so cap how many addresses one network can send codes to.
+      const ip = request.headers.get("cf-connecting-ip") ?? "local";
+      await rateLimit(env, `send-ip:${await privateHash(env.AUTH_SECRET, ip)}`, 10, 60 * 60_000);
+    }
+    // A deletion in progress holds the email until maintain removes the user. An account that
+    // never subscribed has no members row, so its open deletion job holds the email instead.
+    const eligible = billing
+      ? !await env.DB.prepare(`SELECT 1 FROM "user" u WHERE lower(u.email) = ?
+          AND (EXISTS (SELECT 1 FROM members m WHERE m.id = u.id AND m.deleted_at IS NOT NULL)
+            OR EXISTS (SELECT 1 FROM deletion_jobs d WHERE d.member_id = u.id AND d.completed_at IS NULL)) LIMIT 1`)
+          .bind(input.email).first()
+      : await env.DB.prepare(`SELECT 1 FROM invites WHERE email = ? AND expires_at > ? AND redeemed_by IS NULL
+          UNION SELECT 1 FROM "user" u JOIN members m ON u.id = m.id
+          WHERE lower(u.email) = ? AND m.deleted_at IS NULL LIMIT 1`)
+        .bind(input.email, Date.now(), input.email).first();
     if (!eligible) {
       if (path.includes("send-verification")) return json({ success: true });
       throw new ApiError(401, "sign_in_failed", "The code is invalid or expired. Check your invitation email.");
@@ -80,16 +94,21 @@ async function authRequest(request: Request, env: Env, path: string): Promise<Re
 export async function handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const receivedAt = Date.now();
   const url = new URL(request.url);
-  if (url.pathname === "/health" && request.method === "GET") return json({ ok: true });
+  // The app words its sign-in screen for open sign-up or invites.
+  if (url.pathname === "/health" && request.method === "GET") return json({ ok: true, signup: env.BILLING_ENABLED === "true" ? "open" : "invite" });
+  // Before the per-IP limit: Stripe delivers renewals in bursts from a few addresses.
+  if (url.pathname === "/webhooks/stripe" && request.method === "POST") return stripeWebhook(request, env);
   const release = await releaseRequest(request, env);
   if (release) return release;
   const ip = request.headers.get("cf-connecting-ip") ?? "local";
   await rateLimit(env, `ip:${await privateHash(env.AUTH_SECRET, ip)}`, 120, 60_000);
+  if (url.pathname === "/billing/done" && request.method === "GET") return billingDone(url);
   if (url.pathname.startsWith("/auth/")) return authRequest(request, env, url.pathname);
   if (url.pathname === "/operator" && request.method === "POST") return admin(request, env, await readJson(request, 8192));
   const memberId = await authenticate(request, env);
   await rateLimit(env, `member:${memberId}`, 120, 60_000);
   const route = `${request.method} ${url.pathname}`;
+  const modern = request.headers.has("Mixing-Pal-Version");
   if (route === "POST /v1/reports") {
     const saved = await submitReport(env, memberId, await readJson(request, MAX_REPORT_BODY));
     ctx.waitUntil(notifyReport(env, saved.id).catch(() => console.error(JSON.stringify({ event: "report_notification_failed", report_id: saved.id }))));
@@ -102,10 +121,15 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
     if (request.method === "GET") return json(await reportReceipt(env, memberId, id));
     if (request.method === "DELETE") { await deleteReport(env, memberId, id); return json({ deletion: "pending" }, 202); }
   }
-  if (route === "GET /v1/account") return account(env, memberId);
-  if (route === "POST /v1/invites/redeem") return redeem(env, memberId, await readJson(request, 4096));
-  if (route === "PUT /v1/consent") return consent(env, memberId, await readJson(request, 4096));
-  if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx, receivedAt);
+  if (route === "GET /v1/account") return account(env, memberId, modern);
+  if (route === "POST /v1/invites/redeem") return redeem(env, memberId, await readJson(request, 4096), modern);
+  if (route === "PUT /v1/consent") return consent(env, memberId, await readJson(request, 4096), modern);
+  if (route === "POST /v1/terms") return acceptTerms(env, memberId, modern);
+  if (route === "POST /v1/billing/checkout") return checkout(env, memberId, await readJson(request, 4096));
+  if (route === "POST /v1/billing/portal") return portal(env, memberId);
+  if (route === "POST /v1/billing/start-now") return startNow(env, memberId, modern);
+  if (route === "POST /v1/billing/upgrade") return upgrade(env, memberId, modern);
+  if (route === "POST /v1/completions") return complete(env, memberId, await readJson(request), ctx, receivedAt, modern);
   if (route === "DELETE /v1/account") {
     await deleteAccount(env, memberId);
     return json({ deletion: "pending" }, 202);

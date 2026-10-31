@@ -11,10 +11,17 @@ export interface Env {
   ADMIN_TOKEN: string;
   INFERENCE_ENABLED: string;
   REPORT_RECOVERY?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  STRIPE_PRICE_STARTER?: string;
+  STRIPE_PRICE_PRO?: string;
+  BILLING_ENABLED?: string;
 }
 
 export const DAY = 86_400_000;
 export const CAPTURE_VERSION = "quality-2026-09-17";
+// The Terms and Privacy Policy at mixingpal.com. A new version asks every account again before its next Checkout.
+export const TERMS_VERSION = "terms-2026-10-29";
 export const MAX_BODY = 1_048_576;
 // A 4,000-character report can need six bytes per character when JSON-escaped.
 export const MAX_FEEDBACK_BODY = 32 * 1024;
@@ -43,7 +50,7 @@ export function json(value: unknown, status = 200): Response {
   });
 }
 
-export async function readJson(request: Request | Response, max = MAX_BODY): Promise<unknown> {
+export async function readText(request: Request | Response, max = MAX_BODY): Promise<string> {
   const reader = request.body?.getReader();
   if (!reader) throw new ApiError(400, "invalid_request", "A JSON body is required.");
   const chunks: Uint8Array[] = [];
@@ -64,8 +71,13 @@ export async function readJson(request: Request | Response, max = MAX_BODY): Pro
     bytes.set(chunk, offset);
     offset += chunk.length;
   }
+  return new TextDecoder().decode(bytes);
+}
+
+export async function readJson(request: Request | Response, max = MAX_BODY): Promise<unknown> {
+  const text = await readText(request, max);
   try {
-    return JSON.parse(new TextDecoder().decode(bytes));
+    return JSON.parse(text);
   } catch {
     throw new ApiError(400, "invalid_request", "The request must contain valid JSON.");
   }

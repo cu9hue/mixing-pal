@@ -39,11 +39,28 @@ it("keeps the chat visible during a pause and enables its draft when service res
   await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
   const input = screen.getByLabelText("Ask about the set") as HTMLInputElement;
   expect(input.disabled).toBe(true);
-  expect(screen.getByRole("status").textContent).toBe("Model access is temporarily paused.");
+  expect(screen.getByRole("status").textContent).toBe("Model access is paused on our side. Try again later.");
+  expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
   current = { ...current, view: { ...current.view!, can_ask: true, service_paused: false } };
   mounted.rerender(conversation());
   expect(input.disabled).toBe(false);
-  expect(screen.queryByText("Model access is temporarily paused.")).toBeNull();
+  expect(screen.queryByText("Model access is paused on our side. Try again later.")).toBeNull();
+});
+
+it.each([
+  [{ subscription_status: "trialing", plan: "starter" }, "Your trial usage is used up."],
+  [{ subscription_status: "active", plan: "starter" }, "This month's usage is used up."],
+  [{}, "Your pilot usage is used up."],
+] as const)("when usage runs out, says so and opens Settings from the line itself", async (sub, line) => {
+  vi.mocked(invoke).mockResolvedValue({ exchanges: [], goal: "finish this track", saved_at: 1, next_bullet: 1, note: [] });
+  const onOpenSettings = vi.fn();
+  const used: AccountState = { ...account, view: { access: "active", capture: false, can_ask: false, remaining_micro_usd: 100, ...sub } };
+  render(<Conversation state={{ ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version }}
+    connected account={used} onTurnRunningChange={() => {}} onAnswer={() => {}} onOpenSettings={onOpenSettings} />);
+  await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
+  expect(screen.getByRole("status").textContent).toBe(`${line} Open Settings`);
+  fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+  expect(onOpenSettings).toHaveBeenCalledTimes(1);
 });
 
 it.each([
@@ -139,13 +156,13 @@ it("lists what the model has read while the producer waits, and clears the list 
   expect(screen.queryAllByRole("listitem")).toEqual([]);
 });
 
-async function answered(move = "«Pad», mud: cut 300 Hz") {
+async function answered(move = "«Pad», mud: cut 300 Hz", member: AccountState = account) {
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "load_thread") return { exchanges: [], goal: "finish this track", saved_at: 1, next_bullet: 1, note: [] };
     if (command === "model_complete") return { text: `Cut it.\n\`\`\`move\n${move}\n\`\`\`` };
   });
   const state = { ...emptySet(), setId: "set", setPath: "/set.als", scriptVersion: wireVersion.version, tracks: { 0: { ...emptyTrack(), name: "Pad" } } };
-  render(<Conversation state={state} connected account={account} onTurnRunningChange={() => {}} onAnswer={() => {}} />);
+  render(<Conversation state={state} connected account={member} onTurnRunningChange={() => {}} onAnswer={() => {}} />);
   await act(() => vi.advanceTimersByTimeAsync(SWITCH_HOLD_MS));
   const input = screen.getByLabelText("Ask about the set");
   fireEvent.change(input, { target: { value: "How is the pad?" } });
@@ -161,6 +178,25 @@ it("waits until the producer comes back before asking how the move went", async 
   expect(strip()).toBeNull();
   fireEvent.focus(input);
   expect(strip()).toBeTruthy();
+});
+
+it("asks once to share when the first rated move's check-in closes, and records the answer", async () => {
+  const change = vi.fn();
+  const member: AccountState = { ...account, change,
+    view: { access: "active", capture: false, sharing_chosen: false, can_ask: true, remaining_micro_usd: 5_000_000 } };
+  const input = await answered(undefined, member);
+  const ask = () => screen.queryByRole("region", { name: "Help me get better at this?" });
+  expect(ask()).toBeNull();
+  fireEvent.focus(input);
+  fireEvent.click(screen.getByRole("button", { name: "Kept it" }));
+  // One row at a time: the heard step comes first.
+  expect(ask()).toBeNull();
+  fireEvent.keyDown(screen.getByLabelText("What did you hear?"), { key: "Enter" });
+  expect(strip()).toBeNull();
+  expect(ask()).toBeTruthy();
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "No thanks" })); });
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("account_consent", { enabled: false });
+  expect(change).toHaveBeenCalledTimes(1);
 });
 
 it("asks when the window regains focus", async () => {

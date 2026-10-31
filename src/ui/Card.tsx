@@ -56,10 +56,14 @@ export function Card({
     setReport({ ...target, accountId: account.view!.id!, email: account.view!.email! }) : undefined;
   useEffect(() => { setReport(null); }, [account.view?.id]);
   const activeReport = report?.accountId === account.view?.id ? report : null;
-  const needsSignIn =
+  // Until the member can use chat, the account panel holds the whole card:
+  // signing in, picking a plan, fixing a payment, or reading that access was revoked.
+  const needsAccount =
     account.view === null ||
     account.view.access === "signed_out" ||
-    account.view.access === "invitation_required";
+    account.view.access === "invitation_required" ||
+    account.view.access === "plan_required" ||
+    account.view.access === "revoked";
 
   // One drag mechanism for the whole card: everything inside drags the
   // window, except buttons, inputs, and summaries (Tauri blocks those
@@ -68,9 +72,9 @@ export function Card({
   // exchange opts back in. See dragRegions.test.ts.
   return (
     <div className="card" data-tauri-drag-region="deep">
-      <Header connected={connected} onCollapse={onCollapse} showConnection={!needsSignIn} />
+      <Header connected={connected} onCollapse={onCollapse} showConnection={!needsAccount} />
       {updates && onOpenSettings && <UpdateNotice view={updates.view}
-        visible={visible && !settingsOpen && !needsSignIn && !activeReport} onReview={onOpenSettings} />}
+        visible={visible && !settingsOpen && !needsAccount && !activeReport} onReview={onOpenSettings} />}
       {activeReport && <ReportProblem key={activeReport.accountId} target={activeReport} accountId={activeReport.accountId}
         email={activeReport.email} onClose={() => setReport(null)} />}
       {/* Settings replaces what is below the header, but hides it rather
@@ -82,9 +86,9 @@ export function Card({
         </div>
       )}
       <div className={`card__main${settingsOpen ? " card__main--hidden" : ""}`}>
-      {needsSignIn && <div className="card__account card__account--solo"><AccountPanel account={account} /></div>}
-      <div className={`card__session${needsSignIn ? " card__session--hidden" : ""}`}>
-      {!needsSignIn && <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />}
+      {needsAccount && <div className="card__account card__account--solo"><AccountPanel account={account} /></div>}
+      <div className={`card__session${needsAccount ? " card__session--hidden" : ""}`}>
+      {!needsAccount && <Connection lastSeen={lastSeen} scriptVersion={state.scriptVersion} onShowSetup={onShowSetup} />}
       {nudge !== null && connected && (
         <Noticed nudge={nudge} onDismiss={() => onDismissNudge(nudge.id)} />
       )}
@@ -92,6 +96,7 @@ export function Card({
       <div className={`card__conversation${connected ? "" : " card__conversation--hidden"}`}>
         <Conversation
           account={account}
+          onOpenSettings={onOpenSettings}
           onReport={openReport}
           connected={connected}
           state={state}

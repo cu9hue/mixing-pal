@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, access, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, access, mkdir, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -88,6 +88,47 @@ test("recovery commands send verified totals and reasons to the correct scope", 
   ]);
 });
 
+test("set-budget and set-capacity send one whole number each", async () => {
+  const sent = [];
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token", fetch: async (_url, options) => {
+    sent.push(JSON.parse(options.body)); return Response.json({ ok: true });
+  } };
+  await run(["set-budget", "100000000"], connection, () => {});
+  await run(["set-capacity", "30"], connection, () => {});
+  assert.deepEqual(sent, [
+    { action: "set_budget", allowance_micro_usd: 100000000 },
+    { action: "set_capacity", max_in_flight: 30 },
+  ]);
+  await assert.rejects(run(["set-budget"], connection), /Unknown command or arguments/);
+  await assert.rejects(run(["set-capacity", "3", "4"], connection), /Unknown command or arguments/);
+  assert.equal(sent.length, 2);
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  assert.match(output[0], /set-budget micro-usd/);
+  assert.match(output[0], /set-capacity requests/);
+});
+
+test("set-budget below the service's spending tells the operator to pause instead", async () => {
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token",
+    fetch: async () => Response.json({ error: { code: "budget_below_spent" } }, { status: 409 }) };
+  await assert.rejects(run(["set-budget", "1000"], connection),
+    /^Error: That amount is below what the service has already spent\. To stop the service, run npm run admin -- pause\.$/);
+});
+
+test("the production preflight states the pilot key cap apart from the billing top-ups", () => {
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  const help = spawnSync(process.execPath, [script, "help"], { encoding: "utf8" }).stdout;
+  assert.match(help, /the API key's credit cap\. For the pilot it is \$50\s+with no replenishment\./);
+  assert.doesNotMatch(help, /\$50 API key cap/);
+  assert.match(help, /set-budget to the same amount/);
+});
+
+test("the restore sequence sets the service budget again, since a restore rewinds it", async () => {
+  const output = [];
+  await run(["help"], {}, (line) => output.push(line));
+  assert.match(output.join("\n"), /restore rewinds the service budget[\s\S]*set-budget/);
+});
+
 test("resolve-without-id sends the cost and reason for every provisional row without an ID", async () => {
   const sent = [];
   const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token", fetch: async (_url, options) => {
@@ -117,7 +158,7 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
       await rm(join(dir, "calls.jsonl"), { force: true });
       const result = spawnSync(process.execPath, [script, "enable", stage], { cwd: dir, encoding: "utf8", env: {
         PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
-        MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: preflight, MIXINGPAL_RELEASE_VERIFIED: release,
+        MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: preflight, MIXINGPAL_RELEASE_VERIFIED: release, MIXINGPAL_BILLING: "off",
       } });
       assert.equal(result.status, allowed ? 0 : 1, `${stage}: ${result.stderr}`);
       if (!allowed) { await assert.rejects(access(join(dir, "calls.jsonl"))); continue; }
@@ -151,9 +192,14 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
     git("init", "-q"); git("commit", "-q", "--allow-empty", "-m", "release");
     const head = git("rev-parse", "HEAD").stdout.trim();
     const deployed = spawnSync(process.execPath, [script, "deploy", "staging"], { cwd: dir, encoding: "utf8", env: {
-      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000", MIXINGPAL_BILLING: "off",
+      MIXINGPAL_STRIPE_PRICE_STARTER: "price_fromEnvironment", MIXINGPAL_STRIPE_PRICE_PRO: "price_fromEnvironment",
     } });
     assert.equal(deployed.status, 0, deployed.stderr);
+    // Price IDs come from the committed file, never from the environment.
+    const committed = JSON.parse(await readFile(fileURLToPath(new URL("../billing-prices.json", import.meta.url)), "utf8")).staging;
+    const shipped = JSON.parse(await readFile(join(dir, ".deploy-staging.json"), "utf8")).vars;
+    assert.deepEqual([shipped.STRIPE_PRICE_STARTER, shipped.STRIPE_PRICE_PRO], [committed.starter, committed.pro]);
     assert.match(head, /^[0-9a-f]{40}$/);
     assert.match(deployed.stdout, new RegExp(`^Deploying commit ${head}$`, "m"));
     assert.deepEqual((await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse), [
@@ -164,7 +210,7 @@ test("enable requires stage-specific checks before invoking Wrangler", async () 
     ]);
     await rm(join(dir, "calls.jsonl"), { force: true });
     const recovery = spawnSync(process.execPath, [script, "recovery", "staging"], { cwd: dir, encoding: "utf8", env: {
-      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000", MIXINGPAL_BILLING: "off",
     } });
     assert.equal(recovery.status, 0, recovery.stderr);
     assert.deepEqual((await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse),
@@ -208,4 +254,143 @@ test("stats sends an optional day count and rejects anything else", async () => 
   await assert.rejects(run(["stats", "a week"], connection), /Unknown command or arguments/);
   await assert.rejects(run(["stats", "7", "8"], connection), /Unknown command or arguments/);
   assert.equal(sent.length, 2);
+});
+
+test("comp, uncomp and billing-sync send their operator actions", async () => {
+  const sent = [];
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "t", fetch: async (_url, options) => {
+    sent.push(JSON.parse(options.body));
+    return Response.json({ ok: true });
+  } };
+  await run(["comp", "partner@example.com"], connection, () => {});
+  await run(["uncomp", "member-1"], connection, () => {});
+  await run(["billing-sync", "member-1"], connection, () => {});
+  assert.deepEqual(sent, [{ action: "comp", email: "partner@example.com" }, { action: "uncomp", member_id: "member-1" },
+    { action: "billing_sync", member_id: "member-1" }]);
+});
+
+test("billing vars come from an explicit choice and the stage's committed price IDs, and on needs both", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const prices = { staging: { starter: "", pro: "price_1Pro" }, production: { starter: "price_1Starter", pro: "price_1Pro" } };
+  const off = configuration({ vars: {} }, "staging", id);
+  assert.equal(off.vars.BILLING_ENABLED, "false");
+  const live = configuration({ vars: {} }, "production", id, true, false, true, prices);
+  assert.deepEqual([live.vars.BILLING_ENABLED, live.vars.STRIPE_PRICE_STARTER, live.vars.STRIPE_PRICE_PRO], ["true", "price_1Starter", "price_1Pro"]);
+  assert.throws(() => configuration({ vars: {} }, "staging", id, false, false, true, prices), /price IDs.*billing-prices\.json/);
+});
+
+test("an off deploy still carries the file's price IDs, so existing subscribers keep their plan", () => {
+  const prices = { staging: { starter: "", pro: "" }, production: { starter: "price_1Starter", pro: "price_1Pro" } };
+  const off = configuration({ vars: {} }, "production", "11111111-1111-4111-8111-111111111111", true, false, false, prices);
+  assert.deepEqual([off.vars.BILLING_ENABLED, off.vars.STRIPE_PRICE_STARTER, off.vars.STRIPE_PRICE_PRO], ["false", "price_1Starter", "price_1Pro"]);
+});
+
+test("deploy without MIXINGPAL_BILLING stops before any Wrangler call", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  try {
+    await writeFile(join(dir, "wrangler.jsonc"), JSON.stringify({ vars: {} }));
+    await mkdir(join(dir, "node_modules/wrangler/bin"), { recursive: true });
+    await writeFile(join(dir, "node_modules/wrangler/bin/wrangler.js"),
+      `require("node:fs").appendFileSync("calls.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");`);
+    const result = spawnSync(process.execPath, [script, "deploy", "staging"], { cwd: dir, encoding: "utf8", env: {
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000",
+    } });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Set MIXINGPAL_BILLING=on or off/);
+    await assert.rejects(access(join(dir, "calls.jsonl")));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a billing-on deploy or enable without both Stripe secrets stops before any Wrangler call; recovery does not need them", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mixing-pal-deploy-"));
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  try {
+    await writeFile(join(dir, "wrangler.jsonc"), JSON.stringify({ vars: {} }));
+    await mkdir(join(dir, "node_modules/wrangler/bin"), { recursive: true });
+    await writeFile(join(dir, "node_modules/wrangler/bin/wrangler.js"),
+      `require("node:fs").appendFileSync("calls.jsonl", JSON.stringify(process.argv.slice(2)) + "\\n");`);
+    const run = (command, secrets) => spawnSync(process.execPath, [script, command, "staging"], { cwd: dir, encoding: "utf8", env: {
+      PATH: process.env.PATH, MIXINGPAL_D1_ID: "00000000-0000-4000-8000-000000000000", MIXINGPAL_BILLING: "on",
+      MIXINGPAL_STAGING_PREFLIGHT_VERIFIED: "yes", ...secrets,
+    } });
+    for (const command of ["deploy", "enable"]) {
+      for (const secrets of [{}, { STRIPE_SECRET_KEY: "sk_test_x" }, { STRIPE_WEBHOOK_SECRET: "whsec_x" }]) {
+        const result = run(command, secrets);
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET/);
+        await assert.rejects(access(join(dir, "calls.jsonl")));
+      }
+      // Both set gets past this check, whatever the next one says.
+      assert.doesNotMatch(run(command, { STRIPE_SECRET_KEY: "sk_test_x", STRIPE_WEBHOOK_SECRET: "whsec_x" }).stderr, /STRIPE_SECRET_KEY/);
+      await rm(join(dir, "calls.jsonl"), { force: true });
+    }
+    // Recovery uploads no secrets, so it must not make the operator export the live key.
+    assert.doesNotMatch(run("recovery", {}).stderr, /STRIPE_SECRET_KEY/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("the operator help names every event the proxy logs, so each can be alerted on", async () => {
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  const src = fileURLToPath(new URL("../src/", import.meta.url));
+  const names = new Set();
+  for (const file of await readdir(src)) {
+    for (const [, logged] of (await readFile(join(src, file), "utf8")).matchAll(/JSON\.stringify\(\{ event: ([^,}]+)/g)) {
+      for (const [, name] of logged.matchAll(/"(\w+)"/g)) names.add(name);
+    }
+  }
+  assert.ok(names.has("subscription_canceled_unrefunded"));
+  assert.deepEqual([...names].filter((name) => !new RegExp(`\\b${name}\\b`).test(output[0])), []);
+});
+
+test("the Stripe runbook in the deploy help uses the API version the proxy sends", async () => {
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  const help = spawnSync(process.execPath, [script, "help"], { encoding: "utf8" }).stdout;
+  const version = (await readFile(fileURLToPath(new URL("../src/stripe.ts", import.meta.url)), "utf8")).match(/STRIPE_VERSION = "([^"]+)"/)[1];
+  assert.match(help, new RegExp(`API version ${version.replaceAll(".", "\\.")}`));
+  assert.match(help, /\/webhooks\/stripe/);
+  // A Portal upgrade would charge with no allowance: only the app's upgrade grants it.
+  assert.match(help, /Plan switching off/);
+  assert.doesNotMatch(help, /downgrades/i);
+});
+
+test("the restore sequence names a fallback for subscriptions billing-sync cannot find", async () => {
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  assert.match(output[0], /billing-sync member-id[\s\S]*resend the subscriptions' events from\s+the Stripe Dashboard/);
+  assert.match(output[0], /no_account means/);
+});
+
+test("revoke refused for a live subscription tells the operator to cancel it in Stripe first", async () => {
+  const connection = { origin: "https://api-staging.mixingpal.com", token: "test-token",
+    fetch: async () => Response.json({ error: { code: "subscription_live" } }, { status: 409 }) };
+  await assert.rejects(run(["revoke", "member-1"], connection),
+    /^Error: This account has a live subscription\. Cancel it in Stripe first\.$/);
+});
+
+test("the alert list names the budget events and what to do about them", async () => {
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  const help = output[0].replace(/\s+/g, " ");
+  assert.match(help, /budget_low: less than 20 requests' worth of service budget is left\. Raise the OpenRouter key's credit cap, then set-budget/);
+  assert.match(help, /budget_exhausted: a member was turned away because the service budget ran out\. Raise the OpenRouter key's credit cap and set-budget now\./);
+});
+
+test("the restore sequence recovers a paid or comped member's spending in the current period, not a lifetime total", async () => {
+  const output = [];
+  await run(["help"], {}, (text) => output.push(text));
+  const help = output[0].replace(/\s+/g, " ");
+  assert.match(help, /For a member with a paid plan or comp, recover the spending in the current period instead\./);
+  assert.match(help, /That is spending since the period started, one month before period_end\./);
+  assert.match(help, /A lifetime total would lock that member out until the next renewal\./);
+});
+
+test("the Stripe runbook cancels on disputes and Dashboard refunds, and keeps price IDs while anyone subscribes", () => {
+  const script = fileURLToPath(new URL("./deploy.mjs", import.meta.url));
+  const help = spawnSync(process.execPath, [script, "help"], { encoding: "utf8" }).stdout.replace(/\s+/g, " ");
+  assert.match(help, /in each mode, set Settings, Billing, "Manage disputed payments" to cancel the subscription immediately without prorating\./);
+  assert.match(help, /when refunding a subscription payment from the Dashboard, also cancel the subscription\. A refund alone leaves access and renewals running\./);
+  assert.match(help, /Never change a plan's price ID in billing-prices\.json while anyone subscribes on it\. Existing subscriptions stay on the old price, and the proxy would stop recognizing them\./);
+  assert.match(help, /A new price needs a code change that maps both IDs\./);
 });

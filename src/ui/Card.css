@@ -661,6 +661,18 @@
   color: var(--text-secondary);
 }
 
+/* A text link, like the account panel's minor actions. */
+.card__access-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 .card__input {
   width: 100%;
   box-sizing: border-box;

@@ -3,6 +3,8 @@ import { maintainReports } from "./reports";
 import { deleteTurn } from "./capture";
 import { DAY, Env, readJson } from "./env";
 import { settle, settleExpired } from "./ledger";
+import { RESERVATION } from "./policy";
+import { cancelForDeletion, renewals } from "./subscriptions";
 
 const CAPTURE_DELETE_BATCH = 100;
 const CAPTURE_DELETE_BATCHES = 3;
@@ -46,6 +48,8 @@ export async function maintain(env: Env): Promise<void> {
   // Billing first and on its own: a report or cleanup failure must never hold a member's money.
   try { await billing(env, now); }
   catch (error) { console.error(JSON.stringify({ event: "billing_maintenance_failed", error: String(error) })); }
+  try { await renewals(env, now); }
+  catch (error) { console.error(JSON.stringify({ event: "renewal_maintenance_failed", error: String(error) })); }
   try { await maintainReports(env); await retryReportMail(env); }
   catch (error) { console.error(JSON.stringify({ event: "report_maintenance_failed", error: String(error) })); }
   await env.DB.batch([
@@ -56,7 +60,11 @@ export async function maintain(env: Env): Promise<void> {
     env.DB.prepare("DELETE FROM api_limits WHERE expires_at < ?").bind(now - DAY),
     env.DB.prepare("DELETE FROM invites WHERE expires_at < ?").bind(now - 83 * DAY),
     env.DB.prepare("DELETE FROM operator_actions WHERE created_at < ?").bind(now - 90 * DAY),
-    env.DB.prepare(`DELETE FROM "user" WHERE createdAt < ? AND NOT EXISTS (SELECT 1 FROM members WHERE members.id = "user".id)`)
+    // A sign-up that never subscribed goes after 90 days, with its unused Stripe customer row.
+    env.DB.prepare(`DELETE FROM subscriptions WHERE status IN ('none', 'incomplete', 'incomplete_expired') AND updated_at < ?
+      AND NOT EXISTS (SELECT 1 FROM members WHERE members.id = subscriptions.member_id)`).bind(now - 90 * DAY),
+    env.DB.prepare(`DELETE FROM "user" WHERE createdAt < ? AND NOT EXISTS (SELECT 1 FROM members WHERE members.id = "user".id)
+      AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE subscriptions.member_id = "user".id)`)
       .bind(new Date(now - 90 * DAY).toISOString()),
   ]);
   const expired = await env.DB.prepare("SELECT id, member_id FROM turns WHERE created_at <= ? AND deleted_at IS NULL LIMIT 100")
@@ -91,8 +99,21 @@ export async function maintain(env: Env): Promise<void> {
     }
     if (failed || objects.results.length < CAPTURE_DELETE_BATCH) break;
   }
-  const deletions = await env.DB.prepare("SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND requested_at < ? LIMIT 20")
-    .bind(now - 10 * 60_000).all<{ member_id: string }>();
+  // Billing first, apart from cleanup. The job tried longest ago goes first, so jobs Stripe keeps failing on cannot hold up the others.
+  // A claim is a five-minute lease: a sweep that overlaps this one, even one started after the claim, skips the job
+  // instead of canceling the same subscriptions. The cron runs every ten minutes, so retries keep their pace.
+  const lease = now - 5 * 60_000;
+  const unbilled = await env.DB.prepare(`SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND billing_cleared_at IS NULL
+    AND requested_at < ? AND billing_checked_at < ? ORDER BY billing_checked_at LIMIT 20`).bind(now - 10 * 60_000, lease)
+    .all<{ member_id: string }>();
+  for (const { member_id: id } of unbilled.results) {
+    const claimed = await env.DB.prepare("UPDATE deletion_jobs SET billing_checked_at = ? WHERE member_id = ? AND billing_checked_at < ?")
+      .bind(now, id, lease).run();
+    if (!claimed.meta.changes) continue;
+    if (await cancelForDeletion(env, id)) await env.DB.prepare("UPDATE deletion_jobs SET billing_cleared_at = ? WHERE member_id = ?").bind(now, id).run();
+  }
+  const deletions = await env.DB.prepare(`SELECT member_id FROM deletion_jobs WHERE completed_at IS NULL AND billing_cleared_at IS NOT NULL
+    AND requested_at < ? ORDER BY requested_at LIMIT 20`).bind(now - 10 * 60_000).all<{ member_id: string }>();
   for (const { member_id: id } of deletions.results) {
     const unfinished = await env.DB.prepare(`SELECT id FROM captures WHERE turn_id IN (SELECT id FROM turns WHERE member_id = ?)
       AND state != 'deleted' LIMIT 1`).bind(id).first();
@@ -102,6 +123,7 @@ export async function maintain(env: Env): Promise<void> {
         SELECT 'sign-in-otp-' || lower(email) FROM "user" WHERE id = ?
         UNION SELECT 'sign-in-otp-' || email FROM "user" WHERE id = ?)` ).bind(id, id),
       env.DB.prepare('DELETE FROM invites WHERE email = (SELECT lower(email) FROM "user" WHERE id = ?)').bind(id),
+      env.DB.prepare("DELETE FROM subscriptions WHERE member_id = ?").bind(id),
       env.DB.prepare('DELETE FROM "user" WHERE id = ?').bind(id),
       env.DB.prepare("DELETE FROM consents WHERE member_id = ?").bind(id),
       env.DB.prepare("UPDATE deletion_jobs SET completed_at = ? WHERE member_id = ?").bind(now, id),
@@ -130,10 +152,14 @@ export async function maintain(env: Env): Promise<void> {
     SUM(generation_id IS NULL) AS without_id FROM requests WHERE provisional = 1`)
     .first<{ count: number; amount: number; oldest: number | null; without_id: number }>();
   const conflicts = await env.DB.prepare("SELECT COUNT(*) AS n FROM cost_conflicts WHERE resolved_at IS NULL").first<{ n: number }>();
-  const budget = await env.DB.prepare("SELECT loss, paused FROM budget").first<{ loss: number; paused: number }>();
+  const budget = await env.DB.prepare("SELECT loss, paused, allowance, spent, reserved FROM budget")
+    .first<{ loss: number; paused: number; allowance: number; spent: number; reserved: number }>();
   if (health?.count || conflicts?.n || budget?.loss || budget?.paused) console.error(JSON.stringify({ event: "provisional_usage",
     count: health?.count ?? 0, amount: health?.amount ?? 0, oldest: health?.oldest ?? null, without_id: health?.without_id ?? 0,
     open_conflicts: conflicts?.n ?? 0, loss: budget?.loss ?? 0, paused: budget?.paused ?? 0 }));
+  // Warns before the service budget refuses every member: raise it with set-budget and the OpenRouter key's cap.
+  const remaining = budget ? budget.allowance - budget.spent - budget.reserved : 0;
+  if (budget && remaining < 20 * RESERVATION) console.error(JSON.stringify({ event: "budget_low", remaining_micro_usd: remaining }));
   const journal = await env.CAPTURE.list({ prefix: "deletions/", limit: 100 });
   for (const object of journal.objects) {
     if (object.uploaded.getTime() < now - 90 * DAY) await env.CAPTURE.delete(object.key);

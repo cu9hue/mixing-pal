@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useId, useRef, useState } from "react";
 import { errorMessage } from "../model/account";
 import { beginMutation, useBusyState } from "../model/updates";
@@ -161,9 +162,5 @@ export function ReportHistory() {
 }
 
 export function SupportContact() {
-  const [copied, setCopied] = useState(false);
-  return <p className="report__hint">Need help? <span className="selectable" data-tauri-drag-region="false">hello@mixingpal.com</span>{" "}
-    <button type="button" className="advanced__button" onClick={() => {
-      void navigator.clipboard.writeText("hello@mixingpal.com").then(() => setCopied(true)).catch(() => setCopied(false));
-    }}>{copied ? "Copied" : "Copy email"}</button></p>;
+  return <p className="report__hint">Need help? <button type="button" className="account__link" onClick={() => { void invoke("open_page", { page: "support" }); }}>hello@mixingpal.com</button></p>;
 }

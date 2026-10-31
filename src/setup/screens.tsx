@@ -2,7 +2,6 @@ import { useBusyState, beginMutation } from "../model/updates";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { EXPERIENCES, ExperienceState } from "../model/experience";
-import { AccountState, AccountView, errorMessage } from "../model/account";
 
 /** Every screen after "install" names the connector as Live shows it. */
 export function InstallScreen({
@@ -40,7 +39,7 @@ export function InstallScreen({
 
   return (
     <>
-      <div className="setup__label">Step 3 of 4</div>
+      <div className="setup__label">Step 2 of 4</div>
       <h1 className="setup__title">Add Mixing Pal to Live.</h1>
       <p className="setup__body">
         It's a small connector that goes in your Ableton User Library. Nothing else on
@@ -68,7 +67,7 @@ export function InstallScreen({
 export function OpenLiveScreen() {
   return (
     <>
-      <div className="setup__label">Step 3 of 4</div>
+      <div className="setup__label">Step 2 of 4</div>
       <h1 className="setup__title">Now open Ableton Live.</h1>
       <p className="setup__body">
         Live only looks for new connectors when it starts. If Live is open, quit it
@@ -85,7 +84,7 @@ export function OpenLiveScreen() {
 export function ControlSurfaceScreen({ folder }: { folder: string }) {
   return (
     <>
-      <div className="setup__label">Step 3 of 4</div>
+      <div className="setup__label">Step 2 of 4</div>
       <h1 className="setup__title">Turn it on in Live.</h1>
       <p className="setup__body">
         Open Live's <b>Settings → Link, Tempo &amp; MIDI</b> (called{" "}
@@ -123,7 +122,7 @@ export function ConnectedScreen({
   const named = trackNames.filter((n) => n.trim() !== "").slice(0, 4);
   return (
     <>
-      <div className="setup__label">Step 4 of 4</div>
+      <div className="setup__label">Step 3 of 4</div>
       <h1 className="setup__title">
         <span className="setup__ok-dot" />
         Connected.
@@ -159,50 +158,6 @@ export function ConnectedScreen({
         ))}
       </div>
       {experience.error !== null && <div className="setup__error">{experience.error}</div>}
-    </>
-  );
-}
-
-export function SharingScreen({ account }: { account: AccountState }) {
-  const operations = useBusyState();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function choose(enabled: boolean) {
-    if (!beginMutation(operations, "accountMutation")) return;
-    setBusy(true);
-    setError(null);
-    try {
-      account.change(await invoke<AccountView>("account_consent", { enabled }));
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-      operations.accountMutation = false;
-    }
-  }
-
-  return (
-    <>
-      <div className="setup__label">Step 2 of 4</div>
-      <h1 className="setup__title">Help make my advice better?</h1>
-      <p className="setup__body">
-        If you share, a person on our team reads your questions, what I read in your set, my
-        answers, and what you tell me about them. We delete them after 30 days. We never use
-        them to train AI.
-      </p>
-      <p className="setup__body">You can change this, or delete what you shared, in Settings.</p>
-      <div className="setup__choices">
-        <button className="setup__choice" disabled={busy} onClick={() => void choose(true)}>
-          <span className="setup__choice-label">Share</span>
-          <span className="setup__choice-hint">Kept for 30 days, then deleted.</span>
-        </button>
-        <button className="setup__choice" disabled={busy} onClick={() => void choose(false)}>
-          <span className="setup__choice-label">Don't share</span>
-          <span className="setup__choice-hint">Nothing is kept for review.</span>
-        </button>
-      </div>
-      {error !== null && <div className="setup__error">{error}</div>}
     </>
   );
 }

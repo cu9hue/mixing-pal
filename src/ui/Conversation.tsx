@@ -8,6 +8,7 @@ import { AccountState, canAsk, errorMessage } from "../model/account";
 import { checkinTarget } from "./checkin";
 import { MoveBox } from "./MoveBox";
 import { MoveCheckin } from "./MoveCheckin";
+import { asksToShare, SharingAsk } from "./SharingAsk";
 import { AnswerMenu } from "./AnswerMenu";
 import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
@@ -237,6 +238,7 @@ export function Conversation({
   onReport,
   account,
   connected,
+  onOpenSettings,
 }: {
   connected: boolean;
   state: SetState;
@@ -244,6 +246,8 @@ export function Conversation({
   onAnswer: () => void;
   onReport?: (target: ReportTarget) => void;
   account: AccountState;
+  /** Settings holds the way to more usage and the account controls. */
+  onOpenSettings?: () => void;
 }) {
   const operations = useBusyState();
   const [history, setHistory] = useState<ChatMessage[]>([]);
@@ -534,11 +538,14 @@ export function Conversation({
   const waiting = waitingLabel({ busy, toolsCalled: reads.length, elapsedMs });
   const log = busy ? readingLog(reads, state) : [];
   const reading = reads.some((r) => !r.done);
-  const accessProblem = canAsk(account.view) ? null
-    : account.view?.access !== "active" ? "Check your account access in Settings."
-    : account.view.service_paused ? "Model access is temporarily paused."
-    : (account.view.reserved_micro_usd ?? 0) > 0 ? "Checking the last request’s usage. Please wait."
-    : "Your remaining allowance cannot cover another request. See Settings.";
+  const view = account.view;
+  // The two lines Settings can fix carry a button to it: a member who ran out is the one ready to pay.
+  const accessProblem: { text: string; settings: boolean } | null = canAsk(view) ? null
+    : view?.access !== "active" ? { text: "Check your account access.", settings: true }
+    : view.service_paused ? { text: "Model access is paused on our side. Try again later.", settings: false }
+    : (view.reserved_micro_usd ?? 0) > 0 ? { text: "Checking the last request’s usage. Please wait.", settings: false }
+    : { text: view.subscription_status === "trialing" ? "Your trial usage is used up."
+      : view.plan || view.comp ? "This month's usage is used up." : "Your pilot usage is used up.", settings: true };
   const loadingSet = key === null || (next !== null && classify(key, next, busy) === "switch");
 
   if (loadingSet) return <div className="card__body" role={loadError === null ? "status" : "alert"}>
@@ -665,13 +672,16 @@ export function Conversation({
       <div className="card__footer">
         {(() => {
           const open = thread.find((x) => x.turnId !== undefined && x.turnId === checkin);
-          return open?.turnId && open.move && open.answer !== null && (
+          if (open?.turnId && open.move && open.answer !== null) return (
             <MoveCheckin exchange={{ turnId: open.turnId, move: open.move, answer: open.answer, tracksRead: open.tracksRead }}
               outcomes={outcomes} sharingEnabled={account.view?.capture === true}
               onChange={(next) => changeOutcomes(next, key)} onClose={closeCheckin} />
           );
+          // The sharing question takes the check-in's place once a move is rated, never both at once.
+          return asksToShare(account.view, outcomes.length > 0) && <SharingAsk account={account} />;
         })()}
-        {accessProblem && <div id="chat-access-status" className="card__access-status" role="status">{accessProblem}</div>}
+        {accessProblem && <div id="chat-access-status" className="card__access-status" role="status">{accessProblem.text}
+          {accessProblem.settings && onOpenSettings && <> <button className="card__access-link" onClick={onOpenSettings}>Open Settings</button></>}</div>}
         <input
           ref={inputRef}
           className="card__input"

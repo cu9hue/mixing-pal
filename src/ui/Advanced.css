@@ -153,8 +153,9 @@
   margin-top: var(--space-2);
 }
 
+/* Account links stay text. :where adds no weight, so the danger button still outranks this. */
 .advanced__button,
-.advanced__body .account__actions button {
+.advanced__body .account__actions button:where(:not(.account__link)) {
   min-height: var(--touch-target);
   background: transparent;
   border: 1px solid var(--border-strong);
@@ -167,12 +168,12 @@
 }
 
 .advanced__button:hover:not(:disabled),
-.advanced__body .account__actions button:hover:not(:disabled) {
+.advanced__body .account__actions button:where(:not(.account__link)):hover:not(:disabled) {
   background: var(--surface-overlay);
 }
 
 .advanced__button:active:not(:disabled),
-.advanced__body .account__actions button:active:not(:disabled) {
+.advanced__body .account__actions button:where(:not(.account__link)):active:not(:disabled) {
   background: var(--surface-sunken);
   border-color: var(--border);
 }

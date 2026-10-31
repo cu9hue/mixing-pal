@@ -7,6 +7,7 @@ import { maintain } from "./maintenance";
 import { exportTurn } from "./export";
 import { sendInvitation } from "./invitation-email";
 import { pilotStats } from "./stats";
+import { billingSync, comp, withoutSubscription, uncomp } from "./subscriptions";
 
 export async function admin(request: Request, env: Env, input: unknown): Promise<Response> {
   if (!env.ADMIN_TOKEN) throw new ApiError(503, "admin_disabled", "Operator access is not configured.");
@@ -30,14 +31,22 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     z.object({ action: z.literal("resolve_without_id"), cost_micro_usd: z.number().int().min(0).max(50_000_000), reason: z.string().min(5).max(500) }),
     z.object({ action: z.literal("conflict"), conflict_id: z.number().int().positive(), resolution: z.enum(["booked", "dismissed"]), reason: z.string().min(5).max(500) }),
     z.object({ action: z.literal("pause"), paused: z.boolean() }),
+    z.object({ action: z.literal("set_budget"), allowance_micro_usd: z.number().int().positive() }),
+    z.object({ action: z.literal("set_capacity"), max_in_flight: z.number().int().min(1) }),
+    // An account's spending is capped at $50; the service total grows with set_budget.
     z.object({ action: z.literal("recover"), member_id: z.string().min(1).max(100).optional(),
-      spent_micro_usd: z.number().int().min(0).max(50_000_000), reason: z.string().min(5).max(500) }),
+      spent_micro_usd: z.number().int().min(0), reason: z.string().min(5).max(500) })
+      .refine((d) => d.member_id === undefined || d.spent_micro_usd <= 50_000_000),
     z.object({ action: z.literal("export"), member_id: z.string().max(100), turn_id: z.uuid() }),
+    z.object({ action: z.literal("comp"), email: z.email().transform((s) => s.toLowerCase()) }),
+    z.object({ action: z.literal("uncomp"), member_id: z.string().max(100) }),
+    z.object({ action: z.literal("billing_sync"), member_id: z.string().max(100) }),
     z.object({ action: z.literal("sweep") }),
     z.object({ action: z.literal("replay_deletions"), cursor: z.string().max(2000).optional() }),
   ]).parse(input);
   const now = Date.now();
   if (data.action === "invite") {
+    if (env.BILLING_ENABLED === "true") throw new ApiError(409, "invites_retired", "Invitations have ended. Use comp for free access.");
     const code = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
     const codeHash = await hash(code);
     await env.DB.prepare("INSERT INTO invites(code_hash, email, expires_at) VALUES (?, ?, ?)")
@@ -59,17 +68,46 @@ export async function admin(request: Request, env: Env, input: unknown): Promise
     return json({ budget, members: members.results, pending: pending.results, conflicts: conflicts.results });
   }
   if (data.action === "stats") return json(await pilotStats(env, data.days ?? 28));
+  if (data.action === "billing_sync") return json(await billingSync(env, data.member_id));
+  if (data.action === "comp") {
+    const granted = await comp(env, data.email, now);
+    await env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) VALUES ('comp', ?, ?, '')")
+      .bind(granted.member_id, now).run();
+    return json(granted);
+  }
   if (data.action === "report") return json(await inspectReport(env, data.report_id));
   if (data.action === "report_notifications") return json((await env.DB.prepare(`SELECT id, created_at, mail_state, mail_error
     FROM support_reports WHERE state = 'ready' AND mail_state IN ('pending', 'sending', 'attention') ORDER BY created_at LIMIT 100`).all()).results);
   if (data.action === "export") return exportTurn(env, data.member_id, data.turn_id);
   if (data.action === "replay_deletions") return json({ cursor: await replayDeletions(env, data.cursor) });
+  if (data.action === "set_budget") {
+    // The check and the write are one statement, so a reservation that lands between them cannot slip under the new budget.
+    const [update] = await env.DB.batch([
+      env.DB.prepare("UPDATE budget SET allowance = ? WHERE id = 1 AND spent + reserved <= ?").bind(data.allowance_micro_usd, data.allowance_micro_usd),
+      env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) SELECT 'set_budget', 'service', ?, ? WHERE changes() > 0")
+        .bind(now, String(data.allowance_micro_usd)),
+    ]);
+    if (!update.meta.changes) throw new ApiError(409, "budget_below_spent", "That amount is below what the service has already spent. To stop the service, use pause.");
+    return json({ ok: true });
+  }
+  if (data.action === "set_capacity") {
+    await env.DB.batch([
+      env.DB.prepare("UPDATE budget SET max_in_flight = ? WHERE id = 1").bind(data.max_in_flight),
+      env.DB.prepare("INSERT INTO operator_actions(action, target, created_at, detail) VALUES ('set_capacity', 'service', ?, ?)")
+        .bind(now, String(data.max_in_flight)),
+    ]);
+    return json({ ok: true });
+  }
   if (data.action === "recover") {
     await recover(env, data.member_id, data.spent_micro_usd, data.reason);
     return json({ ok: true });
   }
   const target = "member_id" in data ? data.member_id : "request_id" in data ? data.request_id : "service";
-  if (data.action === "revoke") await revokeAccess(env, data.member_id);
+  if (data.action === "revoke") {
+    // Revoking would leave the subscription charging for no access. Only this action asks Stripe: a replay must revoke regardless.
+    await withoutSubscription(env, data.member_id, () => revokeAccess(env, data.member_id));
+  }
+  if (data.action === "uncomp") await uncomp(env, data.member_id, now);
   if (data.action === "delete_account") await deleteAccount(env, data.member_id);
   if (data.action === "delete_turn") await deleteTurn(env, data.member_id, data.turn_id);
   if (data.action === "resolve") {
