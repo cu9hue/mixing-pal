@@ -327,3 +327,4 @@
 
 .account .account__terms input { accent-color: var(--accent); margin: 0; }
 .account .account__terms .account__link { margin-top: 0; font: inherit; }
+.account .report__hint .account__link { margin-top: 0; font: inherit; }

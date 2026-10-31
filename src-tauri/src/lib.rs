@@ -898,18 +898,19 @@ async fn account_sign_out(state: tauri::State<'_, Arc<proxy::Proxy>>, trace_stat
     Ok(())
 }
 
-/// The sign-in and plan screens link to these two pages; nothing else opens from a page name.
-fn legal_url(page: &str) -> Option<&'static str> {
+/// The sign-in and plan screens link to these pages and to the support address; nothing else opens from a page name.
+fn page_url(page: &str) -> Option<&'static str> {
     match page {
         "terms" => Some("https://mixingpal.com/terms/"),
         "privacy" => Some("https://mixingpal.com/privacy/"),
+        "support" => Some("mailto:hello@mixingpal.com"),
         _ => None,
     }
 }
 
 #[tauri::command]
-fn open_legal(page: String) -> Result<(), proxy::ProxyError> {
-    let url = legal_url(&page).ok_or_else(|| proxy::ProxyError::new("invalid_request", "Unknown page."))?;
+fn open_page(page: String) -> Result<(), proxy::ProxyError> {
+    let url = page_url(&page).ok_or_else(|| proxy::ProxyError::new("invalid_request", "Unknown page."))?;
     let opened = std::process::Command::new("/usr/bin/open").arg(url).status().map(|status| status.success()).unwrap_or(false);
     if opened { Ok(()) } else { Err(proxy::ProxyError::new("open_failed", "The browser could not be opened.")) }
 }
@@ -1076,7 +1077,7 @@ pub fn run() {
             account_sign_out,
             account_consent,
             account_accept_terms,
-            open_legal,
+            open_page,
             account_delete,
             turn_event,
             turn_feedback,
@@ -2852,11 +2853,12 @@ mod tests {
     }
 
     #[test]
-    fn only_the_terms_and_privacy_pages_open_as_legal_pages() {
-        assert_eq!(legal_url("terms"), Some("https://mixingpal.com/terms/"));
-        assert_eq!(legal_url("privacy"), Some("https://mixingpal.com/privacy/"));
-        for bad in ["", "Terms", "https://evil.example/", "../terms", "beta"] {
-            assert_eq!(legal_url(bad), None, "{bad}");
+    fn only_the_terms_privacy_and_support_links_open_from_a_page_name() {
+        assert_eq!(page_url("terms"), Some("https://mixingpal.com/terms/"));
+        assert_eq!(page_url("privacy"), Some("https://mixingpal.com/privacy/"));
+        assert_eq!(page_url("support"), Some("mailto:hello@mixingpal.com"));
+        for bad in ["", "Terms", "https://evil.example/", "../terms", "beta", "mailto:someone@example.com"] {
+            assert_eq!(page_url(bad), None, "{bad}");
         }
     }
 

@@ -84,6 +84,14 @@ it("says when the code expires and where else to look, and resends without clear
   expect(screen.queryByLabelText("Six-digit sign-in code")).toBeNull();
 });
 
+it("opens a new mail message from the help address, with no copy button", () => {
+  vi.mocked(invoke).mockReset().mockResolvedValue(null);
+  render(<AccountPanel account={signedOut("open")} />);
+  fireEvent.click(screen.getByRole("button", { name: "hello@mixingpal.com" }));
+  expect(vi.mocked(invoke).mock.calls).toEqual([["open_page", { page: "support" }]]);
+  expect(screen.queryByRole("button", { name: "Copy email" })).toBeNull();
+});
+
 it("keeps Continue off until the producer agrees to the Terms, and opens each page from its link", () => {
   vi.mocked(invoke).mockReset().mockResolvedValue(null);
   render(<AccountPanel account={signedOut("open")} />);
@@ -93,7 +101,7 @@ it("keeps Continue off until the producer agrees to the Terms, and opens each pa
   expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Terms" }));
   fireEvent.click(screen.getByRole("button", { name: "Privacy Policy" }));
-  expect(vi.mocked(invoke).mock.calls).toEqual([["open_legal", { page: "terms" }], ["open_legal", { page: "privacy" }]]);
+  expect(vi.mocked(invoke).mock.calls).toEqual([["open_page", { page: "terms" }], ["open_page", { page: "privacy" }]]);
   // Opening a page is not agreeing to it.
   expect(agree.checked).toBe(false);
   fireEvent.click(agree);
