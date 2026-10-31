@@ -67,7 +67,8 @@ The existing CSS variables remain the source of truth. This React app does not u
 
 ## Interaction rules
 
-- The only entry sequence is sign in, connect Ableton, choose a plan, answer the sharing question, optionally name the Live set's goal in the card, then chat. The plan comes after the connected screen, so a new user sees the app read their set before Checkout asks for a card. One action starts chatting with or without a goal; each set keeps that choice with its conversation.
+- The only entry sequence is sign in, connect Ableton, choose a plan, optionally name the Live set's goal in the card, then chat. The plan comes after the connected screen, so a new user sees the app read their set before Checkout asks for a card. One action starts chatting with or without a goal; each set keeps that choice with its conversation.
+- Sharing is asked once, in the chat footer, after the producer's first rated move closes its check-in: "Help me get better at this?" with Share and No thanks. It takes the check-in's place, never sits beside it, and either answer records the choice. Settings changes it.
 - Signed-out views omit Live status, chat, goals, notes, and data summaries.
 - Sign-in centers “A mentor for the track you're writing.” above “Sign in with your email.” Its field label stays left aligned, and the placeholder reads “Enter your email”. `--accent` provides the acid-green action and focus ring.
 - Only when the proxy reports invite-only sign-up does the subtitle read “Sign in with the email your invite came to.”, with the invitation-email placeholder. A failed read keeps the open wording.

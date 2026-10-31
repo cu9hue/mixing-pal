@@ -22,7 +22,7 @@ function render(step: SetupStep, opts: { access?: Access; experience?: Experienc
 describe("setup", () => {
   it.each([
     ["account", "Step 1 of 4"], ["install", "Step 2 of 4"], ["open_live", "Step 2 of 4"],
-    ["control_surface", "Step 2 of 4"], ["connected", "Step 3 of 4"], ["plan", "Step 4 of 4"], ["sharing", "Step 4 of 4"],
+    ["control_surface", "Step 2 of 4"], ["connected", "Step 3 of 4"], ["plan", "Step 4 of 4"],
   ] as const)("labels %s as %s", (step, label) => {
     const access = step === "account" ? "signed_out" : step === "plan" ? "plan_required" : "active";
     expect(render(step, { access })).toContain(`>${label}</div>`);
@@ -41,7 +41,7 @@ describe("setup", () => {
   });
 
   it("draws four ticks", () => {
-    expect(render("sharing").match(/class="setup__tick/g)).toHaveLength(4);
+    expect(render("plan", { access: "plan_required" }).match(/class="setup__tick/g)).toHaveLength(4);
   });
 
   it("asks how the producer works on the connected screen, with no separate Got it", () => {
@@ -63,7 +63,6 @@ describe("setup", () => {
     expect(render("account", { access: "signed_out" })).toContain("A mentor for the track you&#x27;re writing.");
     expect(render("account", { access: "signed_out" })).toContain("Sign in with your email.");
     expect(render("account", { access: "invitation_required" })).toContain("Enter the invite code from your email.");
-    expect(render("sharing")).toContain("Help make my advice better?");
     expect(render("install")).toContain("Add Mixing Pal to Live.");
     expect(render("install")).toContain(">Install the connector</button>");
     expect(render("control_surface")).toContain("Waiting for Live to connect…");

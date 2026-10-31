@@ -5,7 +5,6 @@ export type SetupStep =
   | "connected"
   | "account"
   | "plan"
-  | "sharing"
   | "done";
 
 export interface SetupFacts {
@@ -18,8 +17,6 @@ export interface SetupFacts {
   hasAccount: boolean;
   /** A plan, a trial, or pilot access. */
   hasAccess: boolean;
-  /** Whether the producer answered the current sharing question, either way. */
-  sharingChosen: boolean;
   /** False while Rust has not answered, so the question shows rather than
       setup finishing early. */
   experienceChosen: boolean;
@@ -54,11 +51,9 @@ export function currentStep(facts: SetupFacts): SetupStep {
   // The connected screen asks how the producer works. A level, chosen there or in
   // Settings, moves the producer on.
   if (!facts.experienceChosen) return "connected";
-  // The plan comes after the app has shown it can read the set. Sharing
-  // comes after the plan: consent is stored on the member, and a member
-  // exists only once there is access.
+  // The plan comes after the app has shown it can read the set. Sharing is
+  // asked in the chat, after the first rated move.
   if (!facts.hasAccess) return "plan";
-  if (!facts.sharingChosen) return "sharing";
   return "done";
 }
 

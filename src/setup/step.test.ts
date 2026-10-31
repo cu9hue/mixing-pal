@@ -8,7 +8,6 @@ const DONE: SetupFacts = {
   deltasArriving: true,
   hasAccount: true,
   hasAccess: true,
-  sharingChosen: true,
   experienceChosen: true,
 };
 
@@ -37,7 +36,6 @@ describe("currentStep", () => {
         deltasArriving: false,
         hasAccount: false,
         hasAccess: false,
-        sharingChosen: false,
         experienceChosen: false,
       }),
     ).toBe("account");
@@ -51,13 +49,11 @@ describe("currentStep", () => {
     expect(currentStep({ ...DONE, hasAccess: false, hasAccount: false })).toBe("account");
   });
 
-  // Consent is stored on the member, and a member exists only once a plan or the pilot gives access.
-  it("asks about sharing last, once there is access", () => {
-    expect(currentStep({ ...DONE, sharingChosen: false })).toBe("sharing");
-    expect(
-      currentStep({ ...DONE, sharingChosen: false, connectorInstalled: false, deltasArriving: false }),
-    ).toBe("install");
-    expect(currentStep({ ...DONE, sharingChosen: false, hasAccess: false })).toBe("plan");
+  // Sharing is asked in the chat after the first rated move, so setup ends at the plan.
+  it("finishes once there is access, with no sharing step", () => {
+    expect(currentStep({ ...DONE, hasAccess: false })).toBe("plan");
+    expect(currentStep(DONE)).toBe("done");
+    expect(currentStep({ ...DONE, sharingChosen: false } as SetupFacts)).toBe("done");
   });
 
   // The app updated and the part inside Live did not. Reinstalling is the

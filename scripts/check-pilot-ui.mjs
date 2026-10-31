@@ -48,7 +48,7 @@ if(cmd==='snapshot')return disconnected?[]:snapshot;
 if(cmd==='account_status')return {...window.account};
 if(cmd==='account_send_code')return null;
 if(cmd==='account_sign_in')return window.account={...active,access:'invitation_required'};
-if(cmd==='account_redeem')return window.account={...active};
+if(cmd==='account_redeem')return window.account={...active,sharing_chosen:false};
 if(cmd==='account_consent')return window.account={...window.account,capture:args.enabled,consent_epoch:window.account.consent_epoch+1,sharing_chosen:true};
 if(cmd==='account_sign_out'){window.account={access:'signed_out',capture:false};return;}
 if(cmd==='connector_status')return {folder:'MixingPal',installed:true};
@@ -413,12 +413,9 @@ await page.screenshot({path:`${artifacts}/fresh-experience.png`});
 await page.evaluate(()=>window.emitFixture('menu://settings'));
 await page.getByLabel('New to Live').check();
 await page.getByRole('button',{name:'Done',exact:true}).click();
-// Sharing comes last: consent is stored on the member, which exists once there is access.
-await setup.getByText('Step 4 of 4',{exact:true}).waitFor();
-await page.screenshot({path:`${artifacts}/fresh-sharing.png`});
-await setup.getByRole('button',{name:/^Don't share/}).click();
-assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_consent').at(-1).args.enabled),false);
+// Setup ends once there is access: sharing is asked in the chat, after the first rated move.
 await page.locator('.card__main').waitFor({state:'visible'});
+assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_consent').length),0,'setup does not ask about sharing');
 assert.equal(await page.evaluate(()=>window.experience),'new_to_live','setup saves the chosen level');
 assert.equal(await page.locator('.setup').count(),0,'install setup ends before the set goal');
 await page.getByLabel('Goal (optional)',{exact:true}).waitFor();
@@ -426,6 +423,23 @@ await page.getByRole('button',{name:'Start chatting',exact:true}).click();
 await page.screenshot({path:`${artifacts}/empty-chat.png`});
 assert.equal(await page.getByLabel('Ask about the set',{exact:true}).isEnabled(),true);
 assert.equal(await page.evaluate(()=>localStorage.getItem('copilot.setupDone')),'1');
+await page.getByLabel('Ask about the set',{exact:true}).fill('How is the kick?');
+await page.getByLabel('Ask about the set',{exact:true}).press('Enter');
+await page.waitForFunction(()=>!!window.finishModel);
+await page.evaluate(text=>window.finishModel(text),MOVE);
+await page.getByText('A complete answer.',{exact:true}).waitFor();
+const sharingAsk=page.getByRole('region',{name:'Help me get better at this?'});
+assert.equal(await sharingAsk.count(),0,'no sharing question before a rated move');
+await page.getByLabel('Ask about the set',{exact:true}).click();
+await page.getByRole('region',{name:'How did the last move go?'}).getByRole('button',{name:'Kept it',exact:true}).click();
+assert.equal(await sharingAsk.count(),0,'the heard step comes before the sharing question');
+await page.getByLabel('What did you hear?').press('Enter');
+await sharingAsk.waitFor();
+assert.equal(await page.locator('.checkin').count(),0,'the sharing question takes the check-in\'s place');
+await page.screenshot({path:`${artifacts}/fresh-sharing.png`});
+await sharingAsk.getByRole('button',{name:'No thanks',exact:true}).click();
+await sharingAsk.waitFor({state:'detached'});
+assert.equal(await page.evaluate(()=>window.requests.filter(x=>x.cmd==='account_consent').at(-1).args.enabled),false);
 for (const access of ['expired','revoked']) {
 await page.goto('http://127.0.0.1:1423?access='+access);
 const ended=access==='revoked'?'Your access was revoked. Contact Mixing Pal.':'Your pilot access has ended. Contact Mixing Pal to continue.';
@@ -556,5 +570,5 @@ await page.locator('.card__exchange').last().getByRole('button',{name:'More acti
 await page.getByRole('menuitem',{name:'Report a problem',exact:true}).click();
 await page.getByRole('dialog',{name:'Report a problem',exact:true}).getByRole('button',{name:'Cancel',exact:true}).click();
 assert.deepEqual(errors,[]);
-console.log('PASS report consent, offline receipts/restart, failure/answer/settings entry points, report focus and update coordination, update dismissal, keyboard focus, fixed settings footer, onboarding spacing, service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, setup sharing choice, shared-advice deletion, stale consent response, outcome rating, heard field, rating set switch, window geometry');
+console.log('PASS report consent, offline receipts/restart, failure/answer/settings entry points, report focus and update coordination, update dismissal, keyboard focus, fixed settings footer, onboarding spacing, service recovery, held usage recovery, expired/revoked withdrawal, sign-in-first fresh setup, sharing asked after the first rated move, shared-advice deletion, stale consent response, outcome rating, heard field, rating set switch, window geometry');
 } catch(e){await page.screenshot({path:`${artifacts}/failure.png`});console.log(errors);throw e;} finally {await browser.close();server.kill();closeSync(log);}

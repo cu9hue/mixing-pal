@@ -112,7 +112,6 @@ export default function App() {
     deltasArriving: wireReady(connected, state.scriptVersion, wireVersion.version),
     hasAccount: account.view != null && !["signed_out", "invitation_required"].includes(account.view.access),
     hasAccess: account.view?.access === "active" || account.view?.access === "development",
-    sharingChosen: account.view?.access === "development" || account.view?.sharing_chosen === true,
     experienceChosen: experience.experience != null,
   };
 

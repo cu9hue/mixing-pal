@@ -8,6 +8,7 @@ import { AccountState, canAsk, errorMessage } from "../model/account";
 import { checkinTarget } from "./checkin";
 import { MoveBox } from "./MoveBox";
 import { MoveCheckin } from "./MoveCheckin";
+import { asksToShare, SharingAsk } from "./SharingAsk";
 import { AnswerMenu } from "./AnswerMenu";
 import { SetState } from "../live/model";
 import { ChatMessage, ToolRunner, runTurn } from "../agent/loop";
@@ -671,11 +672,13 @@ export function Conversation({
       <div className="card__footer">
         {(() => {
           const open = thread.find((x) => x.turnId !== undefined && x.turnId === checkin);
-          return open?.turnId && open.move && open.answer !== null && (
+          if (open?.turnId && open.move && open.answer !== null) return (
             <MoveCheckin exchange={{ turnId: open.turnId, move: open.move, answer: open.answer, tracksRead: open.tracksRead }}
               outcomes={outcomes} sharingEnabled={account.view?.capture === true}
               onChange={(next) => changeOutcomes(next, key)} onClose={closeCheckin} />
           );
+          // The sharing question takes the check-in's place once a move is rated, never both at once.
+          return asksToShare(account.view, outcomes.length > 0) && <SharingAsk account={account} />;
         })()}
         {accessProblem && <div id="chat-access-status" className="card__access-status" role="status">{accessProblem.text}
           {accessProblem.settings && onOpenSettings && <> <button className="card__access-link" onClick={onOpenSettings}>Open Settings</button></>}</div>}

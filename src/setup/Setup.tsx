@@ -5,7 +5,6 @@ import {
   ControlSurfaceScreen,
   InstallScreen,
   OpenLiveScreen,
-  SharingScreen,
 } from "./screens";
 import { AccountState } from "../model/account";
 import { ExperienceState } from "../model/experience";
@@ -18,7 +17,6 @@ const TICK: Record<SetupStep, number> = {
   control_surface: 1,
   connected: 2,
   plan: 3,
-  sharing: 3,
   done: 3,
 };
 
@@ -70,7 +68,6 @@ export function Setup({
             experience={experience}
           />
         )}
-        {step === "sharing" && <SharingScreen account={account} />}
         {step === "account" && (
           <>
             <div className="setup__label">Step 1 of 4</div>
