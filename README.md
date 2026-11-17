@@ -1,145 +1,89 @@
 # Mixing Pal
 
-A desktop copilot for producers working in Ableton Live. It watches the set you
-have open and answers questions about it in plain language, so you can ask what
-is fighting what instead of soloing twelve tracks to find out.
+A desktop copilot for producers working in Ableton Live. It reads the set the
+producer has open and answers questions about it in plain language. The
+producer can ask what is fighting what instead of soloing twelve tracks to
+find out.
 
-It is a macOS app, built and verified against Ableton Live 12. Earlier versions
-of Live are untested. The app's macOS floor is 11.0, which is Live 12's own.
+It is a macOS app, built and verified against Ableton Live 12.
+
+**Status:** no longer actively developed. The hosted service is still up, and
+the signed app is at [mixingpal.com](https://mixingpal.com).
+
+## What the model sees
+
+The app keeps a mirror of the open set and sends the model a compact summary
+with every question:
+
+```text
+SET  132 BPM · A Minor · stopped
+SECTIONS (beats; bars assume 4/4)  «Intro» 0 (bar 1), «Drop» 64 (bar 17)
+GOAL  dark garage, 2am
+
+TRACKS  (4)
+ 0 «Pad» -6.0 dB — selected
+ 1 «Drums» -3.0 dB
+ 2 «Vox» -8.0 dB
+ 3 «Bass» -5.0 dB
+```
+
+When the model needs more, it calls one of ten read tools: track detail, the
+mixer, clips, clip notes, the arrangement, arrangement notes, device chains,
+device parameters, rack contents, and samples. The sample tool decodes the
+audio file on the producer's machine and sends the model measurements of
+level, pitch, spectrum and stereo width.
 
 ## How it fits together
 
-Two artifacts, deployed separately, that have to agree with each other.
+- **The app** (`src/`, `src-tauri/`) is Tauri 2: a Rust core with a React
+  frontend. It holds the set mirror, the OSC socket, the tools and the model
+  client.
+- **The connector** (`remote-script/`) is a Python Remote Script that Live
+  loads at startup. It talks to the app over OSC. It builds on
+  [AbletonOSC](https://github.com/ideoforms/AbletonOSC), vendored unmodified at
+  a pinned commit. The app installs the connector on first run.
+- **The proxy** (`proxy/`) is a Cloudflare Worker. It holds the model provider
+  key, signs producers in with an email code, charges for plans through
+  Stripe, and serves app updates.
 
-**The app** is Tauri 2: a Rust core with a React frontend. It holds the model
-client, the OSC socket, and the window machinery.
+The app and the connector agree on a wire version in
+`shared/wire-version.json`. The app checks it at connect, so it can say "your
+connector is stale" instead of misreading a reply.
 
-**The connector** is a Python Remote Script at `remote-script/MixingPal/`. Its
-`abletonosc/` and `pythonosc/` directories are AbletonOSC, vendored unmodified at
-a pinned commit — see `remote-script/MixingPal/UPSTREAM`. The `mixingpal/` package
-beside them is ours. Live loads the whole thing at startup and it talks to the app
-over OSC. The app ships the connector inside its own bundle and installs it into
-your Ableton User Library on first run; you never touch a terminal.
+## Run it from source
 
-The two are versioned independently:
-
-| Number | Where | Changes when |
-| --- | --- | --- |
-| App version | `src-tauri/tauri.conf.json`, `package.json`, `src-tauri/Cargo.toml` | every release |
-| Wire version | `shared/wire-version.json`, `remote-script/MixingPal/mixingpal/version.py` | the OSC contract changes — message shapes, argument counts |
-
-Both are guarded by tests. The app version has to match across all three
-manifests. The wire version has to match across the JSON and the Python, and the
-app polls the running script at connect so it can say "your connector is stale"
-instead of quietly misreading a reply.
-
-## Development
-
-You need a Rust toolchain, Node, and Ableton Live.
+You need a Rust toolchain, Node 22, Python 3 and Ableton Live 12.
 
 ```bash
 npm install
-npm run tauri dev
+npm run tauri dev -- --features direct-provider
 ```
 
-In development the app installs the connector from this repository rather than
-from its own bundle. Live loads the *installed* copy, not the repository one, so
-an edit under `remote-script/` reaches Live only after you reinstall the connector
-from setup and then restart Live. `sync_dir` mirrors the repository copy over the
-installed one, leaving `logs/` alone because a running Live session owns it.
+The `direct-provider` feature skips sign-in. Open the settings, and under
+**Model settings** enter a base URL, a model name and an API key. The base URL
+defaults to OpenRouter. The model has to support tool calls.
 
-### Tests
+## Tests
 
 ```bash
-npx vitest run              # frontend
+npm test                    # frontend and connector
 cd src-tauri && cargo test  # Rust
-npm run build               # tsc + vite, catches type errors
+cd proxy && npm test        # the Worker
 ```
 
-Several tests are tripwires rather than unit tests: they read a config file or a
-source file and assert that two things which have no type-level relationship
-still agree. They exist because the failures they catch are silent — an app that
-ships without its connector, or a version that drifts in one manifest of three.
-When one fails, read its message; it names the failure mode.
+Two eval suites, `src-tauri/tests/evals.rs` and `src-tauri/tests/craft.rs`,
+run the real prompt and tools against a real model and a fake Live. They cost
+money, so a plain `cargo test` skips them. The header comment in each file
+says how to run it.
 
-### Pilot proxy deployment
+## More
 
-Run `cd proxy && npm run deploy -- help` for the staging and production
-procedure. Before enabling either stage, create account-wide Cloudflare budget
-alerts at $10 and $25 under **Manage Account → Billing → Billable Usage**. These
-alerts send warnings; they do not cap usage.
+- `docs/ROADMAP.md`: what shipped, what did not, and why.
+- `.github/workflows/`: the signed release and the pilot and stable update
+  channels.
+- `cd proxy && npm run deploy -- help`: the proxy's deploy procedure.
 
-The deploy command applies the D1 capture budget and the R2 lifecycle rules
-before it publishes the Worker. It leaves inference disabled until the separate
-enable command passes all release acknowledgments.
+## License
 
-## Releasing a new version
-
-There is no release automation yet. This is the manual procedure.
-
-**1. Decide whether the wire contract changed.** If the Remote Script's message
-shapes changed, bump `WIRE_VERSION` in `remote-script/MixingPal/mixingpal/version.py`
-and the matching number in `shared/wire-version.json`. Otherwise leave it alone —
-bumping it needlessly forces every user through a connector reinstall.
-
-**2. Bump the app version** in all three manifests. `npx vitest run` fails if you
-miss one.
-
-**3. Test, then build.**
-
-```bash
-npx vitest run && npm run build && (cd src-tauri && cargo test)
-npm run build:mac
-```
-
-`build:mac` must run in a logged-in graphical session. Tauri's DMG step drives
-Finder through `osascript`; a detached or headless run compiles both
-architectures and then fails at the last step.
-
-**4. Check the artifact.**
-
-```bash
-APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Mixing Pal.app"
-lipo -archs "$APP/Contents/MacOS/"*                                  # x86_64 arm64
-/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"   # 11.0
-ls "$APP/Contents/Resources/MixingPal/mixingpal/version.py"          # connector is aboard
-```
-
-**5. Hand the `.dmg` over through `/Users/Shared` or a USB stick.** Not AirDrop,
-not a download link. The bundle is not signed, so a copy that arrives carrying
-macOS's quarantine attribute is refused with "damaged and can't be opened" — a
-message that does not reliably offer an **Open Anyway** button. See
-`docs/opening-an-unsigned-build.md`.
-
-**6. Install.** Quit Mixing Pal, then drag the new app into `/Applications`,
-replacing the old one.
-
-**7. Start Live before relaunching Mixing Pal.** This step is easy to skip and
-the reason is not obvious. The app decides the connector is stale only when the
-running script reports a different wire version; with Live closed it has no
-answer, assumes the connector is current, and does not prompt for the reinstall
-it needs.
-
-**8. If setup reopens on the install step, reinstall the connector — then
-restart Live.** Live reads Remote Scripts only at startup, so until you restart
-it, the old script is still the one running.
-
-Steps 7 and 8 apply only when the wire version changed. They will survive release
-automation: an app update carries a new connector inside its bundle, but the copy
-in the User Library changes only when the installer runs, and Live still has to
-be restarted.
-
-## Verifying against real Live
-
-Nothing in this repository proves the app works with Live. Before a release a
-person opens a real set, checks that the control surface is listed, that deltas
-arrive, and that a fresh machine can install from the `.dmg`, and records what
-they saw in the PR that cuts the release.
-
-## Where the design lives
-
-`docs/` holds two files: `ROADMAP.md`, what ships next and why, and
-`opening-an-unsigned-build.md`. The design documents and implementation plans
-that used to sit under `docs/superpowers/` were removed on 2026-09-08; they are
-in git history before that date, and the code comments that cite one by date
-mean that history.
+MIT. See `LICENSE`. The vendored AbletonOSC code is also MIT. Its license is
+at `remote-script/MixingPal/LICENSE-AbletonOSC.md`.
