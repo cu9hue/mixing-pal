@@ -1,6 +1,7 @@
 Upstream: https://github.com/ideoforms/AbletonOSC
 Pinned commit: 0ca68214bd62c9b5cb641ca34006cfd70ba94430
 Vendored: 2026-08-16
+License: MIT, see `LICENSE-AbletonOSC.md` (upstream `LICENSE.md` at the pinned commit)
 
 The `abletonosc/` and `pythonosc/` directories are unmodified upstream code.
 `manager.py` is also unmodified upstream code, vendored alongside
