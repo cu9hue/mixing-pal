@@ -2,7 +2,8 @@
 name = "mixing-pal"
 version = "0.2.13"
 description = "A copilot for producers working in Ableton Live"
-authors = ["Polina Guseva <p.guseva00@gmail.com>"]
+authors = ["Polina B <hello@mixingpal.com>"]
+license = "MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
